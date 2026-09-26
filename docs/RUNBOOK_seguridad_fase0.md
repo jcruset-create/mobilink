@@ -181,13 +181,24 @@ compartida es algo que se pide a propósito, no algo que se herede de
 `RUN_DB_TESTS`. Conviene darle una base propia. Su salida queda en un fichero del
 temporal, para poder ver por qué no arrancó si algún día no arranca.
 
-Un detalle de por qué esto importa: la primera versión del arnés **filtraba el
-proceso del servidor**. Con `spawn("npx", …)` el árbol es sh → npx → node, y
-matar al primero deja vivo al que hace el trabajo, así que cada ejecución
-olvidaba un servidor hablando con la base. Se encontraron dos rondando, y era eso
-—no la contención de bloqueos que se supuso al principio— lo que estaba
-ralentizando la suite completa. Ahora se lanza con `detached` y se mata el grupo,
-y se comprueba que no queda ninguno.
+Un fallo aparte que salió por el camino: la primera versión del arnés **filtraba
+el proceso del servidor**. Con `spawn("npx", …)` el árbol es sh → npx → node, y
+matar al primero deja vivo al que hace el trabajo, así que cada ejecución olvidaba
+un servidor hablando con la base. Se encontraron dos rondando. Ahora se lanza con
+`detached` y se mata el grupo, y se comprueba que no queda ninguno.
+
+Las tres mediciones, porque el diagnóstico costó dos intentos:
+
+| Ejecución | Arnés | Huérfanos | Resultado |
+|---|---|---|---|
+| 1 | dentro de la suite | sí | no terminaba en siete minutos |
+| 2 | fuera | sí | **222 s**, igual que la línea base |
+| 3 | fuera | no | 222 s |
+
+O sea: lo que ralentizaba la suite era el arnés corriendo dentro, no los
+huérfanos. La fuga era un fallo real por sí mismo, pero no era la causa de la
+lentitud, y atribuírsela habría mandado a la siguiente persona a buscar donde no
+estaba.
 
 ## B.2 Health check
 

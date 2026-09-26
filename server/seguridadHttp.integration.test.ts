@@ -84,9 +84,13 @@ describeSiHayBase("Fase 0 por HTTP, contra el servidor real", () => {
      * mataba solo al primero: el node seguía vivo con sus catorce trabajos en
      * segundo plano, y cada ejecución de este fichero dejaba un servidor
      * huérfano hablando con la base. Se vio al encontrar dos de ellos rondando
-     * después de dos ejecuciones. Eso —y no la contención de bloqueos que se
-     * supuso primero— es lo que estaba ralentizando la suite completa: varios
-     * servidores olvidados trabajando a la vez sobre el mismo PostgreSQL.
+     * después de dos ejecuciones.
+     *
+     * Es un fallo real por sí mismo, y conviene no atribuirle más de lo que es:
+     * lo que ralentizaba la suite completa era este fichero corriendo DENTRO de
+     * ella, no los huérfanos. Medido: con el fichero dentro, la suite no
+     * terminaba en siete minutos; con el fichero fuera y los huérfanos todavía
+     * vivos, 222 s, igual que antes de la Fase 0.
      */
     servidor = spawn("npx", ["tsx", "server/index.ts"], {
       detached: true,
