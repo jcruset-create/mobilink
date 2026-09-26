@@ -8,11 +8,12 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   getAppUsuarioDeEmpleado, crearUsuarioAuth, guardarAppUsuario,
-  resetPasswordUsuario, listTcEmpresas, type AppUsuario,
+  resetPasswordUsuario, listTcEmpresas, licenciasDeUsuario, type AppUsuario,
 } from "../../administracion/services/data";
 import AccesosModulos from "../../administracion/components/AccesosModulos";
 import {
-  accesosAPayload, estadoInicialAccesos, type AccesoEdit,
+  accesosAPayload, estadoInicialAccesos, modulosGuardados,
+  type AccesoEdit, type LicenciaModulo,
 } from "../../administracion/components/accesosModulosHelpers";
 import { usuarioSugerido } from "./usuarioSugerido";
 
@@ -36,6 +37,8 @@ export default function AccesoEmpleado({ empleado }: { empleado: Empleado }) {
   const [activo, setActivo] = useState(true);
   const [empresas, setEmpresas] = useState<{ id: string; nombre: string }[]>([]);
   const [accesos, setAccesos] = useState<Record<string, AccesoEdit>>(() => estadoInicialAccesos());
+  const [licencias, setLicencias] = useState<LicenciaModulo[] | null>(null);
+  const [yaGuardados, setYaGuardados] = useState<Set<string>>(() => new Set());
   const [guardando, setGuardando] = useState(false);
 
   const [pinNuevo, setPinNuevo] = useState("");
@@ -50,6 +53,10 @@ export default function AccesoEmpleado({ empleado }: { empleado: Empleado }) {
       setUsername(u?.username ?? usuarioSugerido(empleado.nombre, empleado.apellidos));
       setActivo(u?.activo ?? true);
       setAccesos(estadoInicialAccesos(u?.accesos));
+      // Los módulos que ya tenía no se bloquean nunca, aunque su licencia
+      // haya vencido: editar la ficha de alguien no puede quitarle accesos.
+      setYaGuardados(modulosGuardados(u?.accesos));
+      setLicencias(await licenciasDeUsuario(u?.id));
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se pudo consultar el acceso.");
     } finally {
@@ -159,7 +166,8 @@ export default function AccesoEmpleado({ empleado }: { empleado: Empleado }) {
         <p className="text-xs text-slate-400">
           Sin ningún módulo marcado la persona tiene cuenta pero no entra a nada.
         </p>
-        <AccesosModulos accesos={accesos} empresas={empresas} onChange={setAccesos} />
+        <AccesosModulos accesos={accesos} empresas={empresas} onChange={setAccesos}
+          licencias={licencias} yaGuardados={yaGuardados} />
         <div className="flex justify-end">
           <button onClick={() => void guardar()} disabled={guardando} className={btn}>
             {guardando ? "Guardando…" : cuenta ? "Guardar acceso" : "Crear acceso"}
