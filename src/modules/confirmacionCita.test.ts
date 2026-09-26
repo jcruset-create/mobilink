@@ -9,6 +9,8 @@ import {
   estadoEnvioDeTwilio,
   intencionDeRespuesta,
   planDeConfirmacion,
+  enSilencio,
+  fueraDelSilencio,
   respuestaYaAplicada,
   rotuloConfirmacion,
   rotuloEnvio,
@@ -350,5 +352,120 @@ describe("planDeConfirmacion", () => {
   it("no-procede no es lo mismo que pendiente", () => {
     expect(rotuloConfirmacion("not_requested").texto).toBe("No solicitada · cita inmediata");
     expect(rotuloConfirmacion("not_requested").icono).not.toBe("⏳");
+  });
+});
+
+describe("horario de silencio (22:00–08:00 Europe/Madrid)", () => {
+  /*
+   * Los instantes se escriben con desfase explícito (+02:00, que es Madrid en
+   * septiembre) y no como «2026-09-27T23:00:00». Sin el desfase, `Date` los
+   * interpreta en la zona del sistema, y entonces la prueba diría una cosa en
+   * un portátil y otra en la CI, que corre en UTC. Una prueba de horas que
+   * depende de la hora de la máquina no prueba nada.
+   */
+  const madrid = (iso: string) => new Date(`${iso}+02:00`).getTime();
+  const H = 60 * 60 * 1000;
+
+  /** La cita, con su creación y su hora, ya en milisegundos. */
+  function cita(creadaIso: string, citaIso: string, extra: Record<string, unknown> = {}) {
+    return {
+      status: "programado",
+      customerPhone: "600111222",
+      createdAtMs: madrid(creadaIso),
+      ...extra,
+      _citaAtMs: madrid(citaIso),
+    } as any;
+  }
+
+  const plan = (c: any, ahoraMs: number) =>
+    planDeConfirmacion(c, { ahoraMs, citaAtMs: c._citaAtMs, zona: "Europe/Madrid" });
+
+  it("1 · un envío calculado a las 23:00 se pospone a las 08:00 del día siguiente", () => {
+    // Cita el 28 a las 23:00 → T−24 h cae el 27 a las 23:00, ya de noche.
+    const c = cita("2026-09-20T10:00:00", "2026-09-28T23:00:00");
+    const alba = madrid("2026-09-28T08:00:00");
+
+    expect(plan(c, madrid("2026-09-27T23:30:00"))).toMatchObject({
+      accion: "esperar",
+      desdeMs: alba,
+    });
+    expect(plan(c, alba)).toMatchObject({ accion: "enviar" });
+  });
+
+  it("2 · un envío calculado a las 03:00 se pospone a las 08:00 del mismo día", () => {
+    // Cita el 28 a las 03:00 → T−24 h cae el 27 a las 03:00, de madrugada.
+    const c = cita("2026-09-20T10:00:00", "2026-09-28T03:00:00");
+    const alba = madrid("2026-09-27T08:00:00");
+
+    expect(plan(c, madrid("2026-09-27T03:00:00"))).toMatchObject({
+      accion: "esperar",
+      desdeMs: alba,
+    });
+    expect(plan(c, alba)).toMatchObject({ accion: "enviar" });
+  });
+
+  it("3 · pospuesto a las 08:00 con más de 2 h de margen: se manda", () => {
+    // Creada a las 21:30, cita al día siguiente a las 12:00. La regla de la
+    // hora daría 22:30; corrido a las 08:00 quedan cuatro horas, que sirven.
+    const c = cita("2026-09-27T21:30:00", "2026-09-28T12:00:00");
+    const alba = madrid("2026-09-28T08:00:00");
+
+    expect(plan(c, madrid("2026-09-27T22:30:00"))).toMatchObject({
+      accion: "esperar",
+      desdeMs: alba,
+    });
+    expect(c._citaAtMs - alba).toBe(4 * H);
+    expect(plan(c, alba)).toMatchObject({ accion: "enviar" });
+  });
+
+  it("4 · pospuesto a las 08:00 con menos de 2 h de margen: no se pregunta", () => {
+    // Creada a las 23:50, cita al día siguiente a las 09:00. A las 08:00
+    // quedaría una hora: preguntar «¿confirmas?» con el cliente ya de camino
+    // no aporta nada y deja un pendiente que nadie resuelve.
+    const c = cita("2026-09-27T23:50:00", "2026-09-28T09:00:00");
+    expect(plan(c, madrid("2026-09-28T00:50:00"))).toMatchObject({ accion: "no-procede" });
+    expect(plan(c, madrid("2026-09-28T08:00:00"))).toMatchObject({ accion: "no-procede" });
+  });
+
+  it("5 · una cita cancelada durante el silencio no se manda al amanecer", () => {
+    // El aplazamiento no es una cola ciega: cuando llegan las 08:00 se vuelve
+    // a decidir con el estado de ESE momento.
+    const c = cita("2026-09-27T21:30:00", "2026-09-28T12:00:00", { status: "cancelado" });
+    expect(plan(c, madrid("2026-09-28T08:00:00"))).toMatchObject({
+      accion: "nada",
+      motivo: "cita cancelado",
+    });
+  });
+
+  it("6 · una cita confirmada por otra vía antes de las 08:00 tampoco sale", () => {
+    // Llamó por teléfono a las dos de la mañana, o lo hizo recepción a mano.
+    const c = cita("2026-09-27T21:30:00", "2026-09-28T12:00:00", {
+      confirmationStatus: "confirmed",
+      confirmedAtMs: madrid("2026-09-28T02:00:00"),
+    });
+    expect(plan(c, madrid("2026-09-28T08:00:00"))).toMatchObject({
+      accion: "nada",
+      motivo: "ya confirmed",
+    });
+  });
+
+  it("7 · a las 08:00 en punto ya no es silencio, y a las 21:59 tampoco", () => {
+    expect(enSilencio(madrid("2026-09-27T08:00:00"), "Europe/Madrid")).toBe(false);
+    expect(enSilencio(madrid("2026-09-27T21:59:00"), "Europe/Madrid")).toBe(false);
+    expect(enSilencio(madrid("2026-09-27T22:00:00"), "Europe/Madrid")).toBe(true);
+    expect(enSilencio(madrid("2026-09-27T07:59:00"), "Europe/Madrid")).toBe(true);
+  });
+
+  it("8 · un envío de día no se mueve", () => {
+    const tarde = madrid("2026-09-27T17:00:00");
+    expect(fueraDelSilencio(tarde, "Europe/Madrid")).toBe(tarde);
+  });
+
+  it("9 · el silencio se mide en Madrid, no en la zona del servidor", () => {
+    // Las 23:30 de Madrid son las 21:30 UTC. Un servidor que mirara su propio
+    // reloj creería que aún es horario diurno y mandaría el WhatsApp.
+    const noche = madrid("2026-09-27T23:30:00");
+    expect(enSilencio(noche, "Europe/Madrid")).toBe(true);
+    expect(enSilencio(noche, "UTC")).toBe(false);
   });
 });

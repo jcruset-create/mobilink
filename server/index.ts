@@ -14414,7 +14414,15 @@ async function checkAgendaWhatsAppReminders() {
        * intentar nunca. Al reintentarse cada minuto, en cuanto la plantilla
        * esté configurada las citas en ventana salen solas.
        */
-      const plan = planDeConfirmacion(job, { ahoraMs: nowMs, citaAtMs: appointmentAtMs });
+      const plan = planDeConfirmacion(job, {
+        ahoraMs: nowMs,
+        citaAtMs: appointmentAtMs,
+        // El horario de silencio se mide en la zona de la agenda, no en la del
+        // servidor: Render corre en UTC y en verano eso son dos horas de
+        // diferencia, justo las que separan «a las once de la noche» de «a la
+        // una de la madrugada».
+        zona: AGENDA_TIME_ZONE,
+      });
 
       if (plan.accion === "no-procede") {
         // Se deja escrito para que la agenda no diga «pendiente» de algo que

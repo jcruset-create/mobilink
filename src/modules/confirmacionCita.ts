@@ -167,6 +167,90 @@ export const ESPERA_TRAS_CREAR_MS = 60 * 60 * 1000;
 /** Cuánto se tolera llegar tarde: un servidor apagado no debe perder el aviso. */
 export const GRACIA_MS = 12 * 60 * 60 * 1000;
 
+/* ── Horario de silencio ──────────────────────────────────────────────────── */
+
+/** A partir de esta hora no se molesta a nadie. */
+export const SILENCIO_DESDE = 22;
+
+/** Y hasta ésta. Las 08:00 en punto ya valen. */
+export const SILENCIO_HASTA = 8;
+
+export const ZONA_POR_DEFECTO = "Europe/Madrid";
+
+/** Las partes de un instante en una zona horaria. */
+function partesEnZona(ms: number, zona: string) {
+  const f = new Intl.DateTimeFormat("en-US", {
+    timeZone: zona,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const p: Record<string, number> = {};
+  for (const parte of f.formatToParts(new Date(ms))) {
+    if (parte.type !== "literal") p[parte.type] = Number(parte.value);
+  }
+  // A medianoche, `hour12: false` da 24 en algunos entornos.
+  if (p.hour === 24) p.hour = 0;
+  return p as { year: number; month: number; day: number; hour: number; minute: number; second: number };
+}
+
+/** Diferencia entre la hora local de esa zona y UTC, en milisegundos. */
+function desfaseDeZona(ms: number, zona: string): number {
+  const p = partesEnZona(ms, zona);
+  return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - ms;
+}
+
+/**
+ * El instante en que en esa zona son tal día a tal hora.
+ *
+ * Se calcula al revés —se parte de la hora como si fuera UTC y se corrige por
+ * el desfase— porque JavaScript no sabe construir una fecha en una zona que no
+ * sea la del sistema. Se itera dos veces: la primera corrección puede caer al
+ * otro lado de un cambio de hora, y la segunda lo ajusta.
+ */
+function msDeHoraLocal(
+  y: number, mes: number, dia: number, hora: number, zona: string
+): number {
+  let t = Date.UTC(y, mes - 1, dia, hora, 0, 0);
+  for (let i = 0; i < 2; i++) t = Date.UTC(y, mes - 1, dia, hora, 0, 0) - desfaseDeZona(t, zona);
+  return t;
+}
+
+/** ¿Este instante cae en el horario de silencio? */
+export function enSilencio(ms: number, zona: string = ZONA_POR_DEFECTO): boolean {
+  const h = partesEnZona(ms, zona).hour;
+  return h >= SILENCIO_DESDE || h < SILENCIO_HASTA;
+}
+
+/**
+ * El mismo instante, corrido a las 08:00 si caía de noche.
+ *
+ * No se manda una solicitud de confirmación a las tres de la mañana. Un
+ * WhatsApp del taller a esa hora despierta a alguien, y lo que consigue es que
+ * la siguiente vez silencie el número.
+ */
+export function fueraDelSilencio(ms: number, zona: string = ZONA_POR_DEFECTO): number {
+  if (!enSilencio(ms, zona)) return ms;
+
+  const p = partesEnZona(ms, zona);
+  // Antes de las 8 es la mañana de HOY; a partir de las 22, la de mañana.
+  if (p.hour < SILENCIO_HASTA) {
+    return msDeHoraLocal(p.year, p.month, p.day, SILENCIO_HASTA, zona);
+  }
+  const manana = new Date(Date.UTC(p.year, p.month - 1, p.day) + 24 * 60 * 60 * 1000);
+  return msDeHoraLocal(
+    manana.getUTCFullYear(),
+    manana.getUTCMonth() + 1,
+    manana.getUTCDate(),
+    SILENCIO_HASTA,
+    zona
+  );
+}
+
 export type PlanConfirmacion =
   /** No hay nada que hacer, y por qué. */
   | { accion: "nada"; motivo: string }
@@ -206,7 +290,12 @@ export function planDeConfirmacion(
     confirmationWhatsappAttemptCount?: unknown;
     createdAtMs?: unknown;
   },
-  momento: { ahoraMs: number; citaAtMs: number | null; graciaMs?: number }
+  momento: {
+    ahoraMs: number;
+    citaAtMs: number | null;
+    graciaMs?: number;
+    zona?: string;
+  }
 ): PlanConfirmacion {
   const estado = String(cita?.status ?? "");
   if (["cancelado", "eliminado", "cerrado", "realizado"].includes(estado)) {
@@ -247,10 +336,21 @@ export function planDeConfirmacion(
     return { accion: "no-procede" };
   }
 
-  const cuando =
+  const calculado =
     antelacion == null || antelacion > ANTELACION_NORMAL_MS
       ? citaAtMs - ANTELACION_NORMAL_MS
       : creada + ESPERA_TRAS_CREAR_MS;
+
+  // De noche no se molesta: se corre a las 08:00 siguientes.
+  const cuando = fueraDelSilencio(calculado, momento.zona ?? ZONA_POR_DEFECTO);
+
+  /*
+   * Y al correrlo puede quedarse sin sentido: si a las 08:00 la cita es a las
+   * 09:00, preguntar «¿confirmas?» con una hora de margen no sirve de nada —el
+   * cliente ya va de camino o ya no llega— y deja la agenda llena de
+   * pendientes que nadie va a resolver.
+   */
+  if (citaAtMs - cuando < ANTELACION_MINIMA_MS) return { accion: "no-procede" };
 
   if (momento.ahoraMs < cuando) return { accion: "esperar", desdeMs: cuando };
 

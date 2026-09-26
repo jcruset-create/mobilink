@@ -77,6 +77,15 @@ describe("el envío de 24 h lo atiende un solo sitio", () => {
     expect(i).toBeLessThan(j);
   });
 
+  it("el horario de silencio se mide en la zona de la agenda", () => {
+    // Render corre en UTC. Sin pasar la zona, el módulo usaría su valor por
+    // defecto y acertaría por casualidad; el día que alguien cambie
+    // AGENDA_TIME_ZONE, los WhatsApp saldrían de noche sin que nada avise.
+    const i = INDEX.indexOf("planDeConfirmacion(job, {");
+    expect(i).toBeGreaterThan(0);
+    expect(sinComentarios(INDEX.slice(i, i + 600))).toContain("zona: AGENDA_TIME_ZONE");
+  });
+
   it("una cita a menos de dos horas se marca como no solicitada", () => {
     expect(INDEX).toContain("marcarNoSolicitada(job.id)");
   });
