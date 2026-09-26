@@ -29,6 +29,40 @@ workflows:
       # si no coincide, Codemagic no encuentra la integración y no compila.
       app_store_connect: Mobilink Assist
 
+    # ── Cómo se lanza ────────────────────────────────────────────────────
+    #
+    # Hasta ahora sólo salía con «Start new build» a mano en la web de
+    # Codemagic, y eso es lo que ha ido dejando atrás la versión de iOS: la
+    # APK se publica sola en cada merge a main y el .ipa dependía de que
+    # alguien se acordara de entrar. Mismo disparador que TyreControl y
+    # Taller, que ya lo tenían:
+    #
+    #   git tag assist-ios-1 && git push origin assist-ios-1
+    #   git push origin main:assist-ios/1
+    #
+    # Y con etiqueta a propósito, no en cada push a main: cada build gasta un
+    # número de build de TestFlight y cuarenta minutos de Mac, así que subir
+    # a TestFlight es una decisión, no un efecto secundario de mergear.
+    #
+    # El número que va detrás no es la versión de la app —ésa la pone
+    # IOS_VERSION más abajo— sino sólo para no repetir etiqueta.
+    #
+    # El botón de la UI sigue funcionando igual.
+    triggering:
+      events:
+        - tag
+        - push
+      tag_patterns:
+        - pattern: 'assist-ios-*'
+          include: true
+      branch_patterns:
+        - pattern: 'assist-ios/*'
+          include: true
+      # Dos etiquetas seguidas son dos entregas distintas, no una corrección de
+      # la anterior: cancelar la primera dejaría su número de build gastado sin
+      # nada en TestFlight.
+      cancel_previous_builds: false
+
     environment:
       # ── Versión EXACTA, no «stable» ────────────────────────────────────
       #
