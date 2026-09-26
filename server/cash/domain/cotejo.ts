@@ -66,6 +66,16 @@ export type LineaMobilink = {
   importeCentimos: Centimos;
   tipo: "COBRO" | "PAGO" | "ABONO";
   concepto?: string | null;
+  /**
+   * Las partes en las que el ERP puede haberla apuntado, si se sabe.
+   *
+   * El pago de una liquidación de gastos es UNA salida del cajón por el total,
+   * pero en Genes se apunta una línea por concepto: «DIETAS IVAN 66,40» y
+   * «AUTOPISTAS IVAN 15,88» por un pago de 82,28. Con el desglose delante, el
+   * cotejo puede casar las dos líneas con el mismo pago en vez de dar las tres
+   * por sueltas.
+   */
+  desglose?: readonly { concepto: string; importeCentimos: Centimos }[];
 };
 
 /**
@@ -220,7 +230,9 @@ export type Emparejada = {
   erp: LineaErp;
   mobilink: LineaMobilink;
   /** Por qué se emparejaron. Se enseña: no es lo mismo una que otra. */
-  por: "referencia" | "importe";
+  por: "referencia" | "importe" | "desglose";
+  /** Con `desglose`: qué parte de la operación de Mobilink es esta línea del ERP. */
+  parte?: string;
 };
 
 /**
@@ -411,6 +423,37 @@ export function cotejar(
       ambiguas.push({ erp: e, candidatos: encajan });
       pendientesErp.splice(pendientesErp.indexOf(e), 1);
     }
+  }
+
+  // ── Pasada del desglose: una operación, varias líneas en el ERP ──────────
+  //
+  // Después de la de importe entero, para que un ERP que sí la apuntó en una
+  // sola línea la case ahí. Y con la misma regla de no elegir: por cada
+  // importe del desglose tiene que haber en el ERP EXACTAMENTE tantas líneas
+  // de ese importe, tipo y forma como partes lo tienen —dos partes de 10 €
+  // piden dos líneas de 10 €, y da igual cuál es cuál: van al mismo pago—, y
+  // tiene que pasar con TODAS. Si una parte falta o sobran candidatas, no se
+  // casa ninguna: medio pago emparejado diría que cuadra algo que no se sabe.
+  for (const m of [...pendientesMob]) {
+    if (!m.desglose || m.desglose.length < 2) continue;
+    const candidatas = (importe: Centimos) =>
+      pendientesErp.filter((e) => {
+        if (e.tipo !== m.tipo || e.importeCentimos !== importe) return false;
+        const r = resolver(e.formaErp);
+        return r.estado === "resuelta" && r.codigo === m.formaCodigo;
+      });
+    const porImporte = new Map<Centimos, number>();
+    for (const parte of m.desglose) porImporte.set(parte.importeCentimos, (porImporte.get(parte.importeCentimos) ?? 0) + 1);
+    if (![...porImporte].every(([importe, n]) => candidatas(importe).length === n)) continue;
+
+    const usadas = new Set<LineaErp>();
+    for (const parte of m.desglose) {
+      const e = candidatas(parte.importeCentimos).find((x) => !usadas.has(x))!;
+      usadas.add(e);
+      emparejadas.push({ erp: e, mobilink: m, por: "desglose", parte: parte.concepto });
+    }
+    for (const e of usadas) pendientesErp.splice(pendientesErp.indexOf(e), 1);
+    sacar(pendientesMob, m);
   }
 
   // ── Tercera pasada: mismo importe, forma distinta ─────────────────────────

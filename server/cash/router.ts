@@ -1185,7 +1185,10 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.view"),
     ruta(async (req, res) => {
       const sessionId = enteroPositivo(req.params.id, "id");
-      const pdf = await informeCierre(req.authCtx!.empresaId, sessionId);
+      // `?justificantes=0`: solo la hoja del cierre, la que se imprime sola al cerrar.
+      const pdf = await informeCierre(req.authCtx!.empresaId, sessionId, {
+        conJustificantes: req.query.justificantes !== "0",
+      });
       const sesion = await obtenerSesion(sessionId);
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader(

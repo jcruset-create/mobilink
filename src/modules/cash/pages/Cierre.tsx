@@ -34,6 +34,7 @@ import { AvisoPendientes } from "./CambioBanco";
 import { AvisoAutoScanPendiente } from "../components/BandejaAutoScan";
 import { repartirIngreso, valorEnvasado } from "../utils/cierre";
 import * as api from "../services/api";
+import { imprimirPdf } from "../utils/imprimir";
 
 export default function Cierre() {
   const { jornada, denominaciones, cajas, refrescar } = useCash();
@@ -131,9 +132,15 @@ export default function Cierre() {
     void pedirPropuesta();
   }, [fondoFijo, jornada, pedirPropuesta]);
 
-  if (!jornada) return <Aviso tono="aviso">No hay ninguna jornada abierta.</Aviso>;
-
+  /*
+   * La cerrada ANTES que la falta de jornada: al cerrar, `refrescar()` deja la
+   * caja sin jornada abierta, y en el orden contrario la pantalla contestaba
+   * «No hay ninguna jornada abierta» justo después de cerrar, sin el resumen
+   * ni el informe.
+   */
   if (cerrada) return <Cerrada r={cerrada} />;
+
+  if (!jornada) return <Aviso tono="aviso">No hay ninguna jornada abierta.</Aviso>;
 
   /*
    * Lo que se reparte es EL ARQUEO, no el stock teórico.
@@ -672,9 +679,51 @@ function pistaPrecintos(
 }
 
 function Cerrada({ r }: { r: Awaited<ReturnType<typeof api.cerrarJornada>> }) {
+  /*
+   * La hoja del cierre sale sola por la impresora al cerrar. Solo la hoja: los
+   * justificantes ya están en papel y van en el informe completo, abajo.
+   */
+  const rutaCierre = `/sessions/${r.sesion.id}/report.pdf?justificantes=0`;
+  const [impresion, setImpresion] = useState<"enviando" | "enviada" | string>("enviando");
+  const yaImpresa = useRef(false);
+
+  const imprimir = useCallback(async () => {
+    setImpresion("enviando");
+    try {
+      await imprimirPdf(rutaCierre);
+      setImpresion("enviada");
+    } catch (e) {
+      setImpresion(e instanceof Error ? e.message : "No se ha podido imprimir el cierre.");
+    }
+  }, [rutaCierre]);
+
+  useEffect(() => {
+    // Una vez: en desarrollo React monta dos veces, y saldrían dos hojas.
+    if (yaImpresa.current) return;
+    yaImpresa.current = true;
+    void imprimir();
+  }, [imprimir]);
+
   return (
     <div className="space-y-3">
       <Cabecera titulo="Jornada cerrada" descripcion="El cambio final aparecerá mañana como fondo inicial." />
+
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <span className={impresion === "enviando" || impresion === "enviada" ? "text-slate-300" : "text-amber-300"}>
+          {impresion === "enviando"
+            ? "Preparando el cierre para imprimir…"
+            : impresion === "enviada"
+              ? "Cierre enviado a la impresora. Si no ha salido el diálogo de impresión, pulsa el botón."
+              : impresion}
+        </span>
+        <button
+          onClick={() => void imprimir()}
+          disabled={impresion === "enviando"}
+          className="inline-flex items-center gap-1 rounded-lg bg-slate-700 px-3 py-1.5 text-sm text-slate-100 hover:bg-slate-600 disabled:opacity-50"
+        >
+          <Printer className="h-4 w-4" /> Imprimir el cierre
+        </button>
+      </div>
 
       <Aviso tono={r.diferenciaCentimos === 0 ? "bien" : "aviso"}>
         {r.diferenciaCentimos === 0

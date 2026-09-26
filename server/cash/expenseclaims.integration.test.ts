@@ -36,6 +36,7 @@ let pago: typeof import("./expenseclaims/pago.ts");
 let stats: typeof import("./expensestats.ts");
 let analisis: typeof import("./expenseclaims/analisis.ts");
 let empleados: typeof import("./expenseclaims/empleados.ts");
+let cotejoErp: typeof import("./cotejoErp.ts");
 
 const EMPRESA = "00000000-0000-4000-a000-0000000000f7";
 const PRESENTA = "00000000-0000-4000-a000-0000000000f8";
@@ -98,6 +99,7 @@ beforeAll(async () => {
   documentos = await import("./documents.ts");
   liquidaciones = await import("./expenseclaims/service.ts");
   tickets = await import("./expenseclaims/lines.ts");
+  cotejoErp = await import("./cotejoErp.ts");
   informe = await import("./expenseclaims/report.ts");
   pago = await import("./expenseclaims/pago.ts");
   stats = await import("./expensestats.ts");
@@ -613,6 +615,46 @@ describe.runIf(RUN)("Liquidaciones · el pago", () => {
       { empresaId: EMPRESA, desde: fecha, hasta: fecha, granularidad: "dia", centroId: null, conceptoId: null },
       false
     );
+
+  it("en el cotejo con el ERP el pago lleva su desglose por concepto, y casa con Genes partido", async () => {
+    const l = await aprobada82();
+    const r = await pago.pagarLiquidacion(ctxJefe, l.id, enEfectivo(`cotejo-${randomUUID()}`));
+
+    const { lineas } = await cotejoErp.leerJornada(EMPRESA, sesion);
+    const suya = lineas.find((x) => x.id === r.pago.operacionId)!;
+    expect(suya.desglose).toEqual([
+      { concepto: `Dietas ${sufijo}`, importeCentimos: 6640 },
+      { concepto: `Peajes ${sufijo}`, importeCentimos: 1588 },
+    ]);
+
+    // Si las partes no sumaran el pago —un ticket tocado después—, sin desglose: no se inventa.
+    const { rows: [unTicket] } = await db.query(
+      `SELECT id FROM cash_expense_claim_lines WHERE claim_id = $1 ORDER BY id LIMIT 1`,
+      [l.id]
+    );
+    await db.query(`UPDATE cash_expense_claim_lines SET importe_centimos = importe_centimos + 1 WHERE id = $1`, [unTicket.id]);
+    const tocada = (await cotejoErp.leerJornada(EMPRESA, sesion)).lineas.find((x) => x.id === r.pago.operacionId)!;
+    expect(tocada.desglose).toBeUndefined();
+    await db.query(`UPDATE cash_expense_claim_lines SET importe_centimos = importe_centimos - 1 WHERE id = $1`, [unTicket.id]);
+
+    // Así lo apunta Genes: una línea por concepto, las dos CONTADO.
+    const { cotejar } = await import("./domain/cotejo.ts");
+    const inf = cotejar(
+      [
+        { formaErp: "CONTADO", importeCentimos: 6640, tipo: "PAGO", concepto: "DIETAS JUAN" },
+        { formaErp: "CONTADO", importeCentimos: 1588, tipo: "PAGO", concepto: "AUTOPISTAS JUAN" },
+      ],
+      [suya],
+      new Map([["CONTADO", "CASH"]])
+    );
+    expect(inf.cuadra).toBe(true);
+    expect(inf.emparejadas.map((e) => e.por)).toEqual(["desglose", "desglose"]);
+
+    // Con el pago anulado ya no está en la jornada, ni con desglose ni sin él.
+    await servicio.anularOperacion(ctxJefe, r.pago.operacionId, "prueba del cotejo");
+    const tras = await cotejoErp.leerJornada(EMPRESA, sesion);
+    expect(tras.lineas.some((x) => x.id === r.pago.operacionId)).toBe(false);
+  });
 
   it("sale UN pago por el total, del cajón, y los tickets quedan como sus justificantes", async () => {
     const l = await aprobada82();

@@ -339,6 +339,13 @@ Un justificante ilegible o que ya no esté **no rompe el informe**: sale una
 página diciéndolo, con su número de operación. Un cierre sin informe por una
 factura corrupta sería peor que un informe con un hueco señalado.
 
+
+**Al cerrar, la hoja del cierre se imprime sola.** Sin los justificantes, que
+ya están en papel en el cajón (`/sessions/:id/report.pdf?justificantes=0`); el
+informe completo sigue en su botón. Se carga en un iframe invisible y sale el
+diálogo de impresión del navegador. Imprimir sin diálogo lo tiene que activar
+quien administra el PC (Chrome con `--kiosk-printing`); una página web no puede.
+
 ## 7 quinquies. Ingresos bancarios
 
 El cierre de cada jornada aparta un importe "para el banco"
@@ -738,6 +745,20 @@ referencia, importe+forma, y mismo importe con forma distinta. La tercera va la
 resultado **no cuenta como cuadrado**. Con dos candidatos del mismo importe no
 se elige: se declara ambiguo. Un emparejamiento inventado es peor que un hueco
 señalado, porque el hueco se ve y el invento no.
+
+**Lo de la gasolinera no se coteja.** Taller y gasolinera comparten cajón
+pero en Genes son dos cajas, y el arqueo del taller no trae los cobros del
+surtidor. Las operaciones de una sección marcada «Se arquea aparte»
+(Configuración → Secciones de negocio) se dejan fuera del cotejo, y la pantalla
+dice cuántas y por cuánto, para que nadie las dé por perdidas.
+
+**El pago de una liquidación casa con Genes partido.** En Mobilink es un solo
+pago por el total; en Genes se apunta una línea por concepto («DIETAS IVAN
+66,40», «AUTOPISTAS IVAN 15,88» por un pago de 82,28). Ese pago llega al cotejo
+con su desglose por concepto (solo si salió por una forma y las partes suman el
+pago), y una pasada después de la de importe entero casa cada parte con su
+línea: mismo tipo, importe y forma, tantas líneas de cada importe como partes,
+y todas o ninguna.
 
 ### Las etiquetas que el ERP corta
 
