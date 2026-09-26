@@ -173,3 +173,32 @@ Las marcadas con ❓ son tuyas. Las demás son la propuesta por defecto.
 - Todos los importes, fechas y números de ticket se leen en la hoja impresa.
 - Una factura A4 de Genes sale igual que hoy.
 - El informe de cierre de un día normal usa claramente menos hojas que hoy.
+
+## F. Lo que se decidió y lo que entró
+
+Decidido:
+- **Al 100 %, reduciendo hasta el 80 % por grupo** solo si con eso sobra una
+  hoja (la mayor escala que da el mínimo de hojas).
+- **Tickets al final.**
+- **En los tres informes.**
+- **Fotos como hoy**: no hubo respuesta y se aplicó la propuesta por defecto.
+
+Desvíos respecto al prompt, y por qué:
+- **Mínimo del 80 %, no del 70 %.** Decisión tuya.
+- **El recorte se busca a 72 ppp y con umbral 200 sobre 255, no a 36 ppp y
+  140.** Con los tickets reales, el peaje de Calafell (impresión gris clara)
+  quedaba recortado al código de barras y perdía el importe. Se ve solo al
+  montarlo con los escaneos de verdad. Además, un recorte que se come más del
+  40 % de un ticket de papel pequeño se descarta (`recorteFiable`).
+- **Una casilla de aviso en el mosaico (C.9) no entró.** Un justificante que
+  no se puede leer sigue saliendo en su propia hoja de aviso, como antes. Es
+  raro y ya se ve bien.
+- **Cada importe cuenta una vez en la cabecera del grupo.** En el cierre, el
+  albarán y el ticket del datáfono de un mismo cobro llevan el mismo importe.
+- **Los tickets de una liquidación pagada, en el cierre, van con su concepto
+  y su importe** (el de la línea, por la misma ruta), no con los del pago
+  entero.
+
+Resultado con la semana real de Ivan: dietas, 4 en una hoja al 100 %; peajes,
+4 en una hoja al 98 %, porque el de Calafell recortado entero mide 131 mm y al
+100 % no cabían dos filas.

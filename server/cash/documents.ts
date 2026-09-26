@@ -405,18 +405,50 @@ export async function conteoPorOperacion(sessionId: number): Promise<Map<number,
 }
 
 /** Todos los de una jornada, en orden de operación. Es lo que lleva el informe. */
+/** Cómo se agrupan en las hojas de tickets los justificantes sin concepto de gasto. */
+const GRUPO_POR_TIPO: Record<string, string> = {
+  COLLECTION: "Cobros",
+  REFUND: "Abonos",
+  PAYMENT: "Pagos",
+};
+
 export async function documentosDeJornada(sessionId: number): Promise<
-  (DocumentoOperacion & { ruta: string; operacionNumero: string; operacionTipo: string })[]
+  (DocumentoOperacion & {
+    ruta: string;
+    operacionNumero: string;
+    operacionTipo: string;
+    /** Con qué otros tickets va en la hoja: el concepto de gasto, o el tipo de operación. */
+    grupo: string;
+    /** El del ticket si es de una liquidación; si no, el de la operación. */
+    importeCentimos: number | null;
+    /** Si el importe es el del ticket (liquidación) y no el de la operación entera. */
+    importeTicket: boolean;
+  })[]
 > {
   const { rows } = await pool.query(
     /*
      * LEFT JOIN, no JOIN: los documentos de la jornada entera no tienen
      * operación, y con un JOIN a secas desaparecían del informe justo los que
      * más falta hacen —el taco de facturas del día.
+     *
+     * El ticket de una liquidación pagada es la MISMA ruta que su línea: de
+     * ahí salen su concepto y su importe, que no son los del pago entero.
      */
-    `SELECT d.*, o.numero AS operacion_numero, o.tipo AS operacion_tipo
+    `SELECT d.*, o.numero AS operacion_numero, o.tipo AS operacion_tipo,
+            o.importe_centimos AS operacion_importe,
+            ko.nombre AS concepto_operacion,
+            li.concepto AS concepto_ticket, li.importe_centimos AS importe_ticket
        FROM cash_operation_documents d
        LEFT JOIN cash_operations o ON o.id = d.operation_id
+       LEFT JOIN cash_expense_concepts ko ON ko.id = o.expense_concept_id
+       LEFT JOIN LATERAL (
+         SELECT k.nombre AS concepto, l.importe_centimos
+           FROM cash_expense_claims c
+           JOIN cash_expense_claim_lines l ON l.claim_id = c.id AND l.ruta = d.ruta
+           LEFT JOIN cash_expense_concepts k ON k.id = l.expense_concept_id
+          WHERE d.operation_id IS NOT NULL AND c.operation_pago_id = d.operation_id
+          LIMIT 1
+       ) li ON true
       WHERE d.session_id = $1 AND NOT d.anulado
       ORDER BY o.id NULLS LAST, d.id`,
     [sessionId]
@@ -427,6 +459,18 @@ export async function documentosDeJornada(sessionId: number): Promise<
     ruta: r.ruta,
     operacionNumero: r.operacion_numero ?? "Jornada",
     operacionTipo: r.operacion_tipo ?? "SESSION_DOCUMENT",
+    grupo:
+      r.concepto_ticket ??
+      r.concepto_operacion ??
+      GRUPO_POR_TIPO[r.operacion_tipo] ??
+      (r.operacion_tipo ? "Otros" : "Documentos de la jornada"),
+    importeCentimos:
+      r.importe_ticket != null
+        ? Number(r.importe_ticket)
+        : r.operacion_importe != null
+          ? Number(r.operacion_importe)
+          : null,
+    importeTicket: r.importe_ticket != null,
   }));
   /* eslint-enable @typescript-eslint/no-explicit-any */
 }

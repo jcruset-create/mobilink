@@ -328,6 +328,12 @@ export async function informeLiquidacion(ctx: Contexto, id: number): Promise<Buf
     [id]
   );
   const rutaDe = new Map<number, string>(rutas.map((r: { id: number; ruta: string }) => [r.id, r.ruta]));
+  /*
+   * Los tickets van juntos en hojas A4, agrupados por concepto —todas las
+   * dietas, todos los peajes—, cada uno con su número, su día y su importe
+   * encima. Lo que no es un ticket (una factura A4) va entero, como antes.
+   */
+  const dia = (f: string | null) => (f ? `${f.slice(8, 10)}/${f.slice(5, 7)}` : "sin fecha");
   return montar(
     portada,
     incluidas.map((x, i) => ({
@@ -335,6 +341,10 @@ export async function informeLiquidacion(ctx: Contexto, id: number): Promise<Buf
       mime: x.mime,
       nombre: x.nombre,
       operacionNumero: `${l.numero} · ticket ${i + 1}`,
-    }))
+      grupo: x.conceptoNombre ?? "Sin concepto",
+      rotulo: `Ticket ${i + 1} · ${dia(x.fecha)} · ${formatearEuros(x.importeCentimos)} €`,
+      importeCentimos: x.importeCentimos,
+    })),
+    { titulo: `Liquidación ${l.numero} · ${l.empleadoNombre}` }
   );
 }
