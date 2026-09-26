@@ -20228,17 +20228,72 @@ app.post("/api/administracion/usuarios/eliminar-auth", async (req, res) => {
     if (r.rows.length) return res.status(400).json({ success: false, message: "El usuario aún existe en la aplicación" });
 
     /*
-     * Aquí no se puede comprobar la empresa del objetivo: para llegar a este
-     * punto su ficha ya no existe. La autorización real la hace la RPC
-     * `app_eliminar_usuario`, que es la que borra la ficha antes. Esa RPC tenía
-     * el mismo agujero que este endpoint (solo `app_es_admin()`, sin empresa y
-     * sin proteger a los superadministradores) y se corrige en la migración
-     * preparada `supabase/migraciones-preparadas/`. Mientras la migración no se
-     * aplique, esto queda apoyado en una comprobación insuficiente: está
-     * anotado como residual de la Fase 0.
+     * ── La empresa se comprueba con lo que se apuntó ANTES de borrar la ficha ──
+     *
+     * Aquí ya no existe la relación usuario → empresa: para llegar a este punto
+     * la RPC `app_eliminar_usuario` ha borrado la ficha. Y sin esa relación, este
+     * endpoint aceptaba cualquier `userId` cuya ficha no estuviera. Hay cuentas
+     * de `auth.users` que nunca tuvieron ficha en `app_usuarios` —operarios con
+     * email sintético, usuarios que solo viven en `tc_usuarios`—, así que el
+     * administrador de una empresa podía borrar la cuenta de acceso de alguien
+     * de otra.
+     *
+     * La propiedad que se quiere es que ningún id de `auth.users` llegue a una
+     * operación destructiva sin haber sido autorizado contra su empresa mientras
+     * esa información todavía existía. Por eso el disparador de borrado apunta la
+     * baja en `app_bajas_auth` con la empresa que tenía la ficha y quién la pidió,
+     * y aquí solo se borra lo que esté apuntado y sea de tu empresa.
+     *
+     * Mientras la migración no esté aplicada la tabla no existe. En ese caso no
+     * se abre la puerta: se exige ser superadministrador de plataforma. Es más
+     * estrecho que hoy —hoy vale cualquier admin de módulo de cualquier
+     * empresa— y no deja al dueño de la plataforma sin poder operar.
      */
+    const tieneTabla = await db
+      .query(`SELECT to_regclass('public.app_bajas_auth') AS t`)
+      .then((r) => Boolean(r.rows[0]?.t))
+      .catch(() => false);
+
+    if (!tieneTabla) {
+      if (!admin.esSuperadmin) {
+        console.warn(
+          "[eliminar-auth] app_bajas_auth no existe todavía: solo un superadministrador puede borrar cuentas de Auth"
+        );
+        return res.status(403).json({
+          success: false,
+          message:
+            "Esta operación necesita la migración de seguridad aplicada. Mientras tanto, solo un administrador de Mobilink puede hacerla.",
+        });
+      }
+    } else {
+      const baja = await db.query(
+        `SELECT empresa_id, solicitado_por, creado_en
+           FROM app_bajas_auth
+          WHERE user_id = $1
+            AND creado_en > now() - interval '24 hours'`,
+        [userId]
+      );
+      const fila = baja.rows[0];
+      if (!fila) {
+        // Nunca se autorizó una baja para este id, o ha caducado.
+        return res.status(404).json({ success: false, message: "Ese usuario no existe" });
+      }
+      if (!admin.esSuperadmin) {
+        if (!admin.empresaId || fila.empresa_id !== admin.empresaId) {
+          return res.status(404).json({ success: false, message: "Ese usuario no existe" });
+        }
+      }
+    }
+
     const { error } = await supabase.auth.admin.deleteUser(userId);
     if (error) return res.status(400).json({ success: false, message: error.message });
+
+    // El apunte se consume: una baja autoriza un borrado, no varios.
+    if (tieneTabla) {
+      await db
+        .query(`DELETE FROM app_bajas_auth WHERE user_id = $1`, [userId])
+        .catch((e) => console.warn("[eliminar-auth] no se pudo consumir la baja:", e));
+    }
 
     if (admin.empresaId) {
       void registrarAuditoria({

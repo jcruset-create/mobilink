@@ -232,6 +232,27 @@ describe("SEC-015 · los logins tienen freno", () => {
   });
 });
 
+describe("SEC-005 · el borrado de la cuenta de Auth se autoriza con lo apuntado", () => {
+  it("eliminar-auth exige un apunte de baja de tu empresa", () => {
+    const trozo = sinComentarios(ruta('"/api/administracion/usuarios/eliminar-auth"', 4000));
+    // La empresa ya no se puede leer de la ficha: para cuando llega aquí, la
+    // ficha se ha borrado. Se comprueba contra lo que apuntó el disparador.
+    expect(trozo).toContain("app_bajas_auth");
+    expect(trozo).toContain("admin.empresaId");
+  });
+
+  it("y si la tabla no existe todavía, solo entra un superadministrador", () => {
+    const trozo = sinComentarios(ruta('"/api/administracion/usuarios/eliminar-auth"', 4000));
+    expect(trozo).toContain("tieneTabla");
+    expect(trozo).toContain("admin.esSuperadmin");
+  });
+
+  it("el apunte se consume: una baja autoriza un borrado, no varios", () => {
+    const trozo = sinComentarios(ruta('"/api/administracion/usuarios/eliminar-auth"', 4500));
+    expect(trozo).toContain("DELETE FROM app_bajas_auth");
+  });
+});
+
 describe("SEC-021 · no se sale a internet con una URL de fuera sin lista blanca", () => {
   it("files-from-url pasa por fetchSeguro", () => {
     const trozo = sinComentarios(ruta('"/api/roadside-assistances/:id/files-from-url"', 2600));
