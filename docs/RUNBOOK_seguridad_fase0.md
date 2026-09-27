@@ -168,7 +168,7 @@ migración. Se recogen para diseñar la Fase 1A (login por usuario) y la Fase 1C
 | Fase | Bloqueante que la gobierna | Estado hoy |
 |---|---|---|
 | B · Despliegue del código | 1 (Twilio, A.1) | NO-GO: A.1 NO VERIFICADO |
-| D · Migración SQL | 2 (Supabase, A.2/A.4) | **NO-GO por contenido**: la evidencia ya está (2026-09-26), y ha destapado defectos. Ver `docs/PRECHECK_fase0_supabase.md` §4 |
+| D · Migración SQL | 2 (Supabase, A.2/A.4) | **Sin bloqueantes técnicos** (2026-09-27): defectos corregidos, 30 pruebas en PG 17.6, y las cuatro condiciones de las 42 tablas verificadas. Ver `docs/PRECHECK_fase0_vistas.md` |
 | 1A / 1C | 3 (Auth) | No aplica a Fase 0. Dos supuestos resueltos a favor: 2 superadmins con email de recuperación, 0 colisiones de username |
 
 **Sobre el bloqueante 2, actualización del 2026-09-26.** Dejó de ser falta de
@@ -190,8 +190,15 @@ Y el tamaño real del problema es otro: **188 tablas sin RLS**, no 88. La
 migración cubre 42. Las 146 restantes incluyen `connect_api_keys`, `licenses`,
 `payments` y `cobros`, todas con `anon` en CRUD completo.
 
-Precondición nueva de la Fase D: producción va en **PostgreSQL 17.6** y la
-migración se probó contra 16.13. Repetir las pruebas antes de aplicar.
+Precondición de la Fase D, ya cumplida: producción va en **PostgreSQL 17.6**;
+la migración corregida se ha probado contra un 17.6 compilado del código
+oficial, con doble aplicación, vuelta atrás real y reaplicación, y 30 pruebas
+negativas. `bash scripts/probar-migracion-pg17.sh`.
+
+**Advertencia de alcance para cuando se aplique.** La Fase D cierra 42 tablas
+de 188. Después de aplicarla siguen abiertas las 146 restantes, las 14 vistas
+que se saltan la RLS y las dos tablas de personal. Terminar la Fase D no es
+cerrar SEC-002.
 
 El NO-GO global de hoy lo es **por falta de evidencia del entorno, no por un
 fallo del código de Fase 0**, que está cerrado en laboratorio (334 ficheros de

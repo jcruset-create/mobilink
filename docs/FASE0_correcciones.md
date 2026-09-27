@@ -245,11 +245,11 @@ Condiciones a confirmar antes de aplicar, y cómo se comprueba cada una:
 | # | Condición | Estado | Comprobación |
 |---|---|---|---|
 | 1 | Ninguna aparece en los clientes | **CONFIRMADO** | Barrido de `.from('<tabla>')` en `src/` y en los ocho `*_app/lib`: 0 coincidencias de las 188 sin RLS. Los clientes leen 144 nombres, y las 137 que son tablas ya tienen RLS |
-| 2 | Ninguna dependencia vía vista pública | **NO VERIFICADO** | `vista_tablas_base` de `002_vistas_y_objetos.sql` |
-| 3 | El backend entra con `service_role` | **CONFIRMADO en código**, no en ejecución | El cliente del servidor se construye con `SUPABASE_SERVICE_ROLE_KEY`, que no pasa por RLS |
-| 4 | Activar RLS sin políticas no rompe jobs con otro rol | **NO VERIFICADO** | `otros_roles` de `002_vistas_y_objetos.sql`: si sale algún rol con login que no sea `anon`/`authenticated`/`postgres`, hay que mirarlo |
+| 2 | Ninguna dependencia vía vista pública | **CONFIRMADO (2026-09-27)** | Cero de las 42 está bajo alguna de las 14 vistas |
+| 3 | El backend entra con `service_role` | **CONFIRMADO en el catálogo (2026-09-27)** | `service_role` tiene `BYPASSRLS = true` |
+| 4 | Activar RLS sin políticas no rompe jobs con otro rol | **CONFIRMADO (2026-09-27)** | No existe ningún rol de aplicación propio: todo lo demás es infraestructura de Supabase. Y `service_role` tiene `BYPASSRLS` |
 
-Las condiciones 2 y 4 **siguen bloqueando la Fase D**.
+Las cuatro condiciones están confirmadas. **La Fase D ya no tiene comprobaciones pendientes.**
 
 Postcheck de la propia migración, para después de aplicarla:
 
@@ -347,8 +347,8 @@ probado, no ha llegado a producción), **preparado** (escrito, sin aplicar),
 | SEC-064 | Congelado | Congelado | Sin datos nuevos |
 | SEC-065 · `app_login_email` | Preparado | **Preparado**, probado en 17.6 | Confirmado que `PUBLIC` la expone |
 | SEC-067 · `search_path` | Preparado (3 de ~170) | **Preparado (3 de 132)** | Inventario corregido |
-| **Nuevo · Credencial validada en cliente** | — | **ABIERTO** | `codigo_operario` legible con la clave pública, en `perfiles_usuario` y en `sea_employees`. Misma causa raíz por dos superficies; no se cuenta como dos |
-| **Nuevo · Vistas que se saltan la RLS** | — | **NO VERIFICADO** | Ampliación de alcance de SEC-002, no hallazgo aparte |
+| **Nuevo · Credencial validada en cliente y fichero de personal expuesto** | — | **ABIERTO · severidad subida a crítica (2026-09-27)** | Confirmadas las columnas: `sea_employees` expone a `anon` el **DNI, el número de la Seguridad Social y el domicilio** de cada empleado activo, además del `pin_hash` y el `codigo_operario`. Sigue siendo un solo hallazgo —misma causa raíz, las políticas de `anon` del portal—, con dos impactos: enumeración de credenciales y brecha de datos personales |
+| **Nuevo · Vistas que se saltan la RLS** | — | **CONFIRMADO Y REPRODUCIDO (2026-09-27)** | Las 14 vistas corren como `postgres` y tienen `disu` para `anon`. Probado en 17.6: `anon` lee a través de la vista lo que la tabla le niega, y **escribió una fila en una tabla con RLS** vía `tc_clientes_almacen`. Ampliación de alcance de SEC-002, no hallazgo aparte. No afecta a las 42 |
 
 ---
 
@@ -357,7 +357,7 @@ probado, no ha llegado a producción), **preparado** (escrito, sin aplicar),
 | Fase | Estado | Qué lo bloquea |
 |---|---|---|
 | **B · Código** | **NO-GO** | Solo Twilio. Nada de lo hallado aquí afecta al código |
-| **D · Migración** | **NO-GO** | Las vistas (§5) y los roles (§7, condiciones 2 y 4). Los tres defectos de la revisión 1 están corregidos y probados |
+| **D · Migración** | **Sin bloqueantes técnicos** (actualizado 2026-09-27) | Las cuatro condiciones de §7 están verificadas. Ver `docs/PRECHECK_fase0_vistas.md` |
 | **1A / 1C** | No autorizadas | Sin cambios. Dos supuestos resueltos a favor: 2 superadmins con email de recuperación, 0 colisiones de username |
 
 Nada aplicado, nada desplegado, nada mergeado.
