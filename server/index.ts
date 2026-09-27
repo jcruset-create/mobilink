@@ -16158,18 +16158,20 @@ app.post(
       const urls = [...new Set(candidatos)].map((u) => `${u}/api/whatsapp/inbound`);
 
       /*
-       * La firma se calcula UNA vez y se lleva como bandera.
+       * Sin firma válida no se procesa NADA: el webhook responde 403 y corta.
        *
-       * Los caminos que ya existían —recobros, captura, borradores— siguen
-       * procesándose con firma inválida, exactamente como hasta ahora:
-       * endurecerlos de golpe es romper cosas que hoy funcionan sin saber
-       * cuánto ni a quién.
+       * (Este comentario describía antes un diseño intermedio en el que los
+       * caminos ya existentes —recobros, captura, borradores— seguían
+       * procesándose con firma inválida y solo se protegían las citas. Ese
+       * diseño se descartó y el código de abajo rechaza la petición entera,
+       * pero el comentario se quedó diciendo lo contrario. El guard de
+       * `citasWhatsapp/cableado.test.ts` no lo detectó porque compara el código
+       * SIN comentarios, que es lo correcto para fijar comportamiento y lo que
+       * deja pasar una descripción equivocada.)
        *
-       * Lo que NO se hace nunca con firma inválida es tocar una cita. Quien
-       * consiguiera colar un mensaje confirmaría citas ajenas, y un taller que
-       * da por buena una cita que nadie ha confirmado se queda con el hueco
-       * vacío y el cliente sin avisar. Es el mismo razonamiento que ya llevó a
-       * exigir firma en `server/satisfaction/routerCallback.ts`.
+       * Consecuencia operativa, que hay que tener presente al desplegar: si la
+       * URL configurada en la consola de Twilio no coincide con ninguna de las
+       * candidatas, **deja de entrar todo el WhatsApp**, no solo las citas.
        */
       const firmaValida =
         Boolean(authToken) &&
