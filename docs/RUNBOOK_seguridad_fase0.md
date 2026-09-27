@@ -129,6 +129,49 @@ Ninguna depende del despliegue de código, a diferencia de la Fase D.
 | `007_contencion_safety.sql` | Escritura anónima sobre las diez tablas de Safety | Preparada · prioridad 1 |
 | `005_contencion_vistas.sql` | Cuatro vistas que se saltan la RLS, una de ellas borrable por `anon` | Preparada · prioridad 2 |
 
+### Si algo se rompe tras aplicar 005 o 007 · el orden importa
+
+**El rollback completo no es el primer recurso.** Devolver la escritura anónima
+sobre Safety, o la escritura anónima por vistas, es restaurar el agujero entero
+para arreglar un permiso concreto. Es una medida de emergencia de alto riesgo, y
+se trata como tal.
+
+El orden es:
+
+1. **Identificar qué permiso legítimo se rompió.** Qué pantalla, qué operación,
+   qué rol y sobre qué objeto. El error del cliente suele nombrar la tabla.
+2. **Restaurar solo ese acceso mínimo.** Un `grant select` sobre una tabla, o
+   una política de lectura acotada. Nada más.
+3. **Y anotarlo**, porque un permiso que hizo falta restaurar es un consumidor
+   que el barrido estático no encontró: hay que entender por qué.
+
+Ejemplos de restauración mínima, para no improvisarlos con la pantalla caída:
+
+| Síntoma | Restauración mínima |
+|---|---|
+| Una pantalla del panel deja de escribir en una tabla `sea_*` | `grant insert, update on public.<tabla> to authenticated;` — nunca a `anon` |
+| La ficha del empleado deja de cargar un dato | `create policy <nombre>_lectura on <tabla> for select to anon using (true);` — solo esa tabla, solo `select` |
+| `adm_ot_estado` deja de devolver filas al panel | `alter view adm_ot_estado reset (security_invoker);` — deja la vista como estaba sin devolver el acceso de `anon` |
+| Una vista de TyreControl deja de leerse | `grant select on <vista> to authenticated;` — sin `anon` y sin escritura |
+
+**Solo si nada de lo anterior sirve** se ejecuta el rollback completo del
+fichero correspondiente, y entonces se trata como incidente: la ventana entre el
+rollback y la corrección definitiva es tiempo con el agujero abierto, y hay que
+acortarla deliberadamente, no dejarla correr.
+
+### Después de 007 · el siguiente paso, ya identificado
+
+SEC-008 sigue abierto porque `anon` podrá seguir leyendo `sea_employees` entera.
+El paso siguiente, **sin implementar todavía**, es sustituir ese `select`
+anónimo sobre toda la tabla por una superficie mínima para el portal que no
+exponga `dni_nie`, `num_seguridad_social`, `direccion`, `codigo_postal`,
+`poblacion`, `provincia`, `pin_hash` ni `observaciones`.
+
+La RLS no filtra columnas, así que la forma sería una vista con
+`security_invoker` y solo las columnas que el portal usa, retirando después el
+`select` directo sobre la tabla. Queda anotado para cuando termine la contención
+urgente; no se diseña ahora para no abrir otro frente.
+
 ### Estado de SEC-008 tras aplicar 007
 
 **SEC-008: escritura anónima contenida; exposición de lectura todavía abierta.**
