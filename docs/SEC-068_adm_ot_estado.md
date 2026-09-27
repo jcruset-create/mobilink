@@ -143,7 +143,29 @@ restauración mínima revirtió algo que estaba bien.** No lo afirmo: lo propong
 como la explicación que mejor encaja, y abajo está cómo confirmarla sin tocar
 nada.
 
-### 4.5 Cómo confirmarlo, sin SQL y sin modificar producción
+### 4.6 CONFIRMADO el 2026-09-27
+
+Hecha la comprobación: con la sesión renovada, `/administracion/clientes`
+**carga y muestra clientes**, sin `Invalid Refresh Token` y sin errores de
+autorización. Esa pantalla lee `adm_customers` directamente, sujeta a la misma
+política `adm_can_read()`.
+
+> **`adm_can_read()` es cierto para esa sesión.** Luego la vista vacía del 27
+> no fue un fallo de autorización: fue la sesión.
+
+La causa de que la sesión se cayera está registrada aparte, en
+`docs/INCIDENCIA_gotrue_multiple.md`: el panel crea **tres** clientes de
+Supabase, los tres con refresco automático sobre el mismo almacenamiento, y se
+pisan el token entre ellos.
+
+**Consecuencia:** la restauración mínima del 27 revirtió un cambio que estaba
+bien, y el bypass de `authenticated` sigue abierto sin necesidad.
+`014_adm_ot_estado_invoker.sql` lo cierra con una línea.
+
+**Y `011` queda en suspenso:** si `security_invoker` funciona, su predicado
+sobra, porque la RLS de las tablas base ya hace ese trabajo.
+
+### 4.5 Cómo se confirmó, sin SQL y sin modificar producción
 
 `RoleRoute` da al rol `admin` acceso a **todas** las pantallas del módulo
 (`perfil.rol === "admin" || ...`), y `/administracion/clientes` lee
