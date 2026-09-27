@@ -187,6 +187,55 @@ Doble aplicación sin error, y vuelta atrás comprobada: restaura la escritura.
 
 ---
 
+## 5b. Las nueve tablas que el postcheck de producción destapó
+
+Al aplicar 007 el 2026-09-27, el postcheck encontró nueve tablas `sea_*` más
+donde `anon` conservaba los grants de escritura. Producción tiene **19** tablas
+`sea_*`, no 10.
+
+**Mi postcheck estaba mal**, y de dos maneras:
+
+1. Asumía diez tablas en sus filas 9 y 10, con un número fijo.
+2. Medía `has_table_privilege`, que es **el grant**, y lo presentaba como si
+   fuera la capacidad de escribir. No lo es.
+
+### Lo que realmente puede hacer `anon` en esas nueve
+
+Las nueve tienen RLS activa y **ninguna política para `anon`** —salvo
+`sea_modules`, que tiene un SELECT—. Reproducido en PostgreSQL 17.6:
+
+| Operación como `anon` | Resultado |
+|---|---|
+| `INSERT` | **ERROR: new row violates row-level security policy** |
+| `UPDATE` | permitido, **UPDATE 0** |
+| `DELETE` | permitido, **DELETE 0** |
+
+**No son un agujero abierto.** No es el caso de las diez de 007, que tenían
+`ALL to anon using (true)` y sí se podían modificar de verdad.
+
+Lo que son es una cerradura de menos: el día que alguien añada a una de ellas
+una política de `anon`, el grant que sigue puesto la convierte en escritura.
+
+### Qué protegen
+
+| Tabla | Contenido |
+|---|---|
+| `sea_roles` | Roles y su `permisos jsonb`: el modelo de autorización |
+| `sea_company_modules` | Módulos contratados por cada empresa |
+| `sea_signatures` | Firmas: `firma_url`, `hash`, dispositivo, IP |
+| `sea_consents` | Consentimientos con fecha, dispositivo e IP (RGPD) |
+| `sea_audit_logs` | La traza de auditoría del módulo |
+| `sea_certifications`, `sea_modules`, `sea_notifications`, `sea_suppliers` | Catálogos y avisos |
+
+**Ninguna de las nueve se usa en ninguna parte del repositorio**: ni panel, ni
+las ocho APK, ni servidor, ni Edge Functions, ni para leer. Solo existen en
+`001_sea_core.sql`, que las crea. `sea_suppliers` se menciona en
+`server/recepciones/schema.ts` en un comentario que dice expresamente que NO se
+usa.
+
+`007b_contencion_safety_restante.sql` retira solo `insert, update, delete` de
+`anon` y `PUBLIC` en esas nueve. No toca ninguna política ni las diez de 007.
+
 ## 6. Lo que queda abierto después de esto
 
 | | Estado |

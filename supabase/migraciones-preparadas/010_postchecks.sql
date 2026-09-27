@@ -10,48 +10,73 @@
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- POSTCHECK DE 007 · Safety
+-- POSTCHECK DE 007 + 007b · Safety
 -- ═══════════════════════════════════════════════════════════════════════════
+--
+-- Reescrito el 2026-09-27. La versión anterior asumía 10 tablas `sea_*` y
+-- producción tiene 19: las filas 9 y 10 daban FALLO sin que hubiera nada mal.
+--
+-- Ahora no hay ningún número fijo. Cada comprobación compara el conjunto
+-- consigo mismo, así que sigue valiendo si mañana aparece una tabla `sea_`
+-- más. El recuento total se muestra como dato, no como criterio.
+--
+-- Y separa dos cosas que la versión anterior mezclaba:
+--
+--   GRANT      lo que el catálogo concede  (`has_table_privilege`)
+--   EFECTIVO   lo que se puede hacer de verdad, que además depende de que
+--              exista una política de RLS que lo permita
+--
+-- Una tabla con RLS y sin política para `anon` no es escribible aunque el
+-- grant esté puesto. Medir solo el grant exagera el problema; medir solo la
+-- política se pierde la cerradura que falta. Aquí se miran las dos.
 
+with sea as (
+  select c.oid, c.relname, c.relrowsecurity
+    from pg_class c join pg_namespace n on n.oid = c.relnamespace
+   where n.nspname = 'public' and c.relkind = 'r' and c.relname like 'sea\_%'
+)
 select comprobacion, valor, esperado,
        case when valor = esperado then 'OK' else 'FALLO' end as resultado
   from (
-  select '1· policies de escritura de anon sobre sea_*' as comprobacion,
-         (select count(*)::text from pg_policies
-           where schemaname='public' and tablename like 'sea\_%'
-             and 'anon' = any(roles) and cmd <> 'SELECT') as valor,
-         '0' as esperado
-  union all select '2· policies de anon con WITH CHECK sobre sea_*',
-         (select count(*)::text from pg_policies
-           where schemaname='public' and tablename like 'sea\_%'
-             and 'anon' = any(roles) and with_check is not null), '0'
-  union all select '3· tablas sea_* donde anon puede INSERT',
-         (select count(*)::text from pg_class c join pg_namespace n on n.oid=c.relnamespace
-           where n.nspname='public' and c.relkind='r' and c.relname like 'sea\_%'
-             and has_table_privilege('anon',c.oid,'insert')), '0'
-  union all select '4· tablas sea_* donde anon puede UPDATE',
-         (select count(*)::text from pg_class c join pg_namespace n on n.oid=c.relnamespace
-           where n.nspname='public' and c.relkind='r' and c.relname like 'sea\_%'
-             and has_table_privilege('anon',c.oid,'update')), '0'
-  union all select '5· tablas sea_* donde anon puede DELETE',
-         (select count(*)::text from pg_class c join pg_namespace n on n.oid=c.relnamespace
-           where n.nspname='public' and c.relkind='r' and c.relname like 'sea\_%'
-             and has_table_privilege('anon',c.oid,'delete')), '0'
-  union all select '6· LECTURA conservada en sea_employees',
+  select '0· tablas sea_* en el esquema (dato, no criterio)' as comprobacion,
+         (select count(*)::text from sea) as valor,
+         (select count(*)::text from sea) as esperado
+  union all select '1· todas tienen RLS activa',
+         (select count(*) filter (where relrowsecurity)::text from sea),
+         (select count(*)::text from sea)
+  union all select '2· policies de anon que NO son SELECT',
+         (select count(*)::text from pg_policies p join sea on sea.relname = p.tablename
+           where p.schemaname='public' and 'anon' = any(p.roles) and p.cmd <> 'SELECT'), '0'
+  union all select '3· policies de anon con WITH CHECK',
+         (select count(*)::text from pg_policies p join sea on sea.relname = p.tablename
+           where p.schemaname='public' and 'anon' = any(p.roles) and p.with_check is not null), '0'
+  union all select '4· GRANT: tablas donde anon conserva INSERT',
+         (select count(*)::text from sea where has_table_privilege('anon', oid, 'insert')), '0'
+  union all select '5· GRANT: tablas donde anon conserva UPDATE',
+         (select count(*)::text from sea where has_table_privilege('anon', oid, 'update')), '0'
+  union all select '6· GRANT: tablas donde anon conserva DELETE',
+         (select count(*)::text from sea where has_table_privilege('anon', oid, 'delete')), '0'
+  union all select '7· EFECTIVO: tablas escribibles por anon (grant Y policy)',
+         (select count(*)::text from sea
+           where (has_table_privilege('anon', oid, 'insert') or has_table_privilege('anon', oid, 'update')
+               or has_table_privilege('anon', oid, 'delete'))
+             and exists (select 1 from pg_policies p where p.schemaname='public'
+                          and p.tablename = sea.relname and 'anon' = any(p.roles)
+                          and p.cmd in ('ALL','INSERT','UPDATE','DELETE'))), '0'
+  union all select '8· LECTURA conservada en sea_employees',
          (select has_table_privilege('anon','sea_employees','select')::text), 'true'
-  union all select '7· LECTURA conservada en sea_companies',
+  union all select '9· LECTURA conservada en sea_companies',
          (select has_table_privilege('anon','sea_companies','select')::text), 'true'
-  union all select '8· LECTURA conservada en sea_work_centers',
+  union all select '10· LECTURA conservada en sea_work_centers',
          (select has_table_privilege('anon','sea_work_centers','select')::text), 'true'
-  union all select '9· policies de authenticated intactas (sea_auth_all)',
-         (select count(*)::text from pg_policies
-           where schemaname='public' and tablename like 'sea\_%'
-             and 'authenticated' = any(roles)), '10'
-  union all select '10· authenticated conserva la escritura',
-         (select count(*)::text from pg_class c join pg_namespace n on n.oid=c.relnamespace
-           where n.nspname='public' and c.relkind='r' and c.relname like 'sea\_%'
-             and has_table_privilege('authenticated',c.oid,'update')), '10'
-) x order by comprobacion;
+  union all select '11· authenticated: policy en TODAS las tablas sea_*',
+         (select count(distinct p.tablename)::text from pg_policies p join sea on sea.relname = p.tablename
+           where p.schemaname='public' and 'authenticated' = any(p.roles)),
+         (select count(*)::text from sea)
+  union all select '12· authenticated conserva la escritura en TODAS',
+         (select count(*)::text from sea where has_table_privilege('authenticated', oid, 'update')),
+         (select count(*)::text from sea)
+) x order by lpad(split_part(comprobacion, '·', 1), 3, '0');
 
 
 -- ═══════════════════════════════════════════════════════════════════════════

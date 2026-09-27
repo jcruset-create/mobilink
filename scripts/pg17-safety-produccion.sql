@@ -69,3 +69,51 @@ insert into sea_employees (id,company_id,work_center_id,nombre,apellidos,dni_nie
 insert into sea_training_records (employee_id,curso)
   values ('00000000-0000-4000-e000-000000000003','Trabajos en altura');
 insert into sea_employee_authorizations (employee_id) values ('00000000-0000-4000-e000-000000000003');
+
+-- ── Las otras NUEVE tablas sea_* que el postcheck de produccion destapo ───
+-- Estado real (fotografia del 26-09): RLS activa, sea_auth_all para
+-- authenticated, y NINGUNA politica para anon salvo un SELECT en sea_modules.
+-- Los grants de escritura a anon SI estan, heredados del defecto de Supabase.
+create table if not exists sea_roles (id uuid primary key default gen_random_uuid(),
+  company_id uuid, nombre text, descripcion text, permisos jsonb default '{}', es_sistema boolean default false);
+create table if not exists sea_modules (id uuid primary key default gen_random_uuid(),
+  codigo text, nombre text, descripcion text);
+create table if not exists sea_company_modules (id uuid primary key default gen_random_uuid(),
+  company_id uuid, module_id uuid, activo boolean default true);
+create table if not exists sea_consents (id uuid primary key default gen_random_uuid(),
+  employee_id uuid, tipo text, version text, aceptado boolean default false,
+  fecha timestamptz, dispositivo text, ip text, firma_url text);
+create table if not exists sea_signatures (id uuid primary key default gen_random_uuid(),
+  employee_id uuid, modulo text, referencia_id uuid, tipo text, firma_url text,
+  hash text, dispositivo text, ip text);
+create table if not exists sea_certifications (id uuid primary key default gen_random_uuid(),
+  nombre text, descripcion text);
+create table if not exists sea_audit_logs (id uuid primary key default gen_random_uuid(),
+  company_id uuid, employee_id uuid, user_id uuid, modulo text, accion text,
+  tabla_afectada text, registro_id uuid, descripcion text);
+create table if not exists sea_notifications (id uuid primary key default gen_random_uuid(),
+  employee_id uuid, titulo text, leida boolean default false);
+create table if not exists sea_suppliers (id uuid primary key default gen_random_uuid(), nombre text);
+
+do $$ declare t text; begin
+  foreach t in array array['sea_roles','sea_modules','sea_company_modules','sea_consents',
+    'sea_signatures','sea_certifications','sea_audit_logs','sea_notifications','sea_suppliers'] loop
+    execute format('grant select, insert, update, delete on public.%I to anon, authenticated', t);
+    execute format('alter table public.%I enable row level security', t);
+    execute format('drop policy if exists sea_auth_all on public.%I', t);
+    execute format('create policy sea_auth_all on public.%I for all to authenticated using (true) with check (true)', t);
+  end loop;
+end $$;
+-- La unica politica de anon entre las nueve.
+drop policy if exists sea_anon_modules_read on sea_modules;
+create policy sea_anon_modules_read on sea_modules for select to anon using (true);
+
+insert into sea_roles (nombre, permisos, es_sistema)
+  select 'admin', '{"todo":true}'::jsonb, true where not exists (select 1 from sea_roles);
+insert into sea_signatures (employee_id, modulo, tipo, firma_url, hash)
+  select '00000000-0000-4000-e000-000000000003','safety','lectura_doc','https://x/f.png','abc'
+  where not exists (select 1 from sea_signatures);
+insert into sea_audit_logs (modulo, accion, descripcion)
+  select 'core','alta','prueba' where not exists (select 1 from sea_audit_logs);
+insert into sea_modules (codigo,nombre) select 'safety','Safety'
+  where not exists (select 1 from sea_modules);
