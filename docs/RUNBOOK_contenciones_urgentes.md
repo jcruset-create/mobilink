@@ -216,7 +216,7 @@ exposición de `codigo_personal`, que además sale también por la política
 | `009` fotografía previa | **Sí**, solo lectura, antes de 005 | n/a | n/a | Detectó `TRUNCATE`, `REFERENCES` y `TRIGGER` en las cuatro vistas |
 | **`007`** Safety | **Sí** | 3 de 5 OK al inicio → **todas OK** tras corregir el postcheck | pendiente de reporte | 9 tablas `sea_*` adicionales, sin escritura efectiva |
 | **`005`** vistas | **Sí**, con restauración mínima posterior | **4 de 4 OK** | Regresión en `adm_ot_estado` | Ver §6.2 |
-| **`008`** vistas resto | **Sí** | **Todas OK** | Sin incidencias | — |
+| **`008`** vistas resto | **Sí** | **5 filas, 5 OK** | Sin incidencias | — |
 | `007b` resto de Safety | No | — | — | Defensa en profundidad |
 
 ### 6.1 `007` · lo que consiguió, y el error de mi postcheck
@@ -263,8 +263,9 @@ cliente sin pasar por `adm_can_read()`.
 
 Cerrarlo necesita una decisión funcional previa, no un `alter view`: o la
 política de `adm_work_orders` está mal y hay que corregirla, o la pantalla no
-debería mostrar esos datos a ese usuario. Mientras no se decida, queda como
-**residuo conocido y declarado de SEC-068**.
+debería mostrar esos datos a ese usuario. Diagnosticado el 2026-09-27 en `docs/SEC-068_adm_ot_estado.md`: la causa es
+que `adm_can_read()` no incluye el rol `tecnico`, que es para quien está hecha
+esa pantalla. Queda como **residuo conocido y declarado de SEC-068**.
 
 ### 6.3 Las dos incidencias de consola
 
