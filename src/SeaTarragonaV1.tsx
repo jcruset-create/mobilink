@@ -1462,7 +1462,13 @@ useEffect(() => {
       const d = await res.json();
 
       localStorage.setItem("sea-authenticated", "true");
-      localStorage.setItem("sea-admin-token", d.adminToken || "");
+      /*
+       * El login SSO ya no devuelve contraseña alguna: las peticiones del panel
+       * van con el Bearer de la sesión de Supabase, que `getAdminHeaders` añade.
+       * Se borra cualquier token clásico que hubiera quedado de antes, para no
+       * dejar una contraseña maestra olvidada en el navegador.
+       */
+      localStorage.removeItem("sea-admin-token");
       localStorage.setItem("sea-role", d.role);
 
       const role = isValidUserRole(d.role) ? d.role : null;

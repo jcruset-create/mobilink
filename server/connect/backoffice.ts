@@ -3771,10 +3771,16 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
     res.json({ data: r.rows });
   });
 
+  /*
+   * Roles que un cc_admin puede conceder. `superadmin` NO está, a propósito:
+   * atraviesa todas las centrales y solo se da desde dentro de la plataforma.
+   */
+  const ROLES_ASIGNABLES = ["cc_admin", "supervisor", "operator", "analyst", "provider_user"];
+
   router.post("/users", ...requireConnectRole("cc_admin"), async (req, res) => {
     const u = req.connectUser!;
     const { email, name, role, providerCompanyId } = req.body ?? {};
-    const validRoles = ["cc_admin", "supervisor", "operator", "analyst", "provider_user"];
+    const validRoles = ROLES_ASIGNABLES;
     if (!email?.trim() || !validRoles.includes(role)) {
       return err(res, 422, "validation_failed", `email y role (${validRoles.join(", ")}) son obligatorios`);
     }
@@ -3799,12 +3805,52 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
   });
 
   router.patch("/users/:id", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const u = req.connectUser!;
     const { role, active, name } = req.body ?? {};
+
+    /*
+     * Dos agujeros que tenía esta ruta, y los dos vienen de lo mismo: aceptaba
+     * el cuerpo y el id tal cual.
+     *
+     * 1. `role` no se validaba —el POST de al lado sí lo hacía—, así que un
+     *    cc_admin se mandaba `{"role":"superadmin"}` con su propio id y salía
+     *    siendo superadministrador de Connect: `centroDe()` devuelve null para
+     *    él, o sea todas las centrales, todas las tarifas, la facturación y los
+     *    usuarios de todo el mundo. La cláusula `role <> 'superadmin'` de abajo
+     *    solo protegía a los que YA lo eran.
+     * 2. No filtraba por central, así que también podía desactivar o renombrar
+     *    usuarios de otras centrales por id.
+     *
+     * Se añade además que nadie se cambie su propio rol: para eso está otro
+     * cc_admin, y así un despiste no deja una central sin administrador.
+     */
+    if (role != null && !ROLES_ASIGNABLES.includes(role)) {
+      return err(
+        res,
+        422,
+        "validation_failed",
+        `role debe ser uno de: ${ROLES_ASIGNABLES.join(", ")}`,
+      );
+    }
+    if (role != null && Number(req.params.id) === u.id) {
+      return err(res, 403, "forbidden", "No puedes cambiar tu propio rol");
+    }
+
     const r = await db.query(
       `UPDATE connect_users
           SET role = COALESCE($1, role), active = COALESCE($2, active), name = COALESCE($3, name), "updatedAtMs" = $4
-        WHERE id = $5 AND role <> 'superadmin' RETURNING id, email, name, role, active`,
-      [role ?? null, active ?? null, name ?? null, Date.now(), Number(req.params.id)],
+        WHERE id = $5
+          AND role <> 'superadmin'
+          AND ($6::int IS NULL OR "controlCenterId" = $6)
+        RETURNING id, email, name, role, active`,
+      [
+        role ?? null,
+        active ?? null,
+        name ?? null,
+        Date.now(),
+        Number(req.params.id),
+        u.role === "superadmin" ? null : u.controlCenterId,
+      ],
     );
     if (!r.rows[0]) return err(res, 404, "not_found", "Usuario no encontrado (o es superadmin)");
     await auditConnect({ req, action: "user.updated", resourceType: "user", resourceId: r.rows[0].id, detail: req.body });

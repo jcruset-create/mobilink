@@ -20,7 +20,18 @@ import {
   LICENSE_STATUSES,
 } from "./service.ts";
 
+/**
+ * Quién ha hecho la operación, para el historial de la licencia.
+ *
+ * Antes se leía de la cabecera `x-user-name`, que la pone el cliente: el
+ * historial decía lo que el cliente quisiera que dijera, y un historial que se
+ * puede escribir a mano no sirve para averiguar nada después. Ahora se usa el id
+ * del superadministrador que ha pasado el guard, y la cabecera solo se mira
+ * como etiqueta informativa cuando no hay sesión resuelta.
+ */
 function performedBy(req: any): string {
+  const userId = req.licensesAdminUserId;
+  if (userId) return String(userId);
   return String(req.headers["x-user-name"] || "admin");
 }
 

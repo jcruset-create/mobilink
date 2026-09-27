@@ -20,6 +20,23 @@ import {
 import { startWebfleetSync, syncWebfleetOnce, startMantenimientoAvisos } from "./webfleetSync.ts";
 import { getMailTransport } from "./mail.ts";
 import { startCheckpointMail, revisarBuzonCheckpoint } from "./checkpointMail.ts";
+import {
+  fetchSeguro,
+  ErrorRedSegura,
+  HOSTS_TWILIO,
+  HOSTS_MAPAS,
+  hostsSupabase,
+} from "./core/red.ts";
+import { extraerEnlaceMapa } from "./core/enlaceMapa.ts";
+import {
+  POLITICA_SEGUNDO_FACTOR,
+  clave as claveLimite,
+  comprobarIntento,
+  registrarExitoIntento,
+  registrarFallo,
+  registrarFalloIntento,
+} from "./core/rateLimit.ts";
+import { conectarPersistenciaLimites } from "./core/rateLimitStore.ts";
 import { toFile } from "openai";
 import { findUserByPassword } from "./modules/users";
 import twilio from "twilio";
@@ -108,10 +125,10 @@ import { mountFlanco } from "./tyrecontrol/flanco/index.ts";
 import { mountEtiquetas } from "./tyrecontrol/etiquetas/index.ts";
 import { mountParte } from "./tyrecontrol/parte/index.ts";
 import { masNuevaPrimero } from "./apkVersion.ts";
-import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
+import { authenticate, buildMePayload, getAuthMode, licenciaActiva, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
 import { AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "./core/ai.ts";
-import { makeSecret, verifySecretWithLegacy } from "./core/credentials.ts";
+import { makeSecret, safeEquals, verifySecretWithLegacy } from "./core/credentials.ts";
 import { proponerVinculos, type EmpleadoCore } from "./core/vinculoTecnicos.ts";
 import { siguienteReferencia } from "./cobros/referencias.ts";
 import { saveCaptureAnalysis, reconcileCaptureAiStatus } from "./core/whatsappCapture.ts";
@@ -160,6 +177,18 @@ import {
 const twilioClient = clienteTwilio();
 
 const app = express();
+
+/*
+ * Detrás del proxy de Render, `req.ip` era la dirección del proxy para TODAS
+ * las peticiones. Con eso, cualquier límite «por IP» era en realidad un límite
+ * global: el primero que agotara el cupo dejaba fuera a todo el mundo, y quien
+ * quisiera probar contraseñas tenía un único contador que compartir con los
+ * usuarios legítimos. Con `trust proxy` en 1 se lee la última entrada de
+ * `X-Forwarded-For`, que es la que pone el proxy y no puede falsificar el
+ * cliente, porque a este servicio no se llega sin pasar por él.
+ */
+app.set("trust proxy", 1);
+
 app.post(
   "/api/stripe/webhook",
   express.raw({ type: "application/json" }),
@@ -646,7 +675,7 @@ const requireOperarioRole = requireRole(["admin", "supervisor", "pantallas"]);
 // pasar a AUTH_MODE=strict; el permiso fino llegará con el RBAC completo.
 const requirePanelRole = requireRole(["admin", "supervisor", "pantallas", "tv75"]);
 
-app.post("/api/whatsapp/send-agenda-reminder", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.post("/api/whatsapp/send-agenda-reminder", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const {
       customerName,
@@ -723,7 +752,6 @@ app.post("/api/whatsapp/send-agenda-reminder", protectWhenStrict(requirePanelRol
 });
 const PORT = process.env.PORT || 4000;
 
-const RESET_PASSWORD = "sea123";
 // El cliente de OpenAI vive en core/openaiService.ts: aquí no se crea ninguno.
 // Toda la IA de la plataforma pasa por pedirIA() / transcribirAudio().
 console.log("KEY:", process.env.OPENAI_API_KEY ? "OK" : "NO CARGADA");
@@ -1355,7 +1383,7 @@ function extractLatLngFromGoogleMapsUrl(url: string): { lat: number; lng: number
   return null;
 }
 
-app.post("/api/geocode", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.post("/api/geocode", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const address = String(req.body?.address || "").trim();
     if (!address) {
@@ -1679,7 +1707,7 @@ function requireAdmin(req: express.Request, res: express.Response, next: express
     });
   }
 
-  if (token !== expectedToken) {
+  if (!token || !safeEquals(token, expectedToken)) {
     return res.status(401).json({
       error: "No autorizado",
     });
@@ -1695,30 +1723,191 @@ function getRoleFromRequest(req: express.Request): UserRole | null {
   let token = rawToken;
   try { token = decodeURIComponent(rawToken); } catch { token = rawToken; }
 
-  if (process.env.ADMIN_PASSWORD && token === process.env.ADMIN_PASSWORD) {
-    return "admin";
+  /*
+   * Comparación en tiempo constante.
+   *
+   * `===` sobre cadenas corta en el primer carácter distinto, así que el tiempo
+   * de respuesta filtra cuánto prefijo se ha acertado. Sobre una red es ruidoso
+   * y hacen falta muchas medidas, pero estas cuatro contraseñas son compartidas,
+   * no caducan y dan acceso al panel entero: no es el sitio donde ahorrar cuatro
+   * líneas. `safeEquals` ya existía en core/credentials.ts para esto.
+   */
+  if (token) {
+    if (process.env.ADMIN_PASSWORD && safeEquals(token, process.env.ADMIN_PASSWORD)) {
+      return "admin";
+    }
+    if (process.env.SUPERVISOR_PASSWORD && safeEquals(token, process.env.SUPERVISOR_PASSWORD)) {
+      return "supervisor";
+    }
+    if (process.env.SCREENS_PASSWORD && safeEquals(token, process.env.SCREENS_PASSWORD)) {
+      return "pantallas";
+    }
+    if (process.env.TV75_PASSWORD && safeEquals(token, process.env.TV75_PASSWORD)) {
+      return "tv75";
+    }
+  }
+  return null;
+}
+
+/* =========================================================
+   CREDENCIAL MÍNIMA — sustituye a protectWhenStrict
+========================================================= */
+
+type FamiliaCredencial = "sesion" | "operario" | "panel-legacy" | "ninguna";
+
+/**
+ * Qué credencial VÁLIDA trae la petición, si trae alguna.
+ *
+ * No decide permisos: solo si quien llama se ha identificado de alguna de las
+ * formas que los clientes usan hoy. Se prueban en orden de coste creciente y se
+ * para en la primera que cuadra.
+ */
+async function familiaCredencial(req: express.Request): Promise<FamiliaCredencial> {
+  const auth = String(req.headers.authorization || "");
+  const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  if (bearer) {
+    try {
+      if (await resolveAuthContext(bearer)) return "sesion";
+    } catch (e) {
+      console.error("familiaCredencial (bearer):", e);
+    }
   }
 
   if (
-    process.env.SUPERVISOR_PASSWORD &&
-    token === process.env.SUPERVISOR_PASSWORD
+    req.headers["x-roadside-operator-code"] ||
+    req.headers["x-operator-pin"] ||
+    req.headers["x-presencia-pin"]
   ) {
-    return "supervisor";
+    try {
+      if (await getTallerOperatorFromRequest(req)) return "operario";
+    } catch (e) {
+      console.error("familiaCredencial (operario):", e);
+    }
+    const empleado = String(req.headers["x-presencia-employee"] || "").trim();
+    const pinPresencia = String(req.headers["x-presencia-pin"] || "").trim();
+    if (empleado && pinPresencia) {
+      try {
+        if (await verificarPinPresencia(empleado, pinPresencia)) return "operario";
+      } catch (e) {
+        console.error("familiaCredencial (presencia):", e);
+      }
+    }
   }
 
-if (
-  process.env.SCREENS_PASSWORD &&
-  token === process.env.SCREENS_PASSWORD
-) {
-  return "pantallas";
+  if (req.headers["x-admin-token"] || (req.query && (req.query as any).token)) {
+    try {
+      if (await getRoleFromRequestAsync(req)) return "panel-legacy";
+    } catch (e) {
+      console.error("familiaCredencial (panel):", e);
+    }
+  }
+
+  return "ninguna";
 }
-if (
-  process.env.TV75_PASSWORD &&
-  token === process.env.TV75_PASSWORD
-) {
-  return "tv75";
+
+/**
+ * Exige que la petición traiga ALGUNA credencial válida.
+ *
+ * ── Qué sustituye y por qué así ─────────────────────────────────────────────
+ *
+ * Estas rutas iban envueltas en `exigirCredencial(...)`, que solo aplica sus
+ * guards cuando `AUTH_MODE=strict`. `AUTH_MODE` no está definido en ningún
+ * sitio —ni en render.yaml, ni en .env.example— así que valía `dual` y la
+ * función era un `next()` pelado: cincuenta rutas contestaban a cualquiera sin
+ * credencial. Entre ellas, el listado completo de asistencias con nombre,
+ * teléfono, matrícula y ubicación de los clientes, el borrado de trabajos, la
+ * agenda, el envío de WhatsApp y las llamadas a la IA.
+ *
+ * Lo evidente sería poner `AUTH_MODE=strict` y ya. No se hace, y conviene que
+ * quede escrito: `strict` cambia de golpe el comportamiento de las cincuenta y,
+ * sobre todo, ROMPE las subidas multipart de las APKs, que mandan solo las
+ * cabeceras de operario y no el Bearer (flutter_app/lib/services/api_service.dart
+ * y taller_app, en las rutas de `scan-plate` y de ficheros). Eso obliga a
+ * publicar cinco APKs antes de poder cerrar el agujero.
+ *
+ * Así que esto exige lo que los clientes YA envían: sesión unificada, cabeceras
+ * de operario o token de panel clásico. Quien no manda nada se queda fuera; quien
+ * manda algo válido sigue trabajando exactamente igual. No es el destino final
+ * —el permiso fino llega con el RBAC—, es cerrar la puerta que estaba abierta
+ * sin depender de una release de las apps.
+ *
+ * En `AUTH_MODE=strict` se comporta como antes y aplica los guards de verdad.
+ *
+ * Estado: RECHAZA. El commit que introdujo la función solo avisaba en el log.
+ */
+function exigirCredencial(...handlers: express.RequestHandler[]): express.RequestHandler {
+  return (req, res, next) => {
+    if (getAuthMode() === "strict") {
+      let i = 0;
+      const run = (err?: unknown) => {
+        if (err) return next(err as any);
+        const h = handlers[i++];
+        if (!h) return next();
+        h(req, res, run);
+      };
+      return run();
+    }
+
+    void (async () => {
+      const familia = await familiaCredencial(req);
+      if (familia === "ninguna") {
+        /*
+         * Se rechaza. El log queda igual de explícito que en observación,
+         * porque es lo único que va a decir qué cliente se ha quedado fuera si
+         * alguien no estaba inventariado.
+         *
+         * Este rechazo es un commit aparte del que introdujo la función: si
+         * apareciera un consumidor legítimo que no manda credencial, se
+         * revierte solo este y se vuelve a observación sin perder el resto.
+         */
+        console.warn(
+          `[credencial] RECHAZADA sin credencial válida: ${req.method} ${req.path}` +
+            ` (ua=${String(req.headers["user-agent"] || "?").slice(0, 60)})`
+        );
+        return res.status(401).json({ error: "No autorizado" });
+      }
+      next();
+    })().catch((error) => {
+      console.error("exigirCredencial error:", error);
+      res.status(500).json({ error: "Error de autorización" });
+    });
+  };
 }
-  return null;
+
+/* =========================================================
+   FRENO DE LOGIN
+========================================================= */
+
+type AmbitosLogin = { tipo: string; identidad: string; ip: string };
+
+/**
+ * Comprueba el freno antes de un intento de login. Devuelve los ámbitos para
+ * apuntar después el resultado, o `null` si ya se ha contestado con un 429.
+ *
+ * Los ocho endpoints de login del servidor no tenían ningún límite. Con PINs de
+ * cuatro dígitos y las listas de nombres de empleado abiertas, recorrer las diez
+ * mil combinaciones de una persona era cuestión de minutos.
+ */
+async function frenoLogin(
+  req: express.Request,
+  res: express.Response,
+  tipo: string,
+  identidad: string
+): Promise<AmbitosLogin | null> {
+  const ambitos: AmbitosLogin = {
+    tipo,
+    identidad: String(identidad || "(sin-identidad)").toLowerCase(),
+    ip: String(req.ip || ""),
+  };
+  const veredicto = await comprobarIntento(ambitos);
+  if (!veredicto.permitido) {
+    console.warn(`[login] bloqueado ${tipo} identidad=${ambitos.identidad} ip=${ambitos.ip}`);
+    res
+      .status(429)
+      .json({ error: `Demasiados intentos. Vuelve a probar en ${veredicto.reintentarEnS} s.` });
+    return null;
+  }
+  return ambitos;
 }
 
 function normalizeRoadsideOperatorCodeRow(row: any, includeCode = true) {
@@ -1757,7 +1946,7 @@ async function getRoadsideOperatorFromRequest(req: express.Request) {
   const code = String(req.headers["x-roadside-operator-code"] ?? "").trim();
   const expectedCode = await getExpectedRoadsideOperatorCode(techName);
 
-  if (!techName || !code || !expectedCode || code !== expectedCode) {
+  if (!techName || !code || !expectedCode || !safeEquals(code, expectedCode)) {
     return null;
   }
 
@@ -1872,7 +2061,14 @@ function requireRoadsideOperator(
 }
 
 app.use((req, _res, next) => {
-  console.log(`[REQ] ${req.method} ${req.url}`);
+  /*
+   * `req.path`, no `req.url`: la URL lleva la cadena de consulta, y ahí
+   * viajaban el token de admin (`?token=`) y la contraseña de backup
+   * (`?password=`). Cada petición del panel escribía una contraseña en los logs
+   * de Render, que se quedan guardados y los lee cualquiera con acceso al
+   * panel de control.
+   */
+  console.log(`[REQ] ${req.method} ${req.path}`);
   next();
 });
 
@@ -1944,7 +2140,7 @@ app.get("/api/health", (_req, res) => {
 //     cayendo las reparaciones en sitio de resolver incidencias.
 //   · Sin él (APKs viejas): como siempre, se CREA la intervención agrupando
 //     las huérfanas del vehículo desde `desde`.
-app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate, requireModule("tyrecontrol")), async (req, res) => {
+app.post("/api/tyrecontrol/intervencion/cerrar", exigirCredencial(authenticate, requireModule("tyrecontrol")), async (req, res) => {
   try {
     const { vehiculoId, desde, intervencionId, montajeAntes, incidencias, imagenChasis,
       inicioAt, finAt, pausaSeg, nPausas } = req.body ?? {};
@@ -2235,7 +2431,7 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
   }
 });
 
-app.get("/api/ai-test", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.get("/api/ai-test", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const r = await pedirIA({
       operacion: "diagnostico.ai-test",
@@ -2258,7 +2454,36 @@ app.post("/api/reset", requireAdminRole, async (req, res) => {
   try {
     const { password } = req.body ?? {};
 
-    if (password !== RESET_PASSWORD) {
+    /*
+     * ── Por qué este endpoint ya no funciona en producción ──────────────────
+     *
+     * Borra `jobs`, `logs` y `assigned_maintenance_tasks` enteras. El único
+     * freno, además del rol de admin, era una contraseña escrita en el código:
+     * `const RESET_PASSWORD = "sea123"`. Estaba en el repositorio y en todo su
+     * historial, así que no era un segundo factor: era un trámite. Y el rol de
+     * admin, mientras siga viva la autenticación clásica, lo tiene cualquiera
+     * que consiga una contraseña compartida —que el login SSO además entregaba
+     * al navegador.
+     *
+     * Un borrado masivo de datos de trabajo no es una operación que deba
+     * existir detrás de un botón del panel. Fuera de producción se conserva,
+     * porque vaciar el tablero en un entorno de pruebas es útil, y allí la
+     * contraseña se pone por entorno en vez de en el código.
+     */
+    if (process.env.NODE_ENV === "production") {
+      return res.status(410).json({
+        error:
+          "El reinicio total ya no se hace desde el panel. Si de verdad hay que vaciar el tablero, se hace con un script y una copia de seguridad delante.",
+      });
+    }
+
+    const esperada = process.env.RESET_PASSWORD;
+    if (!esperada) {
+      return res.status(503).json({
+        error: "RESET_PASSWORD no está configurada en este entorno",
+      });
+    }
+    if (!password || !safeEquals(String(password), esperada)) {
       return res.status(401).json({ error: "Contraseña incorrecta" });
     }
 
@@ -2295,7 +2520,7 @@ const techs = techsResult.rows;
     res.status(500).json({ error: "Error reiniciando el sistema" });
   }
 });
-app.post("/api/ai/taller", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.post("/api/ai/taller", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const { jobs, techs, operationReport, techOperationStats } = req.body;
     const safeJobs = Array.isArray(jobs) ? jobs : [];
@@ -2390,7 +2615,7 @@ Si no hay técnico válido, responsable debe ser null.
    TECHS
 ========================================================= */
 
-app.get("/api/techs", protectWhenStrict(requirePanelRole), async (_req, res) => {
+app.get("/api/techs", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
     const result = await db.query(`
       SELECT name, status, blocked, "currentJobId", competencies, priorities, avatar,
@@ -2796,7 +3021,7 @@ app.post(
    JOBS
 ========================================================= */
 
-app.get("/api/jobs", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.get("/api/jobs", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     // scope=live (por defecto para el operativo y su auto-sync): solo trabajos
     // no cerrados + cerrados de los últimos 3 días (cubre las estadísticas del
@@ -3148,7 +3373,7 @@ app.put("/api/jobs/:id", requireSupervisorRole, async (req, res) => {
   }
 });
 
-app.post("/api/jobs/:id/finish", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.post("/api/jobs/:id/finish", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const id = Number(req.params.id);
 
@@ -3219,7 +3444,7 @@ app.post("/api/jobs/:id/finish", protectWhenStrict(requirePanelRole), async (req
   }
 });
 
-app.delete("/api/jobs/:id", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.delete("/api/jobs/:id", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const id = Number(req.params.id);
 
@@ -3359,6 +3584,9 @@ app.post("/api/taller-operator/login", async (req, res) => {
       return res.status(400).json({ error: "Faltan datos" });
     }
 
+    const freno = await frenoLogin(req, res, "login-taller", techName);
+    if (!freno) return;
+
     // El PIN de taller se guarda hasheado (ver verifyWorkshopPin): no se puede
     // comparar en claro contra "workshopPin", que queda a NULL en cuanto el PIN
     // heredado se migra en el primer login correcto.
@@ -3368,8 +3596,10 @@ app.post("/api/taller-operator/login", async (req, res) => {
     const porCodigo = Boolean(esperado) && code === esperado;
 
     if (!porPin && !porCodigo) {
+      registrarFalloIntento(freno);
       return res.status(401).json({ error: "PIN incorrecto" });
     }
+    registrarExitoIntento(freno);
 
     // El código de operario da además sesión unificada (Bearer) porque es la
     // que ya montaba /api/roadside-operator/login; con PIN de taller se entra
@@ -4094,9 +4324,13 @@ app.post("/api/presencia-operator/login", async (req, res) => {
   try {
     const employeeId = String(req.body?.employeeId || "").trim();
     const pin = String(req.body?.pin || "").trim();
+    const freno = await frenoLogin(req, res, "login-presencia", employeeId);
+    if (!freno) return;
     if (!(await verificarPinPresencia(employeeId, pin))) {
+      registrarFalloIntento(freno);
       return res.status(401).json({ error: "Empleado o PIN incorrecto" });
     }
+    registrarExitoIntento(freno);
     const { data } = await supabase
       .from("sea_employees")
       .select("id, nombre, apellidos, cargo")
@@ -4299,7 +4533,7 @@ async function ensureSafetyDocsBucket() {
 
 app.post(
   "/api/safety/documents/upload",
-  protectWhenStrict(requirePanelRole),
+  exigirCredencial(requirePanelRole),
   upload.single("file"),
   async (req, res) => {
     try {
@@ -4588,7 +4822,7 @@ app.post("/api/workshop-config", requireAdminRole, async (req, res) => {
 
 const AGENDA_CONFIG_KEY = "agenda_config";
 
-app.get("/api/agenda-config", protectWhenStrict(requirePanelRole), async (_req, res) => {
+app.get("/api/agenda-config", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
     const result = await db.query(
       `SELECT value FROM workshop_config WHERE key = $1 LIMIT 1`,
@@ -4765,7 +4999,7 @@ app.post("/api/agenda-config/festivos-ia", requireSupervisorRole, async (req, re
    ROADSIDE ASSISTANCES
 ========================================================= */
 
-app.get("/api/roadside-vehicles", protectWhenStrict(authenticate), async (req, res) => {
+app.get("/api/roadside-vehicles", exigirCredencial(authenticate), async (req, res) => {
   try {
     const includeInactive = String(req.query.includeInactive || "") === "true";
 
@@ -5288,7 +5522,7 @@ app.patch("/api/assist-panel-users/:userId", requireSupervisorRole, async (req, 
   }
 });
 
-app.get("/api/roadside-assistances", protectWhenStrict(authenticate), async (req, res) => {
+app.get("/api/roadside-assistances", exigirCredencial(authenticate), async (req, res) => {
   try {
     const includeClosed = String(req.query.includeClosed || "") === "true";
 
@@ -5463,7 +5697,14 @@ app.post("/api/roadside-assistances/:id/recorrido/aplicar", requireSupervisorRol
   }
 });
 
-app.get("/api/roadside-assistances/mi-contexto", async (req, res) => {
+/*
+ * Llamaba a `getAssistPanelUser` pero no rechazaba nunca: sin credencial
+ * devolvía `sinContexto: true` y, con él, la lista completa de talleres
+ * activos. Ahora hace falta una credencial de panel —vale la clásica o la
+ * sesión unificada—, y la transición de `sinContexto` se conserva para quien
+ * entra con el token antiguo, que era su motivo.
+ */
+app.get("/api/roadside-assistances/mi-contexto", requirePanelRole, async (req, res) => {
   try {
     const panelUser = await getAssistPanelUser(req);
     const talleres = await db.query(
@@ -5896,7 +6137,7 @@ app.delete(
 );
 
 /* ── ETA ─────────────────────────────────────────────────────────────── */
-app.post("/api/maps/eta", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.post("/api/maps/eta", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const { origen, destino } = req.body;
     const eta = await calcularETA(origen, destino);
@@ -5907,7 +6148,7 @@ app.post("/api/maps/eta", protectWhenStrict(requirePanelRole), async (req, res) 
   }
 });
 
-app.post("/api/roadside-eta", protectWhenStrict(authenticate), async (req, res) => {
+app.post("/api/roadside-eta", exigirCredencial(authenticate), async (req, res) => {
   try {
     const { origen, destino } = req.body as {
       origen?: { lat: number; lng: number };
@@ -5930,7 +6171,7 @@ app.post("/api/roadside-eta", protectWhenStrict(authenticate), async (req, res) 
   }
 });
 
-app.get("/api/webfleet/debug", protectWhenStrict(requirePanelRole), async (_req, res) => {
+app.get("/api/webfleet/debug", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
     const { url, headers } = buildWebfleetRequest("showObjectReportExtern");
     const response = await fetch(url, { headers });
@@ -5951,7 +6192,7 @@ app.get("/api/webfleet/debug", protectWhenStrict(requirePanelRole), async (_req,
 // Este endpoint lanza las tres consultas y devuelve la respuesta CRUDA de
 // cada una + las claves detectadas, para saber de qué datos disponemos.
 //   /api/webfleet/debug-fuel?objectno=001&dias=7
-app.get("/api/webfleet/debug-fuel", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.get("/api/webfleet/debug-fuel", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const objectno = String(req.query.objectno || "").trim();
     if (!objectno) return res.status(400).json({ error: "Falta objectno (p. ej. ?objectno=001)" });
@@ -6016,7 +6257,7 @@ app.get("/api/webfleet/debug-fuel", protectWhenStrict(requirePanelRole), async (
 // después de T (interpolando el viaje que contenga T).
 //
 //   /api/webfleet/debug-odometer?objectno=001&dias=30&at=2026-07-15T09:40:00Z
-app.get("/api/webfleet/debug-odometer", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.get("/api/webfleet/debug-odometer", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const objectno = String(req.query.objectno || "").trim();
     if (!objectno) return res.status(400).json({ error: "Falta objectno (p. ej. ?objectno=001)" });
@@ -6176,7 +6417,7 @@ app.get("/api/webfleet/debug-odometer", protectWhenStrict(requirePanelRole), asy
   }
 });
 
-app.get("/api/webfleet/vehicles", protectWhenStrict(requirePanelRole), async (_req, res) => {
+app.get("/api/webfleet/vehicles", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
     const { url, headers } = buildWebfleetRequest("showObjectReportExtern");
     const response = await fetch(url, { headers });
@@ -6249,7 +6490,7 @@ app.get("/api/webfleet/vehicles", protectWhenStrict(requirePanelRole), async (_r
   }
 });
 
-app.get("/api/webfleet/vehicle/:vehicleId/position", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.get("/api/webfleet/vehicle/:vehicleId/position", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const position = await getWebfleetVehiclePosition(String(req.params.vehicleId));
     res.json(position);
@@ -6551,7 +6792,7 @@ app.get("/api/tyrecontrol/webfleet/conduccion", authenticate, requireModule("tyr
   }
 });
 
-app.post("/api/asistencias/:id/en-camino", protectWhenStrict(authenticate), async (req, res) => {
+app.post("/api/asistencias/:id/en-camino", exigirCredencial(authenticate), async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isFinite(id)) {
@@ -6661,13 +6902,18 @@ app.post("/api/roadside-operator/login", async (req, res) => {
   try {
     const techName = String(req.body?.techName || "").trim();
     const code = String(req.body?.code || "").trim();
+    const freno = await frenoLogin(req, res, "login-roadside", techName);
+    if (!freno) return;
+
     const expectedCode = await getExpectedRoadsideOperatorCode(techName);
 
-    if (!techName || !code || !expectedCode || code !== expectedCode) {
+    if (!techName || !code || !expectedCode || !safeEquals(code, expectedCode)) {
+      registrarFalloIntento(freno);
       return res.status(401).json({
         error: "Operario o codigo incorrecto",
       });
     }
+    registrarExitoIntento(freno);
 
     const techResult = await db.query(
       `
@@ -7762,7 +8008,7 @@ app.post(
   }
 );
 
-app.get("/api/roadside-assistances/:id", protectWhenStrict(authenticate), async (req, res) => {
+app.get("/api/roadside-assistances/:id", exigirCredencial(authenticate), async (req, res) => {
   try {
     const id = Number(req.params.id);
 
@@ -7816,7 +8062,7 @@ app.get("/api/roadside-assistances/:id", protectWhenStrict(authenticate), async 
 
 // Posición en vivo (Webfleet) + velocidad + ETA al destino correcto.
 // Para en_camino → ETA al punto de avería; en_camino_base → ETA al taller.
-app.get("/api/roadside-assistances/:id/live-position", protectWhenStrict(authenticate), async (req, res) => {
+app.get("/api/roadside-assistances/:id/live-position", exigirCredencial(authenticate), async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
@@ -8947,13 +9193,45 @@ app.post(
 
       if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
       if (!mediaUrl) return res.status(400).json({ error: "URL requerida" });
+      // `kind` va dentro de la ruta del objeto en el bucket: sin acotarlo, un
+      // `kind` con "../" escribía en la carpeta de otra asistencia.
+      if (!/^[a-z0-9_-]{1,32}$/i.test(kind)) {
+        return res.status(400).json({ error: "Tipo de archivo no válido" });
+      }
 
-      // Descargar el archivo desde la URL
-      const fetchRes = await fetch(mediaUrl);
-      if (!fetchRes.ok) throw new Error(`No se pudo descargar el archivo: ${fetchRes.status}`);
-
-      const contentType = fetchRes.headers.get("content-type") ?? "application/octet-stream";
-      const buffer = Buffer.from(await fetchRes.arrayBuffer());
+      /*
+       * `fetch(mediaUrl)` a pelo era una lectura de la red interna con el
+       * resultado publicado: la URL la ponía quien llamaba, se seguían las
+       * redirecciones y la respuesta acababa en un bucket PÚBLICO, o sea
+       * legible por cualquiera que tuviera el enlace. Servía para leer
+       * `http://localhost:PORT/api/...` —y aquí hay rutas internas sin
+       * autenticación— o los metadatos del proveedor de cloud.
+       *
+       * Solo se descarga de donde viene lo que este endpoint existe para
+       * guardar: los medios de Twilio y nuestro propio almacenamiento.
+       */
+      let contentType = "application/octet-stream";
+      let buffer: Buffer;
+      try {
+        const descarga = await fetchSeguro(mediaUrl, {
+          hostsPermitidos: [...HOSTS_TWILIO, ...hostsSupabase()],
+          maxBytes: 25 * 1024 * 1024,
+          timeoutMs: 20_000,
+        });
+        if (!descarga.ok) {
+          return res
+            .status(400)
+            .json({ error: `No se pudo descargar el archivo: ${descarga.status}` });
+        }
+        contentType = descarga.contentType;
+        buffer = descarga.cuerpo;
+      } catch (e) {
+        if (e instanceof ErrorRedSegura) {
+          console.warn(`[files-from-url] URL rechazada (${e.motivo}): ${mediaUrl}`);
+          return res.status(400).json({ error: "Esa URL no se puede descargar" });
+        }
+        throw e;
+      }
 
       const extMap: Record<string, string> = {
         "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp",
@@ -9006,7 +9284,7 @@ app.post(
  * desaparecería de la pantalla sin que nadie se entere, y una foto que no se
  * ve es una foto perdida. Así, como mucho, sale sin etiqueta.
  */
-app.get("/api/roadside-assistances/:id/files", protectWhenStrict(authenticate), async (req, res) => {
+app.get("/api/roadside-assistances/:id/files", exigirCredencial(authenticate), async (req, res) => {
   try {
     const id = Number(req.params.id);
     const result = await db.query(
@@ -11521,7 +11799,7 @@ async function seedDefaultMaintenanceTasksIfEmpty() {
   }
 }
 
-app.get("/api/maintenance-tasks", protectWhenStrict(requirePanelRole), async (_req, res) => {
+app.get("/api/maintenance-tasks", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
     await seedDefaultMaintenanceTasksIfEmpty();
 
@@ -11542,7 +11820,7 @@ app.get("/api/maintenance-tasks", protectWhenStrict(requirePanelRole), async (_r
   }
 });
 
-app.post("/api/maintenance-tasks", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.post("/api/maintenance-tasks", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     await ensureMaintenanceTables();
 
@@ -11579,7 +11857,7 @@ app.post("/api/maintenance-tasks", protectWhenStrict(requirePanelRole), async (r
   }
 });
 
-app.put("/api/maintenance-tasks/:id", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.put("/api/maintenance-tasks/:id", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     await ensureMaintenanceTables();
 
@@ -11637,7 +11915,7 @@ app.put("/api/maintenance-tasks/:id", protectWhenStrict(requirePanelRole), async
   }
 });
 
-app.delete("/api/maintenance-tasks/:id", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.delete("/api/maintenance-tasks/:id", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     await ensureMaintenanceTables();
 
@@ -11656,7 +11934,7 @@ app.delete("/api/maintenance-tasks/:id", protectWhenStrict(requirePanelRole), as
   }
 });
 
-app.get("/api/assigned-maintenance-tasks", protectWhenStrict(requirePanelRole), async (_req, res) => {
+app.get("/api/assigned-maintenance-tasks", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
     await ensureMaintenanceTables();
 
@@ -11679,7 +11957,7 @@ app.get("/api/assigned-maintenance-tasks", protectWhenStrict(requirePanelRole), 
   }
 });
 
-app.get("/api/maintenance-availability", protectWhenStrict(requirePanelRole), async (_req, res) => {
+app.get("/api/maintenance-availability", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
     await ensureMaintenanceTables();
 
@@ -11735,7 +12013,7 @@ const interruptedTasks = activeMaintenanceTasks.filter(
   }
 });
 
-app.post("/api/assigned-maintenance-tasks", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.post("/api/assigned-maintenance-tasks", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     await ensureMaintenanceTables();
 
@@ -11847,7 +12125,7 @@ async function updateAssignedMaintenanceTaskStatus(
   return nextTask;
 }
 
-app.put("/api/assigned-maintenance-tasks/:id/finish", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.put("/api/assigned-maintenance-tasks/:id/finish", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const id = String(req.params.id || "").trim();
 
@@ -11864,7 +12142,7 @@ app.put("/api/assigned-maintenance-tasks/:id/finish", protectWhenStrict(requireP
   }
 });
 
-app.put("/api/assigned-maintenance-tasks/:id/interrupt", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.put("/api/assigned-maintenance-tasks/:id/interrupt", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const id = String(req.params.id || "").trim();
 
@@ -11884,7 +12162,7 @@ app.put("/api/assigned-maintenance-tasks/:id/interrupt", protectWhenStrict(requi
   }
 });
 
-app.put("/api/assigned-maintenance-tasks/:id/resume", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.put("/api/assigned-maintenance-tasks/:id/resume", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const id = String(req.params.id || "").trim();
 
@@ -11903,7 +12181,7 @@ app.put("/api/assigned-maintenance-tasks/:id/resume", protectWhenStrict(requireP
   }
 });
 
-app.delete("/api/assigned-maintenance-tasks/history", protectWhenStrict(requirePanelRole), async (_req, res) => {
+app.delete("/api/assigned-maintenance-tasks/history", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
     await ensureMaintenanceTables();
 
@@ -11919,8 +12197,16 @@ app.delete("/api/assigned-maintenance-tasks/history", protectWhenStrict(requireP
   }
 });
 
+/*
+ * Borraba filas de `assigned_maintenance_tasks` sin pedir credencial alguna:
+ * un DELETE anónimo contra el historial de mantenimiento. Lo llama el panel con
+ * la cabecera de admin clásica, así que `requireSupervisorRole` la acepta y
+ * además deja fuera a los roles de pantalla y de televisor, que no tienen por
+ * qué borrar nada.
+ */
 app.delete(
   "/api/assigned-maintenance-tasks/old-interrupted",
+  requireSupervisorRole,
   async (req, res) => {
     try {
       await ensureMaintenanceTables();
@@ -11987,7 +12273,7 @@ app.delete(
   }
 );
 
-app.delete("/api/assigned-maintenance-tasks/:id", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.delete("/api/assigned-maintenance-tasks/:id", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     await ensureMaintenanceTables();
 
@@ -12011,7 +12297,7 @@ app.delete("/api/assigned-maintenance-tasks/:id", protectWhenStrict(requirePanel
    LOGS
 ========================================================= */
 
-app.get("/api/logs", protectWhenStrict(requirePanelRole), async (_req, res) => {
+app.get("/api/logs", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
     const result = await db.query(`SELECT * FROM logs ORDER BY id DESC LIMIT 50`);
 
@@ -12022,7 +12308,7 @@ app.get("/api/logs", protectWhenStrict(requirePanelRole), async (_req, res) => {
   }
 });
 
-app.post("/api/logs", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.post("/api/logs", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const log = req.body ?? {};
 
@@ -12048,7 +12334,7 @@ app.post("/api/logs", protectWhenStrict(requirePanelRole), async (req, res) => {
    RULES
 ========================================================= */
 
-app.get("/api/rules", protectWhenStrict(requirePanelRole), async (_req, res) => {
+app.get("/api/rules", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
     const result = await db.query(`SELECT * FROM rules ORDER BY id ASC`);
     res.json(result.rows);
@@ -12317,7 +12603,7 @@ app.delete("/api/quick-templates/:key", requireAdminRole, async (req, res) => {
   }
 });
 
-app.get("/api/scheduled-jobs", protectWhenStrict(requirePanelRole), async (_req, res) => {
+app.get("/api/scheduled-jobs", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
     const result = await db.query(`
       SELECT data
@@ -12336,7 +12622,7 @@ app.get("/api/scheduled-jobs", protectWhenStrict(requirePanelRole), async (_req,
     res.status(500).json({ error: "Error obteniendo citas programadas" });
   }
 });
-app.get("/api/scheduled-tech-statuses", protectWhenStrict(requirePanelRole), async (_req, res) => {
+app.get("/api/scheduled-tech-statuses", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
     const result = await db.query(
       `
@@ -12369,7 +12655,7 @@ app.get("/api/scheduled-tech-statuses", protectWhenStrict(requirePanelRole), asy
 ========================================================= */
 
 /** Correspondencias artículo → entrada rápida de un taller. */
-app.get("/api/partes-trabajo/articulos", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.get("/api/partes-trabajo/articulos", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const workshopId = String(req.query.workshopId || "");
 
@@ -12473,7 +12759,7 @@ app.delete("/api/partes-trabajo/articulos", requireSupervisorRole, async (req, r
  * escaneado se equivoca y una matrícula mal leída manda el trabajo al vehículo
  * equivocado.
  */
-app.post("/api/partes-trabajo/leer", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.post("/api/partes-trabajo/leer", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     if (!hasAi()) {
       return res.status(503).json({
@@ -12581,7 +12867,7 @@ app.post("/api/partes-trabajo/leer", protectWhenStrict(requirePanelRole), async 
  * Devuelve la configuración de un año: modo, días por defecto y los cupos
  * propios por técnico. La fila con "techName" = '' es el valor por defecto.
  */
-app.get("/api/vacaciones-config", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.get("/api/vacaciones-config", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const anio = Number(req.query.anio) || new Date().getFullYear();
     const workshopId = String(req.query.workshopId || "");
@@ -12708,7 +12994,7 @@ app.put("/api/vacaciones-config", requireSupervisorRole, async (req, res) => {
   }
 });
 
-app.get("/api/agenda-date-reminders", protectWhenStrict(requirePanelRole), async (_req, res) => {
+app.get("/api/agenda-date-reminders", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
     const result = await db.query(
       `
@@ -12939,7 +13225,7 @@ app.delete("/api/scheduled-tech-statuses/:id", requireSupervisorRole, async (req
 });
 
 
-app.put("/api/scheduled-jobs", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.put("/api/scheduled-jobs", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const items = Array.isArray(req.body) ? req.body : [];
     const now = Date.now();
@@ -13041,7 +13327,7 @@ app.put("/api/scheduled-jobs", protectWhenStrict(requirePanelRole), async (req, 
  * frágil. Aquí solo se toca la fila afectada y el cliente recibe un error claro
  * si algo falla, en vez de que el cambio se pierda en silencio.
  */
-app.put("/api/scheduled-jobs/:id/status", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.put("/api/scheduled-jobs/:id/status", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const id = Number(req.params.id);
 
@@ -13115,7 +13401,7 @@ app.put("/api/scheduled-jobs/:id/status", protectWhenStrict(requirePanelRole), a
  * histórico de que ese hueco estaba reservado y se anuló. El borrado real
  * sigue siendo el DELETE de más abajo.
  */
-app.put("/api/scheduled-jobs/:id/cancelar", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.put("/api/scheduled-jobs/:id/cancelar", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const id = Number(req.params.id);
 
@@ -13589,7 +13875,7 @@ function startCaducidadRecordatoriosChecker() {
   }, 60_000);
 }
 
-app.get("/api/recordatorios-caducidad", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.get("/api/recordatorios-caducidad", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const clauses: string[] = [];
     const params: any[] = [];
@@ -13620,7 +13906,7 @@ app.get("/api/recordatorios-caducidad", protectWhenStrict(requirePanelRole), asy
   }
 });
 
-app.get("/api/recordatorios-caducidad/:id", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.get("/api/recordatorios-caducidad/:id", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const rec = await getCaducidadById(Number(req.params.id));
     if (!rec) return res.status(404).json({ error: "Recordatorio no encontrado" });
@@ -13831,6 +14117,9 @@ app.post("/api/login", async (req, res) => {
 
     const { password, name } = req.body ?? {};
 
+    const freno = await frenoLogin(req, res, "login-panel", String(name || ""));
+    if (!freno) return;
+
     // 1) Usuarios creados en BD (con pantallas personalizadas)
     try {
       let dbUser: DbAppUser | null = null;
@@ -13844,6 +14133,7 @@ app.post("/api/login", async (req, res) => {
         dbUser = await findDbUserByPassword(password);
       }
       if (dbUser) {
+        registrarExitoIntento(freno);
         return res.json({
           ok: true,
           role: dbUser.role,
@@ -13859,11 +14149,20 @@ app.post("/api/login", async (req, res) => {
     const user = findUserByPassword(password);
 
     if (!user) {
+      /*
+       * Este login admite entrar SIN nombre: `findDbUserByPassword` busca por
+       * contraseña y cualquier usuario cuya contraseña coincida vale. Así que
+       * cada intento se prueba contra todas las cuentas a la vez, y el ámbito
+       * que de verdad frena aquí es el de la IP. Exigir el nombre es cosa de la
+       * fase de identidad; contar los fallos, de ahora.
+       */
+      registrarFalloIntento(freno);
       return res.status(401).json({
         error: "Contraseña incorrecta",
       });
     }
 
+    registrarExitoIntento(freno);
     res.json({
       ok: true,
       role: user.role,
@@ -13886,6 +14185,9 @@ app.post("/api/almacen/login-operario", async (req, res) => {
       return res.status(400).json({ error: "Faltan nombre o PIN" });
     }
 
+    const freno = await frenoLogin(req, res, "login-almacen", nombre);
+    if (!freno) return;
+
     const { data: perfil } = await supabase
       .from("perfiles_usuario")
       .select("id, nombre, rol, ubicacion, activo, codigo_operario")
@@ -13895,8 +14197,10 @@ app.post("/api/almacen/login-operario", async (req, res) => {
 
     const nombreDb = String(perfil?.nombre ?? "").toLowerCase().trim();
     if (!perfil || nombreDb !== nombre.toLowerCase()) {
+      registrarFalloIntento(freno);
       return res.status(401).json({ error: "Usuario o contraseña incorrectos" });
     }
+    registrarExitoIntento(freno);
 
     const slug = nombre
       .toLowerCase()
@@ -13968,6 +14272,34 @@ app.post("/api/login-sso", async (req, res) => {
       });
     }
 
+    /*
+     * ── Este endpoint ya NO devuelve ninguna contraseña ─────────────────────
+     *
+     * Devolvía `adminToken`, y ahí estaban las dos peores fugas del panel:
+     *
+     *   · para un usuario con ficha en `app_users`, la contraseña EN CLARO de
+     *     ese usuario (`panelUser.password`);
+     *   · para un superadministrador o un admin de administración,
+     *     `process.env.ADMIN_PASSWORD`: la contraseña maestra compartida del
+     *     panel entero.
+     *
+     * El navegador la guardaba en `localStorage` («sea-admin-token»), la mandaba
+     * en cada petición y la incrustaba en las URLs de los PDF. Con eso, un XSS,
+     * un puesto compartido o una copia de seguridad de Android bastaban para
+     * llevarse una credencial que no caduca, no se puede revocar y es la misma
+     * para todos. Y no hacía falta ninguna de las dos cosas: el panel ya tiene
+     * la sesión de Supabase con la que ha llegado aquí.
+     *
+     * Las cabeceras del panel (`adminHeaders.ts` y `workshopApi.ts`) mandan
+     * ahora también ese Bearer, y `getRoleFromRequestAsync` lo mira ANTES del
+     * token clásico. Así que la respuesta solo necesita decir quién eres y qué
+     * ves. Quien entra por el login clásico tecleando la contraseña compartida
+     * sigue funcionando igual: eso se retira en la fase de identidad, con su
+     * aviso de deprecación.
+     *
+     * Regla que queda: ninguna respuesta de la API devuelve una contraseña.
+     */
+
     // 1) Usuario del panel con el mismo nombre (username o nombre completo)
     try {
       const users = await listDbAppUsers();
@@ -13979,7 +14311,6 @@ app.post("/api/login-sso", async (req, res) => {
           role: panelUser.role,
           name: panelUser.name,
           allowedViews: panelUser.allowedViews,
-          adminToken: panelUser.password ?? "",
         });
       }
     } catch (e) {
@@ -13987,13 +14318,12 @@ app.post("/api/login-sso", async (req, res) => {
     }
 
     // 2) Superadmin / admin de administración → admin del panel
-    if ((u.es_superadmin || u.adm_admin) && process.env.ADMIN_PASSWORD) {
+    if (u.es_superadmin || u.adm_admin) {
       return res.json({
         ok: true,
         role: "admin",
         name: u.nombre,
         allowedViews: null,
-        adminToken: process.env.ADMIN_PASSWORD,
       });
     }
 
@@ -14133,9 +14463,58 @@ app.delete("/api/users/:id", requireAdminRole, async (req, res) => {
    BACKUP
 ========================================================= */
 
+/**
+ * Columnas que no salen en la copia, en ninguna tabla.
+ *
+ * `SELECT *` sobre `techs` se llevaba el `roadsideOperatorCode` en claro —que es
+ * la credencial con la que entran los operarios en las APKs—, el `workshopPin`
+ * heredado y los hashes. O sea: el fichero que se bajaba «para tener una copia»
+ * era la lista de credenciales de todo el taller, y acababa en la carpeta de
+ * descargas de quien lo pidiera.
+ *
+ * Se filtra por nombre de columna y no por lista de columnas a incluir, para que
+ * una columna nueva no se cuele sola el día que alguien añada otro secreto.
+ */
+const COLUMNAS_QUE_NO_SE_COPIAN = new Set([
+  "roadsideOperatorCode",
+  "workshopPin",
+  "workshopPinHash",
+  "workshopPinSalt",
+  "password",
+  "pin",
+  "pin_hash",
+  "token",
+]);
+
+function sinColumnasSecretas(filas: any[]): any[] {
+  return filas.map((fila) => {
+    const limpia: Record<string, unknown> = {};
+    for (const [clave, valor] of Object.entries(fila ?? {})) {
+      if (!COLUMNAS_QUE_NO_SE_COPIAN.has(clave)) limpia[clave] = valor;
+    }
+    return limpia;
+  });
+}
+
 app.get("/api/backup", requireAdminRole, async (req, res) => {
   try {
-        const password = String(req.query.password ?? "");
+    /*
+     * La contraseña va en cabecera, no en la URL.
+     *
+     * Con `?password=`, el logger de peticiones escribía la línea completa
+     * —incluida la contraseña de backup y el token de admin— en los logs de
+     * Render, donde se quedan; y además iba al historial del navegador y a la
+     * cabecera `Referer`. Se acepta la cabecera nueva y, de momento, también la
+     * consulta, para que un panel sin actualizar no se quede sin copia: el
+     * logger ya no la escribe.
+     */
+    const bruta = String(req.headers["x-backup-password"] ?? req.query.password ?? "");
+    let password = bruta;
+    try {
+      password = decodeURIComponent(bruta);
+    } catch {
+      /* contraseña sin codificar (panel antiguo) */
+    }
     const expectedPassword = process.env.BACKUP_PASSWORD;
 
     if (!expectedPassword) {
@@ -14144,7 +14523,7 @@ app.get("/api/backup", requireAdminRole, async (req, res) => {
       });
     }
 
-    if (password !== expectedPassword) {
+    if (!password || !safeEquals(password, expectedPassword)) {
       return res.status(401).json({
         error: "Contraseña de backup incorrecta",
       });
@@ -14162,7 +14541,7 @@ app.get("/api/backup", requireAdminRole, async (req, res) => {
 
     for (const table of tables) {
       const result = await db.query(`SELECT * FROM ${table} ORDER BY id ASC`);
-      data[table] = result.rows;
+      data[table] = sinColumnasSecretas(result.rows);
     }
 
     const backup = {
@@ -15029,8 +15408,18 @@ async function guardarHistorialOcrAlbaran(
   }
 }
 
+/*
+ * Sin middleware, este endpoint era un OCR gratis para cualquiera: sube un PDF
+ * y el servidor lo manda al modelo con cargo a nuestra cuenta.
+ *
+ * Se exige sesión, pero NO `requireModule("almacen")`: ninguna ruta del módulo
+ * de almacén comprueba hoy esa licencia, así que añadirla aquí podría empezar a
+ * devolver 403 en producción a gente que trabaja. Cerrar el acceso anónimo es
+ * lo urgente; el control de licencia del módulo va con el resto de almacén.
+ */
 app.post(
   "/api/almacen/leer-albaran-pdf",
+  authenticate,
   upload.single("albaran"),
   async (req, res) => {
     try {
@@ -15181,6 +15570,7 @@ Reglas obligatorias:
 
 app.post(
   "/api/almacen/leer-entrada-pdf",
+  authenticate,
   upload.single("albaran"),
   async (req, res) => {
     try {
@@ -15493,9 +15883,13 @@ app.post("/api/workshop-operator/login", async (req, res) => {
     if (!name || !pin) {
       return res.status(400).json({ error: "Faltan datos" });
     }
+    const freno = await frenoLogin(req, res, "login-taller-pin", name);
+    if (!freno) return;
     if (!(await verifyWorkshopPin(name, pin))) {
+      registrarFalloIntento(freno);
       return res.status(401).json({ error: "PIN incorrecto" });
     }
+    registrarExitoIntento(freno);
     res.json({ ok: true, techName: name });
   } catch (error) {
     console.error("POST /api/workshop-operator/login error:", error);
@@ -15715,6 +16109,30 @@ Devuelve SOLO el JSON sin texto adicional:
   }
 }
 
+/**
+ * Descarga un medio de WhatsApp con las credenciales de la cuenta de Twilio.
+ *
+ * La URL viene del cuerpo del webhook, así que la elige quien manda el
+ * mensaje. Por eso pasa por `fetchSeguro` con la lista de hosts de Twilio: sin
+ * eso, poner `MediaUrl0=https://atacante.tld/x` hacía que el servidor enviara
+ * la cabecera `Authorization: Basic <SID>:<AUTH_TOKEN>` al atacante. Estaba
+ * repetido en tres sitios; ahora la credencial se construye en uno.
+ */
+async function descargarMedioTwilio(url: string) {
+  return fetchSeguro(url, {
+    hostsPermitidos: HOSTS_TWILIO,
+    cabeceras: {
+      Authorization:
+        "Basic " +
+        Buffer.from(
+          `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
+        ).toString("base64"),
+    },
+    maxBytes: 25 * 1024 * 1024,
+    timeoutMs: 20_000,
+  });
+}
+
 // Twilio sends form-encoded bodies for webhooks
 app.post(
   "/api/whatsapp/inbound",
@@ -15740,27 +16158,50 @@ app.post(
       const urls = [...new Set(candidatos)].map((u) => `${u}/api/whatsapp/inbound`);
 
       /*
-       * La firma se calcula UNA vez y se lleva como bandera.
+       * Sin firma válida no se procesa NADA: el webhook responde 403 y corta.
        *
-       * Los caminos que ya existían —recobros, captura, borradores— siguen
-       * procesándose con firma inválida, exactamente como hasta ahora:
-       * endurecerlos de golpe es romper cosas que hoy funcionan sin saber
-       * cuánto ni a quién.
+       * (Este comentario describía antes un diseño intermedio en el que los
+       * caminos ya existentes —recobros, captura, borradores— seguían
+       * procesándose con firma inválida y solo se protegían las citas. Ese
+       * diseño se descartó y el código de abajo rechaza la petición entera,
+       * pero el comentario se quedó diciendo lo contrario. El guard de
+       * `citasWhatsapp/cableado.test.ts` no lo detectó porque compara el código
+       * SIN comentarios, que es lo correcto para fijar comportamiento y lo que
+       * deja pasar una descripción equivocada.)
        *
-       * Lo que NO se hace nunca con firma inválida es tocar una cita. Quien
-       * consiguiera colar un mensaje confirmaría citas ajenas, y un taller que
-       * da por buena una cita que nadie ha confirmado se queda con el hueco
-       * vacío y el cliente sin avisar. Es el mismo razonamiento que ya llevó a
-       * exigir firma en `server/satisfaction/routerCallback.ts`.
+       * Consecuencia operativa, que hay que tener presente al desplegar: si la
+       * URL configurada en la consola de Twilio no coincide con ninguna de las
+       * candidatas, **deja de entrar todo el WhatsApp**, no solo las citas.
        */
-      let firmaValida = false;
-      if (authToken && twilioSig) {
-        firmaValida = urls.some((u) =>
-          twilio.validateRequest(authToken, twilioSig, u, req.body)
+      const firmaValida =
+        Boolean(authToken) &&
+        Boolean(twilioSig) &&
+        urls.some((u) => twilio.validateRequest(authToken, twilioSig!, u, req.body));
+
+      if (!firmaValida) {
+        /*
+         * Antes se seguía procesando, y eso era la vía de entrada más grave de
+         * todo el servidor. Un mensaje sin firma llegaba a un `fetch` de
+         * `MediaUrl0` que añadía las credenciales de Twilio en la cabecera: el
+         * atacante ponía su propio dominio y se quedaba con el AUTH_TOKEN de la
+         * cuenta. Con él se firman webhooks válidos y se manda WhatsApp desde el
+         * número de la empresa. Además disparaba llamadas a la IA y escribía
+         * notas en expedientes de recobro.
+         *
+         * Twilio firma siempre, así que una firma inválida es una de dos cosas:
+         * alguien que no es Twilio, o la URL del webhook en la consola de Twilio
+         * no coincide con ninguno de los nombres que este servicio se conoce. Lo
+         * segundo se arregla mirando este log, que dice exactamente qué URLs se
+         * han probado; lo primero no se atiende. El mismo criterio que ya se
+         * aplicaba en server/satisfaction/routerCallback.ts.
+         */
+        console.warn(
+          "[whatsapp] firma de Twilio ausente o inválida: petición rechazada.",
+          authToken ? "" : "Falta TWILIO_AUTH_TOKEN.",
+          twilioSig ? "" : "Falta la cabecera x-twilio-signature.",
+          `URLs probadas: ${urls.join(" , ")}`
         );
-        if (!firmaValida) {
-          console.warn("Invalid Twilio signature on /api/whatsapp/inbound — procesando igualmente (las citas NO se tocan)");
-        }
+        return res.status(403).send("Forbidden");
       }
 
       const {
@@ -15828,8 +16269,13 @@ app.post(
 
         if (intencion) {
           if (!firmaValida) {
-            // Se guarda el mensaje (ya está guardado arriba) pero la cita no
-            // se toca. Queda el aviso para poder mirarlo.
+            /*
+             * Inalcanzable desde que el webhook rechaza con 403 la firma
+             * inválida, y se deja a propósito: es la acción más delicada de
+             * este webhook —dar por confirmada una cita con un cliente— y si
+             * algún día alguien vuelve a abrir la puerta de arriba, esta
+             * segunda barrera sigue en pie.
+             */
             console.error(
               `[Citas] respuesta «${intencion}» DESCARTADA por firma inválida ` +
                 `(sid=${MessageSid}, de=${From}). Ninguna cita modificada.`
@@ -15925,15 +16371,9 @@ app.post(
         let vcardContactPhone: string | null = null;
         if (msgType === "contact" && mediaUrl0) {
           try {
-            const vcardResp = await fetch(mediaUrl0, {
-              headers: {
-                Authorization: "Basic " + Buffer.from(
-                  `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
-                ).toString("base64"),
-              },
-            });
+            const vcardResp = await descargarMedioTwilio(mediaUrl0);
             if (vcardResp.ok) {
-              const vcardText = await vcardResp.text();
+              const vcardText = vcardResp.cuerpo.toString("utf8");
               const parsed = parseVCard(vcardText);
               vcardContactName = parsed.name;
               vcardContactPhone = parsed.phone;
@@ -15947,17 +16387,11 @@ app.post(
         let storedUrl: string | null = null;
         if (mediaUrl0 && ["image","audio","video","document"].includes(msgType)) {
           try {
-            const mediaResp = await fetch(mediaUrl0, {
-              headers: {
-                Authorization: "Basic " + Buffer.from(
-                  `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
-                ).toString("base64"),
-              },
-            });
+            const mediaResp = await descargarMedioTwilio(mediaUrl0);
             if (mediaResp.ok) {
-              const contentType = mediaResp.headers.get("content-type") ?? "application/octet-stream";
+              const contentType = mediaResp.contentType;
               const ext = contentType.split("/")[1]?.split(";")[0] ?? "bin";
-              const buffer = Buffer.from(await mediaResp.arrayBuffer());
+              const buffer = mediaResp.cuerpo;
               const storagePath = `roadside/${jobId}/whatsapp_${Date.now()}.${ext}`;
               const { error: upErr } = await supabase.storage
                 .from(process.env.SUPABASE_ROADSIDE_BUCKET || "roadside")
@@ -15993,12 +16427,32 @@ app.post(
             lng = dms[8].toUpperCase() === "W" ? -lngAbs : lngAbs;
             effectiveMsgType = "location";
           }
-          const mapsUrlMatch = Body.match(/https?:\/\/(maps\.app\.goo\.gl|goo\.gl\/maps|maps\.google\.com|www\.google\.com\/maps)[^\s]*/i);
-          if (mapsUrlMatch && lat == null) {
+          /*
+           * El enlace de mapa lo pone quien manda el mensaje, y antes se abría
+           * tal cual siguiendo redirecciones. El patrón anterior no cerraba el
+           * host —`(maps\.app\.goo\.gl|…)[^\s]*`— así que
+           * `https://maps.app.goo.gl.atacante.tld/x` lo cumplía y el servidor
+           * acababa pidiendo la URL del atacante y siguiéndole las
+           * redirecciones a donde quisiera, incluida la red interna.
+           *
+           * Ahora el patrón exige que el host termine ahí (`/`, `?`, `#` o fin)
+           * y, además, `fetchSeguro` vuelve a comprobar el host en cada salto:
+           * el patrón puede quedarse corto algún día, la lista blanca no.
+           *
+           * Las redirecciones sí se siguen, porque son el motivo de la llamada:
+           * un enlace corto solo suelta las coordenadas al expandirse. Se
+           * limitan a cinco y cada una se revalida.
+           */
+          const enlaceMapa = extraerEnlaceMapa(Body);
+          if (enlaceMapa && lat == null) {
             try {
-              // Follow redirects to get the final URL with coordinates
-              const mapsResp = await fetch(mapsUrlMatch[0], { redirect: "follow", signal: AbortSignal.timeout(5000) });
-              const finalUrl = decodeURIComponent(mapsResp.url);
+              const mapsResp = await fetchSeguro(enlaceMapa, {
+                hostsPermitidos: HOSTS_MAPAS,
+                maxRedirecciones: 5,
+                maxBytes: 2 * 1024 * 1024,
+                timeoutMs: 5000,
+              });
+              const finalUrl = decodeURIComponent(mapsResp.urlFinal);
               // Extract lat/lng from URL patterns like @41.123,1.456, ?q=41.123,1.456, ll=..., !3d..!4d..,
               // or DMS in the place name of the final URL
               const coordMatch = finalUrl.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/) ||
@@ -16299,21 +16753,13 @@ async function transcribeCaptureAudio(captureMessageId: number, twilioMediaUrl: 
       [captureMessageId]
     );
 
-    const resp = await fetch(twilioMediaUrl, {
-      headers: {
-        Authorization:
-          "Basic " +
-          Buffer.from(
-            `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
-          ).toString("base64"),
-      },
-      signal: AbortSignal.timeout(20000),
-    });
+    // La URL la manda quien envía el mensaje: solo se descarga si es de Twilio.
+    const resp = await descargarMedioTwilio(twilioMediaUrl);
     if (!resp.ok) throw new Error(`Audio download HTTP ${resp.status}`);
 
-    const contentType = resp.headers.get("content-type") ?? "audio/ogg";
+    const contentType = resp.contentType || "audio/ogg";
     const ext = (contentType.split("/")[1] || "ogg").split(";")[0];
-    const buffer = Buffer.from(await resp.arrayBuffer());
+    const buffer = resp.cuerpo;
 
     const file = await toFile(buffer, `audio.${ext}`, { type: contentType });
     const transcript = await transcribirAudio(file, {
@@ -17820,11 +18266,34 @@ app.post("/api/tyrecontrol/login-operario", async (req, res) => {
       return res.status(400).json({ error: "Introduce tu nombre y PIN" });
     }
 
-    // Login SOLO contra usuarios de TyreControl con acceso a la APK. Los
-    // operarios de Assist (tabla techs) YA NO pueden entrar en TyreControl.
-    // El PIN es la propia contraseña del usuario en Supabase Auth (se fija al
-    // crear el usuario y se cambia desde Usuarios); aquí solo resolvemos su
-    // email y la APK hace signInWithPassword(email, PIN) → Supabase valida.
+    /*
+     * Este endpoint NO comprobaba el PIN.
+     *
+     * Recibía nombre y `code`, verificaba que los dos venían rellenos y
+     * devolvía el email interno de Auth del usuario buscándolo solo por el
+     * nombre. Quien fuera, sin credencial ninguna, obtenía así el email de
+     * cualquier operario —que es la mitad de lo que hace falta para probar
+     * PINs contra Supabase— y, peor, el `upsert` de más abajo le concedía al
+     * operario acceso a TODAS las empresas activas. Un anónimo con una lista
+     * de nombres reasignaba permisos.
+     *
+     * El PIN es la contraseña del usuario en Supabase Auth, así que se puede
+     * comprobar aquí mismo antes de contestar. La APK sigue recibiendo lo que
+     * espera y vuelve a iniciar sesión por su cuenta; son dos autenticaciones
+     * en vez de una, y es temporal: en la fase de identidad el servidor
+     * devolverá la sesión ya iniciada y la APK dejará de manejar el PIN.
+     *
+     * El mensaje de error es el mismo para «no existe» y «PIN incorrecto»: si
+     * se distinguieran, esto seguiría siendo un enumerador de usuarios.
+     */
+    const limite = { tipo: "tc-login", identidad: techName.toLowerCase(), ip: req.ip };
+    const veredicto = await comprobarIntento(limite);
+    if (!veredicto.permitido) {
+      return res
+        .status(429)
+        .json({ error: `Demasiados intentos. Prueba en ${veredicto.reintentarEnS} s.` });
+    }
+
     const { data: usuarios } = await supabase
       .from("tc_usuarios")
       .select("id, email, nombre, activo, acceso_apk, empresas_manual")
@@ -17834,8 +18303,19 @@ app.post("/api/tyrecontrol/login-operario", async (req, res) => {
       .limit(1);
     const user = (usuarios || [])[0];
     if (!user || !user.email) {
+      registrarFalloIntento(limite);
       return res.status(401).json({ error: "Usuario o PIN incorrectos" });
     }
+
+    const comprobacion = await supabaseAnonAuth.auth.signInWithPassword({
+      email: user.email,
+      password: code,
+    });
+    if (comprobacion.error || !comprobacion.data?.user) {
+      registrarFalloIntento(limite);
+      return res.status(401).json({ error: "Usuario o PIN incorrectos" });
+    }
+    registrarExitoIntento(limite);
 
     // Empresas: si no tiene asignación manual, ve todas las activas (default);
     // si es "manual", las gestiona el administrador desde Usuarios.
@@ -17869,7 +18349,7 @@ app.post("/api/tyrecontrol/usuarios/:id/password", async (req, res) => {
     if (userErr || !userData?.user) return res.status(401).json({ error: "No autenticado" });
     const { data: perfil } = await supabase
       .from("tc_usuarios")
-      .select("rol, es_superadmin, activo")
+      .select("rol, es_superadmin, activo, empresa_id")
       .eq("id", userData.user.id)
       .maybeSingle();
     if (!perfil || !perfil.activo) return res.status(403).json({ error: "Perfil no válido" });
@@ -17877,10 +18357,54 @@ app.post("/api/tyrecontrol/usuarios/:id/password", async (req, res) => {
       return res.status(403).json({ error: "Permisos insuficientes" });
     }
 
+    /*
+     * Este endpoint llama a `auth.admin.updateUserById`, que actúa sobre
+     * `auth.users`: la tabla que comparten TODOS los productos de la
+     * plataforma. Antes aceptaba el id de la ruta sin comprobar nada más, así
+     * que el administrador de una empresa cliente de TyreControl podía cambiar
+     * la contraseña del superadministrador de Mobilink —o de un usuario de otra
+     * empresa— con solo saberse su UUID, que no es un secreto. Era la cadena de
+     * ataque más corta del informe de seguridad.
+     *
+     * El criterio es el mismo que ya usaba `enlace-acceso` unas líneas más
+     * abajo: el objetivo tiene que ser un usuario de TyreControl de TU empresa,
+     * salvo que quien llama sea superadministrador. Y a un superadministrador no
+     * lo toca nadie que no lo sea, mire donde mire.
+     */
+    const objetivoId = String(req.params.id);
+
+    const { data: objetivo } = await supabase
+      .from("tc_usuarios")
+      .select("id, empresa_id, es_superadmin")
+      .eq("id", objetivoId)
+      .maybeSingle();
+    if (!objetivo) return res.status(404).json({ error: "Usuario no encontrado" });
+
+    if (!perfil.es_superadmin) {
+      if (objetivo.es_superadmin === true) {
+        return res.status(403).json({ error: "Permisos insuficientes" });
+      }
+      if (!perfil.empresa_id || objetivo.empresa_id !== perfil.empresa_id) {
+        return res.status(404).json({ error: "Usuario no encontrado" });
+      }
+      // La cuenta puede ser además superadministradora de la plataforma aunque
+      // en TyreControl no lo sea: se comprueba en la tabla maestra.
+      const maestro = await db.query(
+        `SELECT coalesce(es_superadmin, false) AS es_superadmin FROM app_usuarios WHERE id = $1`,
+        [objetivoId]
+      );
+      if (maestro.rows[0]?.es_superadmin) {
+        return res.status(403).json({ error: "Permisos insuficientes" });
+      }
+    }
+
     const nueva = String(req.body?.password ?? "");
     if (nueva.length < 4) return res.status(400).json({ error: "La contraseña debe tener al menos 4 caracteres" });
-    const { error } = await supabase.auth.admin.updateUserById(String(req.params.id), { password: nueva });
+    const { error } = await supabase.auth.admin.updateUserById(objetivoId, { password: nueva });
     if (error) return res.status(400).json({ error: error.message });
+    console.log(
+      `[tyrecontrol] contraseña restablecida por ${userData.user.id} sobre ${objetivoId}`
+    );
     res.json({ ok: true });
   } catch (error: any) {
     console.error("POST /api/tyrecontrol/usuarios/:id/password error:", error);
@@ -19016,8 +19540,18 @@ app.get("/api/vehiculo-historial", requireAdminRole, async (req, res) => {
    SEA ADMINISTRACIÓN — analizar imagen de impagado (devolución
    de recibo bancario) y extraer datos para crear el recobro
 ========================================================= */
+/*
+ * Estos dos análisis de imagen no tenían NINGÚN middleware: cualquiera desde
+ * internet subía ocho imágenes de diez megas y el servidor las mandaba al
+ * modelo de visión con cargo a nuestra cuenta de OpenAI. Además procesaban
+ * datos personales (NIF, teléfonos, correos de clientes) sin que nadie se
+ * hubiera identificado. Se protegen con la sesión unificada y la licencia del
+ * módulo, igual que `/api/payments/create-deposit`, que es de la misma casa.
+ */
 app.post(
   "/api/administracion/analizar-impagado",
+  authenticate,
+  requireModule("administracion"),
   upload.single("imagen"),
   async (req, res) => {
     try {
@@ -19113,6 +19647,8 @@ Reglas:
 ========================================================= */
 app.post(
   "/api/administracion/analizar-cliente",
+  authenticate,
+  requireModule("administracion"),
   upload.array("imagenes", 8),
   async (req, res) => {
     try {
@@ -19517,7 +20053,31 @@ app.post("/api/administracion/recobro-whatsapp", authenticate, requireModule("ad
 
 // Verifica que quien llama es admin (superadmin de app_usuarios
 // o rol admin de adm_usuarios) a partir de su token de sesión.
-async function verificarAdminApp(req: express.Request): Promise<{ ok: boolean; userId?: string; error?: string }> {
+type AdminApp = {
+  ok: boolean;
+  userId?: string;
+  /** Superadministrador de plataforma: atraviesa empresas. */
+  esSuperadmin?: boolean;
+  /** Empresa del llamante. null si solo existe en adm_usuarios. */
+  empresaId?: string | null;
+  error?: string;
+};
+
+/**
+ * Comprueba que quien llama es administrador, y DE QUÉ.
+ *
+ * Antes devolvía un sí o un no. El problema es que ese «sí» valía tanto para un
+ * superadministrador de plataforma como para el administrador del módulo de
+ * administración de cualquier empresa cliente, y los endpoints que la usaban
+ * aceptaban después un `userId` cualquiera. Con eso, el administrador de una
+ * empresa cliente podía cambiar la contraseña del superadministrador y quedarse
+ * con la plataforma entera: era la cadena de ataque más corta del informe.
+ *
+ * Ahora devuelve también el nivel y la empresa, y quien la usa tiene que decidir
+ * qué puede tocar. Es el primer paso de separar los tres niveles
+ * (superadmin / admin de empresa / admin de módulo).
+ */
+async function verificarAdminApp(req: express.Request): Promise<AdminApp> {
   const auth = String(req.headers.authorization || "");
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
   if (!token) return { ok: false, error: "Falta el token de sesión" };
@@ -19525,12 +20085,63 @@ async function verificarAdminApp(req: express.Request): Promise<{ ok: boolean; u
   if (error || !data.user) return { ok: false, error: "Sesión no válida" };
   const r = await db.query(
     `SELECT
-       coalesce((SELECT es_superadmin FROM app_usuarios WHERE id = $1 AND activo), false)
-       OR coalesce((SELECT rol = 'admin' FROM adm_usuarios WHERE id = $1 AND activo), false) AS es_admin`,
+       coalesce((SELECT es_superadmin FROM app_usuarios WHERE id = $1 AND activo), false) AS es_superadmin,
+       coalesce((SELECT rol = 'admin' FROM adm_usuarios WHERE id = $1 AND activo), false) AS adm_admin,
+       (SELECT empresa_id FROM app_usuarios WHERE id = $1 AND activo) AS empresa_id`,
     [data.user.id]
   );
-  if (!r.rows[0]?.es_admin) return { ok: false, error: "Solo un administrador puede gestionar usuarios" };
-  return { ok: true, userId: data.user.id };
+  const fila = r.rows[0];
+  const esSuperadmin = Boolean(fila?.es_superadmin);
+  if (!esSuperadmin && !fila?.adm_admin) {
+    return { ok: false, error: "Solo un administrador puede gestionar usuarios" };
+  }
+  return {
+    ok: true,
+    userId: data.user.id,
+    esSuperadmin,
+    empresaId: fila?.empresa_id ?? null,
+  };
+}
+
+/**
+ * Si `admin` puede actuar sobre la cuenta `objetivoId`.
+ *
+ * Las dos reglas que faltaban:
+ *
+ *   · **nadie que no sea superadministrador toca a un superadministrador**. Sin
+ *     esto, cualquier administrador de empresa se apropiaba de la plataforma;
+ *   · **quien no es superadministrador solo actúa dentro de su empresa**. El id
+ *     de un usuario no es un secreto: sale en listados y en enlaces, así que
+ *     saberlo no puede ser la autorización para cambiarle la contraseña.
+ *
+ * Se contesta 404 y no 403 cuando el usuario es de otra empresa, por la misma
+ * razón que en el resto de la casa (ARCHITECTURE.md §3, regla 3): un 403
+ * confirmaría que la cuenta existe.
+ */
+async function puedeGestionarUsuario(
+  admin: AdminApp,
+  objetivoId: string
+): Promise<{ status: number; message: string } | null> {
+  const r = await db.query(
+    `SELECT id, empresa_id, es_superadmin FROM app_usuarios WHERE id = $1`,
+    [objetivoId]
+  );
+  const objetivo = r.rows[0];
+  if (!objetivo) {
+    return { status: 404, message: "Ese usuario no existe" };
+  }
+  if (objetivo.es_superadmin && !admin.esSuperadmin) {
+    return {
+      status: 403,
+      message: "Solo un administrador de Mobilink puede gestionar esa cuenta",
+    };
+  }
+  if (!admin.esSuperadmin) {
+    if (!admin.empresaId || objetivo.empresa_id !== admin.empresaId) {
+      return { status: 404, message: "Ese usuario no existe" };
+    }
+  }
+  return null;
 }
 
 function emailSintetico(username: string): string {
@@ -19578,8 +20189,25 @@ app.post("/api/administracion/usuarios/reset-password", async (req, res) => {
     if (!userId) return res.status(400).json({ success: false, message: "Falta el usuario" });
     if (password.length < 6) return res.status(400).json({ success: false, message: "Contraseña interna demasiado corta" });
 
+    // Sin esto, el administrador de una empresa cliente cambiaba la contraseña
+    // de CUALQUIER cuenta de Auth, superadministradores incluidos.
+    const problema = await puedeGestionarUsuario(admin, userId);
+    if (problema) {
+      return res.status(problema.status).json({ success: false, message: problema.message });
+    }
+
     const { error } = await supabase.auth.admin.updateUserById(userId, { password });
     if (error) return res.status(400).json({ success: false, message: error.message });
+
+    if (admin.empresaId) {
+      void registrarAuditoria({
+        empresaId: admin.empresaId,
+        userId: admin.userId,
+        accion: "auth.reset-password",
+        detalle: { objetivo: userId },
+        ip: req.ip,
+      });
+    }
     return res.json({ success: true });
   } catch (e: any) {
     console.error("reset-password error:", e);
@@ -19601,8 +20229,116 @@ app.post("/api/administracion/usuarios/eliminar-auth", async (req, res) => {
     const r = await db.query(`SELECT 1 FROM app_usuarios WHERE id = $1`, [userId]);
     if (r.rows.length) return res.status(400).json({ success: false, message: "El usuario aún existe en la aplicación" });
 
+    /*
+     * ── La empresa se comprueba con lo que se apuntó ANTES de borrar la ficha ──
+     *
+     * Aquí ya no existe la relación usuario → empresa: para llegar a este punto
+     * la RPC `app_eliminar_usuario` ha borrado la ficha. Y sin esa relación, este
+     * endpoint aceptaba cualquier `userId` cuya ficha no estuviera. Hay cuentas
+     * de `auth.users` que nunca tuvieron ficha en `app_usuarios` —operarios con
+     * email sintético, usuarios que solo viven en `tc_usuarios`—, así que el
+     * administrador de una empresa podía borrar la cuenta de acceso de alguien
+     * de otra.
+     *
+     * La propiedad que se quiere es que ningún id de `auth.users` llegue a una
+     * operación destructiva sin haber sido autorizado contra su empresa mientras
+     * esa información todavía existía. Por eso el disparador de borrado apunta la
+     * baja en `app_bajas_auth` con la empresa que tenía la ficha y quién la pidió,
+     * y aquí solo se borra lo que esté apuntado y sea de tu empresa.
+     *
+     * Mientras la migración no esté aplicada la tabla no existe. En ese caso no
+     * se abre la puerta: se exige ser superadministrador de plataforma. Es más
+     * estrecho que hoy —hoy vale cualquier admin de módulo de cualquier
+     * empresa— y no deja al dueño de la plataforma sin poder operar.
+     */
+    let bajaId: string | null = null;
+    const tieneTabla = await db
+      .query(`SELECT to_regclass('public.app_bajas_auth') AS t`)
+      .then((r) => Boolean(r.rows[0]?.t))
+      .catch(() => false);
+
+    if (!tieneTabla) {
+      if (!admin.esSuperadmin) {
+        console.warn(
+          "[eliminar-auth] app_bajas_auth no existe todavía: solo un superadministrador puede borrar cuentas de Auth"
+        );
+        return res.status(403).json({
+          success: false,
+          message:
+            "Esta operación necesita la migración de seguridad aplicada. Mientras tanto, solo un administrador de Mobilink puede hacerla.",
+        });
+      }
+    } else {
+      /*
+       * El apunte tiene que estar vivo: no consumido y sin caducar. Un solo uso,
+       * y el `id` del apunte es lo que se consume, no «la baja del usuario X»:
+       * así queda el rastro de cada una aunque haya varias en el tiempo.
+       */
+      const baja = await db.query(
+        `SELECT id, empresa_id, objetivo_es_superadmin, solicitado_por,
+                solicitante_empresa_id, solicitante_nivel, creado_en
+           FROM app_bajas_auth
+          WHERE user_id = $1
+            AND consumido_en IS NULL
+            AND caduca_en > now()
+          ORDER BY creado_en DESC
+          LIMIT 1`,
+        [userId]
+      );
+      const fila = baja.rows[0];
+      if (!fila) {
+        // Nunca se autorizó una baja para este id, ya se consumió, o ha caducado.
+        return res.status(404).json({ success: false, message: "Ese usuario no existe" });
+      }
+
+      /*
+       * Un apunte de la empresa A no sirve para borrar una identidad de la B.
+       * Se compara contra la empresa que tenía el OBJETIVO cuando se autorizó,
+       * que es la instantánea que esta tabla existe para guardar.
+       */
+      if (!admin.esSuperadmin) {
+        if (!admin.empresaId || fila.empresa_id !== admin.empresaId) {
+          return res.status(404).json({ success: false, message: "Ese usuario no existe" });
+        }
+        // Y a un superadministrador solo lo da de baja otro superadministrador,
+        // aunque el apunte exista: el flujo es específico y no se hereda.
+        if (fila.objetivo_es_superadmin) {
+          return res.status(403).json({
+            success: false,
+            message: "Solo un administrador de Mobilink puede dar de baja esa cuenta",
+          });
+        }
+      }
+      bajaId = String(fila.id);
+    }
+
     const { error } = await supabase.auth.admin.deleteUser(userId);
     if (error) return res.status(400).json({ success: false, message: error.message });
+
+    /*
+     * El apunte se marca como consumido, no se borra: una baja autoriza un
+     * borrado y solo uno, y la fila queda como evidencia de quién autorizó qué
+     * y cuándo. Borrarla dejaría la auditoría sin la mitad de la historia.
+     */
+    if (bajaId) {
+      await db
+        .query(
+          `UPDATE app_bajas_auth SET consumido_en = now(), consumido_por = $2
+            WHERE id = $1 AND consumido_en IS NULL`,
+          [bajaId, admin.userId]
+        )
+        .catch((e) => console.warn("[eliminar-auth] no se pudo marcar la baja:", e));
+    }
+
+    if (admin.empresaId) {
+      void registrarAuditoria({
+        empresaId: admin.empresaId,
+        userId: admin.userId,
+        accion: "auth.eliminar-usuario",
+        detalle: { objetivo: userId, baja: bajaId },
+        ip: req.ip,
+      });
+    }
     return res.json({ success: true });
   } catch (e: any) {
     console.error("eliminar-auth error:", e);
@@ -19656,17 +20392,38 @@ mountOrManuales(app);
    MOBILINK LICENCIAS (API bajo /api/licenses)
 ========================================================= */
 
-// Las licencias se gestionan desde el hub (login Supabase), no desde el panel
-// clásico: se valida la sesión Supabase de un superadmin/admin, igual que el
-// resto de módulos del hub. Acepta también el token de admin clásico como respaldo.
+/*
+ * Las licencias son de plataforma: SOLO superadministrador.
+ *
+ * Antes esto aceptaba dos cosas más, y las dos sobraban:
+ *
+ *   · `verificarAdminApp` a secas, que dice «sí» al administrador del módulo de
+ *     administración de cualquier empresa cliente. Con eso, el administrador de
+ *     un cliente veía la cartera completa de licencias de todos los demás
+ *     clientes y podía renovarse la suya, ampliarse módulos o subirse el tope de
+ *     usuarios. Es exactamente el negocio de la casa, en manos del cliente.
+ *   · El token de admin clásico como respaldo, que es una contraseña compartida
+ *     que el login SSO además entregaba al navegador de cada administrador.
+ *
+ * Quien administre licencias tiene que ser superadministrador de Mobilink. No
+ * hay respaldo: un respaldo que se salta el nivel no es un respaldo, es la
+ * puerta de servicio por la que entra todo el mundo.
+ */
 const requireLicensesAdmin: express.RequestHandler = (req, res, next) => {
   void (async () => {
     const admin = await verificarAdminApp(req);
-    if (admin.ok) return next();
-    // Respaldo: token de admin clásico (x-admin-token / ?token=)
-    const role = await getRoleFromRequestAsync(req);
-    if (role === "admin") return next();
-    return res.status(403).json({ error: admin.error || "Permisos insuficientes" });
+    if (!admin.ok) {
+      return res.status(403).json({ error: admin.error || "Permisos insuficientes" });
+    }
+    if (!admin.esSuperadmin) {
+      return res
+        .status(403)
+        .json({ error: "Solo un administrador de Mobilink puede gestionar licencias" });
+    }
+    // Se deja el id en la petición para que la auditoría del módulo no tenga
+    // que fiarse de la cabecera `x-user-name`, que la pone el cliente.
+    (req as any).licensesAdminUserId = admin.userId;
+    return next();
   })().catch((error) => {
     console.error("requireLicensesAdmin error:", error);
     res.status(500).json({ error: "Error de autorización" });
@@ -20238,6 +20995,7 @@ initDb()
   .then(() => {
     app.listen(PORT, () => {
       console.log(`Servidor backend en puerto ${PORT}`);
+      void conectarPersistenciaLimites(); // bloqueos de login que sobreviven a un reinicio
       startAgendaWhatsAppReminderChecker();
       startWorkshopAutoStandbyChecker();
       startRecobrosNotifierChecker();

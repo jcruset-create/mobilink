@@ -1,10 +1,15 @@
-import { createClient } from "@supabase/supabase-js";
-
-// Mismo proyecto Supabase que el resto de módulos (SSO compartido).
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
-if (!supabaseUrl) throw new Error("Falta VITE_SUPABASE_URL");
-if (!supabaseAnonKey) throw new Error("Falta VITE_SUPABASE_ANON_KEY");
-
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+/**
+ * Reexporta el cliente Supabase compartido.
+ *
+ * Aquí había un `createClient` propio. Eran tres, uno por módulo, sobre el
+ * mismo proyecto y la misma clave de almacenamiento: tres `GoTrueClient`
+ * rotando el mismo refresh token, con la pérdida de sesión que eso provoca
+ * («Invalid Refresh Token»). El motivo completo está en
+ * `src/services/supabaseCliente.ts`.
+ *
+ * El fichero se mantiene —en vez de reescribir los 80 imports que apuntan
+ * aquí— para no cambiar el contrato público sin necesidad. `import { supabase }
+ * from ".../administracion/services/supabase"` sigue funcionando igual; lo que
+ * devuelve es ahora la instancia única.
+ */
+export { supabase } from "../../../services/supabaseCliente";

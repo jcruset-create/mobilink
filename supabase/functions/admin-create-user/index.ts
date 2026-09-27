@@ -82,10 +82,27 @@ serve(async (req: Request) => {
     return jsonResponse({ error: "Sesión no válida." }, 401);
   }
 
-  const { data: perfilAdmin, error: perfilError } = await supabaseUser
+  /*
+   * ── Dos cambios de seguridad en esta comprobación ──────────────────────────
+   *
+   * 1. Se lee con el cliente de SERVICE ROLE y no con la sesión de quien llama.
+   *    Antes pasaba por las políticas del usuario, y la de `perfiles_usuario` es
+   *    `FOR ALL TO authenticated USING (true) WITH CHECK (true)`: cualquier
+   *    usuario autenticado podía escribir su propia fila, ponerse
+   *    `rol = 'admin'` y llamar aquí. Preguntarle al interesado si es admin no
+   *    es una comprobación.
+   *
+   * 2. Se empareja solo por `user_id`. Con el `or` por email, quien se
+   *    registrara con el correo de una ficha de admin sin `user_id` heredaba
+   *    ese admin.
+   */
+  const { data: perfilAdmin, error: perfilError } = await createClient(
+    supabaseUrl,
+    serviceRoleKey
+  )
     .from("perfiles_usuario")
-    .select("id, rol, activo")
-    .or(`user_id.eq.${user.id},email.eq.${user.email}`)
+    .select("id, rol, activo, ubicacion")
+    .eq("user_id", user.id)
     .eq("activo", true)
     .maybeSingle();
 

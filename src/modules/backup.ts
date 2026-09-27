@@ -9,12 +9,13 @@ export async function downloadBackup() {
   if (!password) return;
 
   try {
-    const response = await fetch(
-      `${API_BASE}/api/backup?password=${encodeURIComponent(password)}`,
-      {
-        headers: getAdminHeaders(),
-      }
-    );
+    // La contraseña va en cabecera y no en la URL: en la URL acababa en los
+    // logs del servidor, en el historial del navegador y en el `Referer`.
+    const response = await fetch(`${API_BASE}/api/backup`, {
+      // Codificada, como el token: una contraseña con acentos no cabe cruda en
+      // una cabecera HTTP y `fetch` lanzaría antes de salir.
+      headers: getAdminHeaders({ "x-backup-password": encodeURIComponent(password) }),
+    });
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => null);

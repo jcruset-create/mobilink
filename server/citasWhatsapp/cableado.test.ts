@@ -115,26 +115,56 @@ describe("leído NO es confirmado", () => {
   });
 });
 
-describe("una firma inválida no toca una cita", () => {
-  it("la firma se guarda como bandera en vez de solo avisar", () => {
-    const trozo = webhookEntrante();
-    expect(trozo).toContain("let firmaValida = false;");
+describe("una firma inválida no entra", () => {
+  /*
+   * Estas tres reglas cambiaron al cerrar el webhook.
+   *
+   * Antes decían que la firma se guardaba como bandera y que los caminos
+   * antiguos —recobros, captura, borradores— seguían procesándose sin firma,
+   * «para no romper cosas que funcionan sin saber a quién». Esa decisión se
+   * revisó al ver qué había al final de uno de esos caminos: el `fetch` de
+   * `MediaUrl0` que añadía las credenciales de Twilio en la cabecera. Procesar
+   * sin firma no era solo aceptar un mensaje falso; era regalar el AUTH_TOKEN
+   * de la cuenta a quien pusiera su propio dominio en el cuerpo. Con ese token
+   * se firman webhooks válidos, citas incluidas, así que la protección de las
+   * citas tampoco se sostenía.
+   *
+   * Ahora la regla es: sin firma válida no se procesa NADA.
+   */
+  it("una firma ausente o inválida se rechaza con 403 antes de procesar", () => {
+    const trozo = sinComentarios(webhookEntrante());
+    expect(trozo).toContain("if (!firmaValida)");
+    expect(trozo).toContain('res.status(403)');
+    // Y el rechazo va ANTES de guardar el mensaje: si no, un anónimo seguiría
+    // escribiendo filas en whatsapp_messages.
+    const iRechazo = trozo.indexOf("if (!firmaValida)");
+    const iGuardar = trozo.indexOf("INSERT INTO whatsapp_messages");
+    expect(iRechazo).toBeGreaterThan(0);
+    expect(iGuardar).toBeGreaterThan(0);
+    expect(iRechazo).toBeLessThan(iGuardar);
   });
 
-  it("la respuesta solo se aplica con firma válida", () => {
+  it("ya no queda ningún camino que procese sin firma", () => {
+    expect(sinComentarios(webhookEntrante())).not.toContain("procesando igualmente");
+  });
+
+  it("la respuesta a una cita sigue teniendo su propia comprobación", () => {
+    // Inalcanzable desde el 403, y se deja como segunda barrera: confirmar una
+    // cita es lo único de este webhook que el cliente ve como un compromiso.
     const trozo = webhookEntrante();
     const ini = trozo.indexOf("if (intencion) {");
     expect(ini).toBeGreaterThan(0);
-    // El primer `if` de dentro tiene que ser el de la firma: si se aplicara
-    // primero y se comprobara después, ya estaría hecho el daño.
     expect(trozo.slice(ini, ini + 200)).toContain("if (!firmaValida)");
   });
 
-  it("los caminos que ya existían siguen sin exigir firma", () => {
-    // Recobros, captura y borradores llevan años entrando así. Endurecerlos
-    // de golpe es romper cosas que funcionan sin saber a quién.
+  it("los medios de WhatsApp solo se descargan de Twilio", () => {
+    // Es lo que impide entregar el AUTH_TOKEN a un host ajeno. El nombre de la
+    // variable sí aparece —hay que leerla para validar la firma—; lo que no
+    // puede volver a aparecer aquí es la CABECERA construida con ella, que es
+    // lo que viajaba a la URL que eligiera quien mandaba el mensaje.
     const trozo = webhookEntrante();
-    expect(trozo).toContain("procesando igualmente");
+    expect(trozo).toContain("descargarMedioTwilio");
+    expect(trozo).not.toContain('"Basic "');
   });
 });
 
