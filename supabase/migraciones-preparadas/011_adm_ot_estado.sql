@@ -1,4 +1,27 @@
 /*
+ * ╔═══════════════════════════════════════════════════════════════════════╗
+ * ║  DESCARTADA · NO APLICAR                                              ║
+ * ╚═══════════════════════════════════════════════════════════════════════╝
+ *
+ * Esta migración se escribió para resolver una regresión que NO EXISTÍA.
+ *
+ * `adm_ot_estado` aparecía vacía porque **`adm_work_orders` no tiene ni una
+ * fila** (medido el 2026-09-27: 11 clientes, 0 órdenes de trabajo). No había
+ * ningún fallo de autorización que corregir.
+ *
+ * Lo que sí hacía falta era cerrar el salto de privilegios, y eso lo hace
+ * `014_adm_ot_estado_invoker.sql` con una sola línea, ya aplicada.
+ *
+ * Se conserva el fichero como registro de lo que se llegó a proponer y por
+ * qué. Su predicado sobra: con `security_invoker`, la RLS de las tablas base
+ * ya hace ese trabajo.
+ *
+ * Lo único de aquí que sigue teniendo valor por su cuenta es el endurecimiento
+ * de `search_path` de `adm_rol_actual`, `adm_can_read` y `adm_can_manage`, que
+ * son tres de las 132 de SEC-067. Va con el barrido de SEC-067, no aquí.
+ */
+
+/*
  * SEC-068 · `adm_ot_estado` deja de autorizar por omisión
  * PREPARADA, **SIN APLICAR**
  *

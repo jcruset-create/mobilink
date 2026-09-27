@@ -44,11 +44,10 @@ y sin escritura de `authenticated`. Quedan fuera:
 - **`traspasos_auditoria_detalle`** · caso F. Expone `codigo_personal`, y
   cerrarla no bastaría: `traspasos_auditoria` lo expone también por su política
   `anon_read_auditoria`.
-- **`adm_ot_estado`** · conserva el bypass **para `authenticated`**. Su
-  `security_invoker` se revirtió con una restauración mínima porque la pantalla
-  se quedó vacía, lo que demuestra que el usuario legítimo no pasa
-  `adm_can_read()`: la pantalla venía funcionando gracias al salto de RLS.
-  `anon` sí quedó fuera.
+- ~~**`adm_ot_estado`**~~ · **CERRADA el 2026-09-27** con `014`
+  (`security_invoker = true`). La pantalla que se quedó vacía lo estaba porque
+  `adm_work_orders` no tiene ninguna fila, no por autorización. Ver
+  `docs/SEC-068_adm_ot_estado.md`.
 **Descubierto:** 2026-09-27, al contrastar el precheck con producción.
 
 ---

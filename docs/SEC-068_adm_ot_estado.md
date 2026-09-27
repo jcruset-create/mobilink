@@ -1,7 +1,46 @@
-# `adm_ot_estado` · diagnóstico
+# `adm_ot_estado` · CERRADO
 
-Residuo activo de SEC-068 tras las contenciones del 2026-09-27. **Nada
-modificado.** Diagnóstico y propuesta; la corrección se decide aparte.
+> **Conclusión (2026-09-27): no había ningún fallo de autorización.**
+> `adm_work_orders` está vacía —11 clientes, **0 órdenes de trabajo**—, así que
+> la pantalla decía la verdad. El bypass de `authenticated` sí era real y lo
+> cierra `014` con una línea, ya aplicada.
+
+| | |
+|---|---|
+| Bypass de `anon` | **cerrado** por `005` |
+| Bypass de `authenticated` | **cerrado** por `014` (`security_invoker = true`) |
+| «Regresión» del 27-09 | **no existía**: la tabla estaba vacía |
+| `011` | **descartada**: corregía un problema inexistente |
+
+## Lo que costó llegar aquí
+
+Tres hipótesis mías, las tres falsas, y todas por el mismo motivo: **expliqué
+el síntoma desde el código antes de medir el dato**.
+
+| # | Hipótesis | Qué la tumbó |
+|---|---|---|
+| 1 | Falta el rol `tecnico` en `adm_can_read()` | No hay ningún `tecnico` en producción |
+| 2 | Superadmin sin ficha en `adm_usuarios` | Los dos superadministradores tienen ficha, `admin`, activos |
+| 3 | La sesión estaba rota (`Invalid Refresh Token`) | Con sesión válida y `014` puesta, la pantalla seguía vacía |
+
+La medición que lo resolvió —`select count(*) from adm_work_orders`— estaba
+disponible desde el primer minuto y era la más barata de todas. La pregunta
+«¿hay datos?» va antes que «¿quién puede verlos?», y me la salté tres veces.
+
+La hipótesis 3 no fue del todo inútil: destapó el incidente real de los tres
+clientes de GoTrue (`docs/INCIDENCIA_gotrue_multiple.md`), que sigue abierto.
+
+## Lo que la medición confirma, de paso
+
+| Dato | Valor |
+|---|---|
+| Políticas `RESTRICTIVE` en las dos tablas | **ninguna** |
+| `force_rls` | **false** en las dos |
+| `adm_can_read()` para los tres usuarios de `adm_usuarios` | **true** en los tres |
+| Políticas reales | Exactamente las del repositorio: `adm_can_read()` para SELECT, `adm_can_manage()` para el resto |
+
+O sea: la cadena de autorización del módulo **está bien**. Lo que no hay es
+datos.
 
 ---
 

@@ -263,9 +263,10 @@ cliente sin pasar por `adm_can_read()`.
 
 Cerrarlo necesita una decisión funcional previa, no un `alter view`: o la
 política de `adm_work_orders` está mal y hay que corregirla, o la pantalla no
-debería mostrar esos datos a ese usuario. Diagnosticado el 2026-09-27 en `docs/SEC-068_adm_ot_estado.md`: la causa es
-que `adm_can_read()` no incluye el rol `tecnico`, que es para quien está hecha
-esa pantalla. Queda como **residuo conocido y declarado de SEC-068**.
+debería mostrar esos datos a ese usuario. **Resuelto el 2026-09-27.** No había fallo de autorización: `adm_work_orders`
+está vacía (11 clientes, 0 órdenes de trabajo), así que la pantalla decía la
+verdad. `014` reactivó `security_invoker` y **cerró el bypass de
+`authenticated`**. Ver `docs/SEC-068_adm_ot_estado.md`.
 
 ### 6.3 Las dos incidencias de consola
 
