@@ -16,6 +16,9 @@ on:
       - "server/**"
       - "src/**"
       - "autoscan_agent/**"
+      # El guarda de las de integración vive en scripts/, con sus pruebas: un
+      # cambio ahí tiene que pasar por la CI como cualquier otro.
+      - "scripts/**"
       - "package.json"
       - "package-lock.json"
       - "tsconfig*.json"
@@ -96,28 +99,13 @@ jobs:
 
       # Si las de integración se saltaran por un fallo de configuración, el job
       # seguiría verde y no nos enteraríamos: eso es peor que no tenerlas.
+      #
+      # La comprobación vive en un script con sus propias pruebas, y no aquí
+      # embebida, porque embebida no se podía ejecutar en local: cuando
+      # `seguridadHttp.integration.test.ts` pasó a gobernarse con su propia
+      # variable `RUN_HTTP_TESTS`, este paso empezó a fallar con razón y la CI se
+      # quedó SEIS commits en rojo sin que se viera, porque `npm test` en local
+      # pasaba. Ver scripts/ci-integracion-ejecutada.mjs y su .test.ts.
       - name: Comprobar que las de integración se han ejecutado de verdad
         if: always()
-        run: |
-          python3 - <<'PY'
-          import json, sys, os
-          if not os.path.exists('/tmp/tests.json'):
-              sys.exit('No se ha generado el informe de pruebas.')
-          d = json.load(open('/tmp/tests.json'))
-          ficheros = d.get('testResults', [])
-          integracion = [t for t in ficheros if 'integration' in t.get('name', '')]
-          if not integracion:
-              sys.exit('No se ha encontrado ningun fichero de pruebas de integracion.')
-          for t in integracion:
-              casos = t.get('assertionResults', [])
-              pasados = [c for c in casos if c.get('status') == 'passed']
-              print(f"{os.path.basename(t['name'])}: {len(pasados)}/{len(casos)} casos en verde"
-                    f" (fichero: {t.get('status')})")
-              # "skipped" aqui no es un salto legitimo: si RUN_DB_TESTS esta
-              # puesto y aun asi no se ejecutan, es que la suite ni se ha
-              # cargado (un import que revienta, por ejemplo). Antes esto
-              # pasaba por bueno y daba una falsa sensacion de cobertura.
-              if not pasados:
-                  sys.exit('Las pruebas de integracion no han llegado a ejecutarse: '
-                           'revisa el error de carga de la suite mas arriba.')
-          PY
+        run: node scripts/ci-integracion-ejecutada.mjs /tmp/tests.json
