@@ -71,37 +71,66 @@ que proteger es **qué columnas ve cada rol**.
 
 ---
 
-## 4. La causa raíz
+## 4. La causa raíz · CORREGIDA el 2026-09-27
 
-Encaja con la evidencia sin ninguna suposición adicional:
+> **La explicación que di antes era falsa.** Dije que la pantalla se vaciaba
+> porque a `adm_can_read()` le falta el rol `tecnico`. Producción **no tiene
+> ningún `tecnico`**: en `adm_usuarios` hay 2 `admin` y 1 `recepcion`, y nada
+> más. La hipótesis queda descartada.
 
-> **`estado-ots` es la pantalla del técnico. `adm_can_read()` no incluye
-> `tecnico`. La pantalla funciona porque la vista se salta la RLS.**
+La causa real está en
+`src/modules/administracion/contexts/AdminAuthContext.tsx`, en `cargarPerfil()`:
 
-Y el diseño tiene sentido visto así: `adm_work_orders` lleva `total_amount`, y
-la vista **no lo selecciona**. La vista existe precisamente para dar al técnico
-el estado de las OTs *sin importes*.
+```ts
+// Un superadmin de la plataforma entra aunque no tenga ficha en
+// adm_usuarios: se le da perfil de admin sintético para este módulo.
+if (await esSuperadmin(userId)) {
+  return { id: userId, nombre: "Superadmin", rol: "admin", activo: true };
+}
+```
 
-El mecanismo elegido para esa restricción por columnas fue ejecutar la vista
-con los privilegios del dueño. Eso funciona, y es lo que hizo que activar
-`security_invoker` vaciara la pantalla.
+> **El panel le fabrica al superadministrador de plataforma un perfil de
+> «admin» en el navegador. La base de datos no sabe nada de eso.**
+
+`adm_rol_actual()` solo mira `adm_usuarios`, donde ese usuario no tiene fila,
+así que devuelve la cadena vacía y `adm_can_read()` es falso. Y
+`esSuperadmin()` lee `app_usuarios.es_superadmin`, una tabla distinta que la
+cadena de autorización del módulo no consulta nunca.
+
+Encaja con todo lo observado: la interfaz decía «Admin» y la RLS decía que no.
+
+### Reproducido en PostgreSQL 17.6
+
+Con el esquema y las funciones reales:
+
+| Caso | Resultado |
+|---|---|
+| Superadmin sin ficha, estado de hoy | **ve 1 OT** por la vista |
+| Superadmin, `adm_rol_actual()` | **`''`**, y `adm_can_read()` → **false** |
+| Superadmin, acceso **directo** a `adm_work_orders` | **0 filas** |
+| Superadmin, con `security_invoker` | **0 filas** ← la pantalla vacía |
+| `admin` **con ficha**, con `security_invoker` | **1 fila** |
+
+### Lo que implica, y es más grande que esta vista
+
+**El superadministrador no puede leer ninguna tabla del módulo**: ni OTs, ni
+clientes, ni facturas, ni cobros. La interfaz le abre la puerta y la base le
+devuelve cero filas en todo.
+
+`estado-ots` es la única pantalla que le funciona, y le funciona **precisamente
+por el salto de privilegios de esta vista**. Sin saberlo, ese bypass estaba
+tapando una incoherencia del modelo de autorización.
 
 ### Clasificación del defecto
 
-Tu lista era A / B / C / D. La respuesta es **A + D**:
+Tu lista era A / B / C / D. Con el dato real, la respuesta cambia:
 
 | | |
 |---|---|
-| **A · `adm_can_read()`** | Le falta `tecnico`, pero **no se puede añadir sin más**: eso daría al técnico acceso directo a `adm_work_orders`, con `total_amount` incluido, que es justo lo que se quiere evitar |
-| **B · las policies** | Correctas para lo que hacen. El problema no es la fila, es la columna |
-| **C · la identidad** | Correcta. `auth.uid()` llega bien y `adm_usuarios` resuelve el rol |
-| **D · combinación** | Sí: la restricción por columnas se implementó con el salto de RLS, y ese salto no distingue quién llama |
-
-**El fallo real:** el salto de privilegios es **incondicional**. La vista no
-comprueba nada, así que cualquier autenticado del proyecto —de cualquiera de
-las ocho apps— lee todas las OTs y los nombres de cliente.
-
----
+| **A · `adm_can_read()`** | No está mal para lo que cubre. Le falta una dimensión: no contempla al superadministrador de plataforma |
+| **B · las policies** | Correctas |
+| **C · la identidad/contexto** | **Aquí está el defecto.** El panel resuelve el rol por una vía (`app_usuarios.es_superadmin`, en el cliente) y la base por otra (`adm_usuarios`, en el servidor), y las dos no coinciden |
+| **D · combinación** | Sí, pero el eje es C. Y el salto de privilegios de la vista era lo que lo ocultaba |
 
 ## 5. Matriz: quién debería ver qué, y quién ve qué
 
@@ -114,7 +143,8 @@ las ocho apps— lee todas las OTs y los nombres de cliente.
 | **`admin`** | Todo, con importes | **true** | permite | Lo ve todo ✅ |
 | **`administracion`** | Todo, con importes | **true** | permite | Lo ve todo ✅ |
 | **`recepcion`** / **`supervisor`** | Según diseño | **true** | permite | Lo ven ✅ |
-| **`tecnico`** | **Estado sin importes** | **false** ❌ | deniega | **Lo ve por la vista** — y así es como funciona la pantalla |
+| **`tecnico`** | Estado sin importes | **false** ❌ | deniega | No aplica: **no existe ninguno en producción** |
+| **Superadmin de plataforma** sin ficha | Según decisión | **false** ❌ | deniega | **Lo ve por la vista** — y así es como funciona la pantalla |
 | Usuario de **otra empresa** | Nada | No aplica: el módulo no es multiempresa | — | **Lo ve todo** por la vista ⚠️ |
 | **Operario autenticado** (sin fila en `adm_usuarios`) | Nada | **false** | deniega | **Lo ve todo** por la vista ⚠️ |
 | **Autenticado de otra app** del proyecto | Nada | **false** | deniega | **Lo ve todo** por la vista ⚠️ |
