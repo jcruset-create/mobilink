@@ -1,6 +1,17 @@
 # Twilio · comparación de la URL del webhook
 
-Es lo único que bloquea la Fase B, y por tanto la Fase D. **No se cambia nada
+> **RESUELTO · 2026-09-27 · VEREDICTO: COMPATIBLE.**
+> Verificado en la consola de Twilio contra producción. El bloqueante de la
+> Fase B queda cerrado. El detalle está en la [sección 5](#5-veredicto);
+> las secciones 1 a 4 se conservan tal cual porque son el razonamiento que
+> llevó a comprobar estos seis campos y no otros.
+>
+> **Webhook entrante:** `https://sea-tarragona.onrender.com/api/whatsapp/inbound`
+> · `POST` · HTTPS · sin query string · sin barra final · fallback URL vacío.
+>
+> **No se ha cambiado nada en Twilio.** Sólo se ha leído la consola.
+
+Es lo único que bloqueaba la Fase B, y por tanto la Fase D. **No se cambia nada
 en Twilio**: solo se lee la consola y se rellena la columna que falta.
 
 ---
@@ -105,21 +116,74 @@ campos hay que mirarlos.**
 
 ## 5. Veredicto
 
+### 5.1 Criterio, fijado antes de mirar
+
 | Resultado | Condición |
 |---|---|
 | **COMPATIBLE** | Los seis campos coinciden: `https`, host entre los candidatos, sin puerto, path `/api/whatsapp/inbound` exacto, sin query, método POST |
 | **INCOMPATIBLE** | Cualquiera de los cinco modos de fallo |
 
-Si sale **INCOMPATIBLE**, hay dos salidas y la decisión es tuya:
+### 5.2 Dato real de producción · 2026-09-27
 
-1. **Cambiar la URL en Twilio** para que case. Es un cambio externo y no está
-   autorizado todavía.
-2. **Adaptar el servidor** para que firme también la variante configurada. Es
-   código, o sea otra vuelta de Fase B.
+Leído en la consola de Twilio (**Messaging → Senders → número de WhatsApp →
+«A message comes in»**):
 
-No propongo ninguna hasta ver el dato.
+| # | Campo | Valor configurado |
+|---|---|---|
+| 1 | URL completa, literal | `https://sea-tarragona.onrender.com/api/whatsapp/inbound` |
+| 2 | Método | `HTTP POST` |
+| 3 | Query string | Ninguna |
+| 4 | Barra final | No |
+| 5 | «Primary handler fails» / fallback | **Vacío** |
+| 6 | Status callback URL | No aplica al webhook entrante |
 
----
+### 5.3 Comparación campo a campo
+
+| Campo | Configurado en Twilio | Reconstruido por el servidor | ¿Coincide? |
+|---|---|---|---|
+| Protocolo | `https` | `https` literal en todas las candidatas | **Sí** |
+| Host | `sea-tarragona.onrender.com` | candidata 4 de la lista fija | **Sí** |
+| Puerto | Ninguno | Ninguno; no se añade | **Sí** |
+| Path | `/api/whatsapp/inbound` | `/api/whatsapp/inbound` (sufijo fijo) | **Sí** |
+| Query string | Ninguna | Ninguna; nunca se firma con `?…` | **Sí** |
+| Método | `POST` | ruta `app.post(...)` | **Sí** |
+| Barra final | Ninguna | se recortan con `replace(/\/+$/,"")` | **Sí** |
+
+Los cinco modos de fallo de la sección 4 quedan descartados uno por uno, y el
+fallback URL está vacío, así que **no hay una segunda URL que pueda divergir**.
+
+### 5.4 VEREDICTO: **COMPATIBLE**
+
+`twilio.validateRequest()` recibe al menos una candidata idéntica a la cadena
+sobre la que Twilio calculó la firma. La firma valida y el webhook procesa.
+
+El riesgo que quedaba abierto —que el endurecimiento a `403` dejara el WhatsApp
+mudo en producción— queda **descartado por comparación de campos**, no por
+suposición y no desplegando a ver qué pasa.
+
+> Se cierra así **SEC-007** como bloqueante de la Fase B (commits `a8a9a03` y
+> `f823973`). Que la firma valide no es lo mismo que decir que el diseño de la
+> validación sea el definitivo: ver 5.5.
+
+### 5.5 Observación futura, no bloqueante · estrechar la lista de candidatas
+
+La validación es **tolerante por lista**: prueba hasta cuatro orígenes
+(`PUBLIC_APP_URL`, `x-forwarded-host`, `app.mobilink.es`,
+`sea-tarragona.onrender.com`). Hoy eso no es explotable —Render reescribe
+`x-forwarded-host` con el nombre por el que entró la petición, y los otros tres
+son fijos—, y es precisamente lo que hace que el host no pueda fallar.
+
+Pero una lista de candidatas es más superficie que una URL: cuando el host
+definitivo esté fijado, lo correcto es firmar contra **una sola** URL de
+configuración y dejar de derivarla de una cabecera. Se registra como **deuda**,
+con dos condiciones para poder ejecutarla:
+
+- que el dominio definitivo esté decidido (hoy conviven `app.mobilink.es` y
+  `sea-tarragona.onrender.com`);
+- que el cambio vaya con su propio despliegue, porque equivocarse aquí deja el
+  WhatsApp mudo exactamente igual que el fallo que esta comprobación descartó.
+
+**No entra en la Fase B.** No se toca ahora.
 
 ## 6. Una comprobación que se puede hacer *después* de desplegar
 

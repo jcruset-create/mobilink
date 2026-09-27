@@ -1,10 +1,17 @@
 # Runbook de despliegue — Fase 0 de seguridad
 
-Rama `claude/mobilink-security-5ge9b1`, 21 commits sobre `origin/main` (`593ebd3`).
-Versión `package.json`: 1.84.0.
+Rama `claude/mobilink-security-5ge9b1`, 51 commits sobre `origin/main` (`593ebd3`),
+de los cuales **17 tocan código de ejecución** y 34 son documentación, SQL
+preparado y pruebas. Versión `package.json`: 1.84.0.
 
-**Nada de este documento se ha ejecutado.** Es el procedimiento, en orden, con
-sus criterios de parada y su vuelta atrás.
+**Estado a 2026-09-27.** Ya no es cierto que nada se haya ejecutado. Lo que se ha
+hecho en producción son las **contenciones urgentes** (`007`, `005`, `008`,
+`014`), y están registradas en A.5b y en
+`docs/RUNBOOK_contenciones_urgentes.md` §6. **La Fase B (despliegue del código)
+y la Fase D (migración `001`) siguen sin ejecutar.**
+
+El resto es el procedimiento, en orden, con sus criterios de parada y su vuelta
+atrás.
 
 Tres estados, y no se mezclan:
 
@@ -24,7 +31,31 @@ Todo de solo lectura. Si algo sale NO-GO, no se continúa.
 
 ## A.1 Twilio — la URL del webhook
 
-Es lo primero porque condiciona si se puede desplegar el código tal cual.
+> **VERIFICADO EN PRODUCCIÓN · 2026-09-27 · GO.**
+>
+> | Campo | Valor leído en la consola de Twilio |
+> |---|---|
+> | URL | `https://sea-tarragona.onrender.com/api/whatsapp/inbound` |
+> | Método | `POST` |
+> | Protocolo | `https` |
+> | Query string | ninguna |
+> | Barra final | no |
+> | Fallback URL («primary handler fails») | **vacío** |
+>
+> Los seis campos coinciden con la URL que el backend reconstruye, así que
+> `twilio.validateRequest()` recibe una candidata idéntica a la cadena firmada:
+> la firma valida y el webhook procesa. **VEREDICTO: COMPATIBLE.** Comparación
+> campo a campo en `docs/TWILIO_comparacion.md` §5.
+>
+> Observación futura, **no bloqueante**: la validación es tolerante por lista
+> (cuatro orígenes candidatos, uno de ellos derivado de `x-forwarded-host`).
+> Cuando el dominio definitivo esté decidido, lo correcto es firmar contra una
+> sola URL de configuración. Queda como deuda, con su propio despliegue. No se
+> toca en la Fase B.
+
+Es lo primero porque condiciona si se puede desplegar el código tal cual. Lo que
+sigue es el procedimiento con el que se obtuvo el dato de arriba; se conserva
+porque explica **por qué** se comprobaron esos seis campos y no otros.
 
 En la consola de Twilio: **Messaging → Senders / tu número de WhatsApp → «A
 message comes in»**. Anotar la URL **literalmente**, sin interpretarla:
@@ -119,15 +150,42 @@ cualquiera que no haya cambiado la contraseña desde el alta la tiene corta.
 Comando en `COMPROBACIONES-ENTORNO.md` §1. Interesa la primera lista: tablas que
 están en producción y no en ninguna migración. Son las que nadie ha revisado.
 
-## A.5b Contenciones urgentes · por delante de todo lo demás
+## A.5b Contenciones urgentes · APLICADAS · estado real de producción
 
-Dos contenciones preparadas y probadas contra PostgreSQL 17.6, **sin aplicar**.
-Ninguna depende del despliegue de código, a diferencia de la Fase D.
+Ninguna depende del despliegue de código, a diferencia de la Fase D, y por eso
+fueron por delante. **Estado a 2026-09-27**, que es el estado con el que se
+entraría en la Fase B:
 
-| | Qué cierra | Estado |
-|---|---|---|
-| `007_contencion_safety.sql` | Escritura anónima sobre las diez tablas de Safety | Preparada · prioridad 1 |
-| `005_contencion_vistas.sql` | Cuatro vistas que se saltan la RLS, una de ellas borrable por `anon` | Preparada · prioridad 2 |
+| Orden | Fichero | Qué cierra | Estado en producción |
+|---|---|---|---|
+| 1 | `007_contencion_safety.sql` | Escritura anónima sobre las diez tablas de Safety | **APLICADA** · 2026-09-27 |
+| 2 | `005_contencion_vistas.sql` | Las cuatro vistas demostradas | **APLICADA** · 2026-09-27, con una restauración mínima temporal posterior (ver abajo) |
+| — | *restauración mínima temporal* | `alter view adm_ot_estado reset (security_invoker)` | **APLICADA y después REVERTIDA por `014`** |
+| 3 | `008_contencion_vistas_resto.sql` | Las nueve vistas sin consumidor | **APLICADA** · 2026-09-27 |
+| 4 | `014_adm_ot_estado_invoker.sql` | Reactiva `security_invoker` en `adm_ot_estado` | **APLICADA** · 2026-09-27 · postcheck 5/5 OK |
+| — | `007b_contencion_safety_restante.sql` | Los nueve `sea_*` restantes (defensa en profundidad) | **PENDIENTE**, no autorizada |
+| — | `001_seguridad_fase0.sql` | 42 tablas, triggers, `search_path` | **PENDIENTE** · es la Fase D |
+
+**La secuencia operativa de `005` incluyó una vuelta atrás parcial, y el runbook
+no la esconde.** Al aplicar `005`, la pantalla `/administracion/estado-ots` se
+quedó vacía. Se aplicó la restauración mínima prevista en este mismo runbook
+(`reset (security_invoker)`, que deja la vista como estaba **sin** devolver el
+acceso de `anon`), se investigó, y una vez descartadas las hipótesis de
+autorización se volvió a poner `security_invoker = true` con `014`. La pantalla
+seguía vacía **después** de `014`, y la medición (`015`) dio la causa real:
+`adm_work_orders` tiene **0 filas**. No había fallo de autorización que corregir.
+
+O sea: la restauración temporal **no fue necesaria** para arreglar nada, pero se
+hizo, y por tanto forma parte de la historia. Quien reproduzca esto debe saber
+que el estado de `adm_ot_estado` pasó por `invoker → reset → invoker`, y que el
+estado actual es:
+
+**`public.adm_ot_estado`: `security_invoker = true`, `anon` sin ningún
+privilegio, `authenticated` con `select` y sin `insert/update/delete`.**
+
+La corrección `011_adm_ot_estado.sql` que se había preparado queda
+**DESCARTADA**: corregía una autorización que no estaba mal. El fichero conserva
+su cabecera `NO APLICAR`. Detalle en `docs/MEDICION_estado_ots.md`.
 
 ### Si algo se rompe tras aplicar 005 o 007 · el orden importa
 
@@ -203,11 +261,16 @@ primero se analiza el resultado y se propone.
 Hay **tres bloqueantes distintos** y no se mezclan. Cada uno gobierna una fase
 diferente, así que un NO-GO en uno no es un NO-GO en los otros.
 
-### Bloqueante 1 · SEC-007 (Twilio) → gobierna la FASE B
+### Bloqueante 1 · SEC-007 (Twilio) → gobierna la FASE B · **RESUELTO 2026-09-27**
 
 Depende de A.1: la URL y el método configurados hoy en la consola de Twilio,
 comparados campo a campo (https, host, puerto, path, query, método) con la URL
 que el backend reconstruye, con resultado **COMPATIBLE**.
+
+**Verificado en producción el 2026-09-27 con resultado COMPATIBLE**
+(`https://sea-tarragona.onrender.com/api/whatsapp/inbound`, `POST`, sin query,
+sin barra final, fallback vacío). Los seis campos coinciden. **Este bloqueante
+queda cerrado** y con él el NO-GO de la Fase B.
 
 Afecta directamente a los commits `a8a9a03` y `f823973` (validación de firma del
 webhook de WhatsApp): si la URL configurada no coincide con la reconstruida, la
@@ -246,7 +309,7 @@ migración. Se recogen para diseñar la Fase 1A (login por usuario) y la Fase 1C
 
 | Fase | Bloqueante que la gobierna | Estado hoy |
 |---|---|---|
-| B · Despliegue del código | 1 (Twilio, A.1) | NO-GO: A.1 NO VERIFICADO |
+| B · Despliegue del código | 1 (Twilio, A.1) | **GO técnico** (2026-09-27): A.1 VERIFICADO → COMPATIBLE. Pendiente sólo de autorización explícita de despliegue |
 | D · Migración SQL | 2 (Supabase, A.2/A.4) | **Sin bloqueantes técnicos** (2026-09-27): defectos corregidos, 30 pruebas en PG 17.6, y las cuatro condiciones de las 42 tablas verificadas. Ver `docs/PRECHECK_fase0_vistas.md` |
 | 1A / 1C | 3 (Auth) | No aplica a Fase 0. Dos supuestos resueltos a favor: 2 superadmins con email de recuperación, 0 colisiones de username |
 
@@ -279,13 +342,46 @@ de 188. Después de aplicarla siguen abiertas las 146 restantes, las 14 vistas
 que se saltan la RLS y las dos tablas de personal. Terminar la Fase D no es
 cerrar SEC-002.
 
-El NO-GO global de hoy lo es **por falta de evidencia del entorno, no por un
-fallo del código de Fase 0**, que está cerrado en laboratorio (334 ficheros de
-test, 5755 tests, 0 fallos).
+**Actualización del 2026-09-27 · el NO-GO global de la Fase B se levanta.** Era
+por falta de evidencia del entorno, no por un fallo del código, y la evidencia
+ya está: A.1 verificado (COMPATIBLE). La Fase B queda en **GO técnico**, con las
+condiciones de B.0. La Fase D sigue gobernada por su propio bloqueante y **no se
+adelanta a la Fase B**: la sección 6 de `001` cierra `app_login_email` a la clave
+pública y el login del hub necesita el código nuevo ya desplegado; invertir el
+orden deja a los operarios sin poder entrar.
 
 ---
 
 # FASE B · DESPLIEGUE DEL CÓDIGO
+
+## B.0 GO técnico · condiciones · 2026-09-27
+
+**Veredicto: GO técnico.** No quedan bloqueantes abiertos de la Fase B. Lo que
+falta es la autorización explícita de despliegue, que es una decisión, no una
+comprobación.
+
+| # | Bloqueante de la Fase B | Estado |
+|---|---|---|
+| 1 | SEC-007 · la firma estricta podía dejar el WhatsApp mudo (`a8a9a03`, `f823973`) | **RESUELTO** · COMPATIBLE en los seis campos (A.1) |
+| 2 | Un comentario en `server/index.ts` describía mal el comportamiento del webhook | **RESUELTO** · `7a070d3` |
+| 3 | Las contenciones urgentes tenían que ir por delante | **APLICADAS** · `007`, `005`, `008`, `014` (A.5b) |
+| 4 | Tres `GoTrueClient` rotando el mismo refresh token · pérdida de sesión | **RESUELTO** · cliente Supabase único (B.1, commit de front) |
+
+Cuatro condiciones que acompañan al GO y no son opcionales:
+
+1. **El despliegue es todo o nada.** No se cherry-pickea un subconjunto. Un
+   subconjunto deja el backend y el bundle del front en versiones que no se
+   corresponden.
+2. **La Fase D no se adelanta a la Fase B.** La sección 6 de `001` cierra
+   `app_login_email` a la clave pública, y el login del hub necesita el código
+   nuevo ya desplegado. Invertido, los operarios no entran.
+3. **Ventana de observación con un log concreto que mirar.** Buscar en Render
+   `[whatsapp] firma de Twilio ausente o inválida`: la línea imprime las URLs que
+   ha probado, así que si la comparación de A.1 hubiera fallado en algo no
+   contemplado, ahí está el dato exacto. El rollback entonces es revertir el
+   despliegue, **no tocar Twilio**.
+4. **Mandar un WhatsApp real de prueba** en los primeros minutos, en vez de
+   esperar tráfico espontáneo para descubrir si el webhook entra.
 
 ## B.1 Qué entra
 
@@ -315,6 +411,24 @@ que dependen los demás).
 | 19 | `e0e7a02` | Arnés de pruebas por HTTP |
 | 20 | `d5f383c` | El registro de baja completo; `search_path` estrechado a tres funciones |
 | 21 | `2e1327a` | Este runbook |
+| 22 | *(commit de front)* | **Cliente Supabase único**: los tres `createClient` del front web pasan a una sola instancia ← **el primero que toca `src/`** |
+
+Los 21 primeros son los del código de servidor. Los **34 commits restantes de la
+rama** son documentación, SQL preparado (que **no** se aplica en esta fase) y
+pruebas: se mergean con el resto porque el merge es de la rama entera, pero no
+cambian nada de lo que ejecuta Render salvo los que aparecen en esta tabla. Lista
+completa y clasificada en `docs/FASE_B_commits.md`.
+
+### Novedad: esta fase ya no es sólo backend
+
+Hasta el commit 22, todos los cambios de código vivían en `server/`. El cliente
+Supabase único toca `src/`, o sea **el bundle del navegador**. Dos consecuencias
+prácticas:
+
+- Render reconstruye el front, no sólo el servidor. El primer acceso de cada
+  usuario descarga bundle nuevo.
+- Los smoke tests tienen que incluir **login y navegación entre módulos web**
+  (B.3, apartado 4). Hasta ahora bastaba con `curl` contra la API.
 
 Merge a `main` → Render despliega solo (`autoDeploy: true`, rama `main`).
 
@@ -412,6 +526,30 @@ Con credencial, desde el navegador de alguien del equipo:
 7. Licencias: un superadministrador entra; un admin de empresa recibe 403 (es el
    cambio buscado).
 
+### 4) Sesión compartida entre módulos web · nuevo en esta fase
+
+Es el smoke test del cliente Supabase único. Se hace **en un solo navegador**, en
+este orden, sin recargar entre pasos salvo donde se dice:
+
+1. Entrar en **`/administracion`**. Debe autenticar con normalidad.
+2. Sin volver a entrar, navegar a **`/tyrecontrol`** y a **`/almacen`**. Deben
+   abrirse **ya autenticados**: si alguno pide login otra vez, el SSO se ha
+   roto y eso es motivo de rollback.
+3. Abrir la **consola del navegador** y dejarla abierta cinco minutos con la
+   aplicación en uso. **No debe aparecer** ninguna de estas dos líneas:
+   - `Multiple GoTrueClient instances detected in the same browser context`
+   - `Invalid Refresh Token`
+4. En **Application → Local Storage**, comprobar que hay **una sola** clave
+   `sb-<ref>-auth-token`. Si aparecen varias claves de sesión, alguien ha
+   introducido `storageKey` por módulo, que es justo lo que se descartó.
+5. **Cerrar sesión** desde cualquiera de los tres módulos y recargar los otros
+   dos: deben quedarse también sin sesión.
+6. Dejar la pestaña abierta más de una hora (o forzar el refresco) y volver: la
+   sesión debe seguir viva. Es la comprobación de que el refresco ya no se pisa
+   consigo mismo.
+
+Motivo del cambio y detalle en `docs/INCIDENCIA_gotrue_multiple.md`.
+
 ## B.4 Rollback de la Fase B
 
 | Situación | Acción | Alcance |
@@ -419,10 +557,21 @@ Con credencial, desde el navegador de alguien del equipo:
 | Un cliente recibe 401 y no debería | `git revert 669da6a` y desplegar | Vuelve a modo observación: sigue registrando en el log, deja de rechazar. Un solo commit |
 | Twilio empieza a dar errores de firma | `git revert a8a9a03` y desplegar | Vuelve a procesar sin exigir firma. **Reabre SEC-007**: hacerlo solo si el servicio está caído, y con A.1 en la mano |
 | El panel no carga | `git revert dab6577` | Vuelve a entregar el token al navegador. Reabre SEC-006 |
+| El SSO web se rompe: un módulo pide login otra vez, o se pierde la sesión | `git revert <commit del cliente único>` y desplegar | Vuelve a los tres `createClient`. **Reabre el defecto de `Invalid Refresh Token`**: es volver a un fallo conocido, así que sólo si el front está inutilizable |
 | Algo peor | `git revert -m 1 <merge>` | Toda la fase |
 
 Nada de la Fase B toca la base de datos, así que cualquier rollback es solo
-código.
+código. **Ninguno de estos revert deshace las contenciones ya aplicadas**
+(`007`, `005`, `008`, `014`): son SQL en producción y su vuelta atrás es la de
+`docs/RUNBOOK_contenciones_urgentes.md`, con su regla de restauración mínima
+antes del rollback completo. Revertir el despliegue y revertir las contenciones
+son dos decisiones distintas y no se toman juntas por inercia.
+
+**Sobre el revert del cliente único, un detalle que importa:** es código de
+front. Un usuario con el bundle viejo ya cargado en la pestaña seguirá con tres
+instancias hasta que recargue. Después de revertir (o de volver a desplegar), el
+criterio de «está arreglado» se comprueba en una **pestaña nueva**, no en la que
+estaba abierta.
 
 ---
 
