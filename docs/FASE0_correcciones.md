@@ -347,8 +347,8 @@ probado, no ha llegado a producción), **preparado** (escrito, sin aplicar),
 | SEC-064 | Congelado | Congelado | Sin datos nuevos |
 | SEC-065 · `app_login_email` | Preparado | **Preparado**, probado en 17.6 | Confirmado que `PUBLIC` la expone |
 | SEC-067 · `search_path` | Preparado (3 de ~170) | **Preparado (3 de 132)** | Inventario corregido |
-| **Nuevo · Credencial validada en cliente y fichero de personal expuesto** | — | **ABIERTO · severidad subida a crítica (2026-09-27)** | Confirmadas las columnas: `sea_employees` expone a `anon` el **DNI, el número de la Seguridad Social y el domicilio** de cada empleado activo, además del `pin_hash` y el `codigo_operario`. Sigue siendo un solo hallazgo —misma causa raíz, las políticas de `anon` del portal—, con dos impactos: enumeración de credenciales y brecha de datos personales |
-| **Nuevo · Vistas que se saltan la RLS** | — | **CONFIRMADO Y REPRODUCIDO (2026-09-27)** | Las 14 vistas corren como `postgres` y tienen `disu` para `anon`. Probado en 17.6: `anon` lee a través de la vista lo que la tabla le niega, y **escribió una fila en una tabla con RLS** vía `tc_clientes_almacen`. Ampliación de alcance de SEC-002, no hallazgo aparte. No afecta a las 42 |
+| **Nuevo · Credencial en cliente y fichero de personal expuesto** | — | **ABIERTO · CRÍTICO, la prioridad más alta** | Corregido lo que dije el 26: no es solo lectura. **Diez tablas de Safety tienen `ALL to anon using (true)`**, `sea_employees` incluida, así que con la clave publicable se puede **leer, modificar y borrar** el fichero de personal (DNI, NSS, domicilio, `pin_hash`) y los registros de formación. Un solo hallazgo, misma causa raíz. Ver `docs/DEUDA_credencial_en_cliente.md` |
+| **SEC-068** · Vistas con privilegios del propietario | — | **ABIERTO · CRÍTICO. Contención preparada** | Hallazgo **independiente**, no ampliación de SEC-002: activar RLS no lo cierra (`clientes` tiene RLS y `anon` escribe igual por la vista). Las 14 corren como `postgres`; probado en 17.6 que `anon` lee lo que la tabla le niega, **inserta** en `clientes` y **borra** el catálogo de marcas por `tc_marcas_contadores`. Ver `docs/SEC-068_vistas.md`. No afecta a las 42 |
 
 ---
 
@@ -357,7 +357,7 @@ probado, no ha llegado a producción), **preparado** (escrito, sin aplicar),
 | Fase | Estado | Qué lo bloquea |
 |---|---|---|
 | **B · Código** | **NO-GO** | Solo Twilio. Nada de lo hallado aquí afecta al código |
-| **D · Migración** | **Sin bloqueantes técnicos** (actualizado 2026-09-27) | Las cuatro condiciones de §7 están verificadas. Ver `docs/PRECHECK_fase0_vistas.md` |
+| **D · Migración** | **Sin bloqueantes técnicos**, pero **no es lo primero** | Las cuatro condiciones de §7 están verificadas. El orden lo decide ahora SEC-068 y la deuda de credenciales, más graves y más fáciles de contener |
 | **1A / 1C** | No autorizadas | Sin cambios. Dos supuestos resueltos a favor: 2 superadmins con email de recuperación, 0 colisiones de username |
 
 Nada aplicado, nada desplegado, nada mergeado.
