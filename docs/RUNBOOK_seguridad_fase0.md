@@ -1,7 +1,7 @@
 # Runbook de despliegue — Fase 0 de seguridad
 
-Rama `claude/mobilink-security-5ge9b1`, 51 commits sobre `origin/main` (`593ebd3`),
-de los cuales **17 tocan código de ejecución** y 34 son documentación, SQL
+Rama `claude/mobilink-security-5ge9b1`, 52 commits sobre `origin/main` (`593ebd3`),
+de los cuales **17 tocan código de ejecución** y 35 son documentación, SQL
 preparado y pruebas. Versión `package.json`: 1.84.0.
 
 **Estado a 2026-09-27.** Ya no es cierto que nada se haya ejecutado. Lo que se ha
@@ -365,7 +365,7 @@ comprobación.
 | 1 | SEC-007 · la firma estricta podía dejar el WhatsApp mudo (`a8a9a03`, `f823973`) | **RESUELTO** · COMPATIBLE en los seis campos (A.1) |
 | 2 | Un comentario en `server/index.ts` describía mal el comportamiento del webhook | **RESUELTO** · `7a070d3` |
 | 3 | Las contenciones urgentes tenían que ir por delante | **APLICADAS** · `007`, `005`, `008`, `014` (A.5b) |
-| 4 | Tres `GoTrueClient` rotando el mismo refresh token · pérdida de sesión | **RESUELTO** · cliente Supabase único (B.1, commit de front) |
+| 4 | Tres `GoTrueClient` rotando el mismo refresh token · pérdida de sesión | **RESUELTO** · cliente Supabase único · `9d45430` |
 
 Cuatro condiciones que acompañan al GO y no son opcionales:
 
@@ -411,9 +411,9 @@ que dependen los demás).
 | 19 | `e0e7a02` | Arnés de pruebas por HTTP |
 | 20 | `d5f383c` | El registro de baja completo; `search_path` estrechado a tres funciones |
 | 21 | `2e1327a` | Este runbook |
-| 22 | *(commit de front)* | **Cliente Supabase único**: los tres `createClient` del front web pasan a una sola instancia ← **el primero que toca `src/`** |
+| 22 | `9d45430` | **Cliente Supabase único**: los tres `createClient` del front web pasan a una sola instancia ← **el primero que toca `src/`** |
 
-Los 21 primeros son los del código de servidor. Los **34 commits restantes de la
+Los 21 primeros son los del código de servidor. Los **35 commits restantes de la
 rama** son documentación, SQL preparado (que **no** se aplica en esta fase) y
 pruebas: se mergean con el resto porque el merge es de la rama entera, pero no
 cambian nada de lo que ejecuta Render salvo los que aparecen en esta tabla. Lista
@@ -557,7 +557,7 @@ Motivo del cambio y detalle en `docs/INCIDENCIA_gotrue_multiple.md`.
 | Un cliente recibe 401 y no debería | `git revert 669da6a` y desplegar | Vuelve a modo observación: sigue registrando en el log, deja de rechazar. Un solo commit |
 | Twilio empieza a dar errores de firma | `git revert a8a9a03` y desplegar | Vuelve a procesar sin exigir firma. **Reabre SEC-007**: hacerlo solo si el servicio está caído, y con A.1 en la mano |
 | El panel no carga | `git revert dab6577` | Vuelve a entregar el token al navegador. Reabre SEC-006 |
-| El SSO web se rompe: un módulo pide login otra vez, o se pierde la sesión | `git revert <commit del cliente único>` y desplegar | Vuelve a los tres `createClient`. **Reabre el defecto de `Invalid Refresh Token`**: es volver a un fallo conocido, así que sólo si el front está inutilizable |
+| El SSO web se rompe: un módulo pide login otra vez, o se pierde la sesión | `git revert 9d45430` y desplegar | Vuelve a los tres `createClient`. **Reabre el defecto de `Invalid Refresh Token`**: es volver a un fallo conocido, así que sólo si el front está inutilizable |
 | Algo peor | `git revert -m 1 <merge>` | Toda la fase |
 
 Nada de la Fase B toca la base de datos, así que cualquier rollback es solo

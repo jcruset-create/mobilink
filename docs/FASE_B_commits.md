@@ -3,8 +3,8 @@
 Rama `claude/mobilink-security-5ge9b1` sobre `origin/main` (`593ebd3`).
 Generada el 2026-09-27.
 
-El merge es **de la rama entera**: entran los 51 commits. Pero sólo **17 tocan
-código que Render ejecuta**; los otros 34 son documentación, SQL preparado —que
+El merge es **de la rama entera**: entran los 52 commits. Pero sólo **17 tocan
+código que Render ejecuta**; los otros 35 son documentación, SQL preparado —que
 esta fase **no** aplica— y pruebas. La distinción importa para el rollback: lo
 que se puede revertir «en caliente» está en la primera tabla.
 
@@ -38,7 +38,7 @@ Son los que cambian el comportamiento en producción al desplegar.
 | 14 | `240b1cd` | `eliminar-auth` autoriza contra la empresa apuntada | `server/` |
 | 15 | `d5f383c` | El registro de baja guarda todo lo comprobable después | `server/` |
 | 16 | `7a070d3` | Corrección de un comentario engañoso sobre el webhook (**sin cambio de comportamiento**) | `server/` |
-| 17 | *(este cambio)* | **Cliente Supabase único**: los tres `createClient` del front pasan a una sola instancia | **`src/`** |
+| 17 | `9d45430` | **Cliente Supabase único**: los tres `createClient` del front pasan a una sola instancia | **`src/`** |
 
 Dos commits de código que **no** afectan al despliegue de Render:
 
@@ -56,7 +56,7 @@ necesitar smoke tests de navegador (`RUNBOOK_seguridad_fase0.md` §B.3, apartado
 
 ---
 
-## 2. Los 34 restantes · documentación, SQL preparado y pruebas
+## 2. Los 35 restantes · documentación, SQL preparado y pruebas
 
 No cambian nada de lo que ejecuta Render. Entran porque el merge es de la rama.
 
@@ -76,6 +76,7 @@ No cambian nada de lo que ejecuta Render. Entran porque el merge es de la rama.
 | `2bec5c0`, `f27fcd0` | Restauración mínima antes del rollback, y runbook de contenciones |
 | `2dea83a`, `83b8b38` | Evidencia de `007`, la regla GRANT/policy/efectivo, y `007`+`005`+`008` aplicadas |
 | `330ea51`, `5e2be8e`, `abd0c50`, `43d0343`, `e494e77`, `d3b7a21` | El diagnóstico de `adm_ot_estado`, hipótesis incluidas, hasta la causa real |
+| `38c9e1b` | Twilio COMPATIBLE, estado real de producción y este documento |
 
 > **Las migraciones de este grupo no se aplican en la Fase B.** `001` es la Fase
 > D. `007b` sigue pendiente y no autorizada. `011` está descartada con cabecera
