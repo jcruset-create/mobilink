@@ -181,3 +181,169 @@ insert into productos_neumaticos (marca,modelo,medida)
 insert into tc_cat_marcas_neumatico (id,nombre)
   select '00000000-0000-4000-c000-000000000001','Michelin'
   where not exists (select 1 from tc_cat_marcas_neumatico);
+
+-- ── Las otras nueve vistas, con la definicion EXACTA de produccion ────────
+-- (inventario del 2026-09-27). Hacen falta tablas base adicionales.
+create table if not exists centros (id uuid primary key default gen_random_uuid(), nombre text);
+create table if not exists movimientos_stock (
+  id uuid primary key default gen_random_uuid(), empresa_id uuid, tipo text, cantidad int,
+  documento_referencia text, observaciones text, created_at timestamptz default now(),
+  centro_origen_id uuid, centro_destino_id uuid, cliente_id uuid, producto_id uuid, estado text);
+create table if not exists traspaso_lineas (
+  id uuid primary key default gen_random_uuid(), traspaso_id uuid, producto_id uuid,
+  cantidad_enviada int, cantidad_recibida int);
+create table if not exists tc_tipos_vehiculo (
+  id uuid primary key default gen_random_uuid(), nombre text, descripcion text,
+  configuracion_ejes text, activo boolean default true);
+create table if not exists tc_posiciones_vehiculo (
+  id uuid primary key default gen_random_uuid(), tipo_vehiculo_id uuid, eje int, activo boolean default true);
+create table if not exists tc_cat_aplicaciones_neumatico (codigo text primary key);
+create or replace function tc_ruedas_de_configuracion(p text) returns int[]
+  language sql immutable as $$ select array[2,4] $$;
+
+alter table traspasos add column if not exists recibido_at timestamptz;
+alter table traspasos add column if not exists created_at timestamptz default now();
+alter table traspasos add column if not exists tipo_entrega text;
+alter table traspasos add column if not exists origen_id uuid;
+alter table traspasos add column if not exists destino_id uuid;
+alter table tc_cat_modelos_neumatico add column if not exists nombre text;
+alter table tc_cat_modelos_neumatico add column if not exists aplicacion text;
+
+create or replace view kpis_traspasos as
+ select count(*) filter (where (estado = 'preparado'::text)) as pendientes_recogida,
+    count(*) filter (where (estado = 'en_camino'::text)) as en_camino,
+    count(*) filter (where ((estado = 'recibido'::text) and ((recibido_at)::date = current_date))) as recibidos_hoy,
+    count(*) filter (where ((estado = 'recibido'::text) and (recibido_at >= (now() - '30 days'::interval)))) as recibidos_30_dias
+   from traspasos;
+
+create or replace view movimientos_stock_detalle as
+ select m.id, m.tipo, m.cantidad, m.documento_referencia, m.observaciones, m.created_at,
+    co.nombre as centro_origen_nombre, cd.nombre as centro_destino_nombre,
+    cl.nombre as cliente_nombre, p.marca, p.modelo, p.medida, p.dot
+   from ((((movimientos_stock m
+     left join centros co on ((co.id = m.centro_origen_id)))
+     left join centros cd on ((cd.id = m.centro_destino_id)))
+     left join clientes cl on ((cl.id = m.cliente_id)))
+     left join productos_neumaticos p on ((p.id = m.producto_id)));
+
+create or replace view stock_actual as
+ select empresa_id, coalesce(centro_destino_id, centro_origen_id) as centro_id,
+    cliente_id, producto_id,
+    (sum(case when (centro_destino_id is not null) then cantidad else (- cantidad) end))::integer as stock
+   from movimientos_stock
+  where (coalesce(estado, 'confirmado'::text) = 'confirmado'::text)
+  group by empresa_id, coalesce(centro_destino_id, centro_origen_id), cliente_id, producto_id;
+
+create or replace view stock_actual_detalle as
+ select s.empresa_id, s.centro_id, s.cliente_id, s.producto_id, s.stock,
+    c.nombre as centro_nombre, cl.nombre as cliente_nombre, p.marca, p.modelo, p.medida, p.dot
+   from (((stock_actual s
+     left join centros c on ((c.id = s.centro_id)))
+     left join clientes cl on ((cl.id = s.cliente_id)))
+     left join productos_neumaticos p on ((p.id = s.producto_id)))
+  where (s.stock > 0);
+
+create or replace view tc_modelos_aplicacion_sin_clasificar as
+ select m.id, m.nombre, k.nombre as marca, m.aplicacion
+   from (tc_cat_modelos_neumatico m
+     left join tc_cat_marcas_neumatico k on ((k.id = m.marca_id)))
+  where ((m.aplicacion is not null) and (not (m.aplicacion in (select tc_cat_aplicaciones_neumatico.codigo from tc_cat_aplicaciones_neumatico))));
+
+create or replace view tc_tipos_plano_descuadrado as
+ select nombre, descripcion, configuracion_ejes,
+    ((select sum(x.x) from unnest(tc_ruedas_de_configuracion(t.configuracion_ejes)) x(x)))::integer as ruedas_segun_la_etiqueta,
+    ((select count(*) from tc_posiciones_vehiculo p where ((p.tipo_vehiculo_id = t.id) and p.activo and (p.eje is not null))))::integer as ruedas_en_el_plano
+   from tc_tipos_vehiculo t
+  where (activo and (tc_ruedas_de_configuracion(configuracion_ejes) is not null)
+    and (exists (select 1 from tc_posiciones_vehiculo p where ((p.tipo_vehiculo_id = t.id) and p.activo and (p.eje is not null))))
+    and (((select sum(x.x) from unnest(tc_ruedas_de_configuracion(t.configuracion_ejes)) x(x)))::integer
+         <> (select count(*) from tc_posiciones_vehiculo p where ((p.tipo_vehiculo_id = t.id) and p.activo and (p.eje is not null)))));
+
+create or replace view traspasos_detalle as
+ select t.id, coalesce(t.codigo, ('TR-'::text || upper("left"((t.id)::text, 8)))) as codigo,
+    t.tipo_entrega, t.estado, t.created_at,
+    coalesce(co.nombre, 'Origen no informado'::text) as origen_nombre,
+    coalesce(cd.nombre, 'Destino no informado'::text) as destino_nombre
+   from ((traspasos t
+     left join centros co on ((co.id = t.origen_id)))
+     left join centros cd on ((cd.id = t.destino_id)));
+
+create or replace view traspasos_lineas_detalle as
+ select tl.id, tl.traspaso_id, tl.producto_id, tl.cantidad_enviada, tl.cantidad_recibida,
+    p.marca, p.modelo, p.medida
+   from (traspaso_lineas tl
+     left join productos_neumaticos p on ((p.id = tl.producto_id)));
+
+create or replace view traspasos_resumen_lineas as
+ select tl.traspaso_id, coalesce(sum(tl.cantidad_enviada), (0)::bigint) as cantidad_total,
+    string_agg(distinct concat(pn.medida, ' - ', pn.marca,
+      case when (pn.modelo is not null) then (' '::text || pn.modelo) else ''::text end), ', '::text) as medidas
+   from (traspaso_lineas tl
+     left join productos_neumaticos pn on ((pn.id = tl.producto_id)))
+  group by tl.traspaso_id;
+
+grant select, insert, update, delete on kpis_traspasos, movimientos_stock_detalle,
+  stock_actual, stock_actual_detalle, tc_modelos_aplicacion_sin_clasificar,
+  tc_tipos_plano_descuadrado, traspasos_detalle, traspasos_lineas_detalle,
+  traspasos_resumen_lineas to anon, authenticated;
+
+insert into tc_tipos_vehiculo (id,nombre,configuracion_ejes)
+  select '00000000-0000-4000-d000-000000000001','Rigido','2+4'
+  where not exists (select 1 from tc_tipos_vehiculo);
+insert into tc_posiciones_vehiculo (tipo_vehiculo_id,eje)
+  select '00000000-0000-4000-d000-000000000001',1
+  where not exists (select 1 from tc_posiciones_vehiculo);
+
+-- ── RLS y politicas REALES de las tablas base de las nueve vistas nuevas ───
+-- Sin esto, la columna «acceso directo» de la matriz no vale nada: una tabla
+-- sin RLS deja pasar a anon y parece que la vista no aporta bypass cuando en
+-- realidad es que el laboratorio no reproducia la proteccion.
+--
+-- `centros` y `traspaso_lineas` NO llevan RLS: en produccion tampoco.
+
+alter table tc_tipos_vehiculo enable row level security;
+drop policy if exists tc_tipos_select on tc_tipos_vehiculo;
+create policy tc_tipos_select on tc_tipos_vehiculo for select to public using (auth.uid() is not null);
+drop policy if exists tc_tipos_write on tc_tipos_vehiculo;
+create policy tc_tipos_write on tc_tipos_vehiculo for all to public
+  using (tc_is_superadmin()) with check (tc_is_superadmin());
+
+alter table tc_posiciones_vehiculo enable row level security;
+drop policy if exists tc_posiciones_select on tc_posiciones_vehiculo;
+create policy tc_posiciones_select on tc_posiciones_vehiculo for select to public using (auth.uid() is not null);
+
+alter table tc_cat_modelos_neumatico enable row level security;
+drop policy if exists tc_cat_modelos_select on tc_cat_modelos_neumatico;
+create policy tc_cat_modelos_select on tc_cat_modelos_neumatico for select to public using (auth.uid() is not null);
+
+alter table tc_cat_aplicaciones_neumatico enable row level security;
+drop policy if exists aplicaciones_lectura on tc_cat_aplicaciones_neumatico;
+create policy aplicaciones_lectura on tc_cat_aplicaciones_neumatico for select to public using (true);
+
+alter table movimientos_stock enable row level security;
+drop policy if exists anon_read_movimientos on movimientos_stock;
+create policy anon_read_movimientos on movimientos_stock for select to anon using (true);
+drop policy if exists anon_insert_movimientos on movimientos_stock;
+create policy anon_insert_movimientos on movimientos_stock for insert to anon with check (true);
+
+-- Datos semilla del almacen. El orden importa: `centros` antes que el
+-- movimiento, porque si centro_destino_id queda nulo el stock sale negativo y
+-- `stock_actual_detalle` devuelve cero filas, que parece proteccion y es un
+-- error de los datos de prueba.
+insert into centros (id,nombre) select '00000000-0000-4000-f000-000000000001','Tarragona'
+  where not exists (select 1 from centros);
+insert into movimientos_stock (empresa_id,tipo,cantidad,centro_destino_id,cliente_id,producto_id,
+    estado,documento_referencia,observaciones)
+  select gen_random_uuid(),'entrada',10,'00000000-0000-4000-f000-000000000001',
+    (select id from clientes limit 1),(select id from productos_neumaticos limit 1),
+    'confirmado','ALB-1','nota interna'
+  where not exists (select 1 from movimientos_stock);
+insert into traspaso_lineas (traspaso_id,producto_id,cantidad_enviada)
+  select (select id from traspasos limit 1),(select id from productos_neumaticos limit 1),5
+  where not exists (select 1 from traspaso_lineas);
+insert into tc_cat_aplicaciones_neumatico (codigo) select 'DIR'
+  where not exists (select 1 from tc_cat_aplicaciones_neumatico);
+insert into tc_cat_modelos_neumatico (marca_id,nombre,aplicacion,activo)
+  select (select id from tc_cat_marcas_neumatico limit 1),'M1','DESCONOCIDA',true
+  where not exists (select 1 from tc_cat_modelos_neumatico);
+update traspasos set estado='preparado', tipo_entrega='directa' where estado is null;

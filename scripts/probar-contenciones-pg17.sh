@@ -17,8 +17,13 @@ su postgres -c "PATH=$PG17_BIN:\$PATH pg_ctl -D $DATOS -o '-p $PUERTO -k /tmp' -
 trap 'su postgres -c "PATH=$PG17_BIN:\$PATH pg_ctl -D $DATOS stop -m immediate" >/dev/null 2>&1; rm -rf "$DATOS"' EXIT
 
 fallos=0
-escribir() { local out; out=$($PSQL -c "begin; set local role $1; $2; select 'RES:PASA'; rollback;" 2>&1)
-  if echo "$out" | grep -q "RES:PASA"; then echo "PASA"; else echo "denegado"; fi; }
+escribir() { local out tag n; out=$($PSQL -c "begin; set local role $1; $2; select 'RES:PASA'; rollback;" 2>&1)
+  if ! echo "$out" | grep -q "RES:PASA"; then echo "denegado"; return; fi
+  # La etiqueta de psql dice cuantas filas toco. «PASA» a secas escondia la
+  # diferencia entre escribir de verdad y no tocar nada por el predicado.
+  tag=$(echo "$out" | grep -oE '^(INSERT [0-9]+ [0-9]+|UPDATE [0-9]+|DELETE [0-9]+)$' | head -1)
+  n=$(echo "$tag" | grep -oE '[0-9]+$')
+  if [ "${n:-0}" -gt 0 ]; then echo "ESCRIBE $n"; else echo "PASA"; fi; }
 leer() { local out; out=$($PSQL -c "begin; set local role $1; select 'RES:'||count(*) from $2; rollback;" 2>&1)
   if echo "$out" | grep -q "RES:"; then echo "$out"|grep -o 'RES:[0-9]*'|cut -d: -f2; else echo "denegado"; fi; }
 esperar() { if [ "$2" = "$3" ]; then printf '  ok    %s\n' "$1"; else printf '  FALLO %s -> esperaba «%s», obtuvo «%s»\n' "$1" "$3" "$2"; fallos=$((fallos+1)); fi; }
@@ -30,9 +35,9 @@ echo
 echo "===== 007 · SAFETY ====="
 echo "-- ANTES --"
 esperar "anon LEE el fichero de personal"       "$(leer anon sea_employees)" "1"
-esperar "anon MODIFICA el fichero de personal"  "$(escribir anon "update sea_employees set dni_nie='X'")" "PASA"
-esperar "anon BORRA formacion"                  "$(escribir anon "delete from sea_training_records")" "PASA"
-esperar "anon INSERTA una autorizacion de riesgo" "$(escribir anon "insert into sea_employee_authorizations (employee_id) values (gen_random_uuid())")" "PASA"
+esperar "anon MODIFICA el fichero de personal"  "$(escribir anon "update sea_employees set dni_nie='X'")" "ESCRIBE 1"
+esperar "anon BORRA formacion"                  "$(escribir anon "delete from sea_training_records")" "ESCRIBE 1"
+esperar "anon INSERTA una autorizacion de riesgo" "$(escribir anon "insert into sea_employee_authorizations (employee_id) values (gen_random_uuid())")" "ESCRIBE 1"
 esperar "anon lee el pin_hash"                  "$(leer anon "(select pin_hash from sea_employees) x")" "1"
 
 $PSQL -q -v ON_ERROR_STOP=1 -f "$PREP/007_contencion_safety.sql" >/dev/null 2>&1 && echo "007 aplicada" || { echo "FALLO aplicando 007"; exit 1; }
@@ -46,7 +51,7 @@ esperar "el portal SIGUE leyendo al empleado"   "$(leer anon sea_employees)" "1"
 esperar "y el embebido de empresa (PortalFicha)" "$(leer anon sea_companies)" "1"
 esperar "y el de centro de trabajo"             "$(leer anon sea_work_centers)" "1"
 esperar "SeaHub sigue leyendo formacion"        "$(leer anon sea_training_records)" "1"
-esperar "el panel autenticado sigue escribiendo" "$(escribir authenticated "update sea_employees set cargo='Jefa'")" "PASA"
+esperar "el panel autenticado sigue escribiendo" "$(escribir authenticated "update sea_employees set cargo='Jefa'")" "ESCRIBE 1"
 echo "-- las seis comprobaciones de revision --"
 # 1. Ninguna policy de authenticated eliminada por error.
 esperar "1· las 10 policies de authenticated siguen intactas" \
@@ -96,7 +101,7 @@ $PSQL -q -c "
   create policy sea_anon_training on sea_training_records for all to anon using (true) with check (true);
   grant insert, update, delete on sea_employees, sea_companies, sea_work_centers,
     sea_training_records to anon;" >/dev/null 2>&1
-esperar "la vuelta atras restaura la escritura" "$(escribir anon "update sea_employees set dni_nie='X'")" "PASA"
+esperar "la vuelta atras restaura la escritura" "$(escribir anon "update sea_employees set dni_nie='X'")" "ESCRIBE 1"
 
 echo
 echo "===== 005 · VISTAS ====="
@@ -104,8 +109,8 @@ $PSQL -q -v ON_ERROR_STOP=1 -f "$RAIZ/scripts/pg17-vistas-produccion.sql" >/dev/
 echo "-- ANTES --"
 esperar "anon lee OTs por la vista"     "$(leer anon adm_ot_estado)" "1"
 esperar "anon lee OTs directamente"     "$(leer anon adm_work_orders)" "0"
-esperar "anon ESCRIBE clientes por la vista" "$(escribir anon "insert into tc_clientes_almacen (codigo,nombre,nif) values ('H','H','H')")" "PASA"
-esperar "anon BORRA el catalogo de marcas"   "$(escribir anon "delete from tc_marcas_contadores")" "PASA"
+esperar "anon ESCRIBE clientes por la vista" "$(escribir anon "insert into tc_clientes_almacen (codigo,nombre,nif) values ('H','H','H')")" "ESCRIBE 1"
+esperar "anon BORRA el catalogo de marcas"   "$(escribir anon "delete from tc_marcas_contadores")" "ESCRIBE 1"
 
 $PSQL -q -v ON_ERROR_STOP=1 -f "$PREP/005_contencion_vistas.sql" >/dev/null 2>&1 && echo "005 aplicada" || { echo "FALLO aplicando 005"; exit 1; }
 $PSQL -q -v ON_ERROR_STOP=1 -f "$PREP/005_contencion_vistas.sql" >/dev/null 2>&1 && echo "005 reaplicada (idempotente)" || { echo "FALLO en la 2a pasada"; exit 1; }
@@ -126,6 +131,50 @@ esperar "adm_ot_estado quedo como invoker" \
   "$($PSQL -c "select 'RES:'||coalesce(array_to_string(reloptions,','),'-') from pg_class where relname='adm_ot_estado';" | grep -o 'RES:.*' | cut -d: -f2)" \
   "security_invoker=true"
 
+echo
+echo "===== 008 · LAS NUEVE VISTAS SIN CONSUMIDOR ====="
+echo "-- ANTES --"
+esperar "anon lee tc_tipos_plano_descuadrado" "$(leer anon tc_tipos_plano_descuadrado)" "1"
+esperar "y la tabla base le esta NEGADA"      "$(leer anon tc_tipos_vehiculo)" "0"
+esperar "anon BORRA tipos de vehiculo por la vista" \
+  "$(escribir anon "delete from tc_tipos_plano_descuadrado")" "ESCRIBE 1"
+esperar "anon lee nombres de cliente por movimientos_stock_detalle" \
+  "$($PSQL -c "begin; set local role anon; select 'RES:'||count(*) from movimientos_stock_detalle where cliente_nombre is not null; rollback;" | grep -o 'RES:[0-9]*' | cut -d: -f2)" "1"
+esperar "y clientes directamente le esta NEGADA" "$(leer anon clientes)" "0"
+
+$PSQL -q -v ON_ERROR_STOP=1 -f "$PREP/008_contencion_vistas_resto.sql" >/dev/null 2>&1 && echo "008 aplicada" || { echo "FALLO aplicando 008"; exit 1; }
+$PSQL -q -v ON_ERROR_STOP=1 -f "$PREP/008_contencion_vistas_resto.sql" >/dev/null 2>&1 && echo "008 reaplicada (idempotente)" || { echo "FALLO en la 2a pasada"; exit 1; }
+
+echo "-- DESPUES --"
+esperar "anon ya no lee tc_tipos_plano_descuadrado" "$(leer anon tc_tipos_plano_descuadrado)" "denegado"
+esperar "ni la borra"                               "$(escribir anon "delete from tc_tipos_plano_descuadrado")" "denegado"
+esperar "anon ya no lee movimientos_stock_detalle"  "$(leer anon movimientos_stock_detalle)" "denegado"
+esperar "ni stock_actual_detalle"                   "$(leer anon stock_actual_detalle)" "denegado"
+esperar "ni tc_modelos_aplicacion_sin_clasificar"   "$(leer anon tc_modelos_aplicacion_sin_clasificar)" "denegado"
+esperar "ni las cuatro de solo exposicion"          \
+  "$(leer anon kpis_traspasos):$(leer anon stock_actual):$(leer anon traspasos_detalle):$(leer anon traspasos_resumen_lineas)" \
+  "denegado:denegado:denegado:denegado"
+esperar "authenticated conserva la LECTURA de las nueve" \
+  "$($PSQL -c "select 'RES:'||count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace
+     where n.nspname='public' and c.relkind='v' and c.relname in ('kpis_traspasos','movimientos_stock_detalle',
+       'stock_actual','stock_actual_detalle','tc_modelos_aplicacion_sin_clasificar','tc_tipos_plano_descuadrado',
+       'traspasos_detalle','traspasos_lineas_detalle','traspasos_resumen_lineas')
+       and has_table_privilege('authenticated',c.oid,'select');" | grep -o 'RES:[0-9]*' | cut -d: -f2)" "9"
+esperar "pero pierde la escritura en las nueve" \
+  "$($PSQL -c "select 'RES:'||count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace
+     where n.nspname='public' and c.relkind='v' and c.relname in ('kpis_traspasos','movimientos_stock_detalle',
+       'stock_actual','stock_actual_detalle','tc_modelos_aplicacion_sin_clasificar','tc_tipos_plano_descuadrado',
+       'traspasos_detalle','traspasos_lineas_detalle','traspasos_resumen_lineas')
+       and (has_table_privilege('authenticated',c.oid,'insert') or has_table_privilege('authenticated',c.oid,'update')
+         or has_table_privilege('authenticated',c.oid,'delete'));" | grep -o 'RES:[0-9]*' | cut -d: -f2)" "0"
+esperar "traspasos_auditoria_detalle NO se toca (caso F)" "$(leer anon traspasos_auditoria_detalle)" "1"
+
+echo "-- restauracion minima de 008 (antes que el rollback completo) --"
+$PSQL -q -c "grant select on public.traspasos_detalle to authenticated;" >/dev/null 2>&1
+esperar "devolver una sola vista a authenticated funciona" \
+  "$($PSQL -c "select 'RES:'||has_table_privilege('authenticated','traspasos_detalle','select');" | grep -o 'RES:.*' | cut -d: -f2)" "true"
+
+echo
 echo "-- vuelta atras de 005 --"
 $PSQL -q -c "alter view adm_ot_estado reset (security_invoker);
   grant select, insert, update, delete on adm_ot_estado, tc_clientes_almacen,
