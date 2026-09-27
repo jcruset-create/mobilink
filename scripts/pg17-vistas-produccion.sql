@@ -56,6 +56,11 @@ create or replace function adm_can_manage() returns boolean language sql stable 
 create or replace function tc_is_superadmin() returns boolean language sql stable as $$
   select coalesce(current_setting('prueba.tc_super', true) = '1', false) $$;
 
+-- El defecto de Supabase, tambien para las tablas FUTURAS: es lo que hace que
+-- la lista de tablas abiertas crezca sola. Se reproduce aqui para poder
+-- comprobar que 005 NO lo toca (lo hace la Fase D, que es donde corresponde).
+alter default privileges in schema public grant all on tables to anon, authenticated;
+
 -- ── El defecto de Supabase: CRUD a anon y authenticated en todo ────────────
 do $$ declare t text; begin
   for t in select relname from pg_class c join pg_namespace n on n.oid=c.relnamespace

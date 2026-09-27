@@ -119,6 +119,42 @@ cualquiera que no haya cambiado la contraseña desde el alta la tiene corta.
 Comando en `COMPROBACIONES-ENTORNO.md` §1. Interesa la primera lista: tablas que
 están en producción y no en ninguna migración. Son las que nadie ha revisado.
 
+## A.5b Contenciones urgentes · por delante de todo lo demás
+
+Dos contenciones preparadas y probadas contra PostgreSQL 17.6, **sin aplicar**.
+Ninguna depende del despliegue de código, a diferencia de la Fase D.
+
+| | Qué cierra | Estado |
+|---|---|---|
+| `007_contencion_safety.sql` | Escritura anónima sobre las diez tablas de Safety | Preparada · prioridad 1 |
+| `005_contencion_vistas.sql` | Cuatro vistas que se saltan la RLS, una de ellas borrable por `anon` | Preparada · prioridad 2 |
+
+### Estado de SEC-008 tras aplicar 007
+
+**SEC-008: escritura anónima contenida; exposición de lectura todavía abierta.**
+
+Después de 007, `anon` sigue pudiendo leer de cada empleado activo:
+
+- DNI/NIE;
+- número de Seguridad Social;
+- domicilio;
+- `pin_hash`.
+
+El `pin_hash` no deja de ser sensible por estar hasheado, especialmente con un
+PIN de baja entropía: se ataca sin límite de intentos ni registro.
+
+Esa parte **no se cierra hasta rediseñar identidad y login** (Fase 1/3), porque
+`/portal`, `/portal/mi-ficha` y `/sea` dependen de esa lectura y no tienen otra
+forma de identificar al empleado. **SEC-008 no se marca cerrado con 007.**
+
+### Estado de SEC-068
+
+**ABIERTO.** 5 de 14 vistas clasificadas. Las 9 restantes se crearon a mano en
+el dashboard y su definición no está en el repositorio: hace falta ejecutar
+`006_vistas_pendientes.sql` (solo lectura). `005` cubre solo las cuatro
+demostradas y **no se ampliará automáticamente** cuando aparezcan las nueve:
+primero se analiza el resultado y se propone.
+
 ## A.6 Criterio GO global
 
 Hay **tres bloqueantes distintos** y no se mezclan. Cada uno gobierna una fase

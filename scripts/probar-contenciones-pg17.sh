@@ -47,6 +47,38 @@ esperar "y el embebido de empresa (PortalFicha)" "$(leer anon sea_companies)" "1
 esperar "y el de centro de trabajo"             "$(leer anon sea_work_centers)" "1"
 esperar "SeaHub sigue leyendo formacion"        "$(leer anon sea_training_records)" "1"
 esperar "el panel autenticado sigue escribiendo" "$(escribir authenticated "update sea_employees set cargo='Jefa'")" "PASA"
+echo "-- las seis comprobaciones de revision --"
+# 1. Ninguna policy de authenticated eliminada por error.
+esperar "1· las 10 policies de authenticated siguen intactas" \
+  "$($PSQL -c "select 'RES:'||count(*) from pg_policies where schemaname='public'
+      and tablename like 'sea\_%' and 'authenticated'=any(roles);" | grep -o 'RES:[0-9]*' | cut -d: -f2)" "10"
+# 2. (cubierta arriba: el panel autenticado sigue escribiendo)
+# 3. sea_companies y sea_work_centers conservan SOLO lectura para anon.
+esperar "3· sea_companies deja a anon solo SELECT" \
+  "$($PSQL -c "select 'RES:'||string_agg(cmd,',' order by cmd) from pg_policies
+      where tablename='sea_companies' and 'anon'=any(roles);" | grep -o 'RES:.*' | cut -d: -f2)" "SELECT"
+esperar "3· sea_work_centers deja a anon solo SELECT" \
+  "$($PSQL -c "select 'RES:'||string_agg(cmd,',' order by cmd) from pg_policies
+      where tablename='sea_work_centers' and 'anon'=any(roles);" | grep -o 'RES:.*' | cut -d: -f2)" "SELECT"
+# 4. Ningun WITH CHECK de anon vivo en sea_*.
+esperar "4· no queda ningun WITH CHECK de anon" \
+  "$($PSQL -c "select 'RES:'||count(*) from pg_policies where schemaname='public'
+      and tablename like 'sea\_%' and 'anon'=any(roles) and with_check is not null;" | grep -o 'RES:[0-9]*' | cut -d: -f2)" "0"
+esperar "4· ni ninguna policy de anon que no sea SELECT" \
+  "$($PSQL -c "select 'RES:'||count(*) from pg_policies where schemaname='public'
+      and tablename like 'sea\_%' and 'anon'=any(roles) and cmd<>'SELECT';" | grep -o 'RES:[0-9]*' | cut -d: -f2)" "0"
+# 5. Y tampoco por grants, que es el otro control.
+esperar "5· anon no conserva INSERT/UPDATE/DELETE por grants en ninguna de las 10" \
+  "$($PSQL -c "select 'RES:'||count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace
+      where n.nspname='public' and c.relkind='r' and c.relname like 'sea\_%'
+        and (has_table_privilege('anon',c.oid,'insert') or has_table_privilege('anon',c.oid,'update')
+          or has_table_privilege('anon',c.oid,'delete'));" | grep -o 'RES:[0-9]*' | cut -d: -f2)" "0"
+esperar "5· y conserva el SELECT en las 10, que es lo que usa el portal" \
+  "$($PSQL -c "select 'RES:'||count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace
+      where n.nspname='public' and c.relkind='r' and c.relname like 'sea\_%'
+        and has_table_privilege('anon',c.oid,'select');" | grep -o 'RES:[0-9]*' | cut -d: -f2)" "10"
+# 6. La idempotencia ya se ejerce arriba aplicandola dos veces seguidas.
+
 echo "-- lo que NO cierra, declarado --"
 esperar "anon SIGUE leyendo el pin_hash (abierto a proposito)" "$(leer anon "(select pin_hash from sea_employees) x")" "1"
 echo "-- cambio de comportamiento declarado --"
@@ -85,6 +117,11 @@ esperar "anon ya no borra el catalogo"       "$(escribir anon "delete from tc_ma
 panel=$($PSQL -c "begin; set local role authenticated; set local prueba.adm_read='1';
   select 'RES:'||count(*) from adm_ot_estado; rollback;" 2>&1 | grep -o 'RES:[0-9]*' | cut -d: -f2)
 esperar "el panel sigue leyendo adm_ot_estado (ya como invoker)" "${panel:-denegado}" "1"
+# La 005 ya no lleva los `alter default privileges`: se sacaron a su sitio, la
+# Fase D. Esto lo fija, para que no vuelvan a colarse aqui sin decidirlo.
+$PSQL -q -c "create table if not exists prueba_nacida_despues (id int);" >/dev/null 2>&1
+esperar "005 ya NO toca los privilegios por defecto" \
+  "$($PSQL -c "select 'RES:'||has_table_privilege('anon','prueba_nacida_despues','select');" | grep -o 'RES:.*' | cut -d: -f2)" "true"
 esperar "adm_ot_estado quedo como invoker" \
   "$($PSQL -c "select 'RES:'||coalesce(array_to_string(reloptions,','),'-') from pg_class where relname='adm_ot_estado';" | grep -o 'RES:.*' | cut -d: -f2)" \
   "security_invoker=true"

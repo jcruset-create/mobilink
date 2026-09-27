@@ -84,11 +84,15 @@ revoke insert, update, delete on tc_productos_almacen from authenticated;
 revoke all on tc_marcas_contadores from anon;
 revoke insert, update, delete on tc_marcas_contadores from authenticated;
 
--- ── 5) Que una vista nueva no nazca abierta ────────────────────────────────
--- Mismo razonamiento que con las tablas en la Fase 0: si no se cambia el
--- defecto, la lista vuelve a crecer sola.
-alter default privileges in schema public revoke all on tables from anon;
-alter default privileges in schema public revoke all on tables from authenticated;
+-- Aquí había dos `alter default privileges`. Se han retirado a propósito, y no
+-- por ser mala idea: no hacen falta para cerrar ninguna de estas cuatro vistas,
+-- actúan sobre objetos FUTUROS y no sobre los actuales, y su efecto depende del
+-- rol para el que se definan —hay que confirmar antes qué rol crea realmente
+-- las tablas y las vistas en producción—. Esta migración tiene que ser pequeña,
+-- explícita y reversible: solo las cuatro vistas demostradas.
+--
+-- Siguen estando en la sección 1 de `001_seguridad_fase0.sql`, que es donde les
+-- corresponde.
 
 commit;
 
