@@ -347,9 +347,9 @@ probado, no ha llegado a producción), **preparado** (escrito, sin aplicar),
 | SEC-064 | Congelado | Congelado | Sin datos nuevos |
 | SEC-065 · `app_login_email` | Preparado | **Preparado**, probado en 17.6 | Confirmado que `PUBLIC` la expone |
 | SEC-067 · `search_path` | Preparado (3 de ~170) | **Preparado (3 de 132)** | Inventario corregido |
-| **SEC-008** (ampliado) · Safety abierto a `anon` | Congelado | **ABIERTO · CRÍTICO · prioridad 1** | Ampliado con evidencia de producción, sin abrir un SEC nuevo: es la misma superficie. Diez tablas con `ALL to anon using (true)`: se puede **modificar y borrar** el fichero de personal y la evidencia de habilitación. **Contención de escritura preparada y probada** (`007`). La **lectura** de DNI, NSS, domicilio y `pin_hash` queda **expresamente abierta** hasta migrar el login. Ver `docs/SEC-008_safety.md` |
+| **SEC-008** (ampliado) · Safety abierto a `anon` | Congelado | **ABIERTO · escritura contenida EN PRODUCCIÓN (2026-09-27); lectura sensible abierta** | Ampliado con evidencia de producción, sin abrir un SEC nuevo: es la misma superficie. Diez tablas con `ALL to anon using (true)`: se puede **modificar y borrar** el fichero de personal y la evidencia de habilitación. **Contención de escritura preparada y probada** (`007`). La **lectura** de DNI, NSS, domicilio y `pin_hash` queda **expresamente abierta** hasta migrar el login. Ver `docs/SEC-008_safety.md` |
 | **Deuda · credencial validada en cliente** | — | **ABIERTA** | Patrón `anon key → SELECT credencial → comparación en JavaScript`, en cuatro sitios. No se arregla con una política. Fase 1/3. Ver `docs/DEUDA_credencial_en_cliente.md` |
-| **SEC-068** · Vistas con privilegios del propietario | — | **ABIERTO · CRÍTICO · inventario 14/14, contenciones preparadas (`005` + `008`)** | Hallazgo **independiente**, no ampliación de SEC-002: activar RLS no lo cierra (`clientes` tiene RLS y `anon` escribe igual por la vista). Las 14 corren como `postgres`; probado en 17.6 que `anon` lee lo que la tabla le niega, **inserta** en `clientes` y **borra** el catálogo de marcas por `tc_marcas_contadores`. Ver `docs/SEC-068_vistas.md`. No afecta a las 42 |
+| **SEC-068** · Vistas con privilegios del propietario | — | **ABIERTO · 13/14 contenidas EN PRODUCCIÓN (2026-09-27)**; `traspasos_auditoria_detalle` fuera por decisión funcional, y `adm_ot_estado` conserva el bypass para `authenticated` tras la restauración mínima | Hallazgo **independiente**, no ampliación de SEC-002: activar RLS no lo cierra (`clientes` tiene RLS y `anon` escribe igual por la vista). Las 14 corren como `postgres`; probado en 17.6 que `anon` lee lo que la tabla le niega, **inserta** en `clientes` y **borra** el catálogo de marcas por `tc_marcas_contadores`. Ver `docs/SEC-068_vistas.md`. No afecta a las 42 |
 
 ---
 
@@ -357,7 +357,7 @@ probado, no ha llegado a producción), **preparado** (escrito, sin aplicar),
 
 | Fase | Estado | Qué lo bloquea |
 |---|---|---|
-| **0 · Contenciones urgentes** | **Preparadas y probadas**: `007` Safety, `005` cuatro vistas, `008` nueve vistas más | Falta revisión del SQL y autorización. No dependen de ningún despliegue de código |
+| **0 · Contenciones urgentes** | **APLICADAS EN PRODUCCIÓN el 2026-09-27**: `007`, `005` y `008`. `007b` preparada | Ver `docs/RUNBOOK_contenciones_urgentes.md` §6 |
 | **B · Código** | **NO-GO** | Twilio. Y ahora va detrás de las contenciones |
 | **D · Migración** | **Sin bloqueantes técnicos**, pero **no es lo primero** | Las cuatro condiciones de §7 están verificadas. El orden lo decide ahora SEC-068 y la deuda de credenciales, más graves y más fáciles de contener |
 | **1A / 1C** | No autorizadas | Sin cambios. Dos supuestos resueltos a favor: 2 superadmins con email de recuperación, 0 colisiones de username |

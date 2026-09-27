@@ -35,7 +35,20 @@ parten de filas existentes—, pero **no filtra lo que se inserta**, porque un
 
 Hoy existen las dos. Cuando `005` y `008` estén aplicadas dejará de existir la
 primera; la segunda sigue por `traspasos_auditoria_detalle` y su tabla.
-**Estado:** ABIERTO. Contención preparada, sin aplicar.
+**Estado (2026-09-27): ABIERTO.** *Escritura/bypass de las vistas contenidas
+corregido; una superficie pendiente de decisión funcional.*
+
+`005` y `008` aplicadas en producción: 13 de las 14 vistas sin acceso de `anon`
+y sin escritura de `authenticated`. Quedan fuera:
+
+- **`traspasos_auditoria_detalle`** · caso F. Expone `codigo_personal`, y
+  cerrarla no bastaría: `traspasos_auditoria` lo expone también por su política
+  `anon_read_auditoria`.
+- **`adm_ot_estado`** · conserva el bypass **para `authenticated`**. Su
+  `security_invoker` se revirtió con una restauración mínima porque la pantalla
+  se quedó vacía, lo que demuestra que el usuario legítimo no pasa
+  `adm_can_read()`: la pantalla venía funcionando gracias al salto de RLS.
+  `anon` sí quedó fuera.
 **Descubierto:** 2026-09-27, al contrastar el precheck con producción.
 
 ---

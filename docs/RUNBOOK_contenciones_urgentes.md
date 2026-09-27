@@ -209,52 +209,81 @@ exposición de `codigo_personal`, que además sale también por la política
 
 ---
 
-## 6. Evidencia de cierre · a rellenar durante la intervención
+## 6. Evidencia de la intervención · 2026-09-27
 
-| Migración | Hora UTC | Aplicada | Postcheck | Smoke test | Incidencias |
-|---|---|---|---|---|---|
-| 009 fotografía previa | — | **NO ejecutada antes de 007** | n/a | n/a | No hizo falta: 007 no lleva `revoke all`. **Sí es obligatoria antes de 005** |
-| **007 Safety** | 2026-09-27 | **SÍ** | ver abajo | pendiente de reporte | 9 tablas `sea_*` adicionales detectadas |
-| 007b resto | — | no | — | — | Defensa en profundidad, no urgente |
-| 005 vistas | — | no | — | — | Autorizada, pendiente de 009 |
-| 008 vistas resto | — | no | — | — | Sin autorizar |
+| Migración | Aplicada | Postcheck | Smoke test | Incidencias |
+|---|---|---|---|---|
+| `009` fotografía previa | **Sí**, solo lectura, antes de 005 | n/a | n/a | Detectó `TRUNCATE`, `REFERENCES` y `TRIGGER` en las cuatro vistas |
+| **`007`** Safety | **Sí** | 3 de 5 OK al inicio → **todas OK** tras corregir el postcheck | pendiente de reporte | 9 tablas `sea_*` adicionales, sin escritura efectiva |
+| **`005`** vistas | **Sí**, con restauración mínima posterior | **4 de 4 OK** | Regresión en `adm_ot_estado` | Ver §6.2 |
+| **`008`** vistas resto | **Sí** | **Todas OK** | Sin incidencias | — |
+| `007b` resto de Safety | No | — | — | Defensa en profundidad |
 
-### Resultado de 007
+### 6.1 `007` · lo que consiguió, y el error de mi postcheck
 
 **Escritura anónima efectiva sobre Safety: de 10 tablas a 0.**
 
-El postcheck original marcó FALLO en cinco filas. Dos causas, las dos mías:
+El postcheck original marcó FALLO en cinco filas por dos errores míos:
 
 1. Las filas 9 y 10 asumían **10** tablas `sea_*`; producción tiene **19**.
-2. Las filas 3-5 medían `has_table_privilege`, que es **el grant**, y no la
-   capacidad de escribir.
+2. Las filas 3-5 medían `has_table_privilege` —**el grant**— y lo presentaban
+   como capacidad de escribir.
 
-Las nueve tablas adicionales tienen RLS activa y ninguna política para `anon`,
-así que **no eran escribibles**: el `INSERT` lo rechaza la RLS y el `UPDATE` y
-el `DELETE` afectan a cero filas. Verificado en 17.6.
+Las nueve adicionales tienen RLS y ninguna política de `anon`: el `INSERT` lo
+rechaza la RLS y el `UPDATE`/`DELETE` afectan a cero filas. Reproducido en 17.6.
+Postcheck reescrito en `010`, sin números fijos y separando GRANT de EFECTIVO.
 
-El postcheck está reescrito (`010`), sin números fijos y separando GRANT de
-EFECTIVO. **La fila 7 es la referencia de «escritura anónima efectiva».**
+### 6.2 `005` · `adm_ot_estado` y lo que su regresión demuestra
 
-### Regla que queda fijada
+La pantalla se quedó vacía con `security_invoker = true`, y se aplicó la
+restauración mínima correcta:
 
-Toda verificación futura distingue tres cosas, y no usa `has_table_privilege()`
-como sinónimo de explotabilidad:
+```sql
+alter view public.adm_ot_estado reset (security_invoker);
+```
 
-| | Qué es |
+Los `revoke` de `anon` se conservaron. Pero ese resultado **no es solo un
+contratiempo operativo: es un hallazgo**.
+
+> Que la pantalla se vaciara demuestra que **el usuario legítimo del panel no
+> pasa `adm_can_read()`**. Es decir: esa pantalla llevaba funcionando gracias
+> al salto de RLS, no a pesar de él.
+
+Y la consecuencia de la restauración, dicha sin rodeos:
+
+| Rol | Antes de 005 | Ahora |
+|---|---|---|
+| `anon` | lee saltándose la RLS | **sin acceso** ✅ |
+| `authenticated` | lee saltándose la RLS | **sigue leyendo saltándose la RLS** ⚠️ |
+
+**`adm_ot_estado` conserva el bypass de SEC-068 para cualquier usuario
+autenticado del proyecto** —de cualquiera de las ocho apps, porque el proyecto
+de Supabase es uno—, que obtiene todas las órdenes de trabajo y los nombres de
+cliente sin pasar por `adm_can_read()`.
+
+Cerrarlo necesita una decisión funcional previa, no un `alter view`: o la
+política de `adm_work_orders` está mal y hay que corregirla, o la pantalla no
+debería mostrar esos datos a ese usuario. Mientras no se decida, queda como
+**residuo conocido y declarado de SEC-068**.
+
+### 6.3 Las dos incidencias de consola
+
+Registradas aparte, como se pidió. Y comprobado en el código antes de darlas
+por no relacionadas:
+
+| Incidencia | Relación con 005/008 |
 |---|---|
-| **GRANT** | Lo que el catálogo concede |
-| **Policy RLS** | Lo que la política permite por fila |
-| **Acceso efectivo** | El resultado de las dos, que es lo único que importa |
+| `Invalid Refresh Token / Refresh Token Not Found` | Ninguna. Es de Supabase Auth |
+| `tc_informes_kpis` → HTTP 500 | **Ninguna**: la función no lee ninguna de las 13 vistas contenidas. Lee `tc_neumaticos`, `tc_posiciones_vehiculo`, `tc_config_umbrales*`, `operaciones_neumaticos` y `revisiones_*` |
 
-Y además:
+**Hipótesis que explica las dos como un solo incidente:**
+`tc_informes_kpis` es `security invoker` y su `grant execute` es **solo para
+`authenticated`**. Con el refresh token inválido, PostgREST se queda sin JWT y
+atiende la petición como `anon`, que no tiene ese `execute`. El error de
+permiso puede aflorar como 500.
 
-1. Resultados completos de cada postcheck.
-2. Cualquier permiso restaurado a mano, con su motivo.
-3. Cualquier divergencia entre producción y laboratorio.
-4. Errores observados en logs.
-
----
+Se confirma en dos minutos: volver a entrar y repetir la pantalla de informes.
+Si desaparece, eran lo mismo. No es un bloqueante.
 
 ## 7. Lo que sigue sin autorizar
 
