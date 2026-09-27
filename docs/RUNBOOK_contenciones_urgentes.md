@@ -213,10 +213,39 @@ exposición de `codigo_personal`, que además sale también por la política
 
 | Migración | Hora UTC | Aplicada | Postcheck | Smoke test | Incidencias |
 |---|---|---|---|---|---|
-| 009 fotografía previa | | | n/a | n/a | |
-| 007 Safety | | | /10 | | |
-| 005 vistas | | | /4 | | |
-| 008 vistas resto | | | /5 | | |
+| 009 fotografía previa | — | **NO ejecutada antes de 007** | n/a | n/a | No hizo falta: 007 no lleva `revoke all`. **Sí es obligatoria antes de 005** |
+| **007 Safety** | 2026-09-27 | **SÍ** | ver abajo | pendiente de reporte | 9 tablas `sea_*` adicionales detectadas |
+| 007b resto | — | no | — | — | Defensa en profundidad, no urgente |
+| 005 vistas | — | no | — | — | Autorizada, pendiente de 009 |
+| 008 vistas resto | — | no | — | — | Sin autorizar |
+
+### Resultado de 007
+
+**Escritura anónima efectiva sobre Safety: de 10 tablas a 0.**
+
+El postcheck original marcó FALLO en cinco filas. Dos causas, las dos mías:
+
+1. Las filas 9 y 10 asumían **10** tablas `sea_*`; producción tiene **19**.
+2. Las filas 3-5 medían `has_table_privilege`, que es **el grant**, y no la
+   capacidad de escribir.
+
+Las nueve tablas adicionales tienen RLS activa y ninguna política para `anon`,
+así que **no eran escribibles**: el `INSERT` lo rechaza la RLS y el `UPDATE` y
+el `DELETE` afectan a cero filas. Verificado en 17.6.
+
+El postcheck está reescrito (`010`), sin números fijos y separando GRANT de
+EFECTIVO. **La fila 7 es la referencia de «escritura anónima efectiva».**
+
+### Regla que queda fijada
+
+Toda verificación futura distingue tres cosas, y no usa `has_table_privilege()`
+como sinónimo de explotabilidad:
+
+| | Qué es |
+|---|---|
+| **GRANT** | Lo que el catálogo concede |
+| **Policy RLS** | Lo que la política permite por fila |
+| **Acceso efectivo** | El resultado de las dos, que es lo único que importa |
 
 Y además:
 
