@@ -1,8 +1,40 @@
 # SEC-068 · CRÍTICO · Vistas ejecutadas con privilegios del propietario
 
-> Vistas ejecutadas con privilegios del propietario permiten saltarse la RLS y,
-> en las actualizables, escribir sobre tablas base protegidas.
+> **Vistas ejecutadas con privilegios del propietario exponen datos protegidos
+> por RLS y, cuando son actualizables, permiten escritura indirecta sobre
+> tablas base.**
 
+## Los cuatro mecanismos, que son distintos entre sí
+
+No es un solo fallo con cuatro síntomas: son cuatro caminos con condiciones
+distintas, y una vista puede tener unos y no otros. Conviene enumerarlos
+porque revisar solo uno deja los demás abiertos.
+
+| # | Mecanismo | Condición para que ocurra | Demostrado en |
+|---|---|---|---|
+| 1 | **Bypass de `SELECT`** | La vista no es `security_invoker` y su dueño no pasa por la RLS de la tabla base | `adm_ot_estado`, `tc_modelos_aplicacion_sin_clasificar`, `tc_tipos_plano_descuadrado` |
+| 2 | **Bypass parcial por `join`** | La tabla principal sí es legible por el llamante, pero **una columna viene de otra tabla que no lo es** | `movimientos_stock_detalle` (`clientes.nombre`), `stock_actual_detalle` (cliente y centro) |
+| 3 | **`INSERT` sobre vista sin `CHECK OPTION`** | La vista es insertable y no lleva `with check option`: la fila entra aunque no cumpla el predicado | `tc_clientes_almacen`, `tc_productos_almacen` |
+| 4 | **`UPDATE`/`DELETE` cuando el predicado devuelve filas** | La vista es actualizable y su `where` no excluye al llamante | `tc_marcas_contadores`, `tc_tipos_plano_descuadrado` |
+
+El 2 es el que más fácilmente se escapa: mirar la tabla principal de la vista
+no basta. **Hay que mirar cada `join`.** Una vista sobre una tabla abierta a
+`anon` puede estar sirviendo, por una sola columna, datos de una tabla cerrada.
+
+El 3 y el 4 se distinguen porque protegen cosas distintas: un predicado en el
+`where` filtra lo que se lee, se actualiza y se borra —porque esas operaciones
+parten de filas existentes—, pero **no filtra lo que se inserta**, porque un
+`INSERT` no parte de ninguna fila.
+
+## Severidad
+
+**CRÍTICA**, y se mantiene mientras exista cualquiera de estas dos cosas:
+
+- escritura anónima efectiva sobre alguna tabla base;
+- exposición de credenciales o de datos sensibles por alguna de las vistas.
+
+Hoy existen las dos. Cuando `005` y `008` estén aplicadas dejará de existir la
+primera; la segunda sigue por `traspasos_auditoria_detalle` y su tabla.
 **Estado:** ABIERTO. Contención preparada, sin aplicar.
 **Descubierto:** 2026-09-27, al contrastar el precheck con producción.
 
