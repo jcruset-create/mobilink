@@ -71,66 +71,105 @@ que proteger es **qué columnas ve cada rol**.
 
 ---
 
-## 4. La causa raíz · CORREGIDA el 2026-09-27
+## 4. Dos hipótesis descartadas, y lo que la evidencia sí permite afirmar
 
-> **La explicación que di antes era falsa.** Dije que la pantalla se vaciaba
-> porque a `adm_can_read()` le falta el rol `tecnico`. Producción **no tiene
-> ningún `tecnico`**: en `adm_usuarios` hay 2 `admin` y 1 `recepcion`, y nada
-> más. La hipótesis queda descartada.
+### 4.1 Descartadas formalmente
 
-La causa real está en
-`src/modules/administracion/contexts/AdminAuthContext.tsx`, en `cargarPerfil()`:
+| # | Hipótesis | Por qué se descarta |
+|---|---|---|
+| 1 | Falta el rol `tecnico` en `adm_can_read()` | **Producción no tiene ningún `tecnico`.** `adm_usuarios`: 2 `admin`, 1 `recepcion` |
+| 2 | El usuario es un superadmin sin ficha en `adm_usuarios` | **Los dos superadministradores tienen ficha**, con `rol = admin`, activos, y acceso al módulo. La cadena `auth.users → app_usuarios → app_usuario_modulos → adm_usuarios` está completa para los dos |
 
-```ts
-// Un superadmin de la plataforma entra aunque no tenga ficha en
-// adm_usuarios: se le da perfil de admin sintético para este módulo.
-if (await esSuperadmin(userId)) {
-  return { id: userId, nombre: "Superadmin", rol: "admin", activo: true };
-}
+Las dos eran mías y las dos eran falsas. Conviene decir por qué fallé igual las
+dos veces: **estaba explicando el síntoma desde el código, sin el dato**. El
+código admite varias explicaciones coherentes; solo la fotografía las descarta.
+
+### 4.2 La contradicción, acotada
+
+Jordi está en `adm_usuarios` como `admin` activo. La evaluación lógica de
+`adm_can_read()` para ese UUID es **true**. Y aun así, con `security_invoker`
+la vista devolvió cero filas.
+
+Solo hay dos formas de que eso pase a la vez:
+
+1. **El UUID de la sesión no era el de Jordi.**
+2. **`auth.uid()` era nulo** en esa petición.
+
+Todo lo demás está descartado por reproducción.
+
+### 4.3 Reproducción de los cinco modos de fallo posibles
+
+Contra PostgreSQL 17.6, con el esquema y las funciones reales, `admin` con
+ficha activa y `security_invoker = true`:
+
+| Candidato | Resultado |
+|---|---|
+| Punto de partida | **1 fila** ✅ |
+| `FORCE ROW LEVEL SECURITY` en `adm_usuarios` | **1 fila** — no es esto |
+| `authenticated` sin `EXECUTE` sobre `adm_can_read()` | **ERROR: permission denied for function** |
+| `authenticated` sin `SELECT` sobre las tablas base | **ERROR: permission denied for table** |
+| **Sesión sin JWT: `auth.uid()` nulo** | **0 filas, sin error** ← el único que encaja |
+| La petición llega como `anon` | **ERROR: permission denied for view** |
+
+> **De los cinco, solo uno produce «vacío» en silencio: que `auth.uid()` no
+> resuelva a un usuario autorizado.** Los otros cuatro habrían dado un error
+> visible en la consola, y ninguno de esos errores se observó.
+
+### 4.4 La hipótesis que ahora encaja mejor, y que no es la vista
+
+Durante esas mismas pruebas se observó en consola:
+
+```
+Invalid Refresh Token / Refresh Token Not Found
 ```
 
-> **El panel le fabrica al superadministrador de plataforma un perfil de
-> «admin» en el navegador. La base de datos no sabe nada de eso.**
+Si el token de refresco había caducado, las peticiones salían sin un JWT
+válido. El panel ya había pintado «Admin» —porque el perfil se cargó cuando la
+sesión aún valía— y las consultas posteriores llegaban sin identidad.
 
-`adm_rol_actual()` solo mira `adm_usuarios`, donde ese usuario no tiene fila,
-así que devuelve la cadena vacía y `adm_can_read()` es falso. Y
-`esSuperadmin()` lee `app_usuarios.es_superadmin`, una tabla distinta que la
-cadena de autorización del módulo no consulta nunca.
+Eso explicaría, con una sola causa, las tres cosas observadas:
 
-Encaja con todo lo observado: la interfaz decía «Admin» y la RLS decía que no.
-
-### Reproducido en PostgreSQL 17.6
-
-Con el esquema y las funciones reales:
-
-| Caso | Resultado |
+| Observación | Explicación |
 |---|---|
-| Superadmin sin ficha, estado de hoy | **ve 1 OT** por la vista |
-| Superadmin, `adm_rol_actual()` | **`''`**, y `adm_can_read()` → **false** |
-| Superadmin, acceso **directo** a `adm_work_orders` | **0 filas** |
-| Superadmin, con `security_invoker` | **0 filas** ← la pantalla vacía |
-| `admin` **con ficha**, con `security_invoker` | **1 fila** |
+| `adm_ot_estado` vacía con `security_invoker` | `auth.uid()` nulo → `adm_can_read()` falso → 0 filas |
+| `tc_informes_kpis` → HTTP 500 | La función es `security invoker` y su `grant execute` es solo para `authenticated` |
+| `Invalid Refresh Token` | La causa de las dos anteriores |
 
-### Lo que implica, y es más grande que esta vista
+Y explicaría también por qué «al revertir, la pantalla volvió a funcionar»: al
+revertir se recarga la página, y una recarga renueva la sesión.
 
-**El superadministrador no puede leer ninguna tabla del módulo**: ni OTs, ni
-clientes, ni facturas, ni cobros. La interfaz le abre la puerta y la base le
-devuelve cero filas en todo.
+**Si esto es lo que pasó, `security_invoker` no era el problema y la
+restauración mínima revirtió algo que estaba bien.** No lo afirmo: lo propongo
+como la explicación que mejor encaja, y abajo está cómo confirmarla sin tocar
+nada.
 
-`estado-ots` es la única pantalla que le funciona, y le funciona **precisamente
-por el salto de privilegios de esta vista**. Sin saberlo, ese bypass estaba
-tapando una incoherencia del modelo de autorización.
+### 4.5 Cómo confirmarlo, sin SQL y sin modificar producción
 
-### Clasificación del defecto
+`RoleRoute` da al rol `admin` acceso a **todas** las pantallas del módulo
+(`perfil.rol === "admin" || ...`), y `/administracion/clientes` lee
+`adm_customers` **directamente**, sujeta a la misma política
+`adm_customers_select using (adm_can_read())`.
 
-Tu lista era A / B / C / D. Con el dato real, la respuesta cambia:
+Por tanto:
 
-| | |
-|---|---|
-| **A · `adm_can_read()`** | No está mal para lo que cubre. Le falta una dimensión: no contempla al superadministrador de plataforma |
-| **B · las policies** | Correctas |
-| **C · la identidad/contexto** | **Aquí está el defecto.** El panel resuelve el rol por una vía (`app_usuarios.es_superadmin`, en el cliente) y la base por otra (`adm_usuarios`, en el servidor), y las dos no coinciden |
-| **D · combinación** | Sí, pero el eje es C. Y el salto de privilegios de la vista era lo que lo ocultaba |
+> **Cerrar sesión, volver a entrar, y abrir `/administracion/clientes`.**
+>
+> · **Si muestra clientes** → `adm_can_read()` es cierto para esa sesión, luego
+>   `security_invoker` habría funcionado y la pantalla vacía fue la sesión.
+> · **Si sale vacía** → `adm_can_read()` es falso de verdad, y entonces el
+>   problema está en qué UUID llega. Ahí sí hay que mirar la sesión.
+
+Es una observación de interfaz: ni una línea de SQL, ni un cambio, ni riesgo.
+
+Y el dato que lo cierra del todo, también desde el navegador, sin SQL:
+
+```js
+// en la consola, con el panel abierto y sesión recién renovada
+(await supabase.auth.getUser()).data.user.id
+```
+
+Ese UUID se compara con los tres de `adm_usuarios`. **No imprimas el
+`access_token`**: es una credencial. El `id` no lo es.
 
 ## 5. Matriz: quién debería ver qué, y quién ve qué
 
