@@ -40,12 +40,19 @@ export default function Cierre() {
   const { jornada, denominaciones, cajas, refrescar } = useCash();
 
   /*
-   * El fondo fijo de esta caja: lo que el cajón tiene que tener SIEMPRE al
-   * empezar el día. Es una decisión de la caja, no del cierre de hoy, así que
-   * viene configurado y no se teclea cada tarde. Sigue siendo editable, porque
-   * un día puede hacer falta dejar más o menos, pero eso es la excepción.
+   * El cambio que se deja al cerrar: EL MISMO CON EL QUE EMPEZÓ EL DÍA. Lo
+   * demás —lo que ha entrado hoy— va a pendiente de ingresar. Así el cajón
+   * abre mañana igual que hoy y nadie tiene que teclear nada cada tarde.
+   * Sigue siendo editable, porque un día puede hacer falta dejar más o menos,
+   * pero eso es la excepción.
+   *
+   * Si el día empezó sin cambio (el primero de una caja), el fondo fijo de la
+   * caja si lo tiene; y si tampoco, se pregunta con 300 € de partida.
    */
-  const fondoFijo = cajas.find((c) => c.id === jornada?.sesion.registerId)?.fondoObjetivoCentimos ?? 0;
+  const fondoFijoCaja = cajas.find((c) => c.id === jornada?.sesion.registerId)?.fondoObjetivoCentimos ?? 0;
+  const cambioInicial = jornada?.sesion.fondoInicialCentimos ?? 0;
+  const fondoFijo = cambioInicial > 0 ? cambioInicial : fondoFijoCaja;
+  const porCambioInicial = cambioInicial > 0;
 
   const [objetivoTexto, setObjetivoTexto] = useState(
     fondoFijo > 0 ? aTextoEditable(fondoFijo) : "300,00"
@@ -106,11 +113,11 @@ export default function Cierre() {
    */
   const yaPropuesto = useRef(false);
 
-  const pedirPropuesta = useCallback(async () => {
-    if (!jornada || objetivo <= 0) return;
+  const pedirPropuesta = useCallback(async (objetivoPedido: number = objetivo) => {
+    if (!jornada || objetivoPedido <= 0) return;
     setError("");
     try {
-      const r = await api.proponerCierre(jornada.sesion.id, objetivo);
+      const r = await api.proponerCierre(jornada.sesion.id, objetivoPedido);
       // De la propuesta se toma el lado del BANCO, que es el que se teclea. El
       // cambio que se queda se deriva restando, así que no hace falta fijarlo.
       setRetirado(cantidadesDesde(r.ingresoBancario));
@@ -129,7 +136,13 @@ export default function Cierre() {
   useEffect(() => {
     if (yaPropuesto.current || fondoFijo <= 0 || !jornada) return;
     yaPropuesto.current = true;
-    void pedirPropuesta();
+    /*
+     * Con el importe explícito y en la casilla a la vez: si la jornada llegó
+     * después del primer pintado, la casilla aún dice 300 € y la propuesta
+     * saldría con eso.
+     */
+    setObjetivoTexto(aTextoEditable(fondoFijo));
+    void pedirPropuesta(fondoFijo);
   }, [fondoFijo, jornada, pedirPropuesta]);
 
   /*
@@ -351,7 +364,8 @@ export default function Cierre() {
       */}
       {fondoFijo > 0 && contadoTotal < fondoFijo && (
         <Aviso tono="aviso">
-          En el cajón hay {euros(contadoTotal)} y su fondo fijo es de {euros(fondoFijo)}: faltan{" "}
+          En el cajón hay {euros(contadoTotal)} y{" "}
+          {porCambioInicial ? `el día empezó con ${euros(fondoFijo)} de cambio` : `su fondo fijo es de ${euros(fondoFijo)}`}: faltan{" "}
           <strong>{euros(fondoFijo - contadoTotal)}</strong>. No hay nada que ingresar; mañana la
           caja abre corta de cambio salvo que se reponga.
         </Aviso>
@@ -360,7 +374,7 @@ export default function Cierre() {
       <div className="flex flex-wrap items-end gap-2">
         <label className="block">
           <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
-            Fondo fijo de la caja
+            {porCambioInicial ? "Cambio que se deja (el del inicio del día)" : "Fondo fijo de la caja"}
           </span>
           <input
             value={objetivoTexto}
@@ -419,8 +433,8 @@ export default function Cierre() {
           value={euros(aRetirar)}
           hint={
             fondoFijo > 0
-              ? `${euros(contadoTotal)} contados − ${euros(fondoFijo)} de fondo fijo`
-              : "Esta caja no tiene fondo fijo configurado"
+              ? `${euros(contadoTotal)} contados − ${euros(fondoFijo)} ${porCambioInicial ? "del cambio inicial" : "de fondo fijo"}`
+              : "El día empezó sin cambio y la caja no tiene fondo fijo"
           }
           accent="text-amber-300"
         />
@@ -461,8 +475,8 @@ export default function Cierre() {
       {cuadra && desvioObjetivo !== 0 && (
         <Aviso tono="aviso">
           {desvioObjetivo < 0
-            ? `En el paso 2 quedan ${euros(-desvioObjetivo)} menos que el fondo fijo (${euros(objetivo)}): estás retirando de más.`
-            : `En el paso 2 quedan ${euros(desvioObjetivo)} más que el fondo fijo (${euros(objetivo)}): estás retirando de menos.`}{" "}
+            ? `En el paso 2 quedan ${euros(-desvioObjetivo)} menos que el cambio a dejar (${euros(objetivo)}): estás retirando de más.`
+            : `En el paso 2 quedan ${euros(desvioObjetivo)} más que el cambio a dejar (${euros(objetivo)}): estás retirando de menos.`}{" "}
           {(tubosContados.length > 0 || bolsasContadas.length > 0) &&
             "Si el hueco es de un envase entero, ajústalo en las columnas «cart.» o «bols.» del paso 1. "}
           Puedes cerrar así igualmente: lo que retires es lo que va al banco.

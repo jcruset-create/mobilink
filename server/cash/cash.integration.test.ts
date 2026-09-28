@@ -1123,7 +1123,12 @@ describe.runIf(RUN)("ingresos bancarios", () => {
     });
     const teorico = await servicio.stockDeJornada(sesion.id);
     await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: teorico.lineas });
-    const cierre = await servicio.cerrarJornada(ctx, { sessionId: sesion.id, cambioFinal: [] });
+    // Todo al banco A PROPÓSITO: estas pruebas son del ingreso, no del cambio que se queda.
+    const cierre = await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      cambioFinal: [],
+      permitirCajaVacia: true,
+    });
     expect(cierre.totalIngresoCentimos).toBe(centimos);
     return sesion.id;
   }
@@ -2430,7 +2435,7 @@ describe.runIf(RUN)("jornadas fechadas en días pasados", () => {
     });
     const t = await servicio.stockDeJornada(primera.sesion.id);
     await servicio.guardarArqueo(ctx, { sessionId: primera.sesion.id, contado: t.lineas });
-    await servicio.cerrarJornada(ctx, { sessionId: primera.sesion.id, cambioFinal: [] });
+    await servicio.cerrarJornada(ctx, { sessionId: primera.sesion.id, cambioFinal: [], permitirCajaVacia: true });
 
     // Segundo intento del mismo día: se para y se dice cuál es la que ya hay.
     await expect(
@@ -5183,15 +5188,35 @@ describe.runIf(RUN)("cierre que deja la caja vacía", () => {
     expect(r.totalCambioCentimos).toBe(0);
   });
 
-  it("sin fondo fijo no pregunta nada: vaciar es lo normal", async () => {
+  it("sin fondo fijo también pregunta si el día empezó con cambio: es lo que se deja", async () => {
     const caja = await crearCaja("vacia-sin-fondo");
     const { sesion } = await servicio.abrirJornada(ctx, {
       registerId: caja,
       fondoManual: [{ valor: 5000, cantidad: 2 }],
     });
     await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: [{ valor: 5000, cantidad: 2 }] });
-    const r = await servicio.cerrarJornada(ctx, { sessionId: sesion.id, cambioFinal: [] });
+    await expect(servicio.cerrarJornada(ctx, { sessionId: sesion.id, cambioFinal: [] })).rejects.toMatchObject({
+      codigo: "CIERRE_DEJA_CAJA_VACIA",
+      message: expect.stringContaining("el día empezó con 100,00 € de cambio"),
+    });
+    const r = await servicio.cerrarJornada(ctx, { sessionId: sesion.id, cambioFinal: [], permitirCajaVacia: true });
     expect(r.totalIngresoCentimos).toBe(10000);
+  });
+
+  it("un día que empezó sin cambio y sin fondo fijo no pregunta: vaciar es lo normal", async () => {
+    const caja = await crearCaja("vacia-sin-nada");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: [] });
+    await servicio.registrarOperacion(ctx, {
+      sessionId: sesion.id,
+      tipo: "COLLECTION",
+      importeCentimos: 5000,
+      formasPago: [{ forma: "CASH", importe: 5000 }],
+      efectivoRecibido: [{ valor: 5000, cantidad: 1 }],
+      concepto: "venta",
+    });
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: [{ valor: 5000, cantidad: 1 }] });
+    const r = await servicio.cerrarJornada(ctx, { sessionId: sesion.id, cambioFinal: [] });
+    expect(r.totalIngresoCentimos).toBe(5000);
   });
 
   it("dejar cambio no dispara la pregunta aunque haya fondo fijo", async () => {

@@ -1479,7 +1479,7 @@ export async function informeIngreso(empresaId: string, depositId: number): Prom
       .fillColor(GRIS)
       .fontSize(9)
       .text(
-        "El banco solo admite billetes. Estas monedas se quedan en tienda como remanente y entran en el ingreso siguiente.",
+        "El banco solo admite billetes. Estas monedas siguen pendientes de ingresar: entran en el ingreso siguiente o se cambian antes por billetes.",
         M,
         doc.y,
         { width: ancho }
@@ -1497,7 +1497,7 @@ export async function informeIngreso(empresaId: string, depositId: number): Prom
   for (const c of ingreso.cierres) {
     fila(`Cierre del ${c.fecha}`, eur(c.importeCentimos));
   }
-  fila("Remanente anterior", eur(ingreso.remanenteAnteriorCentimos));
+  fila("Pendiente de ingresos anteriores", eur(ingreso.remanenteAnteriorCentimos));
   /*
    * Lo que volvió al cajón a reponer su fondo sale en el papel, en negativo.
    * Sin esta línea el resguardo no cuadra: quien lo lea sumará los cierres y
@@ -1507,7 +1507,7 @@ export async function informeIngreso(empresaId: string, depositId: number): Prom
     fila("Repuesto al cajón (fondo de caja)", `-${eur(ingreso.repuestoCentimos)}`);
   }
   fila(
-    "Total bajo control",
+    "Total pendiente de ingresar",
     eur(
       ingreso.remanenteAnteriorCentimos +
         ingreso.totalCierresCentimos -
@@ -1516,7 +1516,7 @@ export async function informeIngreso(empresaId: string, depositId: number): Prom
     true
   );
   fila("Se ingresa", eur(ingreso.importeCentimos), true);
-  fila("Remanente que queda en tienda", eur(ingreso.remanenteNuevoCentimos), true);
+  fila("Sigue pendiente de ingresar", eur(ingreso.remanenteNuevoCentimos), true);
 
   /*
    * A qué cuenta va, en el papel que se lleva al banco. Es media razón de ser

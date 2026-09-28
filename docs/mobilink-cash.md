@@ -375,9 +375,17 @@ El cierre de cada jornada aparta un importe "para el banco"
 (`ingreso_bancario_centimos`), pero al banco no se va cada día: se acumulan
 cierres y un solo ingreso los agrupa (`cash_bank_deposits` +
 `cash_bank_deposit_sessions`). El banco solo admite billetes, así que las
-monedas que no se consiguen convertir quedan en tienda como **remanente**, que
-arrastra al ingreso siguiente. Cuánto se ingresa de verdad lo decide el
-usuario: el sistema no puede saber cuántas monedas se convirtieron.
+monedas que no se cambian por billetes **siguen pendientes de ingresar** y
+entran en el ingreso siguiente. Cuánto se ingresa de verdad lo decide el
+usuario: se propone todo lo que hay en billetes, y puede poner menos para
+dejar más pendiente para otro día. El sistema no puede saber cuántas monedas
+se convirtieron.
+
+Antes eso se llamaba **remanente en tienda** y salía en un total aparte. Era
+el mismo dinero con otro nombre, y obligaba a sumar dos totales de cabeza.
+Desde la 1.85 la pantalla y el resguardo lo cuentan como pendiente de
+ingresar, con su línea en la lista («Sin ingresar del TAR1-IB-26-002»).
+Por debajo la tabla no cambia: sigue guardándose en `remanente_*`.
 
 La ecuación es un `CHECK` de la tabla, no una validación de código:
 
@@ -492,12 +500,14 @@ código (`asentarAjusteDeArqueo`) para que no diverjan:
    solo. Una caja ya regularizada no vuelve a asentar nada, porque para
    entonces el teórico y lo contado son el mismo número.
 
-**Fondo fijo de la caja** (`cash_registers.fondo_objetivo_centimos`): lo que el
-cajón tiene que tener SIEMPRE al empezar el día. Es una decisión de la caja, no
-del cierre de hoy, así que se configura una vez y el cierre lo trae puesto y
-propone la composición solo al entrar. Lo que hay que retirar sale de la resta
-—contado menos fondo fijo— y es el efectivo que ha entrado en la jornada. Cero
-significa «sin fondo fijo» y el cierre lo pregunta como antes.
+**El cambio que se deja al cerrar es el del inicio del día**
+(`fondo_inicial_centimos` de la jornada). El cierre lo trae puesto y propone la
+composición solo al entrar; lo que hay que retirar sale de la resta —contado
+menos cambio inicial— y va a pendiente de ingresar. Sigue siendo editable. Si
+el día empezó sin cambio, se usa el **fondo fijo de la caja**
+(`cash_registers.fondo_objetivo_centimos`); si tampoco lo hay, se pregunta.
+Dejar la caja a 0 € cuando el día empezó con cambio pide confirmación
+(`CIERRE_DEJA_CAJA_VACIA`).
 
 **Informes** reúne el papeleo de cada jornada en un sitio: el informe de cierre
 en PDF —que existía pero solo aparecía en la pantalla de confirmación y en el
