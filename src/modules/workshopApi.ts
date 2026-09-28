@@ -274,7 +274,7 @@ export async function saveScheduledJobStatusToBackend(
 }
 
 export async function loadJobsFromBackend(scope: "live" | "all" = "live") {
-  const response = await fetchWithTimeout(`${API_BASE}/api/jobs?scope=${scope}`);
+  const response = await fetchWithTimeout(`${API_BASE}/api/jobs?scope=${scope}`, { headers: getAdminHeaders() });
 
   if (!response.ok) {
     throw new Error(`Error cargando trabajos. Código ${response.status}.`);
@@ -290,7 +290,7 @@ export async function loadJobsFromBackend(scope: "live" | "all" = "live") {
 }
 
 export async function loadLogsFromBackend() {
-  const response = await fetchWithTimeout(`${API_BASE}/api/logs`);
+  const response = await fetchWithTimeout(`${API_BASE}/api/logs`, { headers: getAdminHeaders() });
 
   if (!response.ok) {
     throw new Error(`Error cargando logs. Código ${response.status}.`);
@@ -320,7 +320,7 @@ export async function loadQuickTemplatesFromBackend() {
 }
 
 export async function loadScheduledJobsFromBackend() {
-  const response = await fetchWithTimeout(`${API_BASE}/api/scheduled-jobs`);
+  const response = await fetchWithTimeout(`${API_BASE}/api/scheduled-jobs`, { headers: getAdminHeaders() });
 
   if (!response.ok) {
     throw new Error(`Error cargando agenda. Código ${response.status}.`);
@@ -336,7 +336,7 @@ export async function loadScheduledJobsFromBackend() {
 }
 
 export async function loadTechsFromBackend() {
-  const response = await fetchWithTimeout(`${API_BASE}/api/techs`);
+  const response = await fetchWithTimeout(`${API_BASE}/api/techs`, { headers: getAdminHeaders() });
 
   if (!response.ok) {
     throw new Error(`Error cargando técnicos. Código ${response.status}.`);

@@ -23,7 +23,8 @@ export async function cargarConfigVacaciones(
     const response = await fetchWithTimeout(
       `${API_BASE}/api/vacaciones-config?anio=${anio}&workshopId=${encodeURIComponent(
         workshopId
-      )}`
+      )}`,
+      { headers: getAdminHeaders() }
     );
 
     if (!response.ok) throw new Error(`Error ${response.status}`);

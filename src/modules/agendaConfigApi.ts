@@ -7,7 +7,7 @@ import {
 
 export async function loadAgendaConfig(): Promise<AgendaConfig> {
   try {
-    const response = await fetchWithTimeout(`${API_BASE}/api/agenda-config`);
+    const response = await fetchWithTimeout(`${API_BASE}/api/agenda-config`, { headers: getAdminHeaders() });
     if (!response.ok) throw new Error(`Error ${response.status}`);
 
     const data = await response.json();

@@ -160,7 +160,7 @@ export function useScheduledJobs({
 
   async function loadScheduledJobs() {
     try {
-      const response = await fetchWithTimeout(`${API_BASE}/api/scheduled-jobs`);
+      const response = await fetchWithTimeout(`${API_BASE}/api/scheduled-jobs`, { headers: getAdminHeaders() });
       const data = await response.json();
 
       setScheduledJobs(
