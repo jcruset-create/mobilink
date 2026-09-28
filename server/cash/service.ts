@@ -1447,22 +1447,29 @@ export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<Re
         valorDe(repartoBolsas.ingresoBancario, porBolsa),
     };
     /*
-     * Dejar la caja a 0,00 € teniendo fondo fijo configurado casi nunca es a
-     * propósito: el caso real fue teclear el cierre mandando el fondo entero
-     * al ingreso del banco, y ese cero además rompía la herencia del día
-     * siguiente. Se pide confirmación explícita en vez de prohibirlo, porque
-     * vaciar la caja de verdad existe (vacaciones, traslado).
+     * Dejar la caja a 0,00 € casi nunca es a propósito: el caso real fue
+     * teclear el cierre mandando el fondo entero al ingreso del banco, y ese
+     * cero además rompía la herencia del día siguiente. Se pide confirmación
+     * explícita en vez de prohibirlo, porque vaciar la caja de verdad existe
+     * (vacaciones, traslado).
+     *
+     * Lo que se compara es el cambio con el que EMPEZÓ el día: es lo que el
+     * cierre deja por norma. Si el día empezó sin cambio, el fondo fijo de la
+     * caja, si lo tiene.
      */
     if (reparto.totalCambio === 0 && reparto.totalIngreso > 0 && !e.permitirCajaVacia) {
       const { rows: cajaCierre } = await client.query<{ fondo_objetivo_centimos: string }>(
         `SELECT fondo_objetivo_centimos FROM cash_registers WHERE id = $1`,
         [sesion.registerId]
       );
-      const objetivo = Number(cajaCierre[0]?.fondo_objetivo_centimos ?? 0);
+      const fondoFijo = Number(cajaCierre[0]?.fondo_objetivo_centimos ?? 0);
+      const objetivo = sesion.fondoInicialCentimos > 0 ? sesion.fondoInicialCentimos : fondoFijo;
       if (objetivo > 0) {
         throw new ErrorCaja(
           "CIERRE_DEJA_CAJA_VACIA",
-          `Este cierre manda todo al banco y deja la caja a 0,00 €, pero la caja tiene un fondo fijo de ${formatearEuros(objetivo)} €. ¿Seguro que no era cambio? Si de verdad quieres vaciarla, confírmalo.`,
+          sesion.fondoInicialCentimos > 0
+            ? `Este cierre manda todo al banco y deja la caja a 0,00 €, pero el día empezó con ${formatearEuros(objetivo)} € de cambio. ¿Seguro que no era cambio? Si de verdad quieres vaciarla, confírmalo.`
+            : `Este cierre manda todo al banco y deja la caja a 0,00 €, pero la caja tiene un fondo fijo de ${formatearEuros(objetivo)} €. ¿Seguro que no era cambio? Si de verdad quieres vaciarla, confírmalo.`,
           409,
           { objetivoCentimos: objetivo }
         );

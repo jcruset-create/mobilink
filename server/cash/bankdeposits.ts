@@ -435,7 +435,7 @@ export async function crearIngreso(ctx: Contexto, e: EntradaIngreso): Promise<In
     if (e.importeCentimos > disponible) {
       throw new ErrorCaja(
         "INGRESO_SUPERA_DISPONIBLE",
-        `Se quieren ingresar ${formatearEuros(e.importeCentimos)} € y el efectivo bajo control son ${formatearEuros(disponible)} € (${formatearEuros(totalCierres)} € de cierres más ${formatearEuros(remanenteAnterior)} € de remanente${repuesto > 0 ? `, menos ${formatearEuros(repuesto)} € devueltos al cajón para reponer su fondo` : ""}).`,
+        `Se quieren ingresar ${formatearEuros(e.importeCentimos)} € y el efectivo bajo control son ${formatearEuros(disponible)} € (${formatearEuros(totalCierres)} € de cierres más ${formatearEuros(remanenteAnterior)} € en monedas pendientes de ingresos anteriores${repuesto > 0 ? `, menos ${formatearEuros(repuesto)} € devueltos al cajón para reponer su fondo` : ""}).`,
         400
       );
     }

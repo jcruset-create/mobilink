@@ -4,14 +4,22 @@
  * Cada cierre de jornada aparta un importe "para el banco", pero al banco no
  * se va cada día: se acumulan cierres y luego un solo ingreso los agrupa. El
  * banco solo admite billetes, así que antes de ir se convierten las monedas
- * que se pueda y lo que no, se queda en tienda como remanente, que arrastra
- * al ingreso siguiente.
+ * que se pueda, y las que no, **siguen pendientes de ingresar**: entran en el
+ * ingreso siguiente o en el próximo canje. Y cuánto se ingresa lo decide quien
+ * va al banco: si prefiere dejar también billetes para otro día, se quedan
+ * igual de pendientes.
+ *
+ * Antes esas monedas se llamaban «remanente en tienda» y salían en un total
+ * aparte. Era el mismo dinero con otro nombre, y dos totales que había que
+ * sumar de cabeza. Ahora son parte de lo pendiente, con su línea en la lista.
+ * Por debajo la cuenta de cada ingreso no cambia: la tabla la sigue guardando
+ * en `remanente_nuevo_centimos`.
  *
  * La pantalla gira alrededor de una sola frase, que es como piensa quien la
- * usa: "Tenemos X, vamos a ingresar Y, quedan en tienda Z". El importe que se
- * ingresa lo decide el usuario —el sistema no puede saber cuántas monedas se
- * consiguieron convertir de verdad—, y el remanente se calcula solo y nunca
- * puede ser negativo.
+ * usa: "Tenemos X, vamos a ingresar Y en billetes, quedan pendientes Z en
+ * monedas". El importe que se ingresa lo decide el usuario —el sistema no
+ * puede saber cuántas monedas se consiguieron convertir de verdad—, y lo que
+ * queda pendiente se calcula solo y nunca puede ser negativo.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -117,12 +125,16 @@ export default function IngresosBancarios() {
 
   const seleccionados = panel.pendientes.filter((c) => seleccion.has(c.sessionId));
   const masAntiguo = panel.pendientes[0] ?? null;
+  /** Todo lo que falta por llevar al banco: cierres, menos lo repuesto, más las monedas de antes. */
+  const pendienteTotal = panel.totalPendienteCentimos + panel.remanenteCentimos;
+  /** De qué ingreso vienen las monedas que siguen pendientes: el último confirmado. */
+  const ingresoDeLasMonedas = panel.ingresos.find((i) => i.estado === "CONFIRMADO") ?? null;
 
   return (
     <div className="space-y-3">
       <Cabecera
         titulo="Ingresos bancarios"
-        descripcion="Los cierres se acumulan hasta que se llevan al banco. El banco solo admite billetes: las monedas que no se convierten quedan en tienda como remanente."
+        descripcion="Los cierres se acumulan hasta que se llevan al banco. El banco solo admite billetes: las monedas que no se cambian por billetes siguen pendientes de ingresar."
       />
 
       {error && <ErrorBox>{error}</ErrorBox>}
@@ -132,8 +144,13 @@ export default function IngresosBancarios() {
           <div className="flex flex-wrap items-center gap-2">
             <span>
               Ingreso <strong>{ultimoCreado.numero}</strong> registrado:{" "}
-              <strong>{euros(ultimoCreado.importeCentimos)}</strong> al banco y{" "}
-              <strong>{euros(ultimoCreado.remanenteNuevoCentimos)}</strong> de remanente en tienda.
+              <strong>{euros(ultimoCreado.importeCentimos)}</strong> al banco
+              {ultimoCreado.remanenteNuevoCentimos > 0 && (
+                <>
+                  {" "}y <strong>{euros(ultimoCreado.remanenteNuevoCentimos)}</strong> siguen pendientes de ingresar
+                </>
+              )}
+              .
             </span>
             {/* El resguardo se imprime AHORA, que es cuando se mete el dinero
                 en la bolsa y se le da a quien lo lleva. */}
@@ -150,26 +167,20 @@ export default function IngresosBancarios() {
 
       {/* ── Resumen ── */}
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        {/*
+          Un solo total: lo que falta por llevar al banco, monedas incluidas.
+          Antes eran tres —pendiente, remanente y «bajo control»— y había que
+          sumar de cabeza para saber lo que de verdad faltaba.
+        */}
         <Card
           title="Pendiente de ingresar"
-          value={euros(panel.totalPendienteCentimos)}
+          value={euros(pendienteTotal)}
           hint={
             `${panel.pendientes.length} ${panel.pendientes.length === 1 ? "cierre" : "cierres"} sin conciliar` +
+            (panel.remanenteCentimos > 0 ? ` + ${euros(panel.remanenteCentimos)} que no se ingresaron la última vez` : "") +
             (panel.reposiciones.length > 0 ? ", menos lo repuesto al cajón" : "")
           }
           accent="text-sky-300"
-        />
-        <Card
-          title="Remanente en tienda"
-          value={euros(panel.remanenteCentimos)}
-          hint="monedas del último ingreso"
-          accent="text-amber-300"
-        />
-        <Card
-          title="Bajo control"
-          value={euros(panel.totalPendienteCentimos + panel.remanenteCentimos)}
-          hint="cierres + remanente"
-          accent="text-emerald-400"
         />
         <Card
           title="Más antiguo"
@@ -222,7 +233,7 @@ export default function IngresosBancarios() {
             </tr>
           </thead>
           <tbody>
-            {panel.pendientes.length === 0 && panel.reposiciones.length === 0 && (
+            {panel.pendientes.length === 0 && panel.reposiciones.length === 0 && panel.remanenteCentimos === 0 && (
               <EmptyRow cols={gestiona ? 5 : 4} text="No hay ningún cierre pendiente: todo está en el banco." />
             )}
             {panel.pendientes.map((c) => (
@@ -241,6 +252,13 @@ export default function IngresosBancarios() {
                 }
               />
             ))}
+            {panel.remanenteCentimos > 0 && (
+              <FilaMonedasPendientes
+                importe={panel.remanenteCentimos}
+                ingreso={ingresoDeLasMonedas}
+                seleccionable={gestiona}
+              />
+            )}
             {panel.reposiciones.map((r) => (
               <FilaReposicion key={`rep-${r.id}`} reposicion={r} seleccionable={gestiona} />
             ))}
@@ -317,6 +335,40 @@ function FilaPendiente({
       <td className={tdCls}>
         <BadgeDias dias={cierre.dias} />
       </td>
+    </tr>
+  );
+}
+
+/**
+ * Lo que no fue al banco en el último ingreso —las monedas, y los billetes que
+ * se decidiera dejar—: sigue pendiente.
+ *
+ * No se marca: entra SIEMPRE en el ingreso siguiente, junto a los cierres que
+ * se elijan (y ahí se decide otra vez cuánto se lleva), o las monedas se
+ * cambian antes por billetes con el canje. Aparece en la
+ * lista para que la columna de importes sume lo que de verdad falta por
+ * llevar al banco.
+ */
+function FilaMonedasPendientes({
+  importe,
+  ingreso,
+  seleccionable,
+}: {
+  importe: number;
+  ingreso: IngresoBancario | null;
+  seleccionable: boolean;
+}) {
+  return (
+    <tr className="bg-sky-500/5">
+      {seleccionable && <td className={tdCls}></td>}
+      <td className={`${tdCls} font-medium text-slate-100`}>
+        {ingreso?.fechaIngreso ? fechaCorta(ingreso.fechaIngreso) : "—"}
+      </td>
+      <td className={`${tdCls} text-sky-200`}>
+        Sin ingresar del {ingreso?.numero ?? "ingreso anterior"}
+      </td>
+      <td className={`${tdCls} text-right font-bold tabular-nums`}>{euros(importe)}</td>
+      <td className={`${tdCls} text-[11px] text-slate-400`}>van en el próximo ingreso</td>
     </tr>
   );
 }
@@ -441,12 +493,14 @@ function PrepararIngreso({
 
   const resumen = useMemo(
     () => [
-      { texto: "Remanente anterior", valor: remanenteAnterior },
+      ...(remanenteAnterior > 0
+        ? [{ texto: "Sin ingresar la última vez", valor: remanenteAnterior }]
+        : []),
       { texto: `Cierres seleccionados (${seleccionados.length})`, valor: totalCierres },
       ...(repuesto > 0
         ? [{ texto: "Repuesto al cajón", valor: -repuesto }]
         : []),
-      { texto: "Efectivo bajo control", valor: disponible, destacado: true },
+      { texto: "Pendiente de ingresar", valor: disponible, destacado: true },
     ],
     [remanenteAnterior, seleccionados.length, totalCierres, repuesto, disponible]
   );
@@ -476,6 +530,9 @@ function PrepararIngreso({
             <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
               Se ingresa en billetes
             </span>
+            <span className="mb-1 block text-[11px] text-slate-500">
+              Se propone todo lo que hay en billetes. Pon menos si quieres dejar más pendiente para otro día.
+            </span>
             <input
               value={importeTexto}
               onChange={(e) => setImporteTexto(e.target.value)}
@@ -486,7 +543,7 @@ function PrepararIngreso({
 
           <div className="mt-2 flex items-baseline justify-between gap-2 border-t border-slate-700 pt-2">
             <span className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
-              Quedan en tienda (monedas)
+              Siguen pendientes de ingresar
             </span>
             <span
               className={`text-2xl font-black tabular-nums ${remanenteNuevo < 0 ? "text-red-300" : "text-amber-300"}`}
@@ -541,12 +598,14 @@ function PrepararIngreso({
         >
           {ocupado
             ? "Registrando…"
-            : `Confirmar: ${euros(importe)} al banco, ${euros(Math.max(0, remanenteNuevo))} quedan en tienda`}
+            : remanenteNuevo > 0
+              ? `Confirmar: ${euros(importe)} al banco, ${euros(remanenteNuevo)} siguen pendientes`
+              : `Confirmar: ${euros(importe)} al banco`}
         </BotonAccion>
         <p className="mt-2 max-w-xl text-[11px] text-slate-500">
-          Tenemos {euros(disponible)}, ingresamos {euros(importe)} y quedan {euros(Math.max(0, remanenteNuevo))} en
-          monedas. Los {seleccionados.length === 1 ? "cierre seleccionado deja" : "cierres seleccionados dejan"} de
-          estar pendientes y el próximo ingreso arrancará del nuevo remanente.
+          Tenemos {euros(disponible)} pendientes, ingresamos {euros(importe)} en billetes
+          {remanenteNuevo > 0 && <> y {euros(remanenteNuevo)} siguen pendientes de ingresar: van en el próximo ingreso, y las monedas se pueden cambiar antes por billetes con el canje</>}.
+          {" "}Los {seleccionados.length === 1 ? "cierre seleccionado deja" : "cierres seleccionados dejan"} de estar pendientes.
         </p>
       </div>
     </div>
@@ -585,7 +644,7 @@ function Historial({
             <th className={thCls}>Fecha ingreso</th>
             <th className={`${thCls} text-right`}>Cierres</th>
             <th className={`${thCls} text-right`}>Ingresado</th>
-            <th className={`${thCls} text-right`}>Remanente</th>
+            <th className={`${thCls} text-right`}>Quedó pendiente</th>
             <th className={thCls}>Estado</th>
             <th className={thCls}></th>
           </tr>
@@ -673,10 +732,10 @@ function Historial({
                       </div>
                       <div className="text-sm">
                         {/* La ecuación completa, para que el ingreso se explique solo. */}
-                        <div className="flex justify-between gap-2"><span className="text-slate-400">Remanente anterior</span><span className="tabular-nums">{euros(i.remanenteAnteriorCentimos)}</span></div>
+                        <div className="flex justify-between gap-2"><span className="text-slate-400">Pendiente de antes</span><span className="tabular-nums">{euros(i.remanenteAnteriorCentimos)}</span></div>
                         <div className="flex justify-between gap-2"><span className="text-slate-400">+ Total cierres</span><span className="tabular-nums">{euros(i.totalCierresCentimos)}</span></div>
                         <div className="flex justify-between gap-2"><span className="text-slate-400">− Ingresado</span><span className="tabular-nums">{euros(i.importeCentimos)}</span></div>
-                        <div className="mt-1 flex justify-between gap-2 border-t border-slate-700 pt-1 font-bold"><span>= Remanente nuevo</span><span className="tabular-nums text-amber-300">{euros(i.remanenteNuevoCentimos)}</span></div>
+                        <div className="mt-1 flex justify-between gap-2 border-t border-slate-700 pt-1 font-bold"><span>= Quedó pendiente</span><span className="tabular-nums text-amber-300">{euros(i.remanenteNuevoCentimos)}</span></div>
                         {i.banco && (
                           <div className="mt-2 text-[12px] text-slate-300">
                             {i.banco} · <span className="font-mono">···{(i.iban ?? "").slice(-4)}</span>
@@ -727,7 +786,7 @@ function Historial({
                         )}
                         {gestiona && i.estado === "CONFIRMADO" && !i.esUltimo && (
                           <p className="mt-3 text-[11px] text-slate-500">
-                            Solo se puede anular el último ingreso: los siguientes arrancaron de su remanente.
+                            Solo se puede anular el último ingreso: los siguientes arrancaron de lo que éste dejó pendiente.
                           </p>
                         )}
                       </div>
@@ -740,8 +799,8 @@ function Historial({
         </tbody>
       </TableWrap>
       <p className="text-[11px] text-slate-500">
-        Cada ingreso guarda la cuenta completa: remanente anterior + cierres − ingresado = remanente nuevo. Anular no
-        borra nada: devuelve los cierres a pendientes, restaura el remanente anterior y deja quién, cuándo y por qué.
+        Cada ingreso guarda la cuenta completa: pendiente de antes + cierres − ingresado = queda pendiente. Anular no
+        borra nada: devuelve los cierres a pendientes, restaura lo que quedaba pendiente antes y deja quién, cuándo y por qué.
       </p>
     </section>
   );
