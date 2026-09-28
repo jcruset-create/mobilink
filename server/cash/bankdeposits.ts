@@ -1119,7 +1119,7 @@ export async function composicionDeIngreso(
 
 export type PropuestaCanje = {
   /** Desglose del montón tal y como está ahora. */
-  pendiente: { billetes: LineaDenominacion[]; monedas: LineaDenominacion[] };
+  pendiente: Awaited<ReturnType<typeof composicionPendiente>>;
   /** Lo que se puede ingresar hoy: solo los billetes. */
   ingresableCentimos: Centimos;
   /** Lo que se quedaría en tienda si no se canjea nada. */
