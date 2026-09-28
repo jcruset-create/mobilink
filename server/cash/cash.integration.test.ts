@@ -1194,6 +1194,17 @@ describe.runIf(RUN)("ingresos bancarios", () => {
     expect(await ingresos.remanenteActual(db, caja)).toBe(25);
   });
 
+  it("la bolsa enseña lo que quedó sin ingresar la última vez", async () => {
+    // Lo quedado sin ingresar está en la bolsa: sin esto, sus monedas no salían.
+    const caja = await crearCaja("ingresos-remanente-bolsa");
+    const s1 = await cerrarJornadaCon(caja, 435045);
+    await ingresos.crearIngreso(ctx, { registerId: caja, sessionIds: [s1], importeCentimos: 435000 });
+    const s2 = await cerrarJornadaCon(caja, 72580);
+    const p = await ingresos.proponerCanje(EMPRESA, caja, [s2]);
+    expect(p.remanenteCentimos).toBe(45);
+    expect(p.pendiente.faltan).toEqual([]);
+  });
+
   it("no se puede ingresar más de lo que hay bajo control", async () => {
     const caja = await crearCaja("ingresos-exceso");
     const s1 = await cerrarJornadaCon(caja, 10000);
@@ -6506,6 +6517,26 @@ describe.runIf(RUN)("reposición del fondo desde el dinero pendiente de ingresar
     const manana = (await servicio.abrirJornada(ctx, { registerId: caja })).sesion;
     expect(manana.fondoInicialCentimos).toBe(35000);
     expect((await servicio.resumenJornada(manana.id)).fondoRepuestoCentimos).toBe(0);
+  });
+
+  it("una pieza sacada de la bolsa que según los cierres no estaba se dice, no se tira", async () => {
+    /*
+     * Tarragona, 28/09: el desglose sumaba 10 € más que lo pendiente, porque
+     * una pieza en negativo se descartaba en silencio. Aquí se fabrica ese
+     * estado quitando por SQL un billete del ingreso del cierre, después de
+     * que la reposición ya se lo llevara.
+     */
+    const { caja, sessionIds } = await escenario();
+    const p = await ingresos.proponerReposicion(EMPRESA, caja, sessionIds);
+    await ingresos.registrarReposicion(ctx, { registerId: caja, sessionIds, sacar: p.reposicion!.sacar, devolver: p.reposicion!.devolver });
+    await db.query(
+      `UPDATE cash_denomination_movements SET cantidad = cantidad - 1
+        WHERE session_id = $1 AND motivo = 'BANK_DEPOSIT' AND valor_unitario_centimos = 5000`,
+      [sessionIds[0]]
+    );
+    const bolsa = await ingresos.composicionPendiente(EMPRESA, caja, sessionIds);
+    expect(bolsa.faltan).toEqual([{ valor: 5000, cantidad: 1 }]);
+    expect(bolsa.billetes.find((l) => l.valor === 5000)).toBeUndefined();
   });
 
   it("lo repuesto ya no se puede ingresar en el banco", async () => {

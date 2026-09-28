@@ -524,7 +524,7 @@ function PrepararIngreso({
             ))}
           </div>
 
-          {propuesta && <DesgloseDeLaBolsa propuesta={propuesta} />}
+          {propuesta && <DesgloseDeLaBolsa propuesta={propuesta} pendienteCentimos={disponible} />}
 
           <label className="mt-3 block">
             <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
@@ -1204,8 +1204,24 @@ function ReponerFondo({
  * es lo que hay en la bolsa»: se ven los billetes y las monedas por separado,
  * porque al banco solo van los billetes.
  */
-function DesgloseDeLaBolsa({ propuesta }: { propuesta: PropuestaCanjeIngreso }) {
+function DesgloseDeLaBolsa({
+  propuesta,
+  pendienteCentimos,
+}: {
+  propuesta: PropuestaCanjeIngreso;
+  /** Lo pendiente de ingresar según la cuenta: la bolsa tiene que sumar esto. */
+  pendienteCentimos: number;
+}) {
   const { canje } = propuesta;
+  /*
+   * Lo que quedó sin ingresar la última vez también está en la bolsa. El
+   * ingreso guardó el importe, no las piezas, así que va en su propia fila;
+   * antes no salía y las monedas de la bolsa no sumaban lo que había.
+   */
+  const remanente = propuesta.remanenteCentimos ?? 0;
+  const faltan = propuesta.pendiente.faltan ?? [];
+  const valorFaltan = faltan.reduce((a, l) => a + l.valor * l.cantidad, 0);
+  const totalBolsa = propuesta.ingresableCentimos + propuesta.enMonedasCentimos + remanente;
 
   return (
     <div className="mt-3 space-y-2 rounded-lg border border-slate-700 bg-slate-900/40 p-3">
@@ -1222,9 +1238,41 @@ function DesgloseDeLaBolsa({ propuesta }: { propuesta: PropuestaCanjeIngreso }) 
       <TablaPiezas
         titulo="En monedas · no las admite el banco"
         lineas={propuesta.pendiente.monedas}
-        total={propuesta.enMonedasCentimos}
+        total={propuesta.enMonedasCentimos + remanente}
         tono="text-amber-300"
+        extra={
+          remanente > 0
+            ? { texto: "Sin ingresar de ingresos anteriores (sin desglose)", valor: remanente }
+            : undefined
+        }
       />
+
+      {/*
+        La bolsa tiene que sumar lo pendiente. Cuando no, casi siempre es que
+        una reposición o un canje sacó una pieza que según los cierres no
+        estaba, y el desglose enseña de más justo ese valor. Se dice con las
+        piezas en vez de pintar una bolsa que no existe: lo contado manda.
+      */}
+      {totalBolsa !== pendienteCentimos && (
+        <Aviso tono="aviso">
+          El desglose suma <strong>{euros(totalBolsa)}</strong> y lo pendiente de ingresar son{" "}
+          <strong>{euros(pendienteCentimos)}</strong>
+          {valorFaltan > 0 && (
+            <>
+              : se sacaron de la bolsa{" "}
+              {faltan.map((l, i) => (
+                <span key={l.valor}>
+                  {i > 0 && ", "}
+                  {l.cantidad} × {euros(l.valor)}
+                </span>
+              ))}{" "}
+              que, según los cierres, no estaban
+            </>
+          )}
+          . Cuenta la bolsa y fíate de lo contado: en «Se ingresa en billetes» pon los billetes
+          que tengas de verdad, y lo demás sigue pendiente de ingresar.
+        </Aviso>
+      )}
 
       {/*
         Aquí ya NO se canjea: el botón vive arriba, en su propio panel. Esto es
@@ -1266,14 +1314,17 @@ function TablaPiezas({
   lineas,
   total,
   tono,
+  extra,
 }: {
   titulo: string;
   lineas: readonly LineaDenominacion[];
   total: number;
   tono: string;
+  /** Una fila sin pieza concreta, como lo que quedó de ingresos anteriores. */
+  extra?: { texto: string; valor: number };
 }) {
   const { denominaciones } = useCash();
-  if (lineas.length === 0) return null;
+  if (lineas.length === 0 && !extra) return null;
 
   const imagenDe = (valor: number) =>
     denominaciones.find((d) => d.valor === valor)?.imagenUrl ?? null;
@@ -1309,6 +1360,15 @@ function TablaPiezas({
               </tr>
             );
           })}
+          {extra && (
+            <tr className="border-t border-slate-800">
+              <td className="w-12 px-2 py-1" />
+              <td colSpan={2} className="px-1 py-1 text-slate-300">
+                {extra.texto}
+              </td>
+              <td className="px-2 py-1 text-right tabular-nums text-slate-400">{euros(extra.valor)}</td>
+            </tr>
+          )}
         </tbody>
       </table>
     </div>

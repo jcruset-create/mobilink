@@ -471,11 +471,18 @@ export type CanjeIngreso = {
 };
 
 export type PropuestaCanjeIngreso = {
-  pendiente: { billetes: LineaDenominacion[]; monedas: LineaDenominacion[] };
+  pendiente: {
+    billetes: LineaDenominacion[];
+    monedas: LineaDenominacion[];
+    /** Piezas que se sacaron de la bolsa y que, según los cierres, no estaban. */
+    faltan?: LineaDenominacion[];
+  };
   /** Lo que se puede ingresar hoy: solo los billetes del montón. */
   ingresableCentimos: number;
   /** Lo que se quedaría en tienda si no se canjea nada. */
   enMonedasCentimos: number;
+  /** Lo que quedó sin ingresar en ingresos anteriores: está en la bolsa, sin desglose. */
+  remanenteCentimos?: number;
   canje: CanjeIngreso | null;
   sinJornadaAbierta: boolean;
 };

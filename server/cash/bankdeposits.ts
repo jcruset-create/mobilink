@@ -950,7 +950,17 @@ export async function composicionPendiente(
    * registra, sus canjes dejan de estar pendientes y el montón ya no los ve.
    */
   canjesDe: number | null = null
-): Promise<{ billetes: LineaDenominacion[]; monedas: LineaDenominacion[] }> {
+): Promise<{
+  billetes: LineaDenominacion[];
+  monedas: LineaDenominacion[];
+  /**
+   * Piezas que las reposiciones o los canjes sacaron de la bolsa y que, según
+   * los cierres, no estaban. No deberían existir; cuando existen, el desglose
+   * enseña de más justo su valor, y se devuelven para decirlo en vez de
+   * tirarlas en silencio.
+   */
+  faltan: LineaDenominacion[];
+}> {
   const piezas = new Map<Centimos, number>();
   const acumular = (valor: Centimos, cantidad: number) => {
     const n = (piezas.get(valor) ?? 0) + cantidad;
@@ -1039,12 +1049,18 @@ export async function composicionPendiente(
 
   const billetes: LineaDenominacion[] = [];
   const monedas: LineaDenominacion[] = [];
+  const faltan: LineaDenominacion[] = [];
   for (const [valor, cantidad] of piezas) {
+    if (cantidad < 0) faltan.push({ valor, cantidad: -cantidad });
     if (cantidad <= 0) continue;
     (esBillete.get(valor) ? billetes : monedas).push({ valor, cantidad });
   }
   const porValor = (a: LineaDenominacion, b: LineaDenominacion) => b.valor - a.valor;
-  return { billetes: billetes.sort(porValor), monedas: monedas.sort(porValor) };
+  return {
+    billetes: billetes.sort(porValor),
+    monedas: monedas.sort(porValor),
+    faltan: faltan.sort(porValor),
+  };
 }
 
 /**
@@ -1103,11 +1119,16 @@ export async function composicionDeIngreso(
 
 export type PropuestaCanje = {
   /** Desglose del montón tal y como está ahora. */
-  pendiente: { billetes: LineaDenominacion[]; monedas: LineaDenominacion[] };
+  pendiente: Awaited<ReturnType<typeof composicionPendiente>>;
   /** Lo que se puede ingresar hoy: solo los billetes. */
   ingresableCentimos: Centimos;
   /** Lo que se quedaría en tienda si no se canjea nada. */
   enMonedasCentimos: Centimos;
+  /**
+   * Lo que quedó sin ingresar en ingresos anteriores. Está en la bolsa, pero
+   * sin desglose: el ingreso guarda el importe y no las piezas.
+   */
+  remanenteCentimos: Centimos;
   /** El canje propuesto, o null si la caja no tiene con qué. */
   canje: Canje | null;
   /** Falta una jornada abierta donde asentar el canje. */
@@ -1126,8 +1147,11 @@ export async function proponerCanje(
   registerId: number,
   sessionIds: readonly number[]
 ): Promise<PropuestaCanje> {
-  const pendiente = await composicionPendiente(empresaId, registerId, sessionIds);
-  const abierta = await sesionAbierta(registerId);
+  const [pendiente, abierta, remanente] = await Promise.all([
+    composicionPendiente(empresaId, registerId, sessionIds),
+    sesionAbierta(registerId),
+    remanenteActual(pool, registerId),
+  ]);
 
   const billetesCaja = new Map<Centimos, number>();
   if (abierta) {
@@ -1144,6 +1168,7 @@ export async function proponerCanje(
     pendiente,
     ingresableCentimos: pendiente.billetes.reduce((a, l) => a + l.valor * l.cantidad, 0),
     enMonedasCentimos: pendiente.monedas.reduce((a, l) => a + l.valor * l.cantidad, 0),
+    remanenteCentimos: remanente,
     canje: abierta
       ? mejorCanje(
           inventarioDesdeLineas(pendiente.monedas),
