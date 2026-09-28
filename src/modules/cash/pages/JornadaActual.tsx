@@ -13,7 +13,7 @@ import { useCash } from "../contexts/CashContext";
 import DenominationGrid, { type CantidadesPorValor, lineasDesde } from "../components/DenominationGrid";
 import { Aviso, BotonAccion, Cabecera, Card, ErrorBox, Modal, btnDanger, btnSecondary, inputCls } from "../components/ui";
 import { euros, totalLineas } from "../utils/money";
-import { ETIQUETA_ESTADO_SESION, ETIQUETA_FORMA_PAGO } from "../types";
+import { ETIQUETA_ESTADO_SESION, ETIQUETA_FORMA_PAGO, ETIQUETA_TIPO_OPERACION } from "../types";
 import type { FormaPagoConfig, Operacion, SeccionConfig } from "../types";
 import Justificantes from "../components/Justificantes";
 import { AvisoPendientes } from "./CambioBanco";
@@ -47,10 +47,13 @@ export default function JornadaActual() {
    * La jornada está «vacía» si no tiene nada más que su fondo de apertura:
    * es el único caso en que anularla es deshacer un despiste y no borrar
    * trabajo. El servidor lo vuelve a comprobar; esto solo decide si el enlace
-   * merece estar a la vista.
+   * merece estar a la vista. La lista de lo que estorba la da el servidor con
+   * su misma regla: contar operaciones escondía el enlace en una jornada con
+   * dos aperturas (fondo traído), que sí se puede anular.
    */
+  const bloquean = jornada.bloqueanAnulacion ?? [];
   const vacia =
-    jornada.operaciones <= 1 &&
+    bloquean.length === 0 &&
     jornada.cobros.totalCentimos === 0 &&
     (jornada.abonos?.totalCentimos ?? 0) === 0 &&
     jornada.pagos.totalCentimos === 0;
@@ -120,6 +123,26 @@ export default function JornadaActual() {
         */}
         {vacia && puede("cash.operation.reverse") && <AnularJornada sessionId={s.id} />}
       </div>
+
+      {/*
+        Una jornada REABIERTA sin cobros ni pagos suele reabrirse para anularla
+        (arreglar la herencia del cambio). Si algo lo impide, se dice qué: sin
+        esto el enlace simplemente no salía y no había forma de saber por qué.
+      */}
+      {s.estado === "REOPENED" && !vacia && bloquean.length > 0 && puede("cash.operation.reverse") && (
+        <Aviso tono="info">
+          Para poder anular esta jornada, anula antes{" "}
+          {bloquean.length === 1 ? "esta operación" : "estas operaciones"} (Histórico → esta jornada → Anular):{" "}
+          {bloquean.map((o, i) => (
+            <span key={o.id}>
+              {i > 0 && ", "}
+              <strong>{o.numero}</strong> ({ETIQUETA_TIPO_OPERACION[o.tipo] ?? o.tipo}
+              {o.concepto ? ` · ${o.concepto}` : ""})
+            </span>
+          ))}
+          .
+        </Aviso>
+      )}
 
       {/*
         La jornada amaneció sin fondo pero hay un cierre anterior que dejó

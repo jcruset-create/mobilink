@@ -177,6 +177,8 @@ export type ResumenJornada = {
   pendientesErp: number;
   /** Lo repuesto hoy al cajón desde lo pendiente de ingresar. El cierre lo deja como cambio. */
   fondoRepuestoCentimos?: number;
+  /** Lo que hay que anular antes de poder anular la jornada (sin el fondo de apertura). */
+  bloqueanAnulacion?: { id: number; numero: string; tipo: TipoOperacion; concepto: string | null }[];
   /** El arqueo más reciente. El cierre reparte esto, no el teórico. */
   ultimoArqueo: {
     id: number;
