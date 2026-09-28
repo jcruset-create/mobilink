@@ -26,7 +26,7 @@ async function parseOrThrow(response: Response) {
 }
 
 export async function loadCaducidadReminders(): Promise<CaducidadReminder[]> {
-  const response = await fetchWithTimeout(`${API_BASE}/api/recordatorios-caducidad`);
+  const response = await fetchWithTimeout(`${API_BASE}/api/recordatorios-caducidad`, { headers: getAdminHeaders() });
   const data = await parseOrThrow(response);
   return Array.isArray(data) ? data : [];
 }

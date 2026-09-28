@@ -19,7 +19,8 @@ export async function loadAgendaDateRemindersFromBackend(): Promise<
 > {
   try {
     const response = await fetchWithTimeout(
-      `${API_BASE}/api/agenda-date-reminders`
+      `${API_BASE}/api/agenda-date-reminders`,
+      { headers: getAdminHeaders() }
     );
 
     if (!response.ok) {

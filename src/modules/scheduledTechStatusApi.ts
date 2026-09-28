@@ -6,7 +6,8 @@ export async function loadScheduledTechStatusesFromBackend(): Promise<
 > {
   try {
     const response = await fetchWithTimeout(
-      `${API_BASE}/api/scheduled-tech-statuses`
+      `${API_BASE}/api/scheduled-tech-statuses`,
+      { headers: getAdminHeaders() }
     );
 
     if (!response.ok) {

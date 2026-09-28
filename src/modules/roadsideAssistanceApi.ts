@@ -267,7 +267,8 @@ export async function fetchAsistenciasContexto(): Promise<AsistenciasContexto> {
 
 export async function loadRoadsideVehiclesFromBackend(includeInactive = true) {
   const response = await fetchWithTimeout(
-    `${API_BASE}/api/roadside-vehicles?includeInactive=${includeInactive}`
+    `${API_BASE}/api/roadside-vehicles?includeInactive=${includeInactive}`,
+    { headers: getAdminHeaders() }
   );
 
   if (!response.ok) {
@@ -513,7 +514,7 @@ export async function sendRoadsideTrackingWhatsappInBackend(id: number) {
 export async function loadWebfleetVehiclesFromBackend(): Promise<
   { id: string; name: string }[]
 > {
-  const response = await fetchWithTimeout(`${API_BASE}/api/webfleet/vehicles`);
+  const response = await fetchWithTimeout(`${API_BASE}/api/webfleet/vehicles`, { headers: getAdminHeaders() });
   if (!response.ok) return [];
   const data = await response.json();
   if (!Array.isArray(data)) return [];

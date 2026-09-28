@@ -50,7 +50,7 @@ function isMaintenanceTask(
 export async function loadMaintenanceTasksFromBackend(): Promise<
   MaintenanceTask[]
 > {
-  const response = await fetchWithTimeout(`${API_BASE}/api/maintenance-tasks`);
+  const response = await fetchWithTimeout(`${API_BASE}/api/maintenance-tasks`, { headers: getAdminHeaders() });
 
   if (!response.ok) {
     throw new Error(

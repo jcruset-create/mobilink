@@ -748,7 +748,7 @@ useEffect(() => {
   useEffect(() => {
     async function loadRules() {
       try {
-        const response = await fetchWithTimeout(`${API_BASE}/api/rules`);
+        const response = await fetchWithTimeout(`${API_BASE}/api/rules`, { headers: getAdminHeaders() });
         const data = await response.json();
         setRules(
           Array.isArray(data)
@@ -776,7 +776,7 @@ useEffect(() => {
 useEffect(() => {
   async function loadJobs() {
     try {
-      const response = await fetchWithTimeout(`${API_BASE}/api/jobs?scope=live`);
+      const response = await fetchWithTimeout(`${API_BASE}/api/jobs?scope=live`, { headers: getAdminHeaders() });
       const data = await response.json();
       const normalized = Array.isArray(data) ? data.map(normalizeJobFromApi) : [];
       setJobs(normalized);
@@ -920,7 +920,7 @@ useEffect(() => {
   useEffect(() => {
   async function loadLogs() {
     try {
-      const response = await fetchWithTimeout(`${API_BASE}/api/logs`);
+      const response = await fetchWithTimeout(`${API_BASE}/api/logs`, { headers: getAdminHeaders() });
       const data = await response.json();
       setLog(Array.isArray(data) ? data : []);
     } catch (error) {
@@ -3917,7 +3917,7 @@ async function resetAllSystem() {
     setResetPassword("");
     setResetConfirmOpen(false);
 
-    const responseTechs = await fetchWithTimeout(`${API_BASE}/api/techs`);
+    const responseTechs = await fetchWithTimeout(`${API_BASE}/api/techs`, { headers: getAdminHeaders() });
     const techsData = await responseTechs.json();
 
     if (Array.isArray(techsData)) {
