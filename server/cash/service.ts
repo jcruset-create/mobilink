@@ -2331,20 +2331,7 @@ export async function anularJornada(
      * poder anular la jornada. Si bloquearan, la jornada con un cobro anulado
      * no se podría anular nunca.
      */
-    const { rows: ops } = await client.query<{
-      id: number;
-      tipo: string;
-      numero: string;
-      estado: string;
-      reversa_de_id: number | null;
-    }>(
-      `SELECT id, tipo, numero, estado, reversa_de_id FROM cash_operations
-        WHERE session_id = $1 AND estado <> 'CANCELLED'`,
-      [sessionId]
-    );
-    const ajenas = ops.filter(
-      (o) => o.tipo !== "OPENING_FLOAT" && o.estado !== "REVERSED" && o.reversa_de_id == null
-    );
+    const ajenas = await operacionesQueBloqueanAnular(client, sessionId);
     if (ajenas.length > 0) {
       throw new ErrorCaja(
         "JORNADA_CON_OPERACIONES",
@@ -2395,13 +2382,12 @@ export async function anularJornada(
      * efecto. Las parejas ya anuladas (REVERSED + reversión) se quedan como
      * están: son el rastro de lo que pasó, no operaciones vivas.
      */
-    for (const o of ops) {
-      if (o.tipo !== "OPENING_FLOAT" || o.estado === "REVERSED" || o.reversa_de_id != null) continue;
-      await client.query(
-        `UPDATE cash_operations SET estado = 'CANCELLED', updated_at_ms = $2 WHERE id = $1`,
-        [o.id, ahora]
-      );
-    }
+    await client.query(
+      `UPDATE cash_operations SET estado = 'CANCELLED', updated_at_ms = $2
+        WHERE session_id = $1 AND tipo = 'OPENING_FLOAT'
+          AND estado NOT IN ('CANCELLED','REVERSED') AND reversa_de_id IS NULL`,
+      [sessionId, ahora]
+    );
 
     // El motivo queda EN la jornada, no solo en la auditoría: el histórico lo
     // enseña sin tener que ir a buscar quién la anuló a otra tabla.
@@ -2715,6 +2701,15 @@ export type ResumenJornada = {
    */
   fondoRepuestoCentimos: Centimos;
   /**
+   * Las operaciones que impiden anular la jornada, con el MISMO criterio que
+   * `anularJornada`: todas las vivas menos el fondo de apertura y las
+   * reversiones. La pantalla decidía con `operaciones <= 1`, que no es lo
+   * mismo —una jornada a la que se trajo el fondo tiene dos aperturas y se
+   * puede anular; una con un ajuste de arqueo, no— y escondía el enlace sin
+   * decir por qué.
+   */
+  bloqueanAnulacion: { id: number; numero: string; tipo: string; concepto: string | null }[];
+  /**
    * El arqueo más reciente de la jornada, si lo hay.
    *
    * El cierre reparte **lo contado**, no el teórico, así que la pantalla
@@ -2766,6 +2761,31 @@ async function repuestoDeJornada(
     [sessionId]
   );
   return Number(rows[0].total);
+}
+
+/**
+ * Lo que hay que anular antes de poder anular la jornada. Es la regla de
+ * `anularJornada`, y las dos leen de aquí para no volver a separarse.
+ */
+async function operacionesQueBloqueanAnular(
+  client: PoolClient | typeof pool,
+  sessionId: number
+): Promise<{ id: number; numero: string; tipo: string; concepto: string | null }[]> {
+  const { rows } = await client.query<{
+    id: number;
+    numero: string;
+    tipo: string;
+    concepto: string | null;
+  }>(
+    `SELECT id, numero, tipo, concepto FROM cash_operations
+      WHERE session_id = $1
+        AND estado NOT IN ('CANCELLED','REVERSED')
+        AND reversa_de_id IS NULL
+        AND tipo <> 'OPENING_FLOAT'
+      ORDER BY id`,
+    [sessionId]
+  );
+  return rows;
 }
 
 export async function resumenJornada(sessionId: number): Promise<ResumenJornada> {
@@ -2926,6 +2946,7 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
     operaciones: Number(totalOps[0].n),
     pendientesErp: Number(pendientes[0].n),
     fondoRepuestoCentimos: await repuestoDeJornada(pool, sessionId),
+    bloqueanAnulacion: await operacionesQueBloqueanAnular(pool, sessionId),
     ultimoArqueo,
     /* eslint-disable @typescript-eslint/no-explicit-any */
     porSeccion: secciones.map((r: any) => ({

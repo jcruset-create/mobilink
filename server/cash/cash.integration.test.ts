@@ -2419,6 +2419,37 @@ describe.runIf(RUN)("jornadas fechadas en días pasados", () => {
     expect(texto).toContain("CAMBIO FINAL QUE SE QUEDA EN CAJA\n\nDENOMINACIÓN\nUNIDADES\nCARTUCHOS\nBOLSAS\nIMPORTE\n50 €\n2\n100,00 €");
   });
 
+  it("la pantalla sabe qué impide anular: el fondo de apertura no, un ajuste de arqueo sí", async () => {
+    /*
+     * La pantalla escondía «Anular jornada» con `operaciones <= 1` sin decir
+     * por qué. Ahora recibe la lista con la regla del servidor.
+     */
+    const caja = await crearCaja("reabierta-con-ajuste");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fecha: haceDias(3), fondoManual: FONDO_300 });
+    expect((await servicio.resumenJornada(sesion.id)).bloqueanAnulacion).toEqual([]);
+
+    // Se cuenta una pieza menos y se acepta el descuadre: queda un ajuste vivo.
+    const t = await servicio.stockDeJornada(sesion.id);
+    const contado = t.lineas.map((l, i) => (i === 0 ? { ...l, cantidad: l.cantidad - 1 } : l));
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado });
+    await servicio.regularizarArqueo(ctx, { sessionId: sesion.id, motivo: "faltaba una pieza" });
+    await servicio.cerrarJornada(ctx, { sessionId: sesion.id, cambioFinal: contado });
+    await servicio.reabrirJornada(ctx, sesion.id, "anularla");
+
+    const bloquean = (await servicio.resumenJornada(sesion.id)).bloqueanAnulacion;
+    expect(bloquean).toHaveLength(1);
+    expect(bloquean[0]).toMatchObject({ tipo: "ADJUSTMENT", concepto: expect.stringContaining("Regularización de arqueo") });
+    await expect(servicio.anularJornada(ctx, sesion.id, "sobra")).rejects.toMatchObject({
+      codigo: "JORNADA_CON_OPERACIONES",
+    });
+
+    // Anulado el ajuste, ya no queda nada y la jornada se anula.
+    await servicio.anularOperacion(ctx, bloquean[0].id, "deshacer el ajuste");
+    expect((await servicio.resumenJornada(sesion.id)).bloqueanAnulacion).toEqual([]);
+    const anulada = await servicio.anularJornada(ctx, sesion.id, "sobra");
+    expect(anulada.estado).toBe("CANCELLED");
+  });
+
   it("una jornada reabierta con cobros sigue sin poder anularse, tenga o no arqueo", async () => {
     const caja = await crearCaja("reabierta-con-cobros");
     const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fecha: haceDias(3), fondoManual: FONDO_300 });
