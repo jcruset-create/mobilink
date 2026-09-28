@@ -175,6 +175,8 @@ export type ResumenJornada = {
   entregasCentimos: number;
   operaciones: number;
   pendientesErp: number;
+  /** Lo repuesto hoy al cajón desde lo pendiente de ingresar. El cierre lo deja como cambio. */
+  fondoRepuestoCentimos?: number;
   /** El arqueo más reciente. El cierre reparte esto, no el teórico. */
   ultimoArqueo: {
     id: number;

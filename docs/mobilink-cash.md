@@ -509,6 +509,14 @@ el día empezó sin cambio, se usa el **fondo fijo de la caja**
 Dejar la caja a 0 € cuando el día empezó con cambio pide confirmación
 (`CIERRE_DEJA_CAJA_VACIA`).
 
+**Lo repuesto ese día cuenta como cambio.** La reposición del fondo es siempre
+manual: en *Ingresos bancarios*, alguien autoriza la propuesta de «Reponer» y
+el dinero pasa de pendiente de ingresar al cajón. El cierre nunca repone nada
+por su cuenta. Lo que hace es dejar como cambio el del inicio del día **más** lo
+repuesto en esa jornada (`fondoRepuestoCentimos` del resumen). Sin sumarlo,
+el cierre devolvía lo repuesto a pendiente de ingresar y la caja no llegaba
+nunca a su fondo fijo.
+
 **Reabrir un día pasado y cambiar su cambio final.** Si una jornada posterior
 ya heredó ese cambio, recerrar con otro importe se para
 (`CAMBIO_YA_HEREDADO`), porque dejaría a la otra con un fondo que no existe.

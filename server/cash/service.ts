@@ -1453,9 +1453,9 @@ export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<Re
      * explícita en vez de prohibirlo, porque vaciar la caja de verdad existe
      * (vacaciones, traslado).
      *
-     * Lo que se compara es el cambio con el que EMPEZÓ el día: es lo que el
-     * cierre deja por norma. Si el día empezó sin cambio, el fondo fijo de la
-     * caja, si lo tiene.
+     * Lo que se compara es el cambio con el que EMPEZÓ el día más lo repuesto
+     * hoy: es lo que el cierre deja por norma. Si el día empezó sin cambio y
+     * sin reposiciones, el fondo fijo de la caja, si lo tiene.
      */
     if (reparto.totalCambio === 0 && reparto.totalIngreso > 0 && !e.permitirCajaVacia) {
       const { rows: cajaCierre } = await client.query<{ fondo_objetivo_centimos: string }>(
@@ -1463,11 +1463,13 @@ export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<Re
         [sesion.registerId]
       );
       const fondoFijo = Number(cajaCierre[0]?.fondo_objetivo_centimos ?? 0);
-      const objetivo = sesion.fondoInicialCentimos > 0 ? sesion.fondoInicialCentimos : fondoFijo;
+      const cambioDelDia =
+        sesion.fondoInicialCentimos + (await repuestoDeJornada(client, e.sessionId));
+      const objetivo = cambioDelDia > 0 ? cambioDelDia : fondoFijo;
       if (objetivo > 0) {
         throw new ErrorCaja(
           "CIERRE_DEJA_CAJA_VACIA",
-          sesion.fondoInicialCentimos > 0
+          cambioDelDia > 0
             ? `Este cierre manda todo al banco y deja la caja a 0,00 €, pero el día empezó con ${formatearEuros(objetivo)} € de cambio. ¿Seguro que no era cambio? Si de verdad quieres vaciarla, confírmalo.`
             : `Este cierre manda todo al banco y deja la caja a 0,00 €, pero la caja tiene un fondo fijo de ${formatearEuros(objetivo)} €. ¿Seguro que no era cambio? Si de verdad quieres vaciarla, confírmalo.`,
           409,
@@ -2704,6 +2706,15 @@ export type ResumenJornada = {
   operaciones: number;
   pendientesErp: number;
   /**
+   * Lo repuesto hoy al cajón desde el dinero pendiente de ingresar.
+   *
+   * Es parte del cambio: el cierre deja el cambio con el que EMPEZÓ el día MÁS
+   * esto. Sin sumarlo, reponer el fondo por la mañana no servía de nada: el
+   * cierre de la tarde devolvía lo repuesto a pendiente de ingresar y la caja
+   * volvía a abrir corta al día siguiente.
+   */
+  fondoRepuestoCentimos: Centimos;
+  /**
    * El arqueo más reciente de la jornada, si lo hay.
    *
    * El cierre reparte **lo contado**, no el teórico, así que la pantalla
@@ -2737,6 +2748,25 @@ export type ResumenJornada = {
     operaciones: number;
   }[];
 };
+
+/**
+ * Lo repuesto al cajón en una jornada desde el montón pendiente de ingresar.
+ *
+ * Solo las reposiciones vivas: una anulada ya devolvió su dinero al montón.
+ */
+async function repuestoDeJornada(
+  client: PoolClient | typeof pool,
+  sessionId: number
+): Promise<Centimos> {
+  const { rows } = await client.query<{ total: string }>(
+    `SELECT COALESCE(SUM(t.importe_centimos),0)::bigint AS total
+       FROM cash_float_topups t
+       JOIN cash_operations o ON o.id = t.operation_id
+      WHERE o.session_id = $1 AND o.estado = 'CONFIRMED'`,
+    [sessionId]
+  );
+  return Number(rows[0].total);
+}
 
 export async function resumenJornada(sessionId: number): Promise<ResumenJornada> {
   const sesion = await obtenerSesion(sessionId);
@@ -2895,6 +2925,7 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
     entregasCentimos: suma("CASH_DELIVERY"),
     operaciones: Number(totalOps[0].n),
     pendientesErp: Number(pendientes[0].n),
+    fondoRepuestoCentimos: await repuestoDeJornada(pool, sessionId),
     ultimoArqueo,
     /* eslint-disable @typescript-eslint/no-explicit-any */
     porSeccion: secciones.map((r: any) => ({

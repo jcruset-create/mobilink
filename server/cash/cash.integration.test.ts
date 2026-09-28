@@ -6445,6 +6445,38 @@ describe.runIf(RUN)("reposición del fondo desde el dinero pendiente de ingresar
     expect((await ingresos.deficitDeCaja(EMPRESA, caja)).deficitCentimos).toBe(0);
   });
 
+  it("el cierre deja el cambio inicial MÁS lo repuesto, y la caja vuelve a su fondo", async () => {
+    /*
+     * El caso de verdad: el día abre con 250 €, se reponen 100 € desde lo
+     * pendiente de ingresar y por la tarde se cierra. Si el cierre tomara solo
+     * los 250 € del inicio como cambio, los 100 € volverían a pendiente de
+     * ingresar y la caja no recuperaría nunca sus 350 €.
+     */
+    const { caja, sessionIds, hoy } = await escenario();
+    const p = await ingresos.proponerReposicion(EMPRESA, caja, sessionIds);
+    await ingresos.registrarReposicion(ctx, { registerId: caja, sessionIds, sacar: p.reposicion!.sacar, devolver: p.reposicion!.devolver });
+
+    const r = await servicio.resumenJornada(hoy.id);
+    expect(r.sesion.fondoInicialCentimos).toBe(25000);
+    expect(r.fondoRepuestoCentimos).toBe(10000);
+
+    // Vaciar la caja avisa con el cambio del día entero, repuesto incluido.
+    await servicio.guardarArqueo(ctx, { sessionId: hoy.id, contado: r.stock });
+    await expect(
+      servicio.cerrarJornada(ctx, { sessionId: hoy.id, cambioFinal: [] })
+    ).rejects.toMatchObject({
+      codigo: "CIERRE_DEJA_CAJA_VACIA",
+      message: expect.stringContaining("350,00 €"),
+    });
+
+    // Cerrando con ese cambio, el día siguiente abre con los 350 € y sin déficit.
+    await servicio.cerrarJornada(ctx, { sessionId: hoy.id, cambioFinal: r.stock });
+    expect((await ingresos.deficitDeCaja(EMPRESA, caja)).deficitCentimos).toBe(0);
+    const manana = (await servicio.abrirJornada(ctx, { registerId: caja })).sesion;
+    expect(manana.fondoInicialCentimos).toBe(35000);
+    expect((await servicio.resumenJornada(manana.id)).fondoRepuestoCentimos).toBe(0);
+  });
+
   it("lo repuesto ya no se puede ingresar en el banco", async () => {
     // Si no bajara el disponible, ese dinero se ingresaría estando en el cajón.
     const { caja, sessionIds } = await escenario();
