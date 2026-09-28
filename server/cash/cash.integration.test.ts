@@ -2332,6 +2332,112 @@ describe.runIf(RUN)("jornadas fechadas en días pasados", () => {
     return new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
   }
 
+  /*
+   * Tarragona, 26 y 28/09/2026. El 26 se cerró dejando 350 €; el 28 abrió
+   * heredándolos y se cerró; después se reabrió el 26 y se volvió a cerrar
+   * dejando 230,80 €. El 28 se quedó con un fondo que ya no existía y la
+   * jornada siguiente lo heredó otra vez: 350 € donde había 230,80.
+   */
+  it("recerrar un día con OTRO cambio del que ya heredó el siguiente se para; la cadena se arregla anulando", async () => {
+    const caja = await crearCaja("herencia-rota");
+    const cerrarDejando = async (sessionId: number, cambioFinal: typeof FONDO_300) => {
+      const t = await servicio.stockDeJornada(sessionId);
+      await servicio.guardarArqueo(ctx, { sessionId, contado: t.lineas });
+      return servicio.cerrarJornada(ctx, { sessionId, cambioFinal, permitirCajaVacia: true });
+    };
+    const SIN_BILLETES_DE_50 = FONDO_300.filter((l) => l.valor !== 5000); // 100 € menos
+
+    const d26 = (await servicio.abrirJornada(ctx, { registerId: caja, fecha: haceDias(4), fondoManual: FONDO_300 })).sesion;
+    await cerrarDejando(d26.id, FONDO_300);
+    const d28 = (await servicio.abrirJornada(ctx, { registerId: caja, fecha: haceDias(2) })).sesion;
+    expect(d28).toMatchObject({ fondoInicialHeredado: true, fondoInicialCentimos: 30000 });
+    await cerrarDejando(d28.id, FONDO_300);
+
+    // Se reabre el 26 y se quiere dejar menos cambio: el 28 ya heredó 300 €.
+    await servicio.reabrirJornada(ctx, d26.id, "el cierre dejó de más");
+    await expect(cerrarDejando(d26.id, SIN_BILLETES_DE_50)).rejects.toMatchObject({
+      codigo: "CAMBIO_YA_HEREDADO",
+      detalle: { sessionId: d28.id, fondoHeredadoCentimos: 30000 },
+    });
+    // Con el mismo cambio, sí: reabrir para meter un cobro olvidado deja la caja igual.
+    await cerrarDejando(d26.id, FONDO_300);
+
+    // El arreglo: se anula el 28 —reabierto, aunque tenga el arqueo de su cierre deshecho—…
+    await servicio.reabrirJornada(ctx, d28.id, "heredó un cambio equivocado");
+    // Para la pantalla, reabierta está «vacía»: solo su apertura. El cierre deshecho y su inversa no cuentan.
+    expect((await servicio.resumenJornada(d28.id)).operaciones).toBe(1);
+    await servicio.anularJornada(ctx, d28.id, "heredó un cambio equivocado");
+    // …ya se puede recerrar el 26 con su cambio bueno…
+    await servicio.reabrirJornada(ctx, d26.id, "el cierre dejó de más");
+    const recerrada = await cerrarDejando(d26.id, SIN_BILLETES_DE_50);
+    expect(recerrada.totalCambioCentimos).toBe(20000);
+    // …y la jornada nueva hereda ESE.
+    const nueva = (await servicio.abrirJornada(ctx, { registerId: caja, fecha: haceDias(1) })).sesion;
+    expect(nueva).toMatchObject({ fondoInicialHeredado: true, fondoInicialCentimos: 20000 });
+  });
+
+  /*
+   * Tarragona, 26/09: se cerró mandando 880,80 € al banco, se reabrió y se
+   * recerró mandando 1.000 €. La bolsa de Ingresos bancarios enseñaba los
+   * billetes de LOS DOS cierres —2.245 € para un pendiente de 1.369,41 €— y
+   * el informe de cierre, lo mismo.
+   */
+  it("reabrir y recerrar deja en la bolsa y en el informe SOLO el ingreso del cierre bueno", async () => {
+    const caja = await crearCaja("bolsa-reabierta");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fecha: haceDias(3), fondoManual: FONDO_300 });
+    await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 20000,
+      formasPago: [{ forma: "CASH", importe: 20000 }],
+      efectivoRecibido: [{ valor: 5000, cantidad: 4 }],
+      concepto: "venta",
+    });
+    const cerrar = async (billetesDe50AlBanco: number) => {
+      const t = await servicio.stockDeJornada(sesion.id);
+      await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: t.lineas });
+      const cambioFinal = t.lineas
+        .map((l) => (l.valor === 5000 ? { ...l, cantidad: l.cantidad - billetesDe50AlBanco } : l))
+        .filter((l) => l.cantidad > 0);
+      return servicio.cerrarJornada(ctx, { sessionId: sesion.id, cambioFinal });
+    };
+
+    expect((await cerrar(2)).totalIngresoCentimos).toBe(10000);
+    await servicio.reabrirJornada(ctx, sesion.id, "el ingreso era otro");
+    expect((await cerrar(4)).totalIngresoCentimos).toBe(20000);
+
+    const bolsa = await ingresos.composicionPendiente(EMPRESA, caja, [sesion.id]);
+    expect(bolsa.billetes).toEqual([{ valor: 5000, cantidad: 4 }]);
+    expect(bolsa.monedas).toEqual([]);
+    const panel = await ingresos.panelIngresos(EMPRESA, caja);
+    expect(panel.totalPendienteCentimos).toBe(20000);
+
+    // Y el informe de cierre: 4 billetes de 50 al banco, no 6.
+    const mupdf = await import("mupdf");
+    const pdf = mupdf.Document.openDocument(await informe.informeCierre(EMPRESA, sesion.id, { conJustificantes: false }), "application/pdf");
+    const texto = [...Array(pdf.countPages()).keys()].map((i) => pdf.loadPage(i).toStructuredText().asText()).join("\n");
+    expect(texto).toContain("INGRESO BANCARIO\n\nDENOMINACIÓN\nUNIDADES\nCARTUCHOS\nBOLSAS\nIMPORTE\n50 €\n4\n200,00 €\n\nTotal\n200,00 €");
+    expect(texto).toContain("CAMBIO FINAL QUE SE QUEDA EN CAJA\n\nDENOMINACIÓN\nUNIDADES\nCARTUCHOS\nBOLSAS\nIMPORTE\n50 €\n2\n100,00 €");
+  });
+
+  it("una jornada reabierta con cobros sigue sin poder anularse, tenga o no arqueo", async () => {
+    const caja = await crearCaja("reabierta-con-cobros");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fecha: haceDias(3), fondoManual: FONDO_300 });
+    await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 1000,
+      formasPago: [{ forma: "CASH", importe: 1000 }],
+      efectivoRecibido: [{ valor: 1000, cantidad: 1 }],
+      concepto: "venta",
+    });
+    const t = await servicio.stockDeJornada(sesion.id);
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: t.lineas });
+    await servicio.cerrarJornada(ctx, { sessionId: sesion.id, cambioFinal: t.lineas });
+    await servicio.reabrirJornada(ctx, sesion.id, "revisión");
+    await expect(servicio.anularJornada(ctx, sesion.id, "no")).rejects.toMatchObject({
+      codigo: "JORNADA_CON_OPERACIONES",
+    });
+  });
+
   it("la fecha de la jornada manda sobre el reloj, y el fondo encadena por fecha", async () => {
     const caja = await crearCaja("atrasadas");
     const dia13 = haceDias(4);
@@ -6337,6 +6443,38 @@ describe.runIf(RUN)("reposición del fondo desde el dinero pendiente de ingresar
     const p = await ingresos.proponerReposicion(EMPRESA, caja, sessionIds);
     await ingresos.registrarReposicion(ctx, { registerId: caja, sessionIds, sacar: p.reposicion!.sacar, devolver: p.reposicion!.devolver });
     expect((await ingresos.deficitDeCaja(EMPRESA, caja)).deficitCentimos).toBe(0);
+  });
+
+  it("el cierre deja el cambio inicial MÁS lo repuesto, y la caja vuelve a su fondo", async () => {
+    /*
+     * El caso de verdad: el día abre con 250 €, se reponen 100 € desde lo
+     * pendiente de ingresar y por la tarde se cierra. Si el cierre tomara solo
+     * los 250 € del inicio como cambio, los 100 € volverían a pendiente de
+     * ingresar y la caja no recuperaría nunca sus 350 €.
+     */
+    const { caja, sessionIds, hoy } = await escenario();
+    const p = await ingresos.proponerReposicion(EMPRESA, caja, sessionIds);
+    await ingresos.registrarReposicion(ctx, { registerId: caja, sessionIds, sacar: p.reposicion!.sacar, devolver: p.reposicion!.devolver });
+
+    const r = await servicio.resumenJornada(hoy.id);
+    expect(r.sesion.fondoInicialCentimos).toBe(25000);
+    expect(r.fondoRepuestoCentimos).toBe(10000);
+
+    // Vaciar la caja avisa con el cambio del día entero, repuesto incluido.
+    await servicio.guardarArqueo(ctx, { sessionId: hoy.id, contado: r.stock });
+    await expect(
+      servicio.cerrarJornada(ctx, { sessionId: hoy.id, cambioFinal: [] })
+    ).rejects.toMatchObject({
+      codigo: "CIERRE_DEJA_CAJA_VACIA",
+      message: expect.stringContaining("350,00 €"),
+    });
+
+    // Cerrando con ese cambio, el día siguiente abre con los 350 € y sin déficit.
+    await servicio.cerrarJornada(ctx, { sessionId: hoy.id, cambioFinal: r.stock });
+    expect((await ingresos.deficitDeCaja(EMPRESA, caja)).deficitCentimos).toBe(0);
+    const manana = (await servicio.abrirJornada(ctx, { registerId: caja })).sesion;
+    expect(manana.fondoInicialCentimos).toBe(35000);
+    expect((await servicio.resumenJornada(manana.id)).fondoRepuestoCentimos).toBe(0);
   });
 
   it("lo repuesto ya no se puede ingresar en el banco", async () => {

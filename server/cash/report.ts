@@ -72,10 +72,17 @@ async function composicionPorMotivo(
   // columnas `cartuchos` y `bolsas`: es lo que distingue un envase precintado
   // de las monedas sueltas del mismo valor, y sin eso el ingreso saldría
   // descuadrado en el papel aunque el dinero estuviera bien.
+  /*
+   * Con las ENTRADAS del mismo motivo restando: son las reversiones de un
+   * cierre deshecho al reabrir la jornada. Sumando solo las salidas, el
+   * informe de un día reabierto y recerrado enseñaba el cambio final y el
+   * ingreso de los dos cierres, el deshecho y el bueno.
+   */
   const { rows } = await pool.query(
-    `SELECT valor_unitario_centimos AS valor, cantidad, cartuchos, bolsas
+    `SELECT valor_unitario_centimos AS valor, cantidad, cartuchos, bolsas,
+            CASE WHEN direccion = 'OUT' THEN 1 ELSE -1 END AS signo
        FROM cash_denomination_movements
-      WHERE session_id = $1 AND motivo = $2 AND direccion = 'OUT'
+      WHERE session_id = $1 AND motivo = $2
       ORDER BY valor_unitario_centimos DESC`,
     [sessionId, motivo]
   );
@@ -85,14 +92,16 @@ async function composicionPorMotivo(
   const sacos = new Map<number, number>();
   /* eslint-disable @typescript-eslint/no-explicit-any */
   for (const m of rows as any[]) {
-    if (m.bolsas > 0) sacos.set(m.valor, (sacos.get(m.valor) ?? 0) + m.bolsas);
-    else if (m.cartuchos > 0) tubos.set(m.valor, (tubos.get(m.valor) ?? 0) + m.cartuchos);
-    else sueltas.set(m.valor, (sueltas.get(m.valor) ?? 0) + m.cantidad);
+    const signo = Number(m.signo);
+    if (m.bolsas > 0) sacos.set(m.valor, (sacos.get(m.valor) ?? 0) + signo * m.bolsas);
+    else if (m.cartuchos > 0) tubos.set(m.valor, (tubos.get(m.valor) ?? 0) + signo * m.cartuchos);
+    else sueltas.set(m.valor, (sueltas.get(m.valor) ?? 0) + signo * m.cantidad);
   }
   /* eslint-enable @typescript-eslint/no-explicit-any */
 
   const aLineas = (m: Map<number, number>) =>
     [...m.entries()]
+      .filter(([, cantidad]) => cantidad > 0)
       .map(([valor, cantidad]) => ({ valor, cantidad }))
       .sort((a, b) => b.valor - a.valor);
 

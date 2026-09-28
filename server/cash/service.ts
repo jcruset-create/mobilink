@@ -1453,9 +1453,9 @@ export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<Re
      * explícita en vez de prohibirlo, porque vaciar la caja de verdad existe
      * (vacaciones, traslado).
      *
-     * Lo que se compara es el cambio con el que EMPEZÓ el día: es lo que el
-     * cierre deja por norma. Si el día empezó sin cambio, el fondo fijo de la
-     * caja, si lo tiene.
+     * Lo que se compara es el cambio con el que EMPEZÓ el día más lo repuesto
+     * hoy: es lo que el cierre deja por norma. Si el día empezó sin cambio y
+     * sin reposiciones, el fondo fijo de la caja, si lo tiene.
      */
     if (reparto.totalCambio === 0 && reparto.totalIngreso > 0 && !e.permitirCajaVacia) {
       const { rows: cajaCierre } = await client.query<{ fondo_objetivo_centimos: string }>(
@@ -1463,17 +1463,52 @@ export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<Re
         [sesion.registerId]
       );
       const fondoFijo = Number(cajaCierre[0]?.fondo_objetivo_centimos ?? 0);
-      const objetivo = sesion.fondoInicialCentimos > 0 ? sesion.fondoInicialCentimos : fondoFijo;
+      const cambioDelDia =
+        sesion.fondoInicialCentimos + (await repuestoDeJornada(client, e.sessionId));
+      const objetivo = cambioDelDia > 0 ? cambioDelDia : fondoFijo;
       if (objetivo > 0) {
         throw new ErrorCaja(
           "CIERRE_DEJA_CAJA_VACIA",
-          sesion.fondoInicialCentimos > 0
+          cambioDelDia > 0
             ? `Este cierre manda todo al banco y deja la caja a 0,00 €, pero el día empezó con ${formatearEuros(objetivo)} € de cambio. ¿Seguro que no era cambio? Si de verdad quieres vaciarla, confírmalo.`
             : `Este cierre manda todo al banco y deja la caja a 0,00 €, pero la caja tiene un fondo fijo de ${formatearEuros(objetivo)} €. ¿Seguro que no era cambio? Si de verdad quieres vaciarla, confírmalo.`,
           409,
           { objetivoCentimos: objetivo }
         );
       }
+    }
+
+    /*
+     * Una jornada posterior que ya HEREDÓ el cambio de este cierre.
+     *
+     * Pasa al reabrir un día pasado: el 26/09 se cerró dejando 350 €, el 28/09
+     * abrió heredándolos, y después se reabrió el 26/09 y se volvió a cerrar
+     * dejando 230,80 €. El 28/09 se quedó con un fondo de 350 € que ya no
+     * existía, y la jornada siguiente lo volvió a heredar. Recerrar con OTRO
+     * cambio sin deshacer antes la que heredó es romper la cadena en silencio.
+     *
+     * Con el mismo cambio no pasa nada —reabrir para meter un cobro olvidado
+     * suele dejar la caja igual— y por eso se compara el importe.
+     */
+    const { rows: herederas } = await client.query<{ id: number; fecha: string; fondo: string }>(
+      `SELECT id, fecha::text AS fecha, fondo_inicial_centimos AS fondo
+         FROM cash_sessions
+        WHERE sesion_anterior_id = $1 AND fondo_inicial_heredado
+          AND estado <> 'CANCELLED' AND id <> $1
+        ORDER BY fecha, id`,
+      [e.sessionId]
+    );
+    const heredera = herederas.find((h) => Number(h.fondo) !== reparto.totalCambio);
+    if (heredera) {
+      const dia = heredera.fecha.split("-").reverse().join("/");
+      throw new ErrorCaja(
+        "CAMBIO_YA_HEREDADO",
+        `La jornada del ${dia} empezó con ${formatearEuros(Number(heredera.fondo))} € heredados de este cierre. ` +
+          `Si ahora dejas ${formatearEuros(reparto.totalCambio)} €, esa jornada se quedaría con un fondo que no existe. ` +
+          `Deja ${formatearEuros(Number(heredera.fondo))} € de cambio, o anula antes la jornada del ${dia} (reábrela si está cerrada).`,
+        409,
+        { sessionId: heredera.id, fondoHeredadoCentimos: Number(heredera.fondo) }
+      );
     }
 
     const ahora = Date.now();
@@ -2321,11 +2356,18 @@ export async function anularJornada(
       );
     }
 
+    /*
+     * Los arqueos de una jornada REABIERTA son del cierre que la reapertura ya
+     * deshizo, no trabajo vivo. Es el camino para arreglar una cadena de
+     * herencia rota: una jornada que heredó un cambio que ya no existe se
+     * reabre y se anula, y la siguiente vuelve a heredar del cierre bueno.
+     * Los cobros, pagos y justificantes siguen bloqueando igual.
+     */
     const { rows: arqueos } = await client.query(
       `SELECT COUNT(*)::int AS n FROM cash_counts WHERE session_id = $1`,
       [sessionId]
     );
-    if (arqueos[0].n > 0) {
+    if (arqueos[0].n > 0 && s.estado !== "REOPENED") {
       throw new ErrorCaja(
         "JORNADA_CON_ARQUEO",
         "La jornada ya tiene un arqueo guardado: no es una apertura en falso. Si aun así sobra, ciérrala y déjalo escrito en las notas.",
@@ -2664,6 +2706,15 @@ export type ResumenJornada = {
   operaciones: number;
   pendientesErp: number;
   /**
+   * Lo repuesto hoy al cajón desde el dinero pendiente de ingresar.
+   *
+   * Es parte del cambio: el cierre deja el cambio con el que EMPEZÓ el día MÁS
+   * esto. Sin sumarlo, reponer el fondo por la mañana no servía de nada: el
+   * cierre de la tarde devolvía lo repuesto a pendiente de ingresar y la caja
+   * volvía a abrir corta al día siguiente.
+   */
+  fondoRepuestoCentimos: Centimos;
+  /**
    * El arqueo más reciente de la jornada, si lo hay.
    *
    * El cierre reparte **lo contado**, no el teórico, así que la pantalla
@@ -2697,6 +2748,25 @@ export type ResumenJornada = {
     operaciones: number;
   }[];
 };
+
+/**
+ * Lo repuesto al cajón en una jornada desde el montón pendiente de ingresar.
+ *
+ * Solo las reposiciones vivas: una anulada ya devolvió su dinero al montón.
+ */
+async function repuestoDeJornada(
+  client: PoolClient | typeof pool,
+  sessionId: number
+): Promise<Centimos> {
+  const { rows } = await client.query<{ total: string }>(
+    `SELECT COALESCE(SUM(t.importe_centimos),0)::bigint AS total
+       FROM cash_float_topups t
+       JOIN cash_operations o ON o.id = t.operation_id
+      WHERE o.session_id = $1 AND o.estado = 'CONFIRMED'`,
+    [sessionId]
+  );
+  return Number(rows[0].total);
+}
 
 export async function resumenJornada(sessionId: number): Promise<ResumenJornada> {
   const sesion = await obtenerSesion(sessionId);
@@ -2807,7 +2877,13 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
   );
 
   const { rows: totalOps } = await pool.query(
-    `SELECT COUNT(*) AS n FROM cash_operations WHERE session_id = $1 AND estado = 'CONFIRMED'`,
+    /*
+     * Sin las reversiones: una operación anulada y su inversa se compensan, y
+     * contarlas como trabajo escondía el «Anular jornada» de una jornada
+     * reabierta que ya no tiene nada vivo (el mismo criterio que `anularJornada`).
+     */
+    `SELECT COUNT(*) AS n FROM cash_operations
+      WHERE session_id = $1 AND estado = 'CONFIRMED' AND reversa_de_id IS NULL`,
     [sessionId]
   );
 
@@ -2849,6 +2925,7 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
     entregasCentimos: suma("CASH_DELIVERY"),
     operaciones: Number(totalOps[0].n),
     pendientesErp: Number(pendientes[0].n),
+    fondoRepuestoCentimos: await repuestoDeJornada(pool, sessionId),
     ultimoArqueo,
     /* eslint-disable @typescript-eslint/no-explicit-any */
     porSeccion: secciones.map((r: any) => ({

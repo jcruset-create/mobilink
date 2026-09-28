@@ -960,9 +960,19 @@ export async function composicionPendiente(
 
   if (sessionIds.length > 0) {
     const { rows } = await client.query(
-      `SELECT valor_unitario_centimos AS valor, SUM(cantidad)::int AS n
+      /*
+       * El NETO, no la suma de salidas. Al reabrir una jornada su ingreso al
+       * banco se revierte con una ENTRADA del mismo motivo; sumando solo las
+       * salidas, el ingreso deshecho seguía en la bolsa. Pasó en Tarragona el
+       * 26/09: reabierta y recerrada, la bolsa enseñaba 880,80 € de billetes
+       * del primer cierre además de los 1.000 € del bueno, y proponía ingresar
+       * un importe que no cuadraba con los billetes. Es el mismo fallo que ya
+       * se arregló para el cambio final (`composicionDeCierre`).
+       */
+      `SELECT valor_unitario_centimos AS valor,
+              SUM(CASE WHEN direccion = 'OUT' THEN cantidad ELSE -cantidad END)::int AS n
          FROM cash_denomination_movements
-        WHERE session_id = ANY($1::int[]) AND motivo = 'BANK_DEPOSIT' AND direccion = 'OUT'
+        WHERE session_id = ANY($1::int[]) AND motivo = 'BANK_DEPOSIT'
         GROUP BY valor_unitario_centimos`,
       [[...sessionIds]]
     );

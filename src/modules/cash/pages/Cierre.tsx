@@ -46,11 +46,17 @@ export default function Cierre() {
    * Sigue siendo editable, porque un día puede hacer falta dejar más o menos,
    * pero eso es la excepción.
    *
+   * Lo repuesto hoy desde lo pendiente de ingresar (Ingresos bancarios →
+   * Reponer) se suma: es cambio que se ha devuelto al cajón para que vuelva a
+   * su fondo, y si el cierre lo mandara otra vez a pendiente de ingresar la
+   * caja no recuperaría nunca el cambio que le falta.
+   *
    * Si el día empezó sin cambio (el primero de una caja), el fondo fijo de la
    * caja si lo tiene; y si tampoco, se pregunta con 300 € de partida.
    */
   const fondoFijoCaja = cajas.find((c) => c.id === jornada?.sesion.registerId)?.fondoObjetivoCentimos ?? 0;
-  const cambioInicial = jornada?.sesion.fondoInicialCentimos ?? 0;
+  const repuestoHoy = jornada?.fondoRepuestoCentimos ?? 0;
+  const cambioInicial = (jornada?.sesion.fondoInicialCentimos ?? 0) + repuestoHoy;
   const fondoFijo = cambioInicial > 0 ? cambioInicial : fondoFijoCaja;
   const porCambioInicial = cambioInicial > 0;
 
@@ -365,7 +371,11 @@ export default function Cierre() {
       {fondoFijo > 0 && contadoTotal < fondoFijo && (
         <Aviso tono="aviso">
           En el cajón hay {euros(contadoTotal)} y{" "}
-          {porCambioInicial ? `el día empezó con ${euros(fondoFijo)} de cambio` : `su fondo fijo es de ${euros(fondoFijo)}`}: faltan{" "}
+          {porCambioInicial
+            ? repuestoHoy > 0
+              ? `el cambio del día es de ${euros(fondoFijo)} (con ${euros(repuestoHoy)} repuestos hoy)`
+              : `el día empezó con ${euros(fondoFijo)} de cambio`
+            : `su fondo fijo es de ${euros(fondoFijo)}`}: faltan{" "}
           <strong>{euros(fondoFijo - contadoTotal)}</strong>. No hay nada que ingresar; mañana la
           caja abre corta de cambio salvo que se reponga.
         </Aviso>
@@ -433,7 +443,7 @@ export default function Cierre() {
           value={euros(aRetirar)}
           hint={
             fondoFijo > 0
-              ? `${euros(contadoTotal)} contados − ${euros(fondoFijo)} ${porCambioInicial ? "del cambio inicial" : "de fondo fijo"}`
+              ? `${euros(contadoTotal)} contados − ${euros(fondoFijo)} ${porCambioInicial ? (repuestoHoy > 0 ? `de cambio (${euros(repuestoHoy)} repuestos hoy)` : "del cambio inicial") : "de fondo fijo"}`
               : "El día empezó sin cambio y la caja no tiene fondo fijo"
           }
           accent="text-amber-300"
