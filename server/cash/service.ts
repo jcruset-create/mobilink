@@ -1476,6 +1476,39 @@ export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<Re
       }
     }
 
+    /*
+     * Una jornada posterior que ya HEREDÓ el cambio de este cierre.
+     *
+     * Pasa al reabrir un día pasado: el 26/09 se cerró dejando 350 €, el 28/09
+     * abrió heredándolos, y después se reabrió el 26/09 y se volvió a cerrar
+     * dejando 230,80 €. El 28/09 se quedó con un fondo de 350 € que ya no
+     * existía, y la jornada siguiente lo volvió a heredar. Recerrar con OTRO
+     * cambio sin deshacer antes la que heredó es romper la cadena en silencio.
+     *
+     * Con el mismo cambio no pasa nada —reabrir para meter un cobro olvidado
+     * suele dejar la caja igual— y por eso se compara el importe.
+     */
+    const { rows: herederas } = await client.query<{ id: number; fecha: string; fondo: string }>(
+      `SELECT id, fecha::text AS fecha, fondo_inicial_centimos AS fondo
+         FROM cash_sessions
+        WHERE sesion_anterior_id = $1 AND fondo_inicial_heredado
+          AND estado <> 'CANCELLED' AND id <> $1
+        ORDER BY fecha, id`,
+      [e.sessionId]
+    );
+    const heredera = herederas.find((h) => Number(h.fondo) !== reparto.totalCambio);
+    if (heredera) {
+      const dia = heredera.fecha.split("-").reverse().join("/");
+      throw new ErrorCaja(
+        "CAMBIO_YA_HEREDADO",
+        `La jornada del ${dia} empezó con ${formatearEuros(Number(heredera.fondo))} € heredados de este cierre. ` +
+          `Si ahora dejas ${formatearEuros(reparto.totalCambio)} €, esa jornada se quedaría con un fondo que no existe. ` +
+          `Deja ${formatearEuros(Number(heredera.fondo))} € de cambio, o anula antes la jornada del ${dia} (reábrela si está cerrada).`,
+        409,
+        { sessionId: heredera.id, fondoHeredadoCentimos: Number(heredera.fondo) }
+      );
+    }
+
     const ahora = Date.now();
     const anio = Number(sesion.fecha.slice(0, 4));
 
@@ -2321,11 +2354,18 @@ export async function anularJornada(
       );
     }
 
+    /*
+     * Los arqueos de una jornada REABIERTA son del cierre que la reapertura ya
+     * deshizo, no trabajo vivo. Es el camino para arreglar una cadena de
+     * herencia rota: una jornada que heredó un cambio que ya no existe se
+     * reabre y se anula, y la siguiente vuelve a heredar del cierre bueno.
+     * Los cobros, pagos y justificantes siguen bloqueando igual.
+     */
     const { rows: arqueos } = await client.query(
       `SELECT COUNT(*)::int AS n FROM cash_counts WHERE session_id = $1`,
       [sessionId]
     );
-    if (arqueos[0].n > 0) {
+    if (arqueos[0].n > 0 && s.estado !== "REOPENED") {
       throw new ErrorCaja(
         "JORNADA_CON_ARQUEO",
         "La jornada ya tiene un arqueo guardado: no es una apertura en falso. Si aun así sobra, ciérrala y déjalo escrito en las notas.",
@@ -2807,7 +2847,13 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
   );
 
   const { rows: totalOps } = await pool.query(
-    `SELECT COUNT(*) AS n FROM cash_operations WHERE session_id = $1 AND estado = 'CONFIRMED'`,
+    /*
+     * Sin las reversiones: una operación anulada y su inversa se compensan, y
+     * contarlas como trabajo escondía el «Anular jornada» de una jornada
+     * reabierta que ya no tiene nada vivo (el mismo criterio que `anularJornada`).
+     */
+    `SELECT COUNT(*) AS n FROM cash_operations
+      WHERE session_id = $1 AND estado = 'CONFIRMED' AND reversa_de_id IS NULL`,
     [sessionId]
   );
 

@@ -509,6 +509,24 @@ el día empezó sin cambio, se usa el **fondo fijo de la caja**
 Dejar la caja a 0 € cuando el día empezó con cambio pide confirmación
 (`CIERRE_DEJA_CAJA_VACIA`).
 
+**Reabrir un día pasado y cambiar su cambio final.** Si una jornada posterior
+ya heredó ese cambio, recerrar con otro importe se para
+(`CAMBIO_YA_HEREDADO`), porque dejaría a la otra con un fondo que no existe.
+Es lo que pasó en Tarragona el 26 y el 28/09: el 28 abrió con 350 € que ya no
+estaban. El arreglo se hace desde la aplicación:
+1. Se anula la jornada que heredó. Si está cerrada, antes se reabre.
+2. Se recierra el día pasado con su cambio bueno.
+3. La siguiente jornada hereda ese cambio.
+
+Una jornada reabierta se puede anular aunque tenga arqueo, porque ese arqueo
+es de un cierre ya deshecho. Lo que no se puede es anularla si tiene
+operaciones vivas.
+
+Todo lo que suma piezas de un cierre cuenta el **neto**: salidas menos
+entradas del mismo motivo, porque la reapertura revierte con entradas. Eso
+incluye la bolsa de Ingresos bancarios, el informe de cierre y la herencia. Si
+se sumaran solo las salidas, un día reabierto contaría sus dos cierres.
+
 **Informes** reúne el papeleo de cada jornada en un sitio: el informe de cierre
 en PDF —que existía pero solo aparecía en la pantalla de confirmación y en el
 detalle del histórico, o sea que quien cerraba y cerraba la pestaña lo perdía de
