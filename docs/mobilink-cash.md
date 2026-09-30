@@ -422,6 +422,23 @@ anteriores también tienen `NULL`, y se ven como «sin desglose» con un botón
 pendiente (`desglosarRemanente`). Con las piezas conocidas, la bolsa las
 suma a sus monedas, y un canje o una reposición las pueden usar.
 
+**Lo pendiente, pieza a pieza, y el cambio con el cajón** (1.89). En Ingresos
+bancarios, lo pendiente de ingresar se ve siempre desglosado en billetes y
+monedas, aunque no haya ningún cierre marcado. Incluye lo que quedó del
+último ingreso; si esa parte no tiene desglose, sale con «Contar». Debajo,
+«Cambiar con el cajón» hace el canje con cualquier pieza y en los dos
+sentidos: lo que sale de lo pendiente entra en el cajón, y al revés, por el
+mismo importe. Tiene tres modos:
+
+- «Monedas → billete»: la propuesta de `mejorCanje`.
+- «Cambio para el cajón»: el cajón da un billete grande y recibe piezas
+  menores de lo pendiente (`utils/cambioConCajon.ts`).
+- «A mano».
+
+Por debajo es el canje de siempre: `registrarCanje` contra todos los cierres
+pendientes, o sin ninguno si solo hay lo que quedó del último ingreso. Se
+deshace desde «Canjes preparados».
+
 ### Posición global
 
 Pantalla `/cash/posicion`, la primera del menú. Enseña todo el efectivo que

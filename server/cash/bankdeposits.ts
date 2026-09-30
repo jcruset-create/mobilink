@@ -1408,7 +1408,9 @@ export async function registrarCanje(
     formasPago: [{ forma: "CASH", importe: valor(entra) }],
     efectivoRecibido: entra,
     efectivoEntregado: sale,
-    concepto: "Canje de monedas por billetes para el ingreso bancario",
+    // Genérico a propósito: desde la pantalla de cambio con el cajón las piezas
+    // pueden ir en los dos sentidos, no solo monedas por billetes.
+    concepto: "Cambio entre lo pendiente de ingresar y el cajón",
   });
 
   /*

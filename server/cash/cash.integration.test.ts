@@ -1227,6 +1227,74 @@ describe.runIf(RUN)("ingresos bancarios", () => {
     ]);
   });
 
+  it("lo que quedó del último ingreso se cambia con el cajón aunque no haya ningún cierre pendiente", async () => {
+    const caja = await crearCaja("cambio-remanente");
+    const s1 = await cerrarJornadaCon(caja, 435045);
+    await ingresos.crearIngreso(ctx, { registerId: caja, sessionIds: [s1], importeCentimos: 435000 });
+    // Quedan 2 × 0,20 + 0,05. La caja abre con monedas de 0,10.
+    await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [
+        { valor: 1000, cantidad: 1 },
+        { valor: 10, cantidad: 10 },
+      ],
+    });
+
+    // Sin cierres pendientes: el cambio se apunta sin cierres.
+    await ingresos.registrarCanje(ctx, {
+      registerId: caja,
+      sessionIds: [],
+      monedasEntregadas: [{ valor: 20, cantidad: 2 }],
+      billetesEntregados: [],
+      billetesRecibidos: [{ valor: 10, cantidad: 4 }],
+    });
+    const p = await ingresos.proponerCanje(EMPRESA, caja, []);
+    expect(p.pendiente.monedas).toEqual([
+      { valor: 10, cantidad: 4 },
+      { valor: 5, cantidad: 1 },
+    ]);
+    expect(p.pendiente.faltan).toEqual([]);
+
+    // Y lo que no está en lo pendiente no se puede cambiar.
+    await expect(
+      ingresos.registrarCanje(ctx, {
+        registerId: caja,
+        sessionIds: [],
+        monedasEntregadas: [{ valor: 20, cantidad: 1 }],
+        billetesEntregados: [],
+        billetesRecibidos: [{ valor: 10, cantidad: 2 }],
+      })
+    ).rejects.toMatchObject({ codigo: "STOCK_INSUFICIENTE" });
+  });
+
+  it("cambio para el cajón: el cajón da un billete grande y se lleva los pequeños de lo pendiente", async () => {
+    const caja = await crearCaja("cambio-para-cajon");
+    // Un cierre que manda al banco 50 € en 2 × 20 + 10.
+    const PEQUENOS = [
+      { valor: 2000, cantidad: 2 },
+      { valor: 1000, cantidad: 1 },
+    ];
+    const j1 = (await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: PEQUENOS })).sesion;
+    await servicio.guardarArqueo(ctx, { sessionId: j1.id, contado: PEQUENOS });
+    await servicio.cerrarJornada(ctx, { sessionId: j1.id, cambioFinal: [], permitirCajaVacia: true });
+
+    // El cajón de hoy solo tiene un billete de 50: le falta cambio.
+    const hoy = (await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: [{ valor: 5000, cantidad: 1 }] }))
+      .sesion;
+    await ingresos.registrarCanje(ctx, {
+      registerId: caja,
+      sessionIds: [j1.id],
+      monedasEntregadas: PEQUENOS,
+      billetesEntregados: [],
+      billetesRecibidos: [{ valor: 5000, cantidad: 1 }],
+    });
+
+    const bolsa = await ingresos.composicionPendiente(EMPRESA, caja, [j1.id]);
+    expect(bolsa.billetes).toEqual([{ valor: 5000, cantidad: 1 }]);
+    const cajon = (await servicio.stockDeJornada(hoy.id)).lineas.filter((l) => l.cantidad > 0);
+    expect(cajon).toEqual(PEQUENOS);
+  });
+
   it("lo que quedó sin desglose se cuenta a mano una vez, y tiene que cuadrar", async () => {
     const caja = await crearCaja("ingresos-remanente-a-mano");
     const s1 = await cerrarJornadaCon(caja, 435045);
