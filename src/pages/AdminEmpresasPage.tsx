@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Building2, Plus, ShieldCheck } from "lucide-react";
+import { ArrowLeft, Building2, Plus, ShieldCheck, Store } from "lucide-react";
 import { apiFetch } from "../modules/apiFetch";
 import { MODULOS_SAAS, nombreModulo } from "../modules/modulosSaas";
 
@@ -241,6 +241,8 @@ export default function AdminEmpresasPage() {
                       ))}
                     </div>
 
+                    <Talleres empresaId={e.id} onError={setError} />
+
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="text-left text-xs text-slate-500">
@@ -321,6 +323,164 @@ export default function AdminEmpresasPage() {
             ))}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+type Taller = {
+  id: string;
+  nombre: string;
+  direccion: string | null;
+  activo: boolean;
+  /** Cajas activas de Mobilink Cash en el taller. */
+  cajas: number;
+};
+
+/**
+ * Los talleres de la empresa: alta, cambio de nombre y baja.
+ *
+ * Antes solo existía el «Centro principal» que se crea con la empresa, y para
+ * abrir la caja de un segundo taller no había taller que elegir. Un taller no
+ * se borra: se da de baja, porque sus cajas y sus informes lo siguen nombrando.
+ */
+function Talleres({ empresaId, onError }: { empresaId: string; onError: (m: string) => void }) {
+  const [talleres, setTalleres] = useState<Taller[]>([]);
+  const [nombre, setNombre] = useState("");
+  const [direccion, setDireccion] = useState("");
+  const [editando, setEditando] = useState<{ id: string; nombre: string } | null>(null);
+  const [ocupado, setOcupado] = useState(false);
+
+  const cargar = useCallback(async () => {
+    const r = await apiFetch(`/api/admin/empresas/${empresaId}/centros`);
+    if (r.ok) setTalleres(await r.json());
+  }, [empresaId]);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  async function pedir(ruta: string, metodo: "POST" | "PATCH", cuerpo: unknown) {
+    setOcupado(true);
+    onError("");
+    try {
+      const r = await apiFetch(ruta, {
+        method: metodo,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(cuerpo),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || `Error ${r.status}`);
+      await cargar();
+      return true;
+    } catch (e: any) {
+      onError(e.message || "Error guardando el taller");
+      return false;
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <div className="mb-4 rounded-xl border border-slate-700/60 p-3">
+      <div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-slate-400">
+        <Store className="h-4 w-4" /> Talleres
+      </div>
+      <table className="w-full text-sm">
+        <tbody>
+          {talleres.map((t) => (
+            <tr key={t.id} className="border-t border-slate-700/60">
+              <td className="py-1.5">
+                {editando?.id === t.id ? (
+                  <input
+                    autoFocus
+                    value={editando.nombre}
+                    onChange={(ev) => setEditando({ id: t.id, nombre: ev.target.value })}
+                    className="rounded-lg border border-slate-600 bg-slate-900 px-2 py-1 text-sm"
+                  />
+                ) : (
+                  <span className={t.activo ? "font-medium" : "text-slate-500 line-through"}>{t.nombre}</span>
+                )}
+                {t.direccion && <span className="ml-2 text-xs text-slate-500">{t.direccion}</span>}
+              </td>
+              <td className="text-xs text-slate-400">
+                {t.cajas} {t.cajas === 1 ? "caja" : "cajas"}
+              </td>
+              <td className="text-right text-xs">
+                {editando?.id === t.id ? (
+                  <>
+                    <button
+                      disabled={ocupado}
+                      onClick={async () => {
+                        if (await pedir(`/api/admin/centros/${t.id}`, "PATCH", { nombre: editando.nombre })) {
+                          setEditando(null);
+                        }
+                      }}
+                      className="mr-3 text-emerald-300 hover:underline"
+                    >
+                      Guardar
+                    </button>
+                    <button onClick={() => setEditando(null)} className="text-slate-400 hover:underline">
+                      Cancelar
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => setEditando({ id: t.id, nombre: t.nombre })}
+                      className="mr-3 text-slate-400 hover:text-slate-200"
+                    >
+                      Renombrar
+                    </button>
+                    <button
+                      disabled={ocupado}
+                      onClick={() => void pedir(`/api/admin/centros/${t.id}`, "PATCH", { activo: !t.activo })}
+                      className={t.activo ? "text-slate-400 hover:text-red-300" : "text-slate-400 hover:text-emerald-300"}
+                    >
+                      {t.activo ? "Dar de baja" : "Reactivar"}
+                    </button>
+                  </>
+                )}
+              </td>
+            </tr>
+          ))}
+          {!talleres.length && (
+            <tr>
+              <td className="py-2 text-xs text-slate-500">Sin talleres</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+      <div className="mt-2 flex flex-wrap items-end gap-2 border-t border-slate-700/60 pt-2">
+        <div className="min-w-40 flex-1">
+          <label className="mb-1 block text-xs text-slate-400">Nuevo taller</label>
+          <input
+            value={nombre}
+            onChange={(ev) => setNombre(ev.target.value)}
+            placeholder="Agroreus"
+            className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm"
+          />
+        </div>
+        <div className="min-w-40 flex-1">
+          <label className="mb-1 block text-xs text-slate-400">Dirección (opcional)</label>
+          <input
+            value={direccion}
+            onChange={(ev) => setDireccion(ev.target.value)}
+            className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm"
+          />
+        </div>
+        <button
+          disabled={ocupado || nombre.trim().length < 2}
+          onClick={async () => {
+            if (await pedir(`/api/admin/empresas/${empresaId}/centros`, "POST", { nombre, direccion })) {
+              setNombre("");
+              setDireccion("");
+            }
+          }}
+          className="flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40"
+        >
+          <Plus className="h-4 w-4" /> Añadir taller
+        </button>
       </div>
     </div>
   );

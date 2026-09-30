@@ -1193,6 +1193,14 @@ interfaz —no hace falta tocar la base de datos a mano:
 3. **La primera caja**: Mobilink Cash → Configuración. Sin ninguna caja dada de
    alta no se puede abrir jornada, así que este paso no es opcional.
 
+**Una caja en otro taller.** El taller de la caja se elige de `app_centros`.
+Al crear la empresa solo se da de alta uno, el «Centro principal». Los demás
+se añaden en **Empresas y licencias → la empresa → Talleres** (SuperAdmin,
+`server/core/centros.ts`): alta, cambio de nombre y baja. Al renombrar un
+taller se renombra también `cash_registers.centro`, que es lo que leen los
+informes. Un taller con cajas activas no se puede dar de baja. Después, en
+Mobilink Cash → Configuración → Cajas, se crea la caja y se elige ese taller.
+
 Y dos que no son obligatorios pero que la gente echa de menos si faltan: los
 **conceptos de gasto** —sin ninguno dado de alta, el desplegable de Pagos no
 aparece, a propósito— y las **credenciales de Business Central** por variables

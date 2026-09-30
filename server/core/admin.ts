@@ -13,6 +13,7 @@ import { Router } from "express";
 import db from "../db.ts";
 import { authenticate, requireSuperadmin, registrarAuditoria } from "./auth.ts";
 import { MODULOS_SAAS } from "../../src/modules/modulosSaas.ts";
+import { ErrorCentro, actualizarCentro, crearCentro, listarCentrosDeEmpresa } from "./centros.ts";
 
 /*
  * Los módulos que se pueden licenciar salen de la lista única del proyecto.
@@ -134,6 +135,66 @@ export function createAdminRouter(): Router {
     } catch (e) {
       console.error("PATCH /api/admin/empresas/:id:", e);
       res.status(500).json({ error: "Error actualizando la empresa" });
+    }
+  });
+
+  // ── Talleres (centros) ───────────────────────────────────
+  // Hasta ahora solo existía el «Centro principal» creado con la empresa, y
+  // sin taller no se podía dar de alta la caja de un segundo taller.
+  const fallo = (res: any, e: unknown, que: string) => {
+    if (e instanceof ErrorCentro) return res.status(e.status).json({ error: e.message });
+    console.error(que, e);
+    res.status(500).json({ error: "Error guardando el taller" });
+  };
+
+  router.get("/empresas/:id/centros", async (req, res) => {
+    try {
+      res.json(await listarCentrosDeEmpresa(req.params.id));
+    } catch (e) {
+      fallo(res, e, "GET centros:");
+    }
+  });
+
+  router.post("/empresas/:id/centros", async (req, res) => {
+    try {
+      const centro = await crearCentro(req.params.id, {
+        nombre: req.body?.nombre,
+        direccion: req.body?.direccion,
+      });
+      void registrarAuditoria({
+        empresaId: req.params.id,
+        userId: req.authCtx!.userId,
+        accion: "admin.centro.creado",
+        entidad: "app_centros",
+        entidadId: centro.id,
+        detalle: { nombre: centro.nombre },
+        ip: req.ip,
+      });
+      res.status(201).json(centro);
+    } catch (e) {
+      fallo(res, e, "POST centros:");
+    }
+  });
+
+  router.patch("/centros/:id", async (req, res) => {
+    try {
+      const { centro, empresaId } = await actualizarCentro(req.params.id, {
+        nombre: req.body?.nombre,
+        direccion: req.body?.direccion,
+        activo: req.body?.activo,
+      });
+      void registrarAuditoria({
+        empresaId,
+        userId: req.authCtx!.userId,
+        accion: "admin.centro.editado",
+        entidad: "app_centros",
+        entidadId: centro.id,
+        detalle: req.body,
+        ip: req.ip,
+      });
+      res.json(centro);
+    } catch (e) {
+      fallo(res, e, "PATCH centros:");
     }
   });
 
