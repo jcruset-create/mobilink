@@ -158,6 +158,17 @@ export async function initCentral(): Promise<void> {
       ultima_actividad_ms BIGINT,
       ultima_fecha_cerrada DATE,
       jornada_abierta_id INTEGER,
+      /*
+       * OBSOLETAS: ya no se escriben ni se leen. Eran contadores que se
+       * incrementaban con cada evento de ingreso, y no sobrevivieron al botón
+       * de resincronizar: reenviar un ingreso es un evento NUEVO del mismo
+       * hecho, así que sumaban otra vez. Lo ingresado se suma ahora desde
+       * central_bank_deposits, que va por deposit_id y aguanta repeticiones.
+       *
+       * Se quedan en la tabla y no se borran: quitarlas exigiria una migracion
+       * destructiva para no ganar nada, y su valor viejo —inflado— ya no lo
+       * mira nadie.
+       */
       ingresos_bancarios INTEGER NOT NULL DEFAULT 0,
       ingresado_centimos BIGINT NOT NULL DEFAULT 0,
       actualizado_en_ms BIGINT NOT NULL

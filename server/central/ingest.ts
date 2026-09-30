@@ -468,14 +468,20 @@ async function proyectarCaja(
   }
 
   if (e.tipo === "BANK_DEPOSIT_CREATED") {
-    await client.query(
-      `UPDATE central_registers
-          SET ingresos_bancarios = ingresos_bancarios + 1,
-              ingresado_centimos = ingresado_centimos + $2,
-              actualizado_en_ms = $3
-        WHERE register_id = $1`,
-      [e.registerId, importe, ahora]
-    );
+    /*
+     * Aquí NO se lleva ningún contador de lo ingresado.
+     *
+     * Lo hubo, sumando el importe de cada alta, y estaba mal desde que existe
+     * el botón de resincronizar: reenviar un ingreso crea un evento NUEVO —otro
+     * `event_id`— del MISMO hecho, así que la clave primaria de `central_events`
+     * no lo para y el contador sumaba otra vez. Pulsar el botón inflaba el
+     * total ingresado de la caja, y no había forma de volver atrás.
+     *
+     * Lo ingresado se suma ahora al consultarlo, desde `central_bank_deposits`,
+     * que va por `deposit_id` y por tanto aguanta que el mismo ingreso llegue
+     * cien veces. Un contador que se incrementa no puede ser idempotente; una
+     * fila con clave, sí.
+     */
     /*
      * Los cierres que entran en el ingreso quedan conciliados: su importe «para
      * el banco» ya no está en la tienda. Sin esto, la posición global seguiría
@@ -572,17 +578,12 @@ async function proyectarCaja(
       [Number(d.depositId ?? 0), d.fecha ?? null, d.referencia ?? null, ahora]
     );
   } else if (e.tipo === "BANK_DEPOSIT_VOIDED") {
-    // Anular resta: el ingreso dejó de existir y la posición de la red no
-    // puede seguir contándolo. El evento de alta sigue en `central_events`,
-    // así que la historia no se pierde — lo que cambia es el saldo.
-    await client.query(
-      `UPDATE central_registers
-          SET ingresos_bancarios = GREATEST(0, ingresos_bancarios - 1),
-              ingresado_centimos = ingresado_centimos - $2,
-              actualizado_en_ms = $3
-        WHERE register_id = $1`,
-      [e.registerId, importe, ahora]
-    );
+    /*
+     * Tampoco hay contador que restar: el anulado deja de contar porque su
+     * fila pasa a ANULADO más abajo y la consulta solo suma los confirmados.
+     * Restar de un acumulador tenía el mismo problema que sumar — reenviar la
+     * anulación restaba otra vez.
+     */
     // Y los cierres vuelven a estar pendientes: su dinero está otra vez en la
     // tienda, así que la posición global tiene que volver a contarlo.
     if (cierres.length > 0) {

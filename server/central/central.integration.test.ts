@@ -211,25 +211,34 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
     expect(marcado[0].resultado).toBe("TARDIO");
   });
 
-  it("el ingreso bancario suma en la caja, y al anularlo se resta", async () => {
+  /*
+   * Lo ingresado por una caja se SUMA de sus ingresos confirmados, no de un
+   * contador: un contador no aguanta que el mismo ingreso se reenvíe, y el
+   * botón de resincronizar lo reenvía. Por eso se mira por la consulta y no
+   * por la columna, que es lo que de verdad ve la pantalla.
+   */
+  it("el ingreso bancario suma en la caja, y al anularlo deja de contar", async () => {
     const comun = { aggregateType: "REGISTER", aggregateId: 900001, sessionId: null };
-    await ingest.ingerirEvento(
-      evento({ ...comun, tipo: "BANK_DEPOSIT_CREATED", datos: { importeCentimos: 50000 } })
-    );
-    let { rows } = await db.query(
-      `SELECT ingresos_bancarios, ingresado_centimos FROM central_registers WHERE register_id = 900001`
-    );
-    expect(rows[0].ingresos_bancarios).toBe(1);
-    expect(Number(rows[0].ingresado_centimos)).toBe(50000);
+    const ingresado = async () =>
+      (await queries.cajasEnRed(EMPRESA)).find((c) => c.registerId === 900001)?.ingresadoCentimos;
 
     await ingest.ingerirEvento(
-      evento({ ...comun, tipo: "BANK_DEPOSIT_VOIDED", datos: { importeCentimos: 50000 } })
+      evento({
+        ...comun,
+        tipo: "BANK_DEPOSIT_CREATED",
+        datos: { depositId: 900101, importeCentimos: 50000 },
+      })
     );
-    ({ rows } = await db.query(
-      `SELECT ingresos_bancarios, ingresado_centimos FROM central_registers WHERE register_id = 900001`
-    ));
-    expect(rows[0].ingresos_bancarios).toBe(0);
-    expect(Number(rows[0].ingresado_centimos)).toBe(0);
+    expect(await ingresado()).toBe(50000);
+
+    await ingest.ingerirEvento(
+      evento({
+        ...comun,
+        tipo: "BANK_DEPOSIT_VOIDED",
+        datos: { depositId: 900101, importeCentimos: 50000 },
+      })
+    );
+    expect(await ingresado()).toBe(0);
   });
 
   it("el resumen de red cuenta descuadres y eventos tardíos", async () => {
@@ -843,6 +852,87 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
       expect(d.remanenteCentimos).toBe(fila.remanenteCentimos);
       expect(d.repuestoCentimos).toBe(fila.repuestoCentimos);
       expect(d.pendienteCentimos).toBe(50);
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
+  });
+
+  /*
+   * Lo ingresado por una caja no crece al resincronizar.
+   *
+   * El caso real: Central decía que Tarragona había ingresado 6.230 € cuando
+   * la caja sumaba 3.075 €. La causa no era un evento perdido sino lo
+   * contrario: un contador que se incrementaba con cada alta, y el botón de
+   * resincronizar reenvía las altas. Reenviar un ingreso crea un evento NUEVO
+   * del MISMO hecho —otro `event_id`—, así que la clave primaria de
+   * `central_events` no lo para y el contador sumaba otra vez.
+   *
+   * Es el riesgo de todo acumulador en una proyección que se puede reemitir, y
+   * por eso esta prueba reenvía a propósito y comprueba que el número NO se
+   * mueve.
+   */
+  it("lo ingresado no crece al resincronizar, por mucho que se reenvíe", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const { rows: creada } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
+         VALUES ($1,'reenvio',$2,$3,$3) RETURNING id`,
+        [EMPRESA, `reen-${String(process.hrtime.bigint()).slice(-9)}`, Date.now()]
+      );
+      const caja = creada[0].id;
+
+      const { sesion } = await servicio.abrirJornada(ctx, {
+        registerId: caja,
+        fondoManual: [{ valor: 1000, cantidad: 2 }],
+      });
+      await servicio.registrarCobro(ctx, {
+        sessionId: sesion.id,
+        importeCentimos: 4000,
+        formasPago: [{ forma: "CASH", importe: 4000 }],
+        efectivoRecibido: [{ valor: 2000, cantidad: 2 }],
+      });
+      await servicio.guardarArqueo(ctx, {
+        sessionId: sesion.id,
+        contado: [{ valor: 2000, cantidad: 2 }, { valor: 1000, cantidad: 2 }],
+      });
+      await servicio.cerrarJornada(ctx, {
+        sessionId: sesion.id,
+        cambioFinal: [{ valor: 1000, cantidad: 2 }],
+      });
+      await ingresosCaja.crearIngreso(ctx, {
+        registerId: caja,
+        sessionIds: [sesion.id],
+        importeCentimos: 4000,
+        fechaIngreso: "2026-09-30",
+      });
+      await vaciar();
+
+      const mia = async () =>
+        (await queries.cajasEnRed(EMPRESA)).find((c) => c.registerId === caja)!;
+      expect((await mia()).ingresadoCentimos).toBe(4000);
+
+      // Se pulsa el botón. Dos veces, que es lo que hace cualquiera cuando no
+      // está seguro de si la primera funcionó.
+      await ingresosCaja.reemitirIngresos(ctx, { registerId: caja });
+      await ingresosCaja.reemitirIngresos(ctx, { registerId: caja });
+      await vaciar();
+
+      // Y sigue diciendo 40 €, no 120.
+      expect((await mia()).ingresadoCentimos).toBe(4000);
+
+      /*
+       * Y al anular, deja de contar: no se resta de ningún sitio, simplemente
+       * el ingreso deja de ser CONFIRMADO. Reenviarlo otra vez tampoco lo
+       * mueve, que era el mismo fallo por el otro lado.
+       */
+      const ingresos = await ingresosCaja.listarIngresos(EMPRESA, caja);
+      await ingresosCaja.anularIngreso(ctx, ingresos[0].id, "Prueba");
+      await vaciar();
+      expect((await mia()).ingresadoCentimos).toBe(0);
+
+      await ingresosCaja.reemitirIngresos(ctx, { registerId: caja });
+      await vaciar();
+      expect((await mia()).ingresadoCentimos).toBe(0);
     } finally {
       transporteCaja.registrarTransporte(null);
     }

@@ -141,7 +141,22 @@ export async function cajasEnRed(empresaId: string, centroId?: string | null): P
             COALESCE(r.centro_id, c.centro_id) AS centro_id,
             r.jornada_abierta_id, r.ultima_actividad_ms,
             r.ultima_fecha_cerrada,
-            COALESCE(r.ingresado_centimos, 0) AS ingresado_centimos,
+            /*
+             * Lo ingresado se SUMA aquí, no se lleva en un contador.
+             *
+             * Hubo un contador que se incrementaba con cada alta, y el botón de
+             * resincronizar lo rompía: reenviar un ingreso es un evento nuevo
+             * del mismo hecho, así que sumaba otra vez y el total crecía cada
+             * vez que alguien lo pulsaba. Sumando desde la tabla de ingresos,
+             * que va por deposit_id, da igual cuántas veces llegue el mismo.
+             *
+             * Solo los CONFIRMADOS: un ingreso anulado no se llevó nada al
+             * banco.
+             */
+            COALESCE((
+              SELECT SUM(d.importe_centimos) FROM central_bank_deposits d
+               WHERE d.register_id = ids.register_id AND d.estado = 'CONFIRMADO'
+            ), 0) AS ingresado_centimos,
             c.nombre AS caja_nombre, c.codigo,
             ${centro.select},
             CASE WHEN r.ultima_fecha_cerrada IS NULL THEN NULL
