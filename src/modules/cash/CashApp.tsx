@@ -11,6 +11,7 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import { CashProvider, useCash } from "./contexts/CashContext";
 import CashLayout from "./layouts/CashLayout";
 import JornadaActual from "./pages/JornadaActual";
+import PosicionGlobal from "./pages/PosicionGlobal";
 import Cobros from "./pages/Cobros";
 import Pagos from "./pages/Pagos";
 import Movimientos from "./pages/Movimientos";
@@ -60,6 +61,7 @@ function Contenido() {
     <Routes>
       <Route element={<CashLayout />}>
         <Route index element={<Navigate to="/cash/jornada" replace />} />
+        <Route path="posicion" element={<PosicionGlobal />} />
         <Route path="jornada" element={<JornadaActual />} />
         <Route path="cobros" element={<Cobros />} />
         <Route path="pagos" element={<Pagos />} />

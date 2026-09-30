@@ -77,6 +77,7 @@ export const MODULOS_APP: ModuloApp[] = [
       { value: "consulta", label: "Solo consulta" },
     ],
     pantallas: [
+      { key: "posicion", label: "Posición global" },
       { key: "jornada", label: "Jornada actual" },
       { key: "cobros", label: "Cobros" },
       { key: "pagos", label: "Pagos" },

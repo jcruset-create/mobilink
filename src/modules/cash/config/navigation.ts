@@ -8,6 +8,7 @@
 
 import {
   LayoutDashboard,
+  Wallet,
   Repeat,
   HandCoins,
   Banknote,
@@ -38,6 +39,7 @@ export type NavItem = {
 };
 
 export const NAV: NavItem[] = [
+  { key: "posicion", path: "posicion", label: "Posición global", icon: Wallet, permiso: "cash.view" },
   { key: "jornada", path: "jornada", label: "Jornada actual", icon: LayoutDashboard, permiso: "cash.view" },
   { key: "cobros", path: "cobros", label: "Cobros", icon: HandCoins, permiso: "cash.view" },
   { key: "pagos", path: "pagos", label: "Pagos", icon: Banknote, permiso: "cash.view" },

@@ -410,6 +410,35 @@ Decisiones que sostienen el resto:
 - Aislamiento por caja en todas las consultas, numeración `MC-IB-YYYY-NNNNNN`,
   anulación lógica con quién/cuándo/por qué, y auditoría en `app_auditoria`.
 
+**En qué piezas queda lo no ingresado** (`remanente_piezas`, 1.86). Al crear
+el ingreso se guardan las piezas que se quedan en la bolsa. Se calculan
+restando a la bolsa (con lo que quedó la vez anterior) las piezas que forman
+el importe. Esas piezas se buscan primero solo entre billetes y, si no sale
+exacto, con monedas (`domain/remanente.ts`). Es programación dinámica,
+porque el voraz falla con cantidades limitadas. Si la bolsa no cuadra con la
+cuenta, se guarda `NULL` en vez de inventarse unas monedas. Los ingresos
+anteriores también tienen `NULL`, y se ven como «sin desglose» con un botón
+**Contar**, que apunta las piezas una vez y exige que sumen justo lo
+pendiente (`desglosarRemanente`). Con las piezas conocidas, la bolsa las
+suma a sus monedas, y un canje o una reposición las pueden usar.
+
+### Posición global
+
+Pantalla `/cash/posicion`, la primera del menú. Enseña todo el efectivo que
+hay ahora mismo, pieza a pieza, en dos columnas:
+
+- **en la caja**: el efectivo teórico de la jornada abierta o, con la caja
+  cerrada, el cambio del último cierre;
+- **pendiente de ingresar**: la misma bolsa de Ingresos bancarios.
+
+El total pendiente sale de la cuenta (cierres + remanente − repuesto) y el
+desglose, de las piezas. Si no coinciden, se avisa con las piezas que
+faltan. El selector cambia entre la caja elegida y la suma de todas las que
+ve el usuario (su taller, o toda la empresa). No cuenta lo que está fuera de
+la tienda (cambio pedido al banco, entregas a personas): para eso está la
+posición de MC Central. Servidor en `server/cash/posicion.ts`, ruta
+`GET /api/cash/posicion`.
+
 ## 7 sexies. Días atrasados (arranque del módulo)
 
 Al poner la caja en marcha hay días que ya se llevaron a mano en papel y que

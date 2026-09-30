@@ -1194,15 +1194,97 @@ describe.runIf(RUN)("ingresos bancarios", () => {
     expect(await ingresos.remanenteActual(db, caja)).toBe(25);
   });
 
-  it("la bolsa enseña lo que quedó sin ingresar la última vez", async () => {
-    // Lo quedado sin ingresar está en la bolsa: sin esto, sus monedas no salían.
+  it("el ingreso guarda en qué piezas queda lo no ingresado, y la bolsa siguiente las enseña", async () => {
+    // 4.350,45 € = 8×500 + 200 + 100 + 50 en billetes, y 2×0,20 + 0,05 en monedas.
     const caja = await crearCaja("ingresos-remanente-bolsa");
     const s1 = await cerrarJornadaCon(caja, 435045);
-    await ingresos.crearIngreso(ctx, { registerId: caja, sessionIds: [s1], importeCentimos: 435000 });
+    const ingreso = await ingresos.crearIngreso(ctx, { registerId: caja, sessionIds: [s1], importeCentimos: 435000 });
+    expect(ingreso.remanentePiezas).toEqual([
+      { valor: 20, cantidad: 2 },
+      { valor: 5, cantidad: 1 },
+    ]);
+
+    // 725,80 € = 500 + 200 + 20 + 5 + 0,50 + 0,20 + 0,10: sus monedas se suman a las de antes.
     const s2 = await cerrarJornadaCon(caja, 72580);
     const p = await ingresos.proponerCanje(EMPRESA, caja, [s2]);
-    expect(p.remanenteCentimos).toBe(45);
+    expect(p.remanenteCentimos).toBe(0);
     expect(p.pendiente.faltan).toEqual([]);
+    expect(p.pendiente.monedas).toEqual([
+      { valor: 50, cantidad: 1 },
+      { valor: 20, cantidad: 3 },
+      { valor: 10, cantidad: 1 },
+      { valor: 5, cantidad: 1 },
+    ]);
+
+    // Y el ingreso siguiente arrastra esas monedas a su propio remanente.
+    const segundo = await ingresos.crearIngreso(ctx, { registerId: caja, sessionIds: [s2], importeCentimos: 72500 });
+    expect(segundo.remanenteNuevoCentimos).toBe(125);
+    expect(segundo.remanentePiezas).toEqual([
+      { valor: 50, cantidad: 1 },
+      { valor: 20, cantidad: 3 },
+      { valor: 10, cantidad: 1 },
+      { valor: 5, cantidad: 1 },
+    ]);
+  });
+
+  it("lo que quedó sin desglose se cuenta a mano una vez, y tiene que cuadrar", async () => {
+    const caja = await crearCaja("ingresos-remanente-a-mano");
+    const s1 = await cerrarJornadaCon(caja, 435045);
+    await ingresos.crearIngreso(ctx, { registerId: caja, sessionIds: [s1], importeCentimos: 435000 });
+    // Como quedaron los ingresos de antes de guardar las piezas.
+    await db.query(`UPDATE cash_bank_deposits SET remanente_piezas = NULL WHERE register_id = $1`, [caja]);
+
+    const s2 = await cerrarJornadaCon(caja, 72580);
+    expect((await ingresos.proponerCanje(EMPRESA, caja, [s2])).remanenteCentimos).toBe(45);
+
+    await expect(
+      ingresos.desglosarRemanente(ctx, caja, [{ valor: 20, cantidad: 1 }])
+    ).rejects.toMatchObject({ codigo: "DESGLOSE_NO_CUADRA" });
+
+    await ingresos.desglosarRemanente(ctx, caja, [
+      { valor: 20, cantidad: 2 },
+      { valor: 5, cantidad: 1 },
+    ]);
+    const p = await ingresos.proponerCanje(EMPRESA, caja, [s2]);
+    expect(p.remanenteCentimos).toBe(0);
+    expect(p.pendiente.monedas).toContainEqual({ valor: 20, cantidad: 3 });
+
+    await expect(
+      ingresos.desglosarRemanente(ctx, caja, [{ valor: 45, cantidad: 1 }])
+    ).rejects.toMatchObject({ codigo: "REMANENTE_YA_DESGLOSADO" });
+  });
+
+  it("posición global: la caja más lo pendiente de ingresar, pieza a pieza", async () => {
+    const { posicionGlobal } = await import("./posicion.ts");
+    const caja = await crearCaja("posicion-global");
+    const s1 = await cerrarJornadaCon(caja, 435045);
+    await ingresos.crearIngreso(ctx, { registerId: caja, sessionIds: [s1], importeCentimos: 435000 });
+    await cerrarJornadaCon(caja, 72580);
+
+    // La caja abierta con 350 €.
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: componer(35000) });
+    const valor = (l: { valor: number; cantidad: number }[]) => l.reduce((a, x) => a + x.valor * x.cantidad, 0);
+
+    let pos = (await posicionGlobal(EMPRESA, null)).cajas.find((c) => c.registerId === caja)!;
+    expect(pos.estado).toBe("ABIERTA");
+    expect(pos.cajaCentimos).toBe(35000);
+    expect(valor(pos.caja)).toBe(35000);
+    // 0,45 que quedaron + 725,80 del cierre sin ingresar.
+    expect(pos.pendienteCentimos).toBe(72625);
+    expect(valor(pos.pendiente)).toBe(72625);
+    expect(pos.remanenteCentimos).toBe(45);
+    expect(pos.numCierres).toBe(1);
+    expect(pos.sinDesgloseCentimos).toBe(0);
+    expect(pos.faltan).toEqual([]);
+
+    // Cerrada dejando el cambio: la caja es el cambio del cierre, y lo pendiente no cambia.
+    const t = await servicio.stockDeJornada(sesion.id);
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: t.lineas });
+    await servicio.cerrarJornada(ctx, { sessionId: sesion.id, cambioFinal: t.lineas });
+    pos = (await posicionGlobal(EMPRESA, null)).cajas.find((c) => c.registerId === caja)!;
+    expect(pos.estado).toBe("CERRADA");
+    expect(pos.cajaCentimos).toBe(35000);
+    expect(pos.pendienteCentimos).toBe(72625);
   });
 
   it("no se puede ingresar más de lo que hay bajo control", async () => {
@@ -3729,16 +3811,18 @@ describe.runIf(RUN)("canje de monedas por billetes para el ingreso", () => {
       billetesRecibidos: p.canje!.billetesRecibidos,
     });
 
-    await ingresos.crearIngreso(ctx, {
+    const ingreso = await ingresos.crearIngreso(ctx, {
       registerId: caja,
       sessionIds,
       importeCentimos: 10500,
     });
 
-    // Sin cierres pendientes y con los canjes consumidos, el montón es cero.
+    // Sin cierres pendientes y con los canjes consumidos, en el montón solo
+    // quedan las monedas que no se ingresaron, ya desglosadas.
     const despues = await ingresos.proponerCanje(EMPRESA, caja, []);
     expect(despues.ingresableCentimos).toBe(0);
-    expect(despues.enMonedasCentimos).toBe(0);
+    expect(despues.enMonedasCentimos).toBe(ingreso.remanenteNuevoCentimos);
+    expect(despues.remanenteCentimos).toBe(0);
   });
 });
 
@@ -6908,8 +6992,11 @@ describe.runIf(RUN)("reposición del fondo desde el dinero pendiente de ingresar
      */
     const bolsa = await ingresos.composicionPendiente(EMPRESA, caja, sessionIds);
     expect(bolsa.billetes).toEqual([{ valor: 5000, cantidad: 1 }]);
-    expect(valor(bolsa.monedas)).toBe(108); // 0,50 + 0,10 + los 0,48 de la vuelta
-    expect(valor(bolsa.billetes) + valor(bolsa.monedas)).toBe(5108);
+    // 0,50 + 0,10 + los 0,48 de la vuelta, y los 0,53 € del ingreso anterior,
+    // que ahora se saben pieza a pieza y van en la bolsa con los demás.
+    expect(valor(bolsa.monedas)).toBe(161);
+    expect(bolsa.sinDesgloseCentimos).toBe(0);
+    expect(valor(bolsa.billetes) + valor(bolsa.monedas)).toBe(5108 + 53);
 
     // ── Y al llevar el billete al banco, el remanente cuadra al céntimo ──────
     const ingreso = await ingresos.crearIngreso(ctx, {

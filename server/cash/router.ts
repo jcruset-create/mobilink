@@ -33,6 +33,7 @@ import * as config from "./config.ts";
 import * as tesoreria from "./treasury.ts";
 import * as documentos from "./documents.ts";
 import * as ingresos from "./bankdeposits.ts";
+import { posicionGlobal } from "./posicion.ts";
 import { informeCierre, informeIngreso } from "./report.ts";
 import { anotarConfirmacion, escanearFactura } from "./invoice-scan/service.ts";
 import * as liquidaciones from "./expenseclaims/service.ts";
@@ -297,6 +298,18 @@ export function createCashRouter(): Router {
   const r = Router();
 
   r.use(authenticate, requireModule("cash"), cargarPermisosCaja);
+
+  /**
+   * Posición global: el efectivo de cada caja que ve el usuario, pieza a
+   * pieza, en el cajón y en la bolsa pendiente de ingresar. Solo lectura.
+   */
+  r.get(
+    "/posicion",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      res.json(await posicionGlobal(req.authCtx!.empresaId, req.cashCentroId ?? null));
+    })
+  );
 
   // ── Contexto de arranque de la interfaz ─────────────────────────────────
   r.get(
@@ -1271,6 +1284,22 @@ export function createCashRouter(): Router {
           billetesEntregados: lineas(b.billetesEntregados, "billetesEntregados"),
           billetesRecibidos: lineas(b.billetesRecibidos, "billetesRecibidos"),
         })
+      );
+    })
+  );
+
+  /**
+   * Apunta en qué piezas está lo que quedó sin ingresar, cuando el ingreso no
+   * lo guardó. Se cuenta una vez y ya sale desglosado.
+   */
+  r.post(
+    "/registers/:id/bank-deposits/remanente",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const registerId = enteroPositivo(req.params.id, "id");
+      await jerarquia.exigirAmbitoCaja(pool, contexto(req), registerId);
+      res.json(
+        await ingresos.desglosarRemanente(contexto(req), registerId, lineas(req.body?.piezas, "piezas"))
       );
     })
   );

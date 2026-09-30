@@ -23,6 +23,7 @@ import type {
   IngresoBancario,
   PropuestaCanjeIngreso,
   PanelIngresos,
+  PosicionCaja,
   PedidoCambio,
   Pendientes,
   PropuestaPedido,
@@ -413,6 +414,17 @@ export async function descargarPdf(ruta: string): Promise<Blob> {
 
 export const panelIngresos = (registerId: number) =>
   pedir<PanelIngresos>(`/registers/${registerId}/bank-deposits`);
+
+/** Apunta en qué piezas está lo que quedó sin ingresar, cuando no se sabía. */
+export const desglosarRemanente = (registerId: number, piezas: LineaDenominacion[]) =>
+  pedir<{ depositId: number; piezas: LineaDenominacion[] }>(
+    `/registers/${registerId}/bank-deposits/remanente`,
+    json({ piezas })
+  );
+
+/** Todo el efectivo de cada caja visible: el cajón y lo pendiente de ingresar. */
+export const posicionGlobal = () =>
+  pedir<{ cajas: PosicionCaja[]; actualizadoMs: number }>(`/posicion`);
 
 /**
  * Qué se puede ingresar de verdad y qué canje lo mejoraría.
