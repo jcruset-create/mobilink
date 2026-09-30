@@ -849,6 +849,110 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
   });
 
   /*
+   * «Pendiente de llevar al banco» tiene que decir lo mismo que la caja.
+   *
+   * El caso real: Tarragona tenía 5,18 € en monedas que el banco no admitió y
+   * Central decía «no hay nada esperando». Son tres sumandos y no uno —cierres
+   * menos lo repuesto al cajón más el remanente del último ingreso—, que es
+   * exactamente la cuenta de la pantalla de ingresos de la caja.
+   */
+  it("lo pendiente de llevar al banco cuenta también el remanente y descuenta lo repuesto", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const { rows: creada } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, fondo_objetivo_centimos,
+                                     created_at_ms, updated_at_ms)
+         VALUES ($1,'pendiente',$2,4000,$3,$3) RETURNING id`,
+        [EMPRESA, `pend-${String(process.hrtime.bigint()).slice(-9)}`, Date.now()]
+      );
+      const caja = creada[0].id;
+
+      // Día 1: se cobran 40 €, se deja un cambio de 20 € y los 40 € van al banco.
+      const { sesion } = await servicio.abrirJornada(ctx, {
+        registerId: caja,
+        fondoManual: [{ valor: 1000, cantidad: 2 }],
+      });
+      await servicio.registrarCobro(ctx, {
+        sessionId: sesion.id,
+        importeCentimos: 4000,
+        formasPago: [{ forma: "CASH", importe: 4000 }],
+        efectivoRecibido: [{ valor: 2000, cantidad: 2 }],
+      });
+      await servicio.guardarArqueo(ctx, {
+        sessionId: sesion.id,
+        contado: [{ valor: 2000, cantidad: 2 }, { valor: 1000, cantidad: 2 }],
+      });
+      await servicio.cerrarJornada(ctx, {
+        sessionId: sesion.id,
+        cambioFinal: [{ valor: 1000, cantidad: 2 }],
+      });
+      await vaciar();
+
+      // (1) Con el cierre sin ingresar: los 40 € esperan, y la fecha del
+      // cierre es la que mide el retraso.
+      const conCierre = (await queries.pendienteDeIngresar(EMPRESA)).find(
+        (p) => p.registerId === caja
+      );
+      expect(conCierre!.centimos).toBe(4000);
+      expect(conCierre!.jornadas).toBe(1);
+      expect(conCierre!.remanenteCentimos).toBe(0);
+      expect(conCierre!.desde).toBe(sesion.fecha);
+
+      /*
+       * (2) Día 2: la caja abre con 20 € y su fondo son 40, así que se repone
+       * con 20 € del montón que esperaba al banco. Ese dinero YA NO espera:
+       * volvió al cajón, y lo pendiente tiene que bajar a 20 €.
+       */
+      await servicio.abrirJornada(ctx, { registerId: caja });
+      const propuesta = await ingresosCaja.proponerReposicion(EMPRESA, caja, [sesion.id]);
+      expect(propuesta.reposicion!.netoCentimos).toBe(2000);
+      await ingresosCaja.registrarReposicion(ctx, {
+        registerId: caja,
+        sessionIds: [sesion.id],
+        sacar: propuesta.reposicion!.sacar,
+        devolver: propuesta.reposicion!.devolver,
+      });
+      await vaciar();
+
+      const trasReponer = (await queries.pendienteDeIngresar(EMPRESA)).find(
+        (p) => p.registerId === caja
+      );
+      expect(trasReponer!.centimos).toBe(2000);
+
+      /*
+       * (3) Se ingresan 19,50 € de los 20 que quedaban: el banco no se lleva
+       * la calderilla. El cierre queda conciliado, la reposición absorbida, y
+       * lo único que sigue esperando son 0,50 € en monedas — el caso exacto de
+       * Tarragona, que la pantalla daba por cero.
+       */
+      await ingresosCaja.crearIngreso(ctx, {
+        registerId: caja,
+        sessionIds: [sesion.id],
+        importeCentimos: 1950,
+        fechaIngreso: "2026-09-30",
+      });
+      await vaciar();
+
+      const soloMonedas = (await queries.pendienteDeIngresar(EMPRESA)).find(
+        (p) => p.registerId === caja
+      );
+      expect(soloMonedas).toBeTruthy();
+      expect(soloMonedas!.centimos).toBe(50);
+      expect(soloMonedas!.remanenteCentimos).toBe(50);
+      // Sin cierres esperando: lo que queda no lleva esperando desde ningún
+      // día concreto, y una fecha inventada sería peor que ninguna.
+      expect(soloMonedas!.jornadas).toBe(0);
+      expect(soloMonedas!.desde).toBeNull();
+
+      // Y coincide con lo que la caja enseña en su propia pantalla.
+      const panel = await ingresosCaja.panelIngresos(EMPRESA, caja);
+      expect(panel.remanenteCentimos + panel.totalPendienteCentimos).toBe(soloMonedas!.centimos);
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
+  });
+
+  /*
    * Anular una jornada: el despiste de abrir la de hoy cuando se quería
    * registrar un día atrasado.
    *

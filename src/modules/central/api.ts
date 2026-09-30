@@ -155,8 +155,12 @@ export type PendienteDeIngresar = {
   registerId: number;
   caja: string | null;
   centro: string | null;
+  /** Cierres sin ingresar. Cero si lo único que espera es el remanente. */
   jornadas: number;
+  /** Los tres sumandos ya hechos: cierres − repuesto + remanente. */
   centimos: number;
+  /** Cuánto de lo anterior son monedas que el banco no admitió. */
+  remanenteCentimos: number;
   desde: string | null;
   dias: number | null;
 };

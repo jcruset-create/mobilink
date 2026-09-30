@@ -945,7 +945,7 @@ function Ingresos() {
           </thead>
           <tbody>
             {pendiente.length === 0 && (
-              <EmptyRow cols={5} text="No hay nada esperando: todos los cierres están ingresados." />
+              <EmptyRow cols={5} text="No hay nada esperando: todo está ingresado." />
             )}
             {pendiente.map((p) => (
               <tr key={p.registerId} className="border-t border-slate-700">
@@ -953,7 +953,18 @@ function Ingresos() {
                   {p.centro ?? <span className="text-amber-400">sin taller</span>}
                 </td>
                 <td className={tdCls}>{p.caja ?? `#${p.registerId}`}</td>
-                <td className={`${tdCls} text-right tabular-nums`}>{p.jornadas}</td>
+                {/*
+                  * Sin cierres pero con remanente, «0» a secas se lee como un
+                  * error. Lo que espera son las monedas que el banco no quiso,
+                  * y decirlo aquí evita la llamada preguntando de dónde sale.
+                  */}
+                <td className={`${tdCls} text-right tabular-nums`}>
+                  {p.jornadas > 0 ? (
+                    p.jornadas
+                  ) : (
+                    <span className="text-[11px] text-slate-500">solo monedas</span>
+                  )}
+                </td>
                 <td className={tdCls}>
                   {p.desde ?? "—"}
                   {/*
@@ -965,7 +976,16 @@ function Ingresos() {
                     <span className="ml-2 text-amber-400">{p.dias} días</span>
                   )}
                 </td>
-                <td className={`${tdCls} text-right tabular-nums`}>{euros(p.centimos)}</td>
+                <td className={`${tdCls} text-right tabular-nums`}>
+                  {euros(p.centimos)}
+                  {/* Solo cuando el remanente NO es todo: si lo es, la columna
+                      de al lado ya lo dice y repetirlo sobra. */}
+                  {p.remanenteCentimos > 0 && p.jornadas > 0 && (
+                    <div className="text-[11px] text-slate-500">
+                      {euros(p.remanenteCentimos)} en monedas
+                    </div>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
