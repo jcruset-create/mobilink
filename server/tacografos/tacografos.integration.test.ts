@@ -723,20 +723,77 @@ describe.runIf(RUN)("Autorrelleno con TyreControl presente", () => {
     db = (await import("../db.ts")).default;
     intervenciones = await import("./intervenciones.ts");
 
+    /*
+     * ── Por qué «IF NOT EXISTS» no basta y hay ADD COLUMN detrás ──────────
+     *
+     * Estas tablas son fingidas y viven en el esquema que comparte toda la
+     * suite, y no es este fichero el único que las finge:
+     * `server/seguridadMigracion.integration.test.ts` crea también
+     * `tc_usuarios`, con OTRAS columnas —(id, empresa_id, rol, activo)— porque
+     * lo que necesita de ella es distinto.
+     *
+     * Con «CREATE TABLE IF NOT EXISTS» gana quien llegue primero, y el segundo
+     * se encuentra una tabla con la forma del otro sin enterarse. En la
+     * primera vuelta sobre una base recién creada llegaba antes éste; en la
+     * segunda ya estaba la del otro, el INSERT de aquí no encontraba «nombre»
+     * y reventaba el `beforeAll` entero: el bloque salía rojo con sus cuatro
+     * pruebas sin ejecutar y sin decir por qué.
+     *
+     * Así que en vez de suponer la forma, se asegura: se crea si no está y se
+     * añaden las columnas que ESTE fichero necesita, existiera ya la tabla o
+     * no. Y los INSERT nombran sus columnas, que es lo que de verdad hacía
+     * daño: un INSERT posicional da por buena una tabla que no es la suya.
+     */
     await db.query(`
-      CREATE TABLE IF NOT EXISTS tc_empresas (id UUID PRIMARY KEY, nombre TEXT);
-      CREATE TABLE IF NOT EXISTS tc_vehiculos (id UUID PRIMARY KEY, matricula TEXT, bastidor TEXT);
-      CREATE TABLE IF NOT EXISTS tc_usuarios (id UUID PRIMARY KEY, nombre TEXT);
+      CREATE TABLE IF NOT EXISTS tc_empresas (id UUID PRIMARY KEY);
+      ALTER TABLE tc_empresas ADD COLUMN IF NOT EXISTS nombre TEXT;
+      CREATE TABLE IF NOT EXISTS tc_vehiculos (id UUID PRIMARY KEY);
+      ALTER TABLE tc_vehiculos ADD COLUMN IF NOT EXISTS matricula TEXT;
+      ALTER TABLE tc_vehiculos ADD COLUMN IF NOT EXISTS bastidor TEXT;
+      CREATE TABLE IF NOT EXISTS tc_usuarios (id UUID PRIMARY KEY);
+      ALTER TABLE tc_usuarios ADD COLUMN IF NOT EXISTS nombre TEXT;
       CREATE TABLE IF NOT EXISTS tc_intervenciones (
         id UUID PRIMARY KEY, empresa_id UUID, vehiculo_id UUID, tecnico_id UUID,
         numero TEXT, fecha DATE, created_at TIMESTAMPTZ DEFAULT now()
       );
-      CREATE OR REPLACE FUNCTION app_licencia_activa(uuid, text)
+    `);
+
+    /*
+     * ── El DROP es obligatorio, no una limpieza de cortesía ───────────────
+     *
+     * `CREATE OR REPLACE FUNCTION` NO puede cambiar el nombre de un parámetro:
+     * contesta 42P13 «cannot change name of input parameter». Y esta función la
+     * finge también `server/seguridadMigracion.integration.test.ts`, allí con
+     * los parámetros nombrados —(p_empresa uuid, p_modulo text)— porque los
+     * necesita así; aquí van sin nombre.
+     *
+     * Sobre una base recién creada llegaba antes éste y su `afterAll` la
+     * borraba, así que no se notaba. Pero aquel fichero la deja puesta, y en la
+     * segunda vuelta sobre la misma base el REPLACE de aquí se encontraba la
+     * versión con parámetros nombrados y reventaba el `beforeAll`: el bloque
+     * salía rojo con sus cuatro pruebas sin ejecutar, y el mensaje que se veía
+     * —«Autorrelleno con TyreControl presente» a secas— no decía nada de esto.
+     *
+     * Con el DROP delante da igual quién haya pasado antes. Es literalmente lo
+     * que sugiere el propio error de PostgreSQL en su «hint».
+     */
+    await db.query(`
+      DROP FUNCTION IF EXISTS app_licencia_activa(uuid, text);
+      CREATE FUNCTION app_licencia_activa(uuid, text)
         RETURNS boolean LANGUAGE sql IMMUTABLE AS 'SELECT true';
     `);
-    await db.query(`INSERT INTO tc_empresas VALUES ($1, 'TRANSPORTES PLANA S.L.') ON CONFLICT DO NOTHING`, [CLIENTE]);
-    await db.query(`INSERT INTO tc_vehiculos VALUES ($1, '2380jbt', 'WDB9634031L') ON CONFLICT DO NOTHING`, [VEHICULO]);
-    await db.query(`INSERT INTO tc_usuarios VALUES ($1, 'Marc Roig') ON CONFLICT DO NOTHING`, [TECNICO]);
+    await db.query(
+      `INSERT INTO tc_empresas (id, nombre) VALUES ($1, 'TRANSPORTES PLANA S.L.') ON CONFLICT DO NOTHING`,
+      [CLIENTE]
+    );
+    await db.query(
+      `INSERT INTO tc_vehiculos (id, matricula, bastidor) VALUES ($1, '2380jbt', 'WDB9634031L') ON CONFLICT DO NOTHING`,
+      [VEHICULO]
+    );
+    await db.query(
+      `INSERT INTO tc_usuarios (id, nombre) VALUES ($1, 'Marc Roig') ON CONFLICT DO NOTHING`,
+      [TECNICO]
+    );
     await db.query(
       `INSERT INTO tc_intervenciones (id, empresa_id, vehiculo_id, tecnico_id, numero, fecha)
        VALUES (gen_random_uuid(), $1, $2, $3, 'NT-2026-000089', DATE '2025-03-10')`,

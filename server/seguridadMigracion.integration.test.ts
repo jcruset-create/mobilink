@@ -44,6 +44,22 @@ const ADMIN_A = "00000000-0000-4000-a000-000000000009";
 const SUPER = "00000000-0000-4000-a000-0000000000ff";
 const DE_A = "00000000-0000-4000-a000-0000000000aa";
 const DE_B = "00000000-0000-4000-a000-0000000000bb";
+const PARA_BORRAR = "00000000-0000-4000-a000-0000000000dd";
+const DOS_VECES = "00000000-0000-4000-a000-0000000000ee";
+
+/**
+ * Todo lo que esta prueba escribe en la base, en un solo sitio.
+ *
+ * Está arriba y no repartido por los `it` a propósito: el borrón de abajo tiene
+ * que limpiar EXACTAMENTE esto, y con los identificadores escritos a mano en
+ * cada prueba, el día que alguien añada un usuario nuevo el borrón se quedaría
+ * corto sin que nada lo avise.
+ *
+ * `otroSuper` no lleva id fijo —lo crea la RPC con `gen_random_uuid()`— así que
+ * a ése hay que buscarlo por nombre de usuario.
+ */
+const USUARIOS_DE_LA_PRUEBA = [ADMIN_A, SUPER, DE_A, DE_B, PARA_BORRAR, DOS_VECES];
+const NOMBRES_DE_LA_PRUEBA = ["otroSuper", "paraBorrar", "dosVeces", "colado"];
 
 /*
  * El esquema mínimo. `auth.uid()` lee un parámetro de sesión para poder cambiar
@@ -185,6 +201,44 @@ describeSiHayBase("Migración de seguridad de la Fase 0", () => {
 
     // Datos, como los escribiría el backend: sin usuario final detrás.
     await db.query(`set test.uid = ''`);
+
+    /*
+     * ── El borrón de lo que dejó una ejecución anterior ──────────────────
+     *
+     * Esta prueba comparte la base con el resto de la suite y no se le da una
+     * limpia: si alguien la corre dos veces seguidas sin recrearla, la segunda
+     * salía roja en tres sitios, y ninguno de los tres decía por qué.
+     *
+     *   · «un superadministrador de verdad sí puede» daba de alta a
+     *     `otroSuper`, que ya existía → el alta chocaba;
+     *   · el apunte de baja de `deA` seguía ahí, ya consumido, y la prueba lo
+     *     esperaba recién creado y sin consumir;
+     *   · y los apuntes de `dosVeces` se acumulaban: contaba cuatro donde tenía
+     *     que haber dos.
+     *
+     * O sea: la prueba estaba bien, la base estaba sucia. Y eso es lo peor que
+     * le puede pasar a una prueba de seguridad, que es de las que hay que
+     * creerse cuando se pone roja: tres fallos que no señalan ningún fallo
+     * enseñan a mirar para otro lado la próxima vez.
+     *
+     * Los usuarios se borran ANTES que los apuntes, y no al revés: borrar un
+     * usuario dispara el apunte de baja, así que hacerlo al revés dejaría las
+     * filas que se acaban de limpiar.
+     */
+    await db.query(
+      `delete from app_usuarios where id = any($1::uuid[]) or username = any($2::text[])`,
+      [USUARIOS_DE_LA_PRUEBA, NOMBRES_DE_LA_PRUEBA]
+    );
+    await db.query(`delete from app_bajas_auth where user_id = any($1::uuid[])`, [
+      USUARIOS_DE_LA_PRUEBA,
+    ]);
+    await db.query(`delete from adm_usuarios where id = any($1::uuid[])`, [
+      USUARIOS_DE_LA_PRUEBA,
+    ]);
+    await db.query(`delete from app_usuario_modulos where user_id = any($1::uuid[])`, [
+      USUARIOS_DE_LA_PRUEBA,
+    ]);
+
     await db.query(
       `insert into app_usuarios (id,username,nombre,activo,es_superadmin,empresa_id) values
          ($1,'adminA','Admin A',true,false,$5),
@@ -322,7 +376,7 @@ describeSiHayBase("Migración de seguridad de la Fase 0", () => {
     });
 
     it("marca el nivel del solicitante como superadmin cuando lo es", async () => {
-      const objetivo = "00000000-0000-4000-a000-0000000000dd";
+      const objetivo = PARA_BORRAR;
       await db.query(`set test.uid = ''`);
       await db.query(
         `insert into app_usuarios (id,username,nombre,activo,es_superadmin,empresa_id)
@@ -338,7 +392,7 @@ describeSiHayBase("Migración de seguridad de la Fase 0", () => {
     });
 
     it("solo hay un apunte vivo por usuario: pedir la baja otra vez cierra el anterior", async () => {
-      const objetivo = "00000000-0000-4000-a000-0000000000ee";
+      const objetivo = DOS_VECES;
       await db.query(`set test.uid = ''`);
       await db.query(
         `insert into app_usuarios (id,username,nombre,activo,es_superadmin,empresa_id)
