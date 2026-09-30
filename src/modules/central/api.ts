@@ -89,6 +89,15 @@ export type PosicionGlobal = {
   totalCentimos: number;
 };
 
+/** La posición de una caja concreta: los mismos cubos, más de quién es. */
+export type PosicionCaja = PosicionGlobal & {
+  registerId: number;
+  caja: string | null;
+  codigo: string | null;
+  centroId: string | null;
+  centro: string | null;
+};
+
 export type TransitoAbierto = {
   clase: string;
   documentoId: number;
@@ -102,7 +111,9 @@ export type TransitoAbierto = {
 };
 
 export const posicion = () =>
-  pedir<{ posicion: PosicionGlobal; transitos: TransitoAbierto[] }>("/position");
+  pedir<{ posicion: PosicionGlobal; porCaja: PosicionCaja[]; transitos: TransitoAbierto[] }>(
+    "/position"
+  );
 
 export type IngresoEnRed = {
   depositId: number;

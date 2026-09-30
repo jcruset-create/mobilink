@@ -24,6 +24,7 @@ import {
   jornadasEnRed,
   pendienteDeIngresar,
   posicionGlobal,
+  posicionPorCaja,
   resumenRed,
   transitosAbiertos,
 } from "./queries.ts";
@@ -104,17 +105,23 @@ export function createCentralRouter(): Router {
    * Va junta con los tránsitos abiertos porque un total sin el desglose de qué
    * está fuera y con quién no se puede comprobar, y un número de dinero que no
    * se puede comprobar no lo usa nadie.
+   *
+   * Y con el desglose por caja, que es la pregunta siguiente en cuanto el total
+   * no cuadra: a qué taller hay que llamar. En la misma llamada porque las dos
+   * cosas se pintan en la misma pantalla y pedirlas por separado enseñaría un
+   * total de un instante y un detalle de otro.
    */
   r.get(
     "/position",
     exigirPermiso("central.view"),
     ruta(async (req, res) => {
       const empresaId = req.authCtx!.empresaId;
-      const [posicion, transitos] = await Promise.all([
+      const [posicion, porCaja, transitos] = await Promise.all([
         posicionGlobal(empresaId),
+        posicionPorCaja(empresaId),
         transitosAbiertos(empresaId),
       ]);
-      res.json({ posicion, transitos });
+      res.json({ posicion, porCaja, transitos });
     })
   );
 
