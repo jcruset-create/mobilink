@@ -25,7 +25,8 @@ export type ModuloApp = {
     | "therefore"
     | "recepciones"
     | "or-manuales"
-    | "assist";
+    | "assist"
+    | "taller";
   label: string;
   roles: RolApp[];
   pantallas: PantallaApp[];
@@ -37,6 +38,15 @@ export type ModuloApp = {
 const ROL_ACCESO: RolApp[] = [{ value: "usuario", label: "Usuario" }];
 
 export const MODULOS_APP: ModuloApp[] = [
+  {
+    key: "taller",
+    label: "Panel de taller",
+    // Planificación del taller. Estaba fuera del catálogo, y por eso no había
+    // forma de concederlo ni de quitarlo: su tarjeta del hub se enseñaba a
+    // todo el mundo. Sin pantallas gateadas, como Assist.
+    roles: ROL_ACCESO,
+    pantallas: [],
+  },
   {
     key: "assist",
     label: "Mobilink Assist",
