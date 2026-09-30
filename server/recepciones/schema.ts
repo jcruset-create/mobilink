@@ -35,6 +35,14 @@
  */
 
 import pool from "../db.ts";
+import { MODULOS_SAAS } from "../../src/modules/modulosSaas.ts";
+
+/*
+ * Los módulos licenciables salen de la lista única del proyecto. Aquí había
+ * una copia a mano; el último esquema que arranca reescribe el CHECK, y una
+ * copia vieja dejaba fuera los módulos nuevos que aún no tenían filas.
+ */
+const MODULOS_LICENCIABLES = MODULOS_SAAS.map((m) => `'${m}'`).join(",");
 
 export async function initRecepciones(): Promise<void> {
   // ── Proveedores de mercancía ──────────────────────────────────────────────
@@ -663,9 +671,7 @@ async function registrarModuloRecepciones(): Promise<void> {
         BEGIN
           SELECT string_agg(quote_literal(m), ',' ORDER BY m) INTO v_lista
           FROM (
-            SELECT unnest(ARRAY['administracion','tyrecontrol','almacen','sea-core','toolcontrol','safety',
-                                'presencia','taller','workplanner','cash','central','tacografos','assist',
-                                'therefore','recepciones']) AS m
+            SELECT unnest(ARRAY[${MODULOS_LICENCIABLES}]) AS m
             UNION SELECT modulo FROM ${tabla}
           ) t;
           EXECUTE 'ALTER TABLE ${tabla} DROP CONSTRAINT IF EXISTS ${restriccion}';

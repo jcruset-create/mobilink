@@ -12,17 +12,15 @@
 import { Router } from "express";
 import db from "../db.ts";
 import { authenticate, requireSuperadmin, registrarAuditoria } from "./auth.ts";
+import { MODULOS_SAAS } from "../../src/modules/modulosSaas.ts";
 
-export const MODULOS_VALIDOS = [
-  "administracion",
-  "tyrecontrol",
-  "almacen",
-  "sea-core",
-  "toolcontrol",
-  "safety",
-  "presencia",
-  "taller",
-] as const;
+/*
+ * Los módulos que se pueden licenciar salen de la lista única del proyecto.
+ * Aquí había una copia a mano de ocho módulos que nadie actualizó: el panel
+ * ofrecía Mobilink Cash, Central, Recepciones… y al añadir la licencia el
+ * servidor respondía «Módulo no válido».
+ */
+export const MODULOS_VALIDOS: readonly string[] = MODULOS_SAAS;
 
 function slugify(nombre: string): string {
   return nombre
@@ -157,7 +155,7 @@ export function createAdminRouter(): Router {
     try {
       const empresaId = req.params.id;
       const modulo = String(req.body?.modulo || "");
-      if (!MODULOS_VALIDOS.includes(modulo as any)) {
+      if (!MODULOS_VALIDOS.includes(modulo)) {
         return res.status(400).json({ error: "Módulo no válido" });
       }
       const r = await db.query(
