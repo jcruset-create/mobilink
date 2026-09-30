@@ -55,6 +55,7 @@ import type {
 } from "../types";
 import * as api from "../services/api";
 import ContarRemanente from "../components/ContarRemanente";
+import { type Cantidades, cambioParaElCajon, cantidadesDe, lineasDe, valorDe } from "../utils/cambioConCajon";
 
 const fechaCorta = (iso: string) =>
   new Date(`${iso}T00:00:00`).toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit", year: "2-digit" });
@@ -209,11 +210,12 @@ export default function IngresosBancarios() {
         distintos. Trabaja sobre TODOS los cierres pendientes, no sobre lo que
         esté marcado.
       */}
-      <CanjeDeMonedas
+      <PendienteYCambio
         registerId={cajaId}
         sessionIds={panel.pendientes.map((c) => c.sessionId)}
+        pendienteCentimos={pendienteTotal}
         gestiona={gestiona}
-        onCanjeado={cargar}
+        onCambiado={cargar}
       />
 
       <CanjesPreparados canjes={panel.canjes} gestiona={gestiona} onDeshecho={cargar} />
@@ -832,42 +834,45 @@ function Historial({
  * es de las cosas que después no sabe explicar nadie.
  */
 /**
- * Canjear las monedas del montón por billetes, sin ingresar nada.
+ * Lo pendiente de ingresar pieza a pieza, y el cambio con el cajón.
  *
- * Vive aparte del panel de preparar el ingreso a propósito: cambiar el dinero
- * y llevarlo al banco dejaron de ser el mismo gesto. Se canjea el día que se
- * tiene el billete en el cajón y el viaje al banco se hace cuando toca.
+ * Siempre a la vista, aunque no haya ningún cierre marcado: antes el desglose
+ * solo salía al preparar un ingreso, y con cero cierres (solo lo que quedó la
+ * última vez) no había forma de ver qué monedas eran ni de cambiarlas.
  *
- * Trabaja SIEMPRE sobre todos los cierres pendientes, no sobre lo que esté
- * marcado: marcar cierres es para decidir qué se ingresa, y esto es otra cosa.
- * El canje queda apuntado contra esos cierres, y solo se lo llevará un ingreso
- * que los incluya a todos.
+ * El cambio va en los dos sentidos y con cualquier pieza: lo que sale de lo
+ * pendiente entra en el cajón y al revés, y las dos partes tienen que sumar lo
+ * mismo. Por debajo es el canje de siempre —una operación de la jornada
+ * abierta, apuntada contra todos los cierres pendientes—, así que se deshace
+ * igual, desde «Canjes preparados», mientras no se haya hecho el ingreso.
  */
-function CanjeDeMonedas({
+function PendienteYCambio({
   registerId,
   sessionIds,
+  pendienteCentimos,
   gestiona,
-  onCanjeado,
+  onCambiado,
 }: {
   registerId: number;
   sessionIds: number[];
+  /** Lo pendiente según la cuenta: las piezas tienen que sumar esto. */
+  pendienteCentimos: number;
   gestiona: boolean;
-  onCanjeado: () => Promise<void>;
+  onCambiado: () => Promise<void>;
 }) {
-  const { refrescar } = useCash();
+  const { jornada, denominaciones, refrescar } = useCash();
   const [datos, setDatos] = useState<PropuestaCanjeIngreso | null>(null);
+  const [modo, setModo] = useState<"monedas" | "cajon" | "mano">("monedas");
+  const [dePendiente, setDePendiente] = useState<Cantidades>({});
+  const [deCajon, setDeCajon] = useState<Cantidades>({});
   const [error, setError] = useState("");
+  const [aviso, setAviso] = useState("");
   const [ocupado, setOcupado] = useState(false);
 
   const clave = sessionIds.join(",");
   const cargar = useCallback(async () => {
     try {
-      setDatos(
-        await api.proponerCanjeIngreso(
-          registerId,
-          clave.split(",").filter(Boolean).map(Number)
-        )
-      );
+      setDatos(await api.proponerCanjeIngreso(registerId, clave.split(",").filter(Boolean).map(Number)));
     } catch {
       setDatos(null);
     }
@@ -877,104 +882,355 @@ function CanjeDeMonedas({
     void cargar();
   }, [cargar]);
 
+  const esBillete = useCallback(
+    (valor: number) => denominaciones.find((d) => d.valor === valor)?.tipo === "BILLETE",
+    [denominaciones]
+  );
+  const pendiente = useMemo(
+    () => (datos ? [...datos.pendiente.billetes, ...datos.pendiente.monedas].sort((a, b) => b.valor - a.valor) : []),
+    [datos]
+  );
+  const cajon = useMemo(
+    () => (jornada?.stock ?? []).filter((l) => l.cantidad > 0).sort((a, b) => b.valor - a.valor),
+    [jornada]
+  );
+
   /*
-   * El panel sale cuando hay monedas que convertir O cuando hay un canje que
-   * proponer. Lo segundo importa desde que el canje también junta billetes
-   * chicos en gordos: con la bolsa entera en billetes no hay monedas y sigue
-   * habiendo algo que hacer.
+   * Cada modo rellena las dos columnas con su propuesta; después se puede
+   * retocar con − y +, que es lo mismo que pasarse a «A mano».
    */
-  if (!datos || (datos.enMonedasCentimos === 0 && !datos.canje)) return null;
+  const aplicarModo = useCallback(
+    (m: "monedas" | "cajon" | "mano") => {
+      setModo(m);
+      setAviso("");
+      if (m === "mano") {
+        setDePendiente({});
+        setDeCajon({});
+        return;
+      }
+      if (m === "monedas") {
+        const c = datos?.canje;
+        if (!c) {
+          setDePendiente({});
+          setDeCajon({});
+          setAviso(
+            "Ahora mismo no hay un billete del cajón que se pueda formar con las monedas de lo pendiente."
+          );
+          return;
+        }
+        setDePendiente(cantidadesDe([...c.monedasEntregadas, ...c.billetesEntregados]));
+        setDeCajon(cantidadesDe(c.billetesRecibidos));
+        return;
+      }
+      const r = cambioParaElCajon(pendiente, cajon, esBillete);
+      if (!r) {
+        setDePendiente({});
+        setDeCajon({});
+        setAviso("No hay ningún billete del cajón que se pueda pagar con piezas más pequeñas de lo pendiente.");
+        return;
+      }
+      setDePendiente(r.dePendiente);
+      setDeCajon(r.deCajon);
+    },
+    [datos, pendiente, cajon, esBillete]
+  );
 
-  const { canje } = datos;
-  const billetesAntes = datos.pendiente.billetes.reduce((a, l) => a + l.cantidad, 0);
-  const billetesDespues = canje
-    ? billetesAntes -
-      canje.billetesEntregados.reduce((a, l) => a + l.cantidad, 0) +
-      canje.billetesRecibidos.reduce((a, l) => a + l.cantidad, 0)
-    : billetesAntes;
-  const junta = billetesDespues < billetesAntes;
+  // La propuesta de monedas se pone sola al llegar los datos.
+  useEffect(() => {
+    if (datos) aplicarModo("monedas");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [datos]);
 
-  async function canjear() {
-    if (!canje) return;
+  if (!datos) return null;
+
+  const sinDesglose = datos.remanenteCentimos ?? 0;
+  const faltan = datos.pendiente.faltan ?? [];
+  const totalPiezas = datos.ingresableCentimos + datos.enMonedasCentimos + sinDesglose;
+  const nada = pendiente.length === 0 && sinDesglose === 0;
+  if (nada) return null;
+
+  const entregaPendiente = valorDe(dePendiente);
+  const entregaCajon = valorDe(deCajon);
+  const cuadra = entregaPendiente > 0 && entregaPendiente === entregaCajon;
+
+  const despues = (() => {
+    const m = cantidadesDe(pendiente);
+    for (const [v, n] of Object.entries(dePendiente)) m[Number(v)] = (m[Number(v)] ?? 0) - n;
+    for (const [v, n] of Object.entries(deCajon)) m[Number(v)] = (m[Number(v)] ?? 0) + n;
+    return lineasDe(m);
+  })();
+  const despuesBilletes = despues.filter((l) => esBillete(l.valor));
+  const despuesMonedas = despues.filter((l) => !esBillete(l.valor));
+
+  async function cambiar() {
     setOcupado(true);
     setError("");
     try {
       await api.registrarCanjeIngreso({
         registerId,
         sessionIds: clave.split(",").filter(Boolean).map(Number),
-        monedasEntregadas: canje.monedasEntregadas,
-        billetesEntregados: canje.billetesEntregados,
-        billetesRecibidos: canje.billetesRecibidos,
+        monedasEntregadas: lineasDe(dePendiente),
+        billetesEntregados: [],
+        billetesRecibidos: lineasDe(deCajon),
       });
       await cargar();
-      await onCanjeado();
-      // El canje acaba de mover el cajón de verdad: la cabecera y las demás
-      // pantallas tienen que enterarse ya, no en la próxima navegación.
+      await onCambiado();
+      // El cajón se acaba de mover de verdad: la cabecera y las demás
+      // pantallas tienen que enterarse ya.
       await refrescar();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "No se ha podido registrar el canje");
+      setError(e instanceof Error ? e.message : "No se ha podido hacer el cambio");
     } finally {
       setOcupado(false);
     }
   }
 
   return (
-    <div className="rounded-lg border border-emerald-600/40 bg-emerald-950/20 p-3">
-      <div className="text-[13px] font-bold text-emerald-200">
-        {datos.enMonedasCentimos > 0
-          ? `Hay ${euros(datos.enMonedasCentimos)} en monedas esperando al banco, y el banco no las admite`
-          : `La bolsa lleva ${billetesAntes} billetes al banco, y se pueden juntar en menos`}
+    <section className="space-y-2">
+      <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+        Qué hay pendiente de ingresar, pieza a pieza
+      </h2>
+      <div className="grid gap-2 lg:grid-cols-2">
+        <TablaPiezas
+          titulo="En billetes · van al banco"
+          lineas={datos.pendiente.billetes}
+          total={datos.ingresableCentimos}
+          tono="text-sky-300"
+          vacio="Ninguno"
+        />
+        <TablaPiezas
+          titulo="En monedas · el banco no las admite"
+          lineas={datos.pendiente.monedas}
+          total={datos.enMonedasCentimos + sinDesglose}
+          tono="text-amber-300"
+          vacio="Ninguna"
+          extra={
+            sinDesglose > 0
+              ? {
+                  texto: "Sin desglose, del último ingreso",
+                  valor: sinDesglose,
+                  accion: <ContarRemanente registerId={registerId} importeCentimos={sinDesglose} onHecho={cargar} />,
+                }
+              : undefined
+          }
+        />
       </div>
 
-      {error && <div className="mt-1 text-[12px] text-rose-300">{error}</div>}
-
-      {!canje ? (
-        <p className="mt-1 text-[12px] text-slate-300">
-          {datos.sinJornadaAbierta
-            ? "Con la caja cerrada no se puede canjear: el billete sale del cajón. Abre la jornada y vuelve aquí."
-            : "Ahora mismo la caja no tiene billetes con los que cambiarlas. En cuanto tenga el que hace falta, aparecerá aquí la propuesta."}
-        </p>
-      ) : (
-        <>
-          <p className="mt-1 text-[12px] text-slate-300">
-            {canje.valorMonedasCentimos > 0 && (
-              <>
-                Se cambian <strong>{euros(canje.valorMonedasCentimos)}</strong> en monedas por
-                billetes del cajón
-                {junta ? ", " : ". "}
-              </>
-            )}
-            {junta && (
-              <>
-                {canje.valorMonedasCentimos > 0 ? "y la bolsa" : "La bolsa"} pasa de{" "}
-                <strong>{billetesAntes}</strong> a <strong>{billetesDespues}</strong> billetes, que
-                son los que hay que contar en el banco.{" "}
-              </>
-            )}
-            <strong>No se ingresa nada</strong>: el canje queda hecho y esperando al ingreso que se
-            lleve estos cierres.
-          </p>
-          <Piezas
-            titulo="Entregas al cajón"
-            lineas={[...canje.monedasEntregadas, ...canje.billetesEntregados].sort(
-              (a, b) => b.valor - a.valor
-            )}
-            tono="text-slate-300"
-          />
-          <Piezas titulo="Te llevas del cajón" lineas={canje.billetesRecibidos} tono="text-emerald-300" />
-          {gestiona && (
-            <button
-              onClick={() => void canjear()}
-              disabled={ocupado}
-              className="mt-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
-            >
-              {ocupado
-                ? "Registrando…"
-                : `Canjear ${euros(canje.valorCanjeCentimos)} y dejarlo preparado`}
-            </button>
+      {totalPiezas !== pendienteCentimos && (
+        <Aviso tono="aviso">
+          Las piezas suman <strong>{euros(totalPiezas)}</strong> y lo pendiente de ingresar son{" "}
+          <strong>{euros(pendienteCentimos)}</strong>
+          {faltan.length > 0 && (
+            <>
+              : se sacaron{" "}
+              {faltan.map((l, i) => (
+                <span key={l.valor}>
+                  {i > 0 && ", "}
+                  {l.cantidad} × {euros(l.valor)}
+                </span>
+              ))}{" "}
+              que, según los cierres, no estaban
+            </>
           )}
-        </>
+          . Cuenta lo que hay y fíate de lo contado.
+        </Aviso>
       )}
+
+      {sinDesglose > 0 && (
+        <p className="text-[12px] text-slate-400">
+          Para cambiar lo que quedó del último ingreso hay que saber qué piezas son: cuéntalas una
+          vez con «Contar».
+        </p>
+      )}
+
+      {gestiona && pendiente.length > 0 && (
+        <div className="space-y-2 rounded-xl border border-sky-700 bg-sky-950/30 p-3">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <div className="text-[14px] font-bold text-slate-100">Cambiar con el cajón</div>
+              <p className="max-w-2xl text-[12px] text-slate-400">
+                Lo que sale de lo pendiente entra en el cajón, y al revés. Las dos partes tienen que
+                sumar lo mismo: lo pendiente no cambia de importe, solo de piezas. Se apunta en la
+                jornada abierta y se puede deshacer mientras no se haga el ingreso.
+              </p>
+            </div>
+            {jornada && (
+              <span className="rounded-md bg-slate-700 px-2 py-0.5 text-[11px] text-slate-200">
+                Caja abierta · {euros(jornada.totalStockCentimos)} en el cajón
+              </span>
+            )}
+          </div>
+
+          {!jornada ? (
+            <Aviso tono="aviso">
+              Con la caja cerrada no se puede cambiar: el cajón tiene que moverse de verdad. Abre la
+              jornada y vuelve aquí.
+            </Aviso>
+          ) : (
+            <>
+              <div className="flex flex-wrap gap-1.5">
+                {(
+                  [
+                    ["monedas", "Monedas → billete"],
+                    ["cajon", "Cambio para el cajón"],
+                    ["mano", "A mano"],
+                  ] as const
+                ).map(([m, texto]) => (
+                  <button
+                    key={m}
+                    onClick={() => aplicarModo(m)}
+                    className={`rounded-full border px-3 py-1 text-[12px] ${
+                      modo === m
+                        ? "border-sky-600 bg-sky-700 font-bold text-white"
+                        : "border-slate-600 text-slate-300 hover:bg-slate-800"
+                    }`}
+                  >
+                    {texto}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[11px] text-slate-500">
+                {modo === "monedas"
+                  ? "Junta monedas de lo pendiente para llevarte billetes del cajón, que son los que admite el banco."
+                  : modo === "cajon"
+                    ? "Para cuando al cajón le falta cambio: da un billete grande y recibe piezas más pequeñas de lo pendiente."
+                    : "Elige cualquier combinación con − y +."}
+              </p>
+              {aviso && <p className="text-[12px] text-amber-300">{aviso}</p>}
+
+              <div className="grid gap-2 lg:grid-cols-2">
+                <ColumnaCambio
+                  titulo="Sale de lo pendiente → al cajón"
+                  disponibles={pendiente}
+                  elegidas={dePendiente}
+                  onChange={(c) => {
+                    setDePendiente(c);
+                    setModo("mano");
+                  }}
+                  tono="text-amber-300"
+                />
+                <ColumnaCambio
+                  titulo="Sale del cajón → a lo pendiente"
+                  disponibles={cajon}
+                  elegidas={deCajon}
+                  onChange={(c) => {
+                    setDeCajon(c);
+                    setModo("mano");
+                  }}
+                  tono="text-sky-300"
+                />
+              </div>
+
+              {error && <ErrorBox>{error}</ErrorBox>}
+
+              <div
+                className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-[13px] ${
+                  cuadra
+                    ? "border-emerald-600 bg-emerald-950/60 text-emerald-200"
+                    : "border-slate-600 bg-slate-900/60 text-slate-300"
+                }`}
+              >
+                <span>
+                  {cuadra
+                    ? `✓ Cuadra: ${euros(entregaPendiente)} por ${euros(entregaCajon)}. Lo pendiente sigue siendo ${euros(pendienteCentimos)}.`
+                    : entregaPendiente === 0 && entregaCajon === 0
+                      ? "Elige qué sale de cada lado."
+                      : `No cuadra: de lo pendiente salen ${euros(entregaPendiente)} y del cajón ${euros(entregaCajon)}.`}
+                </span>
+                <button
+                  onClick={() => void cambiar()}
+                  disabled={!cuadra || ocupado}
+                  className="rounded-lg bg-sky-600 px-4 py-2 text-[13px] font-bold text-white hover:bg-sky-500 disabled:opacity-40"
+                >
+                  {ocupado ? "Cambiando…" : "Hacer el cambio"}
+                </button>
+              </div>
+              {cuadra && (
+                <p className="text-[12px] text-slate-400">
+                  Después del cambio, lo pendiente queda en{" "}
+                  <strong className="text-slate-200">
+                    {despuesBilletes.length
+                      ? despuesBilletes.map((l) => `${l.cantidad} × ${euros(l.valor)}`).join(", ")
+                      : "ningún billete"}
+                  </strong>{" "}
+                  en billetes y{" "}
+                  <strong className="text-slate-200">
+                    {euros(despuesMonedas.reduce((a, l) => a + l.valor * l.cantidad, 0) + sinDesglose)}
+                  </strong>{" "}
+                  en monedas.
+                </p>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** Una columna del cambio: cada pieza con cuántas hay y los botones − y +. */
+function ColumnaCambio({
+  titulo,
+  disponibles,
+  elegidas,
+  onChange,
+  tono,
+}: {
+  titulo: string;
+  disponibles: readonly LineaDenominacion[];
+  elegidas: Cantidades;
+  onChange: (c: Cantidades) => void;
+  tono: string;
+}) {
+  const { denominaciones } = useCash();
+  const imagenDe = (valor: number) => denominaciones.find((d) => d.valor === valor)?.imagenUrl ?? null;
+  const poner = (valor: number, n: number) => onChange({ ...elegidas, [valor]: Math.max(0, n) });
+  const total = valorDe(elegidas);
+
+  return (
+    <div className="rounded-lg border border-slate-700 bg-slate-900/60 p-2">
+      <div className="px-1 pb-1 text-[12px] font-bold text-slate-200">{titulo}</div>
+      {disponibles.length === 0 && <p className="px-1 text-[12px] text-slate-500">Nada.</p>}
+      {disponibles.map((l) => {
+        const n = elegidas[l.valor] ?? 0;
+        const url = imagenDe(l.valor);
+        return (
+          <div
+            key={l.valor}
+            className={`flex items-center gap-2 rounded-md px-1 py-0.5 ${n > 0 ? "bg-sky-900/40" : ""}`}
+          >
+            {url ? (
+              <img src={url} alt="" className="h-6 w-10 flex-none object-contain" />
+            ) : (
+              <span className="block h-6 w-10 flex-none" />
+            )}
+            <span className="min-w-[64px] text-[13px] font-bold tabular-nums text-slate-100">{euros(l.valor)}</span>
+            <span className="text-[11px] text-slate-500">hay {l.cantidad}</span>
+            <span className="ml-auto flex items-center gap-1.5">
+              <button
+                onClick={() => poner(l.valor, n - 1)}
+                disabled={n === 0}
+                className="h-7 w-7 rounded-md border border-slate-600 bg-slate-800 font-bold text-slate-100 disabled:opacity-30"
+                aria-label={`Una pieza menos de ${euros(l.valor)}`}
+              >
+                −
+              </button>
+              <span className="w-6 text-center text-[13px] font-bold tabular-nums">{n}</span>
+              <button
+                onClick={() => poner(l.valor, n + 1)}
+                disabled={n >= l.cantidad}
+                className="h-7 w-7 rounded-md border border-slate-600 bg-slate-800 font-bold text-slate-100 disabled:opacity-30"
+                aria-label={`Una pieza más de ${euros(l.valor)}`}
+              >
+                +
+              </button>
+            </span>
+          </div>
+        );
+      })}
+      <div className={`mt-1 border-t border-slate-700 px-1 pt-1 text-right text-[12px] ${tono}`}>
+        Entrega <strong>{euros(total)}</strong>
+      </div>
     </div>
   );
 }
@@ -1332,6 +1588,7 @@ function TablaPiezas({
   total,
   tono,
   extra,
+  vacio,
 }: {
   titulo: string;
   lineas: readonly LineaDenominacion[];
@@ -1339,9 +1596,11 @@ function TablaPiezas({
   tono: string;
   /** Una fila sin pieza concreta, como lo que quedó de ingresos anteriores. */
   extra?: { texto: string; valor: number; accion?: ReactNode };
+  /** Texto cuando no hay piezas. Sin él, la tabla vacía no se pinta. */
+  vacio?: string;
 }) {
   const { denominaciones } = useCash();
-  if (lineas.length === 0 && !extra) return null;
+  if (lineas.length === 0 && !extra && !vacio) return null;
 
   const imagenDe = (valor: number) =>
     denominaciones.find((d) => d.valor === valor)?.imagenUrl ?? null;
@@ -1377,6 +1636,13 @@ function TablaPiezas({
               </tr>
             );
           })}
+          {lineas.length === 0 && !extra && vacio && (
+            <tr className="border-t border-slate-800">
+              <td colSpan={4} className="px-2 py-1.5 text-slate-500">
+                {vacio}
+              </td>
+            </tr>
+          )}
           {extra && (
             <tr className="border-t border-slate-800">
               <td className="w-12 px-2 py-1" />
