@@ -21,11 +21,10 @@ import { supabase } from "../modules/administracion/services/supabase";
 import { MODULOS_APP, type ModuloApp } from "../modules/administracion/config/modulosApp";
 import { BASES } from "../modules/rutasModulos";
 import { esSuperadmin as resolverSuperadmin, olvidarSuperadmin } from "../modules/superadmin";
+// Asistencias y Panel de taller: quién puede verlas. La regla vive aparte para
+// poder probarla; aquí solo se aplica.
+import { CON_TARJETA_PROPIA, tarjetasPropiasVisibles } from "./inicioTarjetas";
 
-// Tarjetas fijas con login interno propio (no dependen de app_usuario_modulos).
-// Ponlas a false para ocultarlas del hub.
-const MOSTRAR_PANEL_TALLER = true;
-const MOSTRAR_ASISTENCIAS = true;
 // Licencias: solo para superadmin (gestión comercial de contratos)
 const MOSTRAR_LICENCIAS = true;
 
@@ -128,6 +127,8 @@ export default function InicioPage() {
   const [nombre, setNombre] = useState("");
   const [username, setUsername] = useState("");
   const [tarjetas, setTarjetas] = useState<TarjetaModulo[]>([]);
+  /** Assist y Panel de taller, si el usuario se los ha ganado. */
+  const [tarjetasPropias, setTarjetasPropias] = useState<Set<string>>(() => new Set());
   const [esSuperadmin, setEsSuperadmin] = useState(false);
   const [cargando, setCargando] = useState(true);
 
@@ -182,6 +183,8 @@ export default function InicioPage() {
 
       const lista: TarjetaModulo[] = [];
       for (const m of MODULOS_APP) {
+        // Tienen tarjeta propia más abajo: aquí saldrían por duplicado.
+        if ((CON_TARJETA_PROPIA as readonly string[]).includes(m.key)) continue;
         const acc = accesos.get(m.key);
         if (!acc && !esSuperadmin) continue;
         const rolLabel = acc
@@ -192,7 +195,13 @@ export default function InicioPage() {
           : m.pantallas;
         lista.push({ modulo: m, rolLabel, pantallas: permitidas });
       }
-      if (activo) { setTarjetas(lista); setEsSuperadmin(esSuperadmin); setCargando(false); }
+      const propias = tarjetasPropiasVisibles(accesos.keys(), esSuperadmin);
+      if (activo) {
+        setTarjetas(lista);
+        setTarjetasPropias(propias);
+        setEsSuperadmin(esSuperadmin);
+        setCargando(false);
+      }
     })();
     return () => { activo = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -233,7 +242,7 @@ export default function InicioPage() {
 
         {cargando ? (
           <div className="p-6 text-center text-sm text-slate-500">Cargando…</div>
-        ) : tarjetas.length === 0 && !MOSTRAR_PANEL_TALLER && !MOSTRAR_ASISTENCIAS ? (
+        ) : tarjetas.length === 0 && tarjetasPropias.size === 0 ? (
           <div className="max-w-md rounded-2xl border border-amber-500/40 bg-amber-500/10 p-6 text-sm text-amber-300">
             Tu usuario no tiene módulos asignados. Contacta con un administrador.
           </div>
@@ -298,7 +307,7 @@ export default function InicioPage() {
               );
             })}
 
-            {MOSTRAR_ASISTENCIAS && (
+            {tarjetasPropias.has("assist") && (
               <div className="flex flex-col rounded-2xl border border-slate-700 bg-slate-800 p-4 transition hover:border-slate-500">
                 <div className="mb-2 flex items-center gap-2">
                   <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-red-500/15">
@@ -407,7 +416,7 @@ export default function InicioPage() {
               </div>
             )}
 
-            {MOSTRAR_PANEL_TALLER && (
+            {tarjetasPropias.has("taller") && (
               <div className="flex flex-col rounded-2xl border border-slate-700 bg-slate-800 p-4 transition hover:border-slate-500">
                 <div className="mb-2 flex items-center gap-2">
                   <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-500/15">
@@ -429,11 +438,6 @@ export default function InicioPage() {
           </div>
         )}
 
-        {!cargando && tarjetas.length === 0 && (MOSTRAR_PANEL_TALLER || MOSTRAR_ASISTENCIAS) && (
-          <div className="mt-4 max-w-md rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-300">
-            Tu usuario no tiene módulos asignados. Contacta con un administrador.
-          </div>
-        )}
       </main>
     </div>
   );
