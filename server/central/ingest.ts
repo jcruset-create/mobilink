@@ -161,6 +161,36 @@ async function proyectar(
       );
       return "APLICADO";
 
+    /*
+     * Anulada: se abrió por error, estaba vacía y se retira.
+     *
+     * Se marca, no se borra, igual que en la caja: la fila queda como
+     * CANCELLED y sigue en el histórico. Lo que cambia es que deja de contar
+     * como abierta —y deja de ser la «última jornada» de la que la posición de
+     * efectivo saca el cajón, que es lo que la hacía peligrosa y no solo fea.
+     */
+    case "SESSION_VOIDED":
+      if (!nuevo) return "TARDIO";
+      await client.query(
+        `UPDATE central_sessions
+            SET estado = 'CANCELLED', fecha = COALESCE(fecha, $2),
+                ultima_version = $3, actualizado_en_ms = $4
+          WHERE session_id = $1`,
+        [e.sessionId, d.fecha ?? null, e.aggregateVersion, ahora]
+      );
+      /*
+       * Y la caja deja de tenerla por abierta. Con la condición puesta: si
+       * entretanto se abrió otra, `jornada_abierta_id` apunta a ESA y borrarlo
+       * a ciegas escondería una jornada que sí está abierta.
+       */
+      await client.query(
+        `UPDATE central_registers
+            SET jornada_abierta_id = NULL, actualizado_en_ms = $3
+          WHERE register_id = $1 AND jornada_abierta_id = $2`,
+        [e.registerId, e.sessionId, ahora]
+      );
+      return "APLICADO";
+
     case "SESSION_REOPENED":
       if (!nuevo) return "TARDIO";
       await client.query(

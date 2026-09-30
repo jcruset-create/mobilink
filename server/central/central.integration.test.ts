@@ -849,6 +849,96 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
   });
 
   /*
+   * Anular una jornada: el despiste de abrir la de hoy cuando se quería
+   * registrar un día atrasado.
+   *
+   * El caso real que lo destapó: la red decía OCHO jornadas abiertas con DOS
+   * cajas, cuando `cash_sessions` tiene un índice único que impide que una
+   * caja tenga más de una abierta a la vez. Siete de las ocho estaban anuladas
+   * en la caja y abiertas en Central, porque anular no emitía ningún evento.
+   *
+   * Se comprueban las dos mitades del daño, y la segunda es la que muerde:
+   * además del contador, si la anulada era la última jornada de su caja, la
+   * posición de efectivo leía de ella el fondo del cajón.
+   */
+  it("anular una jornada la retira de Central y no se lleva el cajón por delante", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const { rows: creada } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
+         VALUES ($1,'anulada',$2,$3,$3) RETURNING id`,
+        [EMPRESA, `anul-${String(process.hrtime.bigint()).slice(-9)}`, Date.now()]
+      );
+      const caja = creada[0].id;
+
+      // Un día de verdad, cerrado dejando 20 € de cambio para mañana.
+      const { sesion: buena } = await servicio.abrirJornada(ctx, {
+        registerId: caja,
+        fondoManual: [{ valor: 1000, cantidad: 2 }],
+      });
+      await servicio.guardarArqueo(ctx, {
+        sessionId: buena.id,
+        contado: [{ valor: 1000, cantidad: 2 }],
+      });
+      await servicio.cerrarJornada(ctx, {
+        sessionId: buena.id,
+        cambioFinal: [{ valor: 1000, cantidad: 2 }],
+      });
+      await vaciar();
+
+      const antes = await queries.resumenRed(EMPRESA);
+      const cajonAntes = (await queries.posicionPorCaja(EMPRESA)).find(
+        (c) => c.registerId === caja
+      )!.enCajonesCentimos;
+      expect(cajonAntes).toBe(2000);
+
+      // Y ahora el despiste: se abre otra y se anula, vacía.
+      const { sesion: mala } = await servicio.abrirJornada(ctx, {
+        registerId: caja,
+        fondoManual: [{ valor: 1000, cantidad: 2 }],
+      });
+      await vaciar();
+
+      // Con ella abierta, la red cuenta una más. Hasta aquí es correcto.
+      expect((await queries.resumenRed(EMPRESA)).jornadasAbiertas).toBe(antes.jornadasAbiertas + 1);
+
+      await servicio.anularJornada(ctx, mala.id, "Me equivoqué de día");
+      await vaciar();
+
+      // 1) Deja de contarse como abierta. Sin el evento se quedaba para siempre.
+      expect((await queries.resumenRed(EMPRESA)).jornadasAbiertas).toBe(antes.jornadasAbiertas);
+
+      const { rows: proyectada } = await db.query(
+        `SELECT estado FROM central_sessions WHERE session_id = $1`,
+        [mala.id]
+      );
+      // Se marca, no se borra: sigue en el histórico, como en la caja.
+      expect(proyectada[0].estado).toBe("CANCELLED");
+
+      // Y la caja deja de tenerla por abierta.
+      const { rows: reg } = await db.query(
+        `SELECT jornada_abierta_id FROM central_registers WHERE register_id = $1`,
+        [caja]
+      );
+      expect(reg[0].jornada_abierta_id).toBeNull();
+
+      /*
+       * 2) Y el cajón vuelve a ser el que dejó el cierre de verdad. Es la
+       * mitad que muerde: marcar la jornada como anulada y dejarla siendo «la
+       * última» ponía el cajón a cero, porque una anulada no tiene cambio
+       * final. Se cambiaría un número malo por otro.
+       */
+      const cajonDespues = (await queries.posicionPorCaja(EMPRESA)).find(
+        (c) => c.registerId === caja
+      )!.enCajonesCentimos;
+      expect(cajonDespues).toBe(2000);
+      expect((await queries.posicionGlobal(EMPRESA)).enCajonesCentimos).toBeGreaterThanOrEqual(2000);
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
+  });
+
+  /*
    * La reposición del fondo, que es lo que hacía descuadrar la pantalla contra
    * la caja.
    *

@@ -2399,6 +2399,28 @@ export async function anularJornada(
         WHERE id = $1`,
       [sessionId, ctx.userId, ahora, `Anulada: ${motivo.trim()}`]
     );
+
+    /*
+     * Y se le cuenta a Central, dentro de la misma transacción.
+     *
+     * Sin esto la jornada se quedaba abierta allí para siempre: Central se
+     * alimenta solo de eventos y no hay ninguno que diga «se anuló». El daño
+     * no era solo el contador de jornadas abiertas; si la anulada era la
+     * última de su caja, la posición de efectivo sacaba de ella el fondo del
+     * cajón, que es dinero que no está.
+     */
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, s.registerId),
+      registerId: s.registerId,
+      sessionId,
+      agregado: { tipo: "SESSION", id: sessionId },
+      tipo: "SESSION_VOIDED",
+      ocurridoEnMs: ahora,
+      actorUserId: ctx.userId,
+      datos: { fecha: s.fecha, motivo: motivo.trim() },
+    });
+
     return (await obtenerSesion(sessionId, client))!;
   });
 

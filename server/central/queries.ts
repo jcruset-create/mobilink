@@ -316,6 +316,11 @@ export async function posicionGlobal(empresaId: string): Promise<PosicionGlobal>
               efectivo_neto_centimos, cambio_final_centimos
          FROM central_sessions
         WHERE empresa_id = $1
+          -- Una jornada ANULADA no es la última jornada de nadie: se abrió por
+          -- error y no llegó a existir a ningún efecto, igual que en la caja.
+          -- Contándola, el cajón de esa caja salía a cero —una anulada no tiene
+          -- cambio final— y se perdía el que dejó el cierre de verdad.
+          AND estado IS DISTINCT FROM 'CANCELLED'
         ORDER BY register_id, fecha DESC NULLS LAST, session_id DESC
      ),
      cajon AS (
@@ -405,6 +410,11 @@ export async function posicionPorCaja(empresaId: string): Promise<PosicionCaja[]
               efectivo_neto_centimos, cambio_final_centimos
          FROM central_sessions
         WHERE empresa_id = $1
+          -- Una jornada ANULADA no es la última jornada de nadie: se abrió por
+          -- error y no llegó a existir a ningún efecto, igual que en la caja.
+          -- Contándola, el cajón de esa caja salía a cero —una anulada no tiene
+          -- cambio final— y se perdía el que dejó el cierre de verdad.
+          AND estado IS DISTINCT FROM 'CANCELLED'
         ORDER BY register_id, fecha DESC NULLS LAST, session_id DESC
      ),
      cajon AS (
