@@ -6792,26 +6792,46 @@ app.get("/api/tyrecontrol/webfleet/conduccion", authenticate, requireModule("tyr
   }
 });
 
-app.post("/api/asistencias/:id/en-camino", exigirCredencial(authenticate), async (req, res) => {
+/**
+ * Poner una asistencia en camino: ETA, estado, WhatsApp al cliente y diario.
+ *
+ * ── Por qué es una función y no solo una ruta ──────────────────────────────
+ *
+ * La ruta del operario hacía `fetch("http://localhost:PORT/api/asistencias/
+ * .../en-camino")` para no repetir esto. Funcionó mientras la ruta de dentro no
+ * pedía credencial; el día que pasó a pedirla, esa llamada interna —que no
+ * manda ninguna cabecera— empezó a contestar 401 «No autorizado», y eso es lo
+ * que le salía al operario al pulsar «En camino» en el móvil.
+ *
+ * Llamarse a uno mismo por HTTP tiene ese defecto de fondo: la petición interna
+ * no es la del operario, así que pierde quién la hizo y vuelve a pasar por un
+ * guarda que ya se había pasado fuera. Compartiendo la función no hay segunda
+ * petición que autenticar.
+ *
+ * Devuelve el estado y el cuerpo en vez de escribir en `res` para que las dos
+ * rutas contesten igual sin que ésta sepa nada de HTTP.
+ */
+async function ponerAsistenciaEnCamino(
+  id: number,
+  req: express.Request
+): Promise<{ status: number; body: any }> {
   try {
-    const id = Number(req.params.id);
-    if (!Number.isFinite(id)) {
-      return res.status(400).json({ error: "ID de asistencia no valido" });
-    }
-
     const current = await db.query(
       `SELECT * FROM roadside_assistances WHERE id = $1 LIMIT 1`,
       [id]
     );
     if (current.rows.length === 0) {
-      return res.status(404).json({ error: "Asistencia no encontrada" });
+      return { status: 404, body: { error: "Asistencia no encontrada" } };
     }
 
     const row = current.rows[0];
     const destLat = normalizeNullableNumber(row.latitude);
     const destLng = normalizeNullableNumber(row.longitude);
     if (destLat === null || destLng === null) {
-      return res.status(400).json({ error: "La asistencia no tiene coordenadas de destino" });
+      return {
+        status: 400,
+        body: { error: "La asistencia no tiene coordenadas de destino" },
+      };
     }
 
     let origen: { lat: number; lng: number };
@@ -6842,6 +6862,33 @@ app.post("/api/asistencias/:id/en-camino", exigirCredencial(authenticate), async
 
     const updated = normalizeRoadsideAssistanceRow(result.rows[0]);
 
+    /*
+     * La línea del diario, que es de donde salen los «Últimos eventos» de la
+     * página de seguimiento que ve el cliente.
+     *
+     * Faltaba: esta ruta cambiaba el estado y ponía «departedAtMs» pero no
+     * apuntaba nada, así que el cliente veía la barra de pasos avanzar a «En
+     * camino» y la lista de eventos quedarse en «Asignada». El camino
+     * AUTOMÁTICO —la vigilancia de Webfleet, más abajo— sí lo apuntaba, y por
+     * eso la misma asistencia contaba una cosa u otra según hubiera salido
+     * sola o le hubieran dado al botón.
+     *
+     * Solo cuando el estado CAMBIA de verdad: pulsar «En camino» dos veces son
+     * dos peticiones, y dos líneas iguales en el diario del cliente no cuentan
+     * nada que no contara una. Mismo criterio que el cambio de estado del panel.
+     */
+    if (row.status !== "en_camino") {
+      await db.query(
+        `INSERT INTO roadside_assistance_events ("assistanceId", status, note, "createdBy", "createdAtMs")
+         VALUES ($1, 'en_camino', NULL, $2, $3)`,
+        [id, (req as any).roadsideOperator?.techName ?? "panel", now]
+      ).catch((e: any) => {
+        // Apuntar no puede tumbar una salida ya guardada: el operario ya está
+        // en camino y el estado es lo que manda. Queda en el log.
+        console.error("en-camino diario:", e?.message);
+      });
+    }
+
     // Enviar WhatsApp si tiene teléfono y no se ha enviado ya
     let whatsappWarning: string | undefined;
     if (updated.customerPhone && !row.whatsappEnCaminoEnviado) {
@@ -6871,14 +6918,23 @@ app.post("/api/asistencias/:id/en-camino", exigirCredencial(authenticate), async
 
     await syncTechRoadsideOccupation(updated.id, updated.status, updated.assignedTechName);
 
-    return res.json({
-      ...updated,
-      whatsappWarning: whatsappWarning ?? null,
-    });
+    return { status: 200, body: { ...updated, whatsappWarning: whatsappWarning ?? null } };
   } catch (error: any) {
     const noConfig = error?.message?.includes("no configuradas") || error?.message?.includes("no configurada");
-    res.status(noConfig ? 503 : 500).json({ error: error?.message || "Error al actualizar asistencia" });
+    return {
+      status: noConfig ? 503 : 500,
+      body: { error: error?.message || "Error al actualizar asistencia" },
+    };
   }
+}
+
+app.post("/api/asistencias/:id/en-camino", exigirCredencial(authenticate), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) {
+    return res.status(400).json({ error: "ID de asistencia no valido" });
+  }
+  const { status, body } = await ponerAsistenciaEnCamino(id, req);
+  return res.status(status).json(body);
 });
 
 app.get("/api/roadside-operator/techs", async (_req, res) => {
@@ -7279,18 +7335,18 @@ app.post(
         return res.status(400).json({ error: "La asistencia no está en estado asignada" });
       }
 
-      // Reutilizar lógica de en-camino (Webfleet + ETA)
-      const internalRes = await fetch(
-        `http://localhost:${process.env.PORT || 3000}/api/asistencias/${id}/en-camino`,
-        { method: "POST" }
-      );
-      const data = await internalRes.json();
-
-      if (!internalRes.ok) {
-        return res.status(internalRes.status).json(data);
-      }
-
-      res.json(data);
+      /*
+       * La misma lógica que la ruta de oficina (Webfleet + ETA + WhatsApp),
+       * llamada como función.
+       *
+       * Antes era un `fetch` a uno mismo por localhost, y esa petición interna
+       * no llevaba ninguna cabecera. Mientras la ruta de dentro no pidió
+       * credencial dio igual; en cuanto pasó a pedirla, el operario recibía el
+       * 401 tal cual —«No autorizado»— porque este handler devuelve el cuerpo
+       * de la llamada interna sin mirarlo.
+       */
+      const { status, body } = await ponerAsistenciaEnCamino(id, req);
+      return res.status(status).json(body);
     } catch (error) {
       console.error("POST /api/roadside-operator/assistances/:id/en-camino error:", error);
       res.status(500).json({ error: "Error al salir en camino" });
