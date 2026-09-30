@@ -155,8 +155,12 @@ export type PendienteDeIngresar = {
   registerId: number;
   caja: string | null;
   centro: string | null;
+  /** Cierres sin ingresar. Cero si lo único que espera es el remanente. */
   jornadas: number;
+  /** Los tres sumandos ya hechos: cierres − repuesto + remanente. */
   centimos: number;
+  /** Cuánto de lo anterior son monedas que el banco no admitió. */
+  remanenteCentimos: number;
   desde: string | null;
   dias: number | null;
 };
@@ -406,6 +410,16 @@ export const asignarZona = (centroId: string, zonaId: string | null) =>
     method: "PATCH",
     body: JSON.stringify({ zonaId }),
   });
+
+/**
+ * Vuelve a preguntarle a la caja por sus jornadas anuladas. No cambia nada en
+ * la caja: repara las que Central se quedó contando como abiertas.
+ */
+export const reemitirJornadasAnuladas = (f: { registerId?: number | null } = {}) =>
+  pedir<{ reenviadas: number }>(
+    "/sessions/resync-voided",
+    json({ registerId: f.registerId ?? null })
+  );
 
 /**
  * Vuelve a pedirle a la caja que cuente sus ingresos. No cambia nada en la

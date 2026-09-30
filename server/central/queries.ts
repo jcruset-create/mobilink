@@ -141,7 +141,22 @@ export async function cajasEnRed(empresaId: string, centroId?: string | null): P
             COALESCE(r.centro_id, c.centro_id) AS centro_id,
             r.jornada_abierta_id, r.ultima_actividad_ms,
             r.ultima_fecha_cerrada,
-            COALESCE(r.ingresado_centimos, 0) AS ingresado_centimos,
+            /*
+             * Lo ingresado se SUMA aquí, no se lleva en un contador.
+             *
+             * Hubo un contador que se incrementaba con cada alta, y el botón de
+             * resincronizar lo rompía: reenviar un ingreso es un evento nuevo
+             * del mismo hecho, así que sumaba otra vez y el total crecía cada
+             * vez que alguien lo pulsaba. Sumando desde la tabla de ingresos,
+             * que va por deposit_id, da igual cuántas veces llegue el mismo.
+             *
+             * Solo los CONFIRMADOS: un ingreso anulado no se llevó nada al
+             * banco.
+             */
+            COALESCE((
+              SELECT SUM(d.importe_centimos) FROM central_bank_deposits d
+               WHERE d.register_id = ids.register_id AND d.estado = 'CONFIRMADO'
+            ), 0) AS ingresado_centimos,
             c.nombre AS caja_nombre, c.codigo,
             ${centro.select},
             CASE WHEN r.ultima_fecha_cerrada IS NULL THEN NULL
@@ -316,6 +331,11 @@ export async function posicionGlobal(empresaId: string): Promise<PosicionGlobal>
               efectivo_neto_centimos, cambio_final_centimos
          FROM central_sessions
         WHERE empresa_id = $1
+          -- Una jornada ANULADA no es la última jornada de nadie: se abrió por
+          -- error y no llegó a existir a ningún efecto, igual que en la caja.
+          -- Contándola, el cajón de esa caja salía a cero —una anulada no tiene
+          -- cambio final— y se perdía el que dejó el cierre de verdad.
+          AND estado IS DISTINCT FROM 'CANCELLED'
         ORDER BY register_id, fecha DESC NULLS LAST, session_id DESC
      ),
      cajon AS (
@@ -405,6 +425,11 @@ export async function posicionPorCaja(empresaId: string): Promise<PosicionCaja[]
               efectivo_neto_centimos, cambio_final_centimos
          FROM central_sessions
         WHERE empresa_id = $1
+          -- Una jornada ANULADA no es la última jornada de nadie: se abrió por
+          -- error y no llegó a existir a ningún efecto, igual que en la caja.
+          -- Contándola, el cajón de esa caja salía a cero —una anulada no tiene
+          -- cambio final— y se perdía el que dejó el cierre de verdad.
+          AND estado IS DISTINCT FROM 'CANCELLED'
         ORDER BY register_id, fecha DESC NULLS LAST, session_id DESC
      ),
      cajon AS (
@@ -547,8 +572,12 @@ export type PendienteDeIngresar = {
   registerId: number;
   caja: string | null;
   centro: string | null;
+  /** Cierres sin ingresar. Cero si lo único que espera es el remanente. */
   jornadas: number;
+  /** Los tres sumandos ya hechos: cierres − repuesto + remanente. */
   centimos: number;
+  /** Cuánto de lo anterior son monedas que el banco no admitió. */
+  remanenteCentimos: number;
   /** Fecha del cierre más antiguo sin ingresar. Es lo que mide el retraso. */
   desde: string | null;
   dias: number | null;
@@ -645,30 +674,89 @@ export async function ingresosEnRed(
 }
 
 /**
- * Lo que cada caja tiene cerrado y todavía no ha llevado al banco.
+ * Lo que cada caja tiene esperando para ir al banco.
+ *
+ * Son TRES sumandos, no uno, y es exactamente la misma cuenta que enseña la
+ * caja en su pantalla de ingresos:
+ *
+ *   cierres sin ingresar  −  lo repuesto al cajón  +  remanente del último ingreso
+ *
+ * Durante un tiempo esto solo sumaba los cierres, y la pantalla decía «no hay
+ * nada esperando» con 5,18 € de monedas en la tienda: el banco no se lleva la
+ * calderilla, así que lo que sobra del último ingreso se queda y sigue siendo
+ * dinero por llevar. Y lo que se sacó del montón para reponer el fondo ya NO
+ * está esperando: volvió al cajón.
+ *
+ * Por eso la lista incluye también las cajas que solo tienen remanente. Si se
+ * mandara solo sobre los cierres, la caja con 5,18 € en monedas no saldría en
+ * ninguna fila y el total de arriba seguiría diciendo cero.
  *
  * `desde` es la fecha del cierre más antiguo sin ingresar, y es el dato que de
  * verdad importa: 400 € esperando desde ayer es la operativa normal; los mismos
  * 400 € esperando desde hace tres semanas son dinero en un cajón de una tienda,
- * y eso ya es otra cosa.
+ * y eso ya es otra cosa. Con solo remanente no hay cierre y va a nulo: la
+ * calderilla que el banco no quiso no lleva esperando desde ningún día
+ * concreto, y ponerle una fecha inventada sería peor que dejarla en blanco.
  */
 export async function pendienteDeIngresar(empresaId: string): Promise<PendienteDeIngresar[]> {
-  const centro = await joinCentro("ce", "s.centro_id");
+  const centro = await joinCentro("ce", "x.centro_id");
   const { rows } = await pool.query(
-    `SELECT s.register_id,
-            COUNT(*)::int AS jornadas,
-            COALESCE(SUM(s.ingreso_bancario_centimos),0) AS centimos,
-            MIN(s.fecha) AS desde,
+    `WITH cierres AS (
+       -- El taller del cierre MÁS RECIENTE, que es donde está la caja ahora.
+       -- MIN() no vale: en PostgreSQL no existe para uuid.
+       SELECT register_id,
+              (ARRAY_AGG(centro_id ORDER BY fecha DESC NULLS LAST))[1] AS centro_id,
+              COUNT(*)::int AS jornadas,
+              SUM(ingreso_bancario_centimos) AS centimos,
+              MIN(fecha) AS desde
+         FROM central_sessions
+        WHERE empresa_id = $1 AND estado = 'CLOSED' AND NOT conciliada
+          AND COALESCE(ingreso_bancario_centimos,0) > 0
+        GROUP BY register_id
+     ),
+     repuesto AS (
+       SELECT register_id, SUM(importe_centimos) AS centimos
+         FROM central_float_topups
+        WHERE empresa_id = $1 AND deposit_id IS NULL
+        GROUP BY register_id
+     ),
+     -- Solo el ÚLTIMO ingreso confirmado de cada caja: el remanente es una
+     -- cadena y sumarlos todos contaría las mismas monedas una vez por ingreso.
+     remanente AS (
+       SELECT DISTINCT ON (register_id)
+              register_id, centro_id, remanente_nuevo_centimos AS centimos
+         FROM central_bank_deposits
+        WHERE empresa_id = $1 AND estado = 'CONFIRMADO'
+        ORDER BY register_id, deposit_id DESC
+     ),
+     x AS (
+       SELECT i.register_id,
+              COALESCE(cierres.centro_id, remanente.centro_id) AS centro_id,
+              COALESCE(cierres.jornadas, 0) AS jornadas,
+              cierres.desde,
+              COALESCE(cierres.centimos, 0)
+                - COALESCE(repuesto.centimos, 0)
+                + COALESCE(remanente.centimos, 0) AS centimos,
+              COALESCE(remanente.centimos, 0) AS remanente_centimos
+         FROM (
+                SELECT register_id FROM cierres
+                UNION
+                SELECT register_id FROM remanente WHERE centimos <> 0
+              ) i
+         LEFT JOIN cierres   ON cierres.register_id   = i.register_id
+         LEFT JOIN repuesto  ON repuesto.register_id  = i.register_id
+         LEFT JOIN remanente ON remanente.register_id = i.register_id
+     )
+     SELECT x.register_id, x.jornadas, x.desde, x.centimos, x.remanente_centimos,
             c.nombre AS caja_nombre, ${centro.select}
-       FROM central_sessions s
-       LEFT JOIN cash_registers c ON c.id = s.register_id
+       FROM x
+       LEFT JOIN cash_registers c ON c.id = x.register_id
        ${centro.join}
-      WHERE s.empresa_id = $1
-        AND s.estado = 'CLOSED'
-        AND NOT s.conciliada
-        AND COALESCE(s.ingreso_bancario_centimos,0) > 0
-      GROUP BY s.register_id, c.nombre, centro_nombre
-      ORDER BY MIN(s.fecha)`,
+      -- Una caja cuyos cierres se hayan repuesto enteros no está esperando
+      -- nada: enseñarla con 0,00 € sería ruido en la lista de lo que hay que
+      -- llevar al banco.
+      WHERE x.centimos <> 0
+      ORDER BY x.desde NULLS LAST, x.register_id`,
     [empresaId]
   );
 
@@ -681,6 +769,7 @@ export async function pendienteDeIngresar(empresaId: string): Promise<PendienteD
       centro: r.centro_nombre ?? null,
       jornadas: r.jornadas,
       centimos: Number(r.centimos),
+      remanenteCentimos: Number(r.remanente_centimos),
       desde,
       dias: desde
         ? Math.floor((hoy.getTime() - new Date(`${desde}T00:00:00Z`).getTime()) / 86_400_000)

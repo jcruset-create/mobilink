@@ -238,6 +238,8 @@ export default function CentralApp() {
 function Red() {
   const [datos, setDatos] = useState<Awaited<ReturnType<typeof api.red>> | null>(null);
   const [error, setError] = useState("");
+  const [resync, setResync] = useState("");
+  const [ocupado, setOcupado] = useState(false);
 
   const cargar = useCallback(async () => {
     try {
@@ -253,6 +255,7 @@ function Red() {
 
   if (error) return <ErrorBox>{error}</ErrorBox>;
   const r = datos?.resumen;
+  const puedeConfigurar = datos?.permisos?.includes("central.zones.configure") ?? false;
 
   return (
     <div className="space-y-4">
@@ -277,6 +280,53 @@ function Red() {
           hint="llegaron fuera de orden"
         />
       </div>
+
+      {/*
+        * Reparar las jornadas que la caja anuló y Central se quedó contando
+        * como abiertas.
+        *
+        * Anular no emitía ningún evento, así que la cuenta de arriba crecía con
+        * cada despiste y no bajaba nunca. Desplegar el arreglo no repara lo ya
+        * ocurrido: aquellas se anularon sin evento y hay que volver a contarlo.
+        *
+        * Va aquí, debajo del número que miente, y no en una pantalla de
+        * mantenimiento: quien ve el número raro es quien tiene que poder
+        * arreglarlo, en el sitio donde lo ve.
+        */}
+      {puedeConfigurar && (
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            className={btnSecondary}
+            disabled={ocupado}
+            title="Vuelve a preguntarle a la caja por sus jornadas anuladas. No cambia nada en la caja."
+            onClick={() =>
+              void (async () => {
+                setOcupado(true);
+                setResync("");
+                try {
+                  const x = await api.reemitirJornadasAnuladas();
+                  setResync(
+                    x.reenviadas === 0
+                      ? "No había ninguna descuadrada: todas las anuladas ya constan."
+                      : `${x.reenviadas} jornada${x.reenviadas === 1 ? "" : "s"} anulada${
+                          x.reenviadas === 1 ? "" : "s"
+                        } reenviada${x.reenviadas === 1 ? "" : "s"}. Tarda unos segundos en verse.`
+                  );
+                  await cargar();
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : "No se ha podido resincronizar");
+                } finally {
+                  setOcupado(false);
+                }
+              })()
+            }
+          >
+            <RefreshCw className="h-3.5 w-3.5" />{" "}
+            {ocupado ? "Resincronizando…" : "Resincronizar jornadas anuladas"}
+          </button>
+          {resync && <span className="text-[11px] text-emerald-300">{resync}</span>}
+        </div>
+      )}
 
       <TableWrap>
         <thead>
@@ -895,7 +945,7 @@ function Ingresos() {
           </thead>
           <tbody>
             {pendiente.length === 0 && (
-              <EmptyRow cols={5} text="No hay nada esperando: todos los cierres están ingresados." />
+              <EmptyRow cols={5} text="No hay nada esperando: todo está ingresado." />
             )}
             {pendiente.map((p) => (
               <tr key={p.registerId} className="border-t border-slate-700">
@@ -903,7 +953,18 @@ function Ingresos() {
                   {p.centro ?? <span className="text-amber-400">sin taller</span>}
                 </td>
                 <td className={tdCls}>{p.caja ?? `#${p.registerId}`}</td>
-                <td className={`${tdCls} text-right tabular-nums`}>{p.jornadas}</td>
+                {/*
+                  * Sin cierres pero con remanente, «0» a secas se lee como un
+                  * error. Lo que espera son las monedas que el banco no quiso,
+                  * y decirlo aquí evita la llamada preguntando de dónde sale.
+                  */}
+                <td className={`${tdCls} text-right tabular-nums`}>
+                  {p.jornadas > 0 ? (
+                    p.jornadas
+                  ) : (
+                    <span className="text-[11px] text-slate-500">solo monedas</span>
+                  )}
+                </td>
                 <td className={tdCls}>
                   {p.desde ?? "—"}
                   {/*
@@ -915,7 +976,16 @@ function Ingresos() {
                     <span className="ml-2 text-amber-400">{p.dias} días</span>
                   )}
                 </td>
-                <td className={`${tdCls} text-right tabular-nums`}>{euros(p.centimos)}</td>
+                <td className={`${tdCls} text-right tabular-nums`}>
+                  {euros(p.centimos)}
+                  {/* Solo cuando el remanente NO es todo: si lo es, la columna
+                      de al lado ya lo dice y repetirlo sobra. */}
+                  {p.remanenteCentimos > 0 && p.jornadas > 0 && (
+                    <div className="text-[11px] text-slate-500">
+                      {euros(p.remanenteCentimos)} en monedas
+                    </div>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>

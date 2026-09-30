@@ -33,6 +33,17 @@ export type TipoEvento =
   | "SESSION_OPENED"
   | "SESSION_CLOSED"
   | "SESSION_REOPENED"
+  /*
+   * La jornada se anuló: se abrió por error, estaba vacía y se retira.
+   *
+   * Necesita evento propio y no vale con el silencio: sin él, Central se
+   * quedaba con la jornada ABIERTA para siempre. El contador de «jornadas
+   * abiertas» de la red crecía con cada despiste —ocho con dos cajas, cuando
+   * la base de datos de la caja impide tener más de una abierta por caja— y,
+   * peor, si la anulada era la última de su caja, la posición de efectivo
+   * leía de ella el fondo del cajón.
+   */
+  | "SESSION_VOIDED"
   | "OPERATION_REGISTERED"
   | "OPERATION_REVERSED"
   | "COUNT_RECORDED"

@@ -2399,6 +2399,28 @@ export async function anularJornada(
         WHERE id = $1`,
       [sessionId, ctx.userId, ahora, `Anulada: ${motivo.trim()}`]
     );
+
+    /*
+     * Y se le cuenta a Central, dentro de la misma transacción.
+     *
+     * Sin esto la jornada se quedaba abierta allí para siempre: Central se
+     * alimenta solo de eventos y no hay ninguno que diga «se anuló». El daño
+     * no era solo el contador de jornadas abiertas; si la anulada era la
+     * última de su caja, la posición de efectivo sacaba de ella el fondo del
+     * cajón, que es dinero que no está.
+     */
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, s.registerId),
+      registerId: s.registerId,
+      sessionId,
+      agregado: { tipo: "SESSION", id: sessionId },
+      tipo: "SESSION_VOIDED",
+      ocurridoEnMs: ahora,
+      actorUserId: ctx.userId,
+      datos: { fecha: s.fecha, motivo: motivo.trim() },
+    });
+
     return (await obtenerSesion(sessionId, client))!;
   });
 
@@ -2413,6 +2435,97 @@ export async function anularJornada(
   });
 
   return sesion;
+}
+
+/**
+ * Reenvía a MC Central las jornadas que la caja tiene ANULADAS y Central sigue
+ * teniendo por abiertas.
+ *
+ * Hasta que `anularJornada` empezó a emitir `SESSION_VOIDED`, anular no avisaba
+ * a nadie: Central se quedaba con la jornada abierta para siempre. Desplegar el
+ * evento no repara lo ya ocurrido —esas jornadas se anularon sin evento y no
+ * hay nada que reproyectar—, así que hay que volver a contarlo ahora.
+ *
+ * Esto NO cambia ni un dato de la caja: vuelve a decir lo que la caja ya dice.
+ *
+ * Solo toca las DESCUADRADAS, anuladas aquí y abiertas allí. Reenviar las que
+ * ya cuadran no haría daño —el evento se aplica una sola vez por su clave— pero
+ * llenaría la cola de ruido y el número devuelto dejaría de significar nada.
+ */
+export async function reemitirJornadasAnuladas(
+  ctx: Contexto,
+  filtros: { registerId?: number | null } = {}
+): Promise<{ reenviadas: number }> {
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  const params: unknown[] = [ctx.empresaId];
+  let filtroCaja = "";
+  if (filtros.registerId) {
+    params.push(filtros.registerId);
+    filtroCaja = ` AND s.register_id = $${params.length}`;
+  }
+
+  const { rows } = await pool.query<any>(
+    `SELECT s.id, s.register_id, s.fecha, s.notas
+       FROM cash_sessions s
+       JOIN central_sessions c ON c.session_id = s.id
+      WHERE s.empresa_id = $1 AND s.estado = 'CANCELLED'
+        AND c.estado IN ('OPEN','REOPENED')${filtroCaja}
+      ORDER BY s.id`,
+    params
+  );
+
+  let reenviadas = 0;
+  for (const s of rows) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await emitirEvento(client, {
+        empresaId: ctx.empresaId,
+        centroId: await centroDeCaja(client, Number(s.register_id)),
+        registerId: Number(s.register_id),
+        sessionId: Number(s.id),
+        agregado: { tipo: "SESSION", id: Number(s.id) },
+        tipo: "SESSION_VOIDED",
+        ocurridoEnMs: Date.now(),
+        actorUserId: ctx.userId,
+        /*
+         * El motivo vive en las notas de la jornada, que es donde lo dejó
+         * `anularJornada`. Se manda tal cual: inventarlo sería peor que nada.
+         * La fecha NO se saca con String().slice(0,10) de un DATE de pg: eso
+         * da «Thu Aug 27», y ya mordió una vez en este módulo.
+         */
+        datos: {
+          fecha:
+            s.fecha instanceof Date
+              ? s.fecha.toISOString().slice(0, 10)
+              : s.fecha == null
+                ? null
+                : String(s.fecha).slice(0, 10),
+          motivo: s.notas ?? null,
+        },
+      });
+      await client.query("COMMIT");
+      reenviadas++;
+    } catch (e) {
+      await client.query("ROLLBACK");
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "central.jornadas.reemitir_anuladas",
+    entidad: "cash_sessions",
+    entidadId: String(filtros.registerId ?? "todas"),
+    detalle: { reenviadas, filtros },
+    ip: ctx.ip,
+  });
+
+  return { reenviadas };
 }
 
 /**

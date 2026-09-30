@@ -211,25 +211,34 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
     expect(marcado[0].resultado).toBe("TARDIO");
   });
 
-  it("el ingreso bancario suma en la caja, y al anularlo se resta", async () => {
+  /*
+   * Lo ingresado por una caja se SUMA de sus ingresos confirmados, no de un
+   * contador: un contador no aguanta que el mismo ingreso se reenvíe, y el
+   * botón de resincronizar lo reenvía. Por eso se mira por la consulta y no
+   * por la columna, que es lo que de verdad ve la pantalla.
+   */
+  it("el ingreso bancario suma en la caja, y al anularlo deja de contar", async () => {
     const comun = { aggregateType: "REGISTER", aggregateId: 900001, sessionId: null };
-    await ingest.ingerirEvento(
-      evento({ ...comun, tipo: "BANK_DEPOSIT_CREATED", datos: { importeCentimos: 50000 } })
-    );
-    let { rows } = await db.query(
-      `SELECT ingresos_bancarios, ingresado_centimos FROM central_registers WHERE register_id = 900001`
-    );
-    expect(rows[0].ingresos_bancarios).toBe(1);
-    expect(Number(rows[0].ingresado_centimos)).toBe(50000);
+    const ingresado = async () =>
+      (await queries.cajasEnRed(EMPRESA)).find((c) => c.registerId === 900001)?.ingresadoCentimos;
 
     await ingest.ingerirEvento(
-      evento({ ...comun, tipo: "BANK_DEPOSIT_VOIDED", datos: { importeCentimos: 50000 } })
+      evento({
+        ...comun,
+        tipo: "BANK_DEPOSIT_CREATED",
+        datos: { depositId: 900101, importeCentimos: 50000 },
+      })
     );
-    ({ rows } = await db.query(
-      `SELECT ingresos_bancarios, ingresado_centimos FROM central_registers WHERE register_id = 900001`
-    ));
-    expect(rows[0].ingresos_bancarios).toBe(0);
-    expect(Number(rows[0].ingresado_centimos)).toBe(0);
+    expect(await ingresado()).toBe(50000);
+
+    await ingest.ingerirEvento(
+      evento({
+        ...comun,
+        tipo: "BANK_DEPOSIT_VOIDED",
+        datos: { depositId: 900101, importeCentimos: 50000 },
+      })
+    );
+    expect(await ingresado()).toBe(0);
   });
 
   it("el resumen de red cuenta descuadres y eventos tardíos", async () => {
@@ -843,6 +852,306 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
       expect(d.remanenteCentimos).toBe(fila.remanenteCentimos);
       expect(d.repuestoCentimos).toBe(fila.repuestoCentimos);
       expect(d.pendienteCentimos).toBe(50);
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
+  });
+
+  /*
+   * Lo ingresado por una caja no crece al resincronizar.
+   *
+   * El caso real: Central decía que Tarragona había ingresado 6.230 € cuando
+   * la caja sumaba 3.075 €. La causa no era un evento perdido sino lo
+   * contrario: un contador que se incrementaba con cada alta, y el botón de
+   * resincronizar reenvía las altas. Reenviar un ingreso crea un evento NUEVO
+   * del MISMO hecho —otro `event_id`—, así que la clave primaria de
+   * `central_events` no lo para y el contador sumaba otra vez.
+   *
+   * Es el riesgo de todo acumulador en una proyección que se puede reemitir, y
+   * por eso esta prueba reenvía a propósito y comprueba que el número NO se
+   * mueve.
+   */
+  it("lo ingresado no crece al resincronizar, por mucho que se reenvíe", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const { rows: creada } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
+         VALUES ($1,'reenvio',$2,$3,$3) RETURNING id`,
+        [EMPRESA, `reen-${String(process.hrtime.bigint()).slice(-9)}`, Date.now()]
+      );
+      const caja = creada[0].id;
+
+      const { sesion } = await servicio.abrirJornada(ctx, {
+        registerId: caja,
+        fondoManual: [{ valor: 1000, cantidad: 2 }],
+      });
+      await servicio.registrarCobro(ctx, {
+        sessionId: sesion.id,
+        importeCentimos: 4000,
+        formasPago: [{ forma: "CASH", importe: 4000 }],
+        efectivoRecibido: [{ valor: 2000, cantidad: 2 }],
+      });
+      await servicio.guardarArqueo(ctx, {
+        sessionId: sesion.id,
+        contado: [{ valor: 2000, cantidad: 2 }, { valor: 1000, cantidad: 2 }],
+      });
+      await servicio.cerrarJornada(ctx, {
+        sessionId: sesion.id,
+        cambioFinal: [{ valor: 1000, cantidad: 2 }],
+      });
+      await ingresosCaja.crearIngreso(ctx, {
+        registerId: caja,
+        sessionIds: [sesion.id],
+        importeCentimos: 4000,
+        fechaIngreso: "2026-09-30",
+      });
+      await vaciar();
+
+      const mia = async () =>
+        (await queries.cajasEnRed(EMPRESA)).find((c) => c.registerId === caja)!;
+      expect((await mia()).ingresadoCentimos).toBe(4000);
+
+      // Se pulsa el botón. Dos veces, que es lo que hace cualquiera cuando no
+      // está seguro de si la primera funcionó.
+      await ingresosCaja.reemitirIngresos(ctx, { registerId: caja });
+      await ingresosCaja.reemitirIngresos(ctx, { registerId: caja });
+      await vaciar();
+
+      // Y sigue diciendo 40 €, no 120.
+      expect((await mia()).ingresadoCentimos).toBe(4000);
+
+      /*
+       * Y al anular, deja de contar: no se resta de ningún sitio, simplemente
+       * el ingreso deja de ser CONFIRMADO. Reenviarlo otra vez tampoco lo
+       * mueve, que era el mismo fallo por el otro lado.
+       */
+      const ingresos = await ingresosCaja.listarIngresos(EMPRESA, caja);
+      await ingresosCaja.anularIngreso(ctx, ingresos[0].id, "Prueba");
+      await vaciar();
+      expect((await mia()).ingresadoCentimos).toBe(0);
+
+      await ingresosCaja.reemitirIngresos(ctx, { registerId: caja });
+      await vaciar();
+      expect((await mia()).ingresadoCentimos).toBe(0);
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
+  });
+
+  /*
+   * «Pendiente de llevar al banco» tiene que decir lo mismo que la caja.
+   *
+   * El caso real: Tarragona tenía 5,18 € en monedas que el banco no admitió y
+   * Central decía «no hay nada esperando». Son tres sumandos y no uno —cierres
+   * menos lo repuesto al cajón más el remanente del último ingreso—, que es
+   * exactamente la cuenta de la pantalla de ingresos de la caja.
+   */
+  it("lo pendiente de llevar al banco cuenta también el remanente y descuenta lo repuesto", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const { rows: creada } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, fondo_objetivo_centimos,
+                                     created_at_ms, updated_at_ms)
+         VALUES ($1,'pendiente',$2,4000,$3,$3) RETURNING id`,
+        [EMPRESA, `pend-${String(process.hrtime.bigint()).slice(-9)}`, Date.now()]
+      );
+      const caja = creada[0].id;
+
+      // Día 1: se cobran 40 €, se deja un cambio de 20 € y los 40 € van al banco.
+      const { sesion } = await servicio.abrirJornada(ctx, {
+        registerId: caja,
+        fondoManual: [{ valor: 1000, cantidad: 2 }],
+      });
+      await servicio.registrarCobro(ctx, {
+        sessionId: sesion.id,
+        importeCentimos: 4000,
+        formasPago: [{ forma: "CASH", importe: 4000 }],
+        efectivoRecibido: [{ valor: 2000, cantidad: 2 }],
+      });
+      await servicio.guardarArqueo(ctx, {
+        sessionId: sesion.id,
+        contado: [{ valor: 2000, cantidad: 2 }, { valor: 1000, cantidad: 2 }],
+      });
+      await servicio.cerrarJornada(ctx, {
+        sessionId: sesion.id,
+        cambioFinal: [{ valor: 1000, cantidad: 2 }],
+      });
+      await vaciar();
+
+      // (1) Con el cierre sin ingresar: los 40 € esperan, y la fecha del
+      // cierre es la que mide el retraso.
+      const conCierre = (await queries.pendienteDeIngresar(EMPRESA)).find(
+        (p) => p.registerId === caja
+      );
+      expect(conCierre!.centimos).toBe(4000);
+      expect(conCierre!.jornadas).toBe(1);
+      expect(conCierre!.remanenteCentimos).toBe(0);
+      expect(conCierre!.desde).toBe(sesion.fecha);
+
+      /*
+       * (2) Día 2: la caja abre con 20 € y su fondo son 40, así que se repone
+       * con 20 € del montón que esperaba al banco. Ese dinero YA NO espera:
+       * volvió al cajón, y lo pendiente tiene que bajar a 20 €.
+       */
+      await servicio.abrirJornada(ctx, { registerId: caja });
+      const propuesta = await ingresosCaja.proponerReposicion(EMPRESA, caja, [sesion.id]);
+      expect(propuesta.reposicion!.netoCentimos).toBe(2000);
+      await ingresosCaja.registrarReposicion(ctx, {
+        registerId: caja,
+        sessionIds: [sesion.id],
+        sacar: propuesta.reposicion!.sacar,
+        devolver: propuesta.reposicion!.devolver,
+      });
+      await vaciar();
+
+      const trasReponer = (await queries.pendienteDeIngresar(EMPRESA)).find(
+        (p) => p.registerId === caja
+      );
+      expect(trasReponer!.centimos).toBe(2000);
+
+      /*
+       * (3) Se ingresan 19,50 € de los 20 que quedaban: el banco no se lleva
+       * la calderilla. El cierre queda conciliado, la reposición absorbida, y
+       * lo único que sigue esperando son 0,50 € en monedas — el caso exacto de
+       * Tarragona, que la pantalla daba por cero.
+       */
+      await ingresosCaja.crearIngreso(ctx, {
+        registerId: caja,
+        sessionIds: [sesion.id],
+        importeCentimos: 1950,
+        fechaIngreso: "2026-09-30",
+      });
+      await vaciar();
+
+      const soloMonedas = (await queries.pendienteDeIngresar(EMPRESA)).find(
+        (p) => p.registerId === caja
+      );
+      expect(soloMonedas).toBeTruthy();
+      expect(soloMonedas!.centimos).toBe(50);
+      expect(soloMonedas!.remanenteCentimos).toBe(50);
+      // Sin cierres esperando: lo que queda no lleva esperando desde ningún
+      // día concreto, y una fecha inventada sería peor que ninguna.
+      expect(soloMonedas!.jornadas).toBe(0);
+      expect(soloMonedas!.desde).toBeNull();
+
+      // Y coincide con lo que la caja enseña en su propia pantalla.
+      const panel = await ingresosCaja.panelIngresos(EMPRESA, caja);
+      expect(panel.remanenteCentimos + panel.totalPendienteCentimos).toBe(soloMonedas!.centimos);
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
+  });
+
+  /*
+   * Anular una jornada: el despiste de abrir la de hoy cuando se quería
+   * registrar un día atrasado.
+   *
+   * El caso real que lo destapó: la red decía OCHO jornadas abiertas con DOS
+   * cajas, cuando `cash_sessions` tiene un índice único que impide que una
+   * caja tenga más de una abierta a la vez. Siete de las ocho estaban anuladas
+   * en la caja y abiertas en Central, porque anular no emitía ningún evento.
+   *
+   * Se comprueban las dos mitades del daño, y la segunda es la que muerde:
+   * además del contador, si la anulada era la última jornada de su caja, la
+   * posición de efectivo leía de ella el fondo del cajón.
+   */
+  it("anular una jornada la retira de Central y no se lleva el cajón por delante", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const { rows: creada } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
+         VALUES ($1,'anulada',$2,$3,$3) RETURNING id`,
+        [EMPRESA, `anul-${String(process.hrtime.bigint()).slice(-9)}`, Date.now()]
+      );
+      const caja = creada[0].id;
+
+      // Un día de verdad, cerrado dejando 20 € de cambio para mañana.
+      const { sesion: buena } = await servicio.abrirJornada(ctx, {
+        registerId: caja,
+        fondoManual: [{ valor: 1000, cantidad: 2 }],
+      });
+      await servicio.guardarArqueo(ctx, {
+        sessionId: buena.id,
+        contado: [{ valor: 1000, cantidad: 2 }],
+      });
+      await servicio.cerrarJornada(ctx, {
+        sessionId: buena.id,
+        cambioFinal: [{ valor: 1000, cantidad: 2 }],
+      });
+      await vaciar();
+
+      const antes = await queries.resumenRed(EMPRESA);
+      const cajonAntes = (await queries.posicionPorCaja(EMPRESA)).find(
+        (c) => c.registerId === caja
+      )!.enCajonesCentimos;
+      expect(cajonAntes).toBe(2000);
+
+      // Y ahora el despiste: se abre otra y se anula, vacía.
+      const { sesion: mala } = await servicio.abrirJornada(ctx, {
+        registerId: caja,
+        fondoManual: [{ valor: 1000, cantidad: 2 }],
+      });
+      await vaciar();
+
+      // Con ella abierta, la red cuenta una más. Hasta aquí es correcto.
+      expect((await queries.resumenRed(EMPRESA)).jornadasAbiertas).toBe(antes.jornadasAbiertas + 1);
+
+      await servicio.anularJornada(ctx, mala.id, "Me equivoqué de día");
+      await vaciar();
+
+      // 1) Deja de contarse como abierta. Sin el evento se quedaba para siempre.
+      expect((await queries.resumenRed(EMPRESA)).jornadasAbiertas).toBe(antes.jornadasAbiertas);
+
+      const { rows: proyectada } = await db.query(
+        `SELECT estado FROM central_sessions WHERE session_id = $1`,
+        [mala.id]
+      );
+      // Se marca, no se borra: sigue en el histórico, como en la caja.
+      expect(proyectada[0].estado).toBe("CANCELLED");
+
+      // Y la caja deja de tenerla por abierta.
+      const { rows: reg } = await db.query(
+        `SELECT jornada_abierta_id FROM central_registers WHERE register_id = $1`,
+        [caja]
+      );
+      expect(reg[0].jornada_abierta_id).toBeNull();
+
+      /*
+       * 2) Y el cajón vuelve a ser el que dejó el cierre de verdad. Es la
+       * mitad que muerde: marcar la jornada como anulada y dejarla siendo «la
+       * última» ponía el cajón a cero, porque una anulada no tiene cambio
+       * final. Se cambiaría un número malo por otro.
+       */
+      const cajonDespues = (await queries.posicionPorCaja(EMPRESA)).find(
+        (c) => c.registerId === caja
+      )!.enCajonesCentimos;
+      expect(cajonDespues).toBe(2000);
+      expect((await queries.posicionGlobal(EMPRESA)).enCajonesCentimos).toBeGreaterThanOrEqual(2000);
+
+      /*
+       * Y el camino por el que se repara lo que YA estaba mal: las jornadas
+       * que se anularon antes de que existiera el evento. No hay nada que
+       * reproyectar, así que hay que volver a contarlo. Se simula dejando la
+       * proyección como estaba —abierta—, que es el estado real de las siete
+       * de Tarragona, y se comprueba que el botón la devuelve a su sitio.
+       */
+      await db.query(`UPDATE central_sessions SET estado = 'OPEN' WHERE session_id = $1`, [
+        mala.id,
+      ]);
+      expect((await queries.resumenRed(EMPRESA)).jornadasAbiertas).toBe(
+        antes.jornadasAbiertas + 1
+      );
+
+      const servicioCaja = await import("../cash/service.ts");
+      const reparadas = await servicioCaja.reemitirJornadasAnuladas(ctx, { registerId: caja });
+      expect(reparadas.reenviadas).toBe(1);
+      await vaciar();
+
+      expect((await queries.resumenRed(EMPRESA)).jornadasAbiertas).toBe(antes.jornadasAbiertas);
+
+      // Y pulsarlo otra vez no reenvía nada: ya no hay ninguna descuadrada.
+      expect((await servicioCaja.reemitirJornadasAnuladas(ctx, { registerId: caja })).reenviadas)
+        .toBe(0);
     } finally {
       transporteCaja.registrarTransporte(null);
     }
