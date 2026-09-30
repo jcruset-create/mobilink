@@ -22,7 +22,7 @@
  * queda pendiente se calcula solo y nunca puede ser negativo.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { Landmark, Mail, Paperclip, PiggyBank, Undo2, Upload } from "lucide-react";
 import { useCash } from "../contexts/CashContext";
 import {
@@ -54,6 +54,7 @@ import type {
   CanjePreparado,
 } from "../types";
 import * as api from "../services/api";
+import ContarRemanente from "../components/ContarRemanente";
 
 const fechaCorta = (iso: string) =>
   new Date(`${iso}T00:00:00`).toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit", year: "2-digit" });
@@ -524,7 +525,19 @@ function PrepararIngreso({
             ))}
           </div>
 
-          {propuesta && <DesgloseDeLaBolsa propuesta={propuesta} pendienteCentimos={disponible} />}
+          {propuesta && (
+            <DesgloseDeLaBolsa
+              propuesta={propuesta}
+              pendienteCentimos={disponible}
+              contar={
+                <ContarRemanente
+                  registerId={registerId}
+                  importeCentimos={propuesta.remanenteCentimos ?? 0}
+                  onHecho={recargarPropuesta}
+                />
+              }
+            />
+          )}
 
           <label className="mt-3 block">
             <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
@@ -1207,16 +1220,20 @@ function ReponerFondo({
 function DesgloseDeLaBolsa({
   propuesta,
   pendienteCentimos,
+  contar,
 }: {
   propuesta: PropuestaCanjeIngreso;
   /** Lo pendiente de ingresar según la cuenta: la bolsa tiene que sumar esto. */
   pendienteCentimos: number;
+  /** Botón para contar a mano lo que quedó sin desglose. */
+  contar?: ReactNode;
 }) {
   const { canje } = propuesta;
   /*
-   * Lo que quedó sin ingresar la última vez también está en la bolsa. El
-   * ingreso guardó el importe, no las piezas, así que va en su propia fila;
-   * antes no salía y las monedas de la bolsa no sumaban lo que había.
+   * Lo que quedó sin ingresar la última vez también está en la bolsa. Si el
+   * ingreso guardó sus piezas, ya vienen dentro de las monedas; si no (los
+   * ingresos de antes de guardarlas), va en su propia fila, con un botón para
+   * contarlas una vez.
    */
   const remanente = propuesta.remanenteCentimos ?? 0;
   const faltan = propuesta.pendiente.faltan ?? [];
@@ -1242,7 +1259,7 @@ function DesgloseDeLaBolsa({
         tono="text-amber-300"
         extra={
           remanente > 0
-            ? { texto: "Sin ingresar de ingresos anteriores (sin desglose)", valor: remanente }
+            ? { texto: "Sin ingresar de ingresos anteriores (sin desglose)", valor: remanente, accion: contar }
             : undefined
         }
       />
@@ -1321,7 +1338,7 @@ function TablaPiezas({
   total: number;
   tono: string;
   /** Una fila sin pieza concreta, como lo que quedó de ingresos anteriores. */
-  extra?: { texto: string; valor: number };
+  extra?: { texto: string; valor: number; accion?: ReactNode };
 }) {
   const { denominaciones } = useCash();
   if (lineas.length === 0 && !extra) return null;
@@ -1364,7 +1381,8 @@ function TablaPiezas({
             <tr className="border-t border-slate-800">
               <td className="w-12 px-2 py-1" />
               <td colSpan={2} className="px-1 py-1 text-slate-300">
-                {extra.texto}
+                <span className="mr-2">{extra.texto}</span>
+                {extra.accion}
               </td>
               <td className="px-2 py-1 text-right tabular-nums text-slate-400">{euros(extra.valor)}</td>
             </tr>

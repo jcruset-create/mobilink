@@ -1479,6 +1479,19 @@ export async function initCash(): Promise<void> {
   `);
 
   /*
+   * En qué piezas se queda lo que no se ingresa.
+   *
+   * El ingreso guarda el importe; esto guarda las piezas que quedan en la
+   * bolsa, para enseñarlas desglosadas en la bolsa siguiente y en la posición
+   * global. NULL = no se sabe (ingresos anteriores a esta columna, o una bolsa
+   * que no cuadraba): se enseña «sin desglose» y se puede contar a mano.
+   */
+  await pool.query(`
+    ALTER TABLE cash_bank_deposits
+      ADD COLUMN IF NOT EXISTS remanente_piezas JSONB;
+  `);
+
+  /*
    * Reglas del escáner de facturas: qué TPV es de quién.
    *
    * Miran CAMPOS del resguardo, no su texto suelto, y eso no es un detalle. En

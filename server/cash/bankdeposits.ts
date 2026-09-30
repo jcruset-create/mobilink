@@ -55,6 +55,7 @@ import {
 import { type LineaDenominacion, inventarioDesdeLineas } from "./domain/inventory.ts";
 import { type Canje, mejorCanje } from "./domain/depositswap.ts";
 import { type Reposicion, deficitDeFondo, mejorReposicion } from "./domain/floattopup.ts";
+import { piezasDelIngreso, restarPiezas, valorDe } from "./domain/remanente.ts";
 import type { Contexto } from "./service.ts";
 import { centroDeCaja, emitirEvento } from "./events/emitter.ts";
 
@@ -106,6 +107,8 @@ export type IngresoBancario = {
   repuestoCentimos: Centimos;
   importeCentimos: Centimos;
   remanenteNuevoCentimos: Centimos;
+  /** En qué piezas se quedó lo no ingresado. null = no se sabe. */
+  remanentePiezas: LineaDenominacion[] | null;
   cierres: CierreConciliado[];
   creadoPor: string | null;
   creadoAtMs: number;
@@ -154,6 +157,7 @@ function aIngreso(r: any, cierres: CierreConciliado[], esUltimo: boolean): Ingre
     repuestoCentimos: Number(r.repuesto_centimos ?? 0),
     importeCentimos: Number(r.importe_centimos),
     remanenteNuevoCentimos: Number(r.remanente_nuevo_centimos),
+    remanentePiezas: aLineas(r.remanente_piezas),
     cierres,
     creadoPor: r.creado_por,
     creadoAtMs: Number(r.creado_at_ms),
@@ -181,6 +185,122 @@ export async function remanenteActual(
     [registerId]
   );
   return rows.length ? Number(rows[0].remanente_nuevo_centimos) : 0;
+}
+
+/** Las piezas guardadas en JSONB, validadas. Cualquier cosa rara = null. */
+/* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+function aLineas(v: any): LineaDenominacion[] | null {
+  if (!Array.isArray(v)) return null;
+  const lineas: LineaDenominacion[] = [];
+  for (const l of v) {
+    const valor = Number(l?.valor);
+    const cantidad = Number(l?.cantidad);
+    if (!Number.isSafeInteger(valor) || valor <= 0) return null;
+    if (!Number.isSafeInteger(cantidad) || cantidad < 0) return null;
+    if (cantidad > 0) lineas.push({ valor, cantidad });
+  }
+  return lineas.sort((a, b) => b.valor - a.valor);
+}
+
+/**
+ * Lo que quedó sin ingresar la última vez, con sus piezas si se saben.
+ *
+ * `piezas` es null cuando el ingreso no guardó el desglose (anterior a la
+ * columna, o una bolsa que no cuadraba). Sin remanente, lista vacía: no hay
+ * nada que no se sepa.
+ */
+export async function remanenteConPiezas(
+  client: PoolClient | typeof pool,
+  registerId: number
+): Promise<{ depositId: number | null; centimos: Centimos; piezas: LineaDenominacion[] | null }> {
+  const { rows } = await client.query(
+    `SELECT id, remanente_nuevo_centimos, remanente_piezas FROM cash_bank_deposits
+      WHERE register_id = $1 AND estado = 'CONFIRMADO'
+      ORDER BY id DESC LIMIT 1`,
+    [registerId]
+  );
+  if (rows.length === 0) return { depositId: null, centimos: 0, piezas: [] };
+  const centimos = Number(rows[0].remanente_nuevo_centimos);
+  if (centimos === 0) return { depositId: rows[0].id, centimos: 0, piezas: [] };
+  const piezas = aLineas(rows[0].remanente_piezas);
+  // Unas piezas guardadas que no suman el remanente no se enseñan: mentirían.
+  return {
+    depositId: rows[0].id,
+    centimos,
+    piezas: piezas && valorDe(piezas) === centimos ? piezas : null,
+  };
+}
+
+/**
+ * Apunta a mano en qué piezas está lo que quedó sin ingresar.
+ *
+ * Para los ingresos que no guardaron el desglose: los anteriores a guardarlo,
+ * o uno hecho con una bolsa que no cuadraba. Alguien cuenta esas monedas una
+ * vez y a partir de ahí salen desglosadas en la bolsa y en la posición global.
+ *
+ * Solo sobre un remanente SIN desglose: uno que ya lo tiene salió de la cuenta
+ * del propio ingreso, y pisarlo a mano sería esconder un descuadre.
+ */
+export async function desglosarRemanente(
+  ctx: Contexto,
+  registerId: number,
+  lineas: LineaDenominacion[]
+): Promise<{ depositId: number; piezas: LineaDenominacion[] }> {
+  const piezas = lineas
+    .filter((l) => l.cantidad > 0)
+    .map((l) => ({ valor: l.valor, cantidad: l.cantidad }))
+    .sort((a, b) => b.valor - a.valor);
+
+  const resultado = await enTransaccion(async (client) => {
+    const { rows: cajas } = await client.query(
+      `SELECT id FROM cash_registers WHERE id = $1 AND empresa_id = $2 FOR UPDATE`,
+      [registerId, ctx.empresaId]
+    );
+    if (cajas.length === 0) throw new ErrorCaja("CAJA_NO_ENCONTRADA", "La caja no existe.", 404);
+
+    const actual = await remanenteConPiezas(client, registerId);
+    if (actual.depositId == null || actual.centimos === 0) {
+      throw new ErrorCaja("SIN_REMANENTE", "No hay nada pendiente de ingresos anteriores.", 409);
+    }
+    if (actual.piezas) {
+      throw new ErrorCaja(
+        "REMANENTE_YA_DESGLOSADO",
+        "Lo pendiente del último ingreso ya tiene sus piezas apuntadas.",
+        409
+      );
+    }
+
+    const validas = new Set((await cargarDenominaciones(client, false)).map((d) => d.valor));
+    for (const l of piezas) {
+      if (!validas.has(l.valor)) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", `${formatearEuros(l.valor)} € no es una pieza del catálogo.`, 400);
+      }
+    }
+    if (valorDe(piezas) !== actual.centimos) {
+      throw new ErrorCaja(
+        "DESGLOSE_NO_CUADRA",
+        `Las piezas suman ${formatearEuros(valorDe(piezas))} € y lo pendiente del último ingreso son ${formatearEuros(actual.centimos)} €.`,
+        400
+      );
+    }
+
+    await client.query(`UPDATE cash_bank_deposits SET remanente_piezas = $2 WHERE id = $1`, [
+      actual.depositId,
+      JSON.stringify(piezas),
+    ]);
+    return { depositId: actual.depositId, piezas };
+  });
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.bank_deposit.remanente_desglosado",
+    entidad: "cash_bank_deposits",
+    entidadId: String(resultado.depositId),
+    detalle: { piezas: resultado.piezas },
+    ip: ctx.ip,
+  });
+  return resultado;
 }
 
 /**
@@ -442,6 +562,25 @@ export async function crearIngreso(ctx: Contexto, e: EntradaIngreso): Promise<In
     const remanenteNuevo = disponible - e.importeCentimos;
 
     /*
+     * En qué piezas se queda lo que no se ingresa: la bolsa (con lo que quedó
+     * la vez anterior) menos los billetes que se llevan. Solo si la bolsa
+     * cuadra con lo que dice la cuenta; si no, null y la pantalla lo enseña
+     * «sin desglose» en vez de inventarse unas monedas.
+     */
+    let remanentePiezas: LineaDenominacion[] | null = null;
+    const bolsa = await composicionPendiente(ctx.empresaId, e.registerId, sessionIds, client);
+    const piezasBolsa = [...bolsa.billetes, ...bolsa.monedas];
+    if (
+      bolsa.sinDesgloseCentimos === 0 &&
+      bolsa.faltan.length === 0 &&
+      valorDe(piezasBolsa) === disponible
+    ) {
+      const billetes = new Set(bolsa.billetes.map((l) => l.valor));
+      const salen = piezasDelIngreso(piezasBolsa, e.importeCentimos, (v) => billetes.has(v));
+      if (salen) remanentePiezas = restarPiezas(piezasBolsa, salen);
+    }
+
+    /*
      * A qué cuenta va. Si no se dice, la marcada por defecto: es lo normal —una
      * empresa ingresa casi siempre en la misma— y obligar a elegirla cada vez
      * sería un estorbo diario. Puede quedar en NULL si aún no hay ninguna dada
@@ -476,8 +615,8 @@ export async function crearIngreso(ctx: Contexto, e: EntradaIngreso): Promise<In
          (empresa_id, register_id, numero, estado, fecha_ingreso, referencia, observaciones,
           remanente_anterior_centimos, total_cierres_centimos, repuesto_centimos,
           importe_centimos, remanente_nuevo_centimos, creado_por, creado_at_ms,
-          bank_account_id)
-       VALUES ($1,$2,$3,'CONFIRMADO',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+          bank_account_id, remanente_piezas)
+       VALUES ($1,$2,$3,'CONFIRMADO',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
        RETURNING *`,
       [
         ctx.empresaId,
@@ -494,6 +633,7 @@ export async function crearIngreso(ctx: Contexto, e: EntradaIngreso): Promise<In
         ctx.userId,
         ahora,
         cuentaId,
+        remanentePiezas == null ? null : JSON.stringify(remanentePiezas),
       ]
     );
     const depositId = creado[0].id;
@@ -960,6 +1100,11 @@ export async function composicionPendiente(
    * tirarlas en silencio.
    */
   faltan: LineaDenominacion[];
+  /**
+   * Lo que quedó sin ingresar la última vez y del que no se saben las piezas.
+   * Está en la bolsa, pero fuera de `billetes` y `monedas`. 0 cuando se sabe.
+   */
+  sinDesgloseCentimos: Centimos;
 }> {
   const piezas = new Map<Centimos, number>();
   const acumular = (valor: Centimos, cantidad: number) => {
@@ -1044,6 +1189,21 @@ export async function composicionPendiente(
     acumular(Number(r.valor), r.direccion === "IN" ? -Number(r.n) : Number(r.n));
   }
 
+  /*
+   * Lo que quedó sin ingresar la última vez también está en la bolsa. Solo
+   * para el montón vivo: al recomponer un ingreso ya hecho (`canjesDe`) lo
+   * que interesa son sus cierres, no el remanente de otro.
+   */
+  let sinDesgloseCentimos = 0;
+  if (canjesDe == null) {
+    const remanente = await remanenteConPiezas(client, registerId);
+    if (remanente.piezas) {
+      for (const l of remanente.piezas) acumular(l.valor, l.cantidad);
+    } else {
+      sinDesgloseCentimos = remanente.centimos;
+    }
+  }
+
   const denominaciones = await cargarDenominaciones(client, false);
   const esBillete = new Map(denominaciones.map((d) => [d.valor, d.tipo === "BILLETE"]));
 
@@ -1060,6 +1220,7 @@ export async function composicionPendiente(
     billetes: billetes.sort(porValor),
     monedas: monedas.sort(porValor),
     faltan: faltan.sort(porValor),
+    sinDesgloseCentimos,
   };
 }
 
@@ -1125,8 +1286,8 @@ export type PropuestaCanje = {
   /** Lo que se quedaría en tienda si no se canjea nada. */
   enMonedasCentimos: Centimos;
   /**
-   * Lo que quedó sin ingresar en ingresos anteriores. Está en la bolsa, pero
-   * sin desglose: el ingreso guarda el importe y no las piezas.
+   * Lo que quedó sin ingresar en ingresos anteriores y del que no se saben las
+   * piezas. Si se saben, ya van dentro de `pendiente` y esto es 0.
    */
   remanenteCentimos: Centimos;
   /** El canje propuesto, o null si la caja no tiene con qué. */
@@ -1147,10 +1308,9 @@ export async function proponerCanje(
   registerId: number,
   sessionIds: readonly number[]
 ): Promise<PropuestaCanje> {
-  const [pendiente, abierta, remanente] = await Promise.all([
+  const [pendiente, abierta] = await Promise.all([
     composicionPendiente(empresaId, registerId, sessionIds),
     sesionAbierta(registerId),
-    remanenteActual(pool, registerId),
   ]);
 
   const billetesCaja = new Map<Centimos, number>();
@@ -1168,7 +1328,7 @@ export async function proponerCanje(
     pendiente,
     ingresableCentimos: pendiente.billetes.reduce((a, l) => a + l.valor * l.cantidad, 0),
     enMonedasCentimos: pendiente.monedas.reduce((a, l) => a + l.valor * l.cantidad, 0),
-    remanenteCentimos: remanente,
+    remanenteCentimos: pendiente.sinDesgloseCentimos,
     canje: abierta
       ? mejorCanje(
           inventarioDesdeLineas(pendiente.monedas),

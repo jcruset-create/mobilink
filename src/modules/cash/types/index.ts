@@ -1183,3 +1183,26 @@ export type PropuestaVinculo = {
   employeeNombre: string | null;
   candidatos: { id: string; nombre: string }[];
 };
+
+/** Posición global de una caja: el cajón y la bolsa pendiente de ingresar, pieza a pieza. */
+export type PosicionCaja = {
+  registerId: number;
+  nombre: string;
+  centro: string | null;
+  centroId: string | null;
+  /** De dónde sale lo de la caja: la jornada abierta o el cambio del último cierre. */
+  estado: "ABIERTA" | "CERRADA" | "SIN_JORNADAS";
+  fecha: string | null;
+  caja: LineaDenominacion[];
+  cajaCentimos: number;
+  pendiente: LineaDenominacion[];
+  /** Lo pendiente según la cuenta: cierres + remanente − repuesto. */
+  pendienteCentimos: number;
+  cierresCentimos: number;
+  numCierres: number;
+  remanenteCentimos: number;
+  repuestoCentimos: number;
+  /** Lo que quedó del último ingreso sin piezas conocidas. */
+  sinDesgloseCentimos: number;
+  faltan: LineaDenominacion[];
+};
