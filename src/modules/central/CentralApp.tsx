@@ -12,16 +12,26 @@
  */
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import { NavLink, Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import {
+  Link,
+  NavLink,
+  Navigate,
+  Route,
+  Routes,
+  useNavigate,
+  useSearchParams,
+} from "react-router-dom";
 import logoCentral from "../../assets/logo-central.png";
 import {
   Activity,
   Bell,
   Building2,
   CalendarDays,
+  ChevronLeft,
   Coins,
   FileDown,
   Home,
+  Layers,
   Menu,
   Landmark,
   Network,
@@ -44,6 +54,9 @@ import {
 // Administración. Se reutiliza en vez de copiarse: es el mismo lenguaje visual
 // y el mismo componente, no uno parecido.
 import { Aviso } from "../cash/components/ui";
+// La pantalla de desglose es la MISMA que la de la caja: su vista está sacada
+// aparte justo para poder pintarla desde aquí, sin el contexto de la caja.
+import { VistaPosicion } from "../cash/pages/PosicionGlobal";
 import { euros } from "../cash/utils/money";
 // El estado visible de un ingreso se decide en un solo sitio y se reutiliza: si
 // Central lo calculara por su cuenta, acabaría diciendo «Confirmado» donde la
@@ -203,6 +216,7 @@ export default function CentralApp() {
           <Route index element={<Navigate to="red" replace />} />
           <Route path="red" element={<Red />} />
           <Route path="posicion" element={<Posicion />} />
+          <Route path="posicion/desglose" element={<Desglose />} />
           <Route path="ingresos" element={<Ingresos />} />
           <Route path="cambio" element={<Cambio />} />
           <Route path="jornadas" element={<Jornadas />} />
@@ -501,12 +515,13 @@ function DetallePorCaja({ cajas }: { cajas: api.PosicionCaja[] }) {
             <th className={`${thCls} text-right`}>Esperando al banco</th>
             <th className={`${thCls} text-right`}>Remanente</th>
             <th className={`${thCls} text-right`}>Total</th>
+            <th className={thCls}></th>
           </tr>
         </thead>
         <tbody>
           {talleres.length === 0 && (
             <EmptyRow
-              cols={7}
+              cols={8}
               text={
                 cajas.length === 0
                   ? "No hay ninguna caja en la red."
@@ -522,6 +537,19 @@ function DetallePorCaja({ cajas }: { cajas: api.PosicionCaja[] }) {
                   {g.cajas.length} caja{g.cajas.length === 1 ? "" : "s"}
                 </td>
                 <Importes fila={g.cajas} suma={suma} negrita />
+                <td className={`${tdCls} text-right`}>
+                  {/*
+                    * El desglose del taller entero. Solo si el taller existe
+                    * de verdad: «Sin taller asignado» no es un taller y no hay
+                    * nada que pedirle al servidor.
+                    */}
+                  {g.cajas[0]?.centroId && (
+                    <BotonDesglose
+                      a={`desglose?centroId=${g.cajas[0].centroId}`}
+                      titulo={`Desglose pieza a pieza de ${g.centro}`}
+                    />
+                  )}
+                </td>
               </tr>
               {g.cajas.map((c) => (
                 <tr key={c.registerId} className="border-t border-slate-800">
@@ -533,6 +561,12 @@ function DetallePorCaja({ cajas }: { cajas: api.PosicionCaja[] }) {
                     )}
                   </td>
                   <Importes fila={[c]} suma={suma} />
+                  <td className={`${tdCls} text-right`}>
+                    <BotonDesglose
+                      a={`desglose?registerId=${c.registerId}`}
+                      titulo={`Desglose pieza a pieza de ${c.caja ?? `la caja #${c.registerId}`}`}
+                    />
+                  </td>
                 </tr>
               ))}
             </Fragment>
@@ -572,6 +606,92 @@ function Importes({
       <td className={cls(remanente)}>{euros(remanente)}</td>
       <td className={`${cls(total)} ${total === 0 ? "" : "text-sky-400"}`}>{euros(total)}</td>
     </>
+  );
+}
+
+/**
+ * El botón que lleva al desglose, igual en la fila del taller y en la de la caja.
+ *
+ * Un enlace de verdad y no un `onClick`: así se puede abrir en otra pestaña
+ * para comparar dos talleres, que es justo lo que se hace cuando algo no
+ * cuadra.
+ */
+function BotonDesglose({ a, titulo }: { a: string; titulo: string }) {
+  return (
+    <Link
+      to={a}
+      title={titulo}
+      className="inline-flex items-center gap-1 rounded-lg border border-slate-600 px-2 py-1 text-[11px] text-slate-300 hover:border-sky-500 hover:text-sky-300"
+    >
+      <Layers className="h-3 w-3" /> Desglose
+    </Link>
+  );
+}
+
+/**
+ * El desglose pieza a pieza de un taller o de una caja.
+ *
+ * Es LA MISMA pantalla que ve la caja, con su mismo componente: `VistaPosicion`
+ * está sacada aparte en el módulo de caja precisamente para poder pintarla sin
+ * su contexto. Rehacerla aquí sería garantizar que algún día las dos digan
+ * cosas distintas del mismo dinero.
+ *
+ * Lo único que cambia es lo que Central no tiene que hacer: no se ofrece
+ * contar el remanente. Aquí solo se mira; contar monedas es de quien tiene la
+ * caja delante.
+ */
+function Desglose() {
+  const [params] = useSearchParams();
+  const centroId = params.get("centroId");
+  const registerId = params.get("registerId");
+
+  const [datos, setDatos] = useState<Awaited<ReturnType<typeof api.desglosePosicion>> | null>(null);
+  const [error, setError] = useState("");
+
+  const cargar = useCallback(async () => {
+    setError("");
+    try {
+      setDatos(
+        await api.desglosePosicion({
+          centroId,
+          registerId: registerId == null ? null : Number(registerId),
+        })
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido cargar el desglose");
+    }
+  }, [centroId, registerId]);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  return (
+    <div className="space-y-3">
+      <Link
+        to=".."
+        className="inline-flex items-center gap-1 text-[12px] text-slate-400 hover:text-sky-300"
+      >
+        <ChevronLeft className="h-3.5 w-3.5" /> Volver a la posición de la red
+      </Link>
+
+      {error && <ErrorBox>{error}</ErrorBox>}
+      {!error && !datos && <p className="text-sm text-slate-400">Cargando el desglose…</p>}
+      {datos && (
+        <VistaPosicion
+          datos={datos}
+          denominaciones={datos.denominaciones}
+          /*
+           * Con un taller entero se arranca en «todas las cajas», que es lo
+           * que se ha pedido; con una caja señalada, `cajaId` la elige y la
+           * vista de una sola caja es la que corresponde.
+           */
+          cajaId={registerId == null ? null : Number(registerId)}
+          vistaInicial={registerId == null ? "todas" : "caja"}
+          onRecargar={cargar}
+        />
+      )}
+    </div>
   );
 }
 

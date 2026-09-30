@@ -141,18 +141,27 @@ export async function posicionDeCaja(
   };
 }
 
-/** Todas las cajas activas que puede ver el usuario: su taller, o toda la empresa. */
+/**
+ * Todas las cajas activas que puede ver el usuario: su taller, o toda la
+ * empresa.
+ *
+ * `registerId` estrecha a una sola caja. Lo usa Central, que llega desde su
+ * tabla de posición con una caja concreta señalada; la caja no lo pasa nunca,
+ * porque allí el ámbito ya lo decide el usuario.
+ */
 export async function posicionGlobal(
   empresaId: string,
-  centroId: string | null
+  centroId: string | null,
+  registerId: number | null = null
 ): Promise<{ cajas: PosicionCaja[]; actualizadoMs: number }> {
   const { rows } = await pool.query(
     `SELECT id, nombre, centro, centro_id AS "centroId"
        FROM cash_registers
       WHERE empresa_id = $1 AND activa = true
         AND ($2::uuid IS NULL OR centro_id = $2)
+        AND ($3::int IS NULL OR id = $3)
       ORDER BY centro, nombre`,
-    [empresaId, centroId]
+    [empresaId, centroId, registerId]
   );
   const cajas = await Promise.all(
     rows.map((c: { id: number; nombre: string; centro: string | null; centroId: string | null }) =>
