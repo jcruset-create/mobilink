@@ -125,7 +125,7 @@ type Composicion = {
  * denominación con su etiqueta de texto y el informe sale igual: un PDF sin
  * fotos es útil; un PDF que no se genera, no.
  */
-async function imagenesDelCatalogo(
+export async function imagenesDelCatalogo(
   denominaciones: readonly { valor: number; imagenUrl: string | null }[]
 ): Promise<Map<number, Buffer>> {
   const imagenes = new Map<number, Buffer>();

@@ -11,6 +11,7 @@
  */
 
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { FileDown, Share2 } from "lucide-react";
 import { useCash } from "../contexts/CashContext";
 import { Aviso, Cabecera, ErrorBox } from "../components/ui";
 import ContarRemanente from "../components/ContarRemanente";
@@ -142,6 +143,10 @@ export function VistaPosicion({
         titulo="Posición global"
         descripcion={`Todo el efectivo que tenemos ahora mismo: lo que hay en la caja más lo que espera para ir al banco · ${actualizado}`}
       >
+        <BotonesInforme
+          ruta={`/posicion/report.pdf?caja=${vista === "todas" ? "todas" : estaCaja?.registerId ?? "todas"}`}
+          nombre={`posicion-${vista === "todas" ? "todas" : (estaCaja?.nombre ?? "caja").toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${new Date(datos.actualizadoMs).toISOString().slice(0, 10)}`}
+        />
         <button
           onClick={() => void onRecargar()}
           className="rounded-lg bg-slate-700 px-3 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-600"
@@ -438,8 +443,16 @@ function Filas({
         return (
           <tr key={d.valor} className="border-t border-slate-800">
             <td className="px-3 py-1">
-              <span className={`inline-block min-w-[72px] rounded-md px-2 py-0.5 text-center font-bold ${chip}`}>
-                {euros(d.valor)}
+              <span className="flex items-center gap-2">
+                {/* La foto del catálogo: se reconoce la pieza antes de leer el número. */}
+                {d.imagenUrl ? (
+                  <img src={d.imagenUrl} alt="" className="h-7 w-11 flex-none object-contain" loading="lazy" />
+                ) : (
+                  <span className="block h-7 w-11 flex-none" />
+                )}
+                <span className={`inline-block min-w-[72px] rounded-md px-2 py-0.5 text-center font-bold ${chip}`}>
+                  {euros(d.valor)}
+                </span>
               </span>
             </td>
             <td className="border-l border-slate-800 px-3 text-slate-400 tabular-nums">{c ? `×${c}` : "—"}</td>
@@ -475,5 +488,77 @@ function Linea({ texto, valor: v }: { texto: string; valor: number }) {
       <span>{texto}</span>
       <span className="tabular-nums">{euros(v)}</span>
     </div>
+  );
+}
+
+/**
+ * Descargar el informe en PDF y, donde el navegador sabe, mandarlo.
+ *
+ * «Enviar» usa el menú de compartir del sistema (correo, WhatsApp…) con el PDF
+ * adjunto. Solo sale donde el navegador puede compartir ficheros; donde no, se
+ * descarga y se adjunta a mano.
+ */
+function BotonesInforme({ ruta, nombre }: { ruta: string; nombre: string }) {
+  const [ocupado, setOcupado] = useState<"" | "descargar" | "enviar">("");
+  const [error, setError] = useState("");
+  const fichero = `${nombre}.pdf`;
+  const sePuedeCompartir =
+    typeof navigator !== "undefined" &&
+    typeof navigator.canShare === "function" &&
+    typeof File !== "undefined" &&
+    navigator.canShare({ files: [new File([""], fichero, { type: "application/pdf" })] });
+
+  async function descargar() {
+    setOcupado("descargar");
+    setError("");
+    try {
+      const url = URL.createObjectURL(await api.descargarPdf(ruta));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fichero;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido generar el informe");
+    } finally {
+      setOcupado("");
+    }
+  }
+
+  async function enviar() {
+    setOcupado("enviar");
+    setError("");
+    try {
+      const blob = await api.descargarPdf(ruta);
+      await navigator.share({
+        files: [new File([blob], fichero, { type: "application/pdf" })],
+        title: "Posición global de efectivo",
+      });
+    } catch (e) {
+      // Cerrar el menú de compartir no es un error.
+      if (!(e instanceof DOMException && e.name === "AbortError")) {
+        setError(e instanceof Error ? e.message : "No se ha podido enviar el informe");
+      }
+    } finally {
+      setOcupado("");
+    }
+  }
+
+  const cls =
+    "flex items-center gap-1.5 rounded-lg bg-sky-700 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-sky-600 disabled:opacity-60";
+  return (
+    <>
+      <button onClick={() => void descargar()} disabled={ocupado !== ""} className={cls}>
+        <FileDown className="h-3.5 w-3.5" />
+        {ocupado === "descargar" ? "Generando…" : "Descargar PDF"}
+      </button>
+      {sePuedeCompartir && (
+        <button onClick={() => void enviar()} disabled={ocupado !== ""} className={cls}>
+          <Share2 className="h-3.5 w-3.5" />
+          {ocupado === "enviar" ? "Preparando…" : "Enviar"}
+        </button>
+      )}
+      {error && <span className="text-[11px] text-rose-300">{error}</span>}
+    </>
   );
 }

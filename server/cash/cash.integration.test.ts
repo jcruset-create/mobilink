@@ -1287,6 +1287,37 @@ describe.runIf(RUN)("ingresos bancarios", () => {
     expect(pos.pendienteCentimos).toBe(72625);
   });
 
+  it("posición global en PDF: las mismas cifras que la pantalla, para una caja y para todas", async () => {
+    const { informePosicion } = await import("./posicionReport.ts");
+    const caja = await crearCaja("posicion-pdf");
+    const s1 = await cerrarJornadaCon(caja, 435045);
+    await ingresos.crearIngreso(ctx, { registerId: caja, sessionIds: [s1], importeCentimos: 435000 });
+    await cerrarJornadaCon(caja, 72580);
+    await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: componer(35000) });
+
+    const mupdf = await import("mupdf");
+    const textoDe = (pdf: Buffer) => {
+      const d = mupdf.Document.openDocument(pdf, "application/pdf");
+      return [...Array(d.countPages()).keys()].map((i) => d.loadPage(i).toStructuredText().asText()).join("\n");
+    };
+
+    const una = await informePosicion(EMPRESA, null, caja);
+    expect(una.pdf.subarray(0, 5).toString()).toBe("%PDF-");
+    expect(una.nombre).toMatch(/^posicion-.*\.pdf$/);
+    const texto = textoDe(una.pdf);
+    expect(texto).toContain("Posición global de efectivo");
+    // 350 en la caja + 726,25 pendientes (0,45 que quedaron + 725,80 sin ingresar).
+    expect(texto).toContain("1.076,25 €");
+    expect(texto).toContain("350,00 €");
+    expect(texto).toContain("726,25 €");
+    expect(texto).toContain("TOTAL EFECTIVO");
+
+    const todas = textoDe((await informePosicion(EMPRESA, null, null)).pdf);
+    expect(todas).toContain("Todas las cajas");
+
+    await expect(informePosicion(EMPRESA, null, 999999)).rejects.toMatchObject({ codigo: "CAJA_NO_ENCONTRADA" });
+  });
+
   it("no se puede ingresar más de lo que hay bajo control", async () => {
     const caja = await crearCaja("ingresos-exceso");
     const s1 = await cerrarJornadaCon(caja, 10000);

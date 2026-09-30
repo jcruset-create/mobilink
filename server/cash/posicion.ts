@@ -161,3 +161,26 @@ export async function posicionGlobal(
   );
   return { cajas, actualizadoMs: Date.now() };
 }
+
+/** Varias cajas sumadas en una sola posición: la vista «todas las cajas». */
+export function agregarPosicion(cajas: readonly PosicionCaja[]) {
+  const sumarLineas = (f: (c: PosicionCaja) => readonly LineaDenominacion[]) => {
+    const m = new Map<Centimos, number>();
+    for (const c of cajas) for (const l of f(c)) m.set(l.valor, (m.get(l.valor) ?? 0) + l.cantidad);
+    return m;
+  };
+  const suma = (f: (c: PosicionCaja) => number) => cajas.reduce((a, c) => a + f(c), 0);
+  return {
+    caja: sumarLineas((c) => c.caja),
+    pendiente: sumarLineas((c) => c.pendiente),
+    faltan: sumarLineas((c) => c.faltan),
+    cajaCentimos: suma((c) => c.cajaCentimos),
+    pendienteCentimos: suma((c) => c.pendienteCentimos),
+    cierresCentimos: suma((c) => c.cierresCentimos),
+    numCierres: suma((c) => c.numCierres),
+    remanenteCentimos: suma((c) => c.remanenteCentimos),
+    repuestoCentimos: suma((c) => c.repuestoCentimos),
+    sinDesgloseCentimos: suma((c) => c.sinDesgloseCentimos),
+    piezasPendienteCentimos: suma((c) => valor(c.pendiente)),
+  };
+}

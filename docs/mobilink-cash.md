@@ -439,6 +439,13 @@ la tienda (cambio pedido al banco, entregas a personas): para eso está la
 posición de MC Central. Servidor en `server/cash/posicion.ts`, ruta
 `GET /api/cash/posicion`.
 
+Cada pieza sale con la foto del catálogo, en la pantalla y en el **informe
+PDF** (`server/cash/posicionReport.ts`, `GET /api/cash/posicion/report.pdf`,
+con `?caja=ID` o `?caja=todas`). El informe es la misma pantalla en papel,
+con la cabecera de los demás informes de caja. En la pantalla hay dos botones:
+«Descargar PDF» y «Enviar». «Enviar» abre el menú de compartir del sistema con
+el PDF adjunto, y solo sale donde el navegador sabe compartir ficheros.
+
 ## 7 sexies. Días atrasados (arranque del módulo)
 
 Al poner la caja en marcha hay días que ya se llevaron a mano en papel y que
