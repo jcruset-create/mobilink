@@ -408,6 +408,16 @@ export const asignarZona = (centroId: string, zonaId: string | null) =>
   });
 
 /**
+ * Vuelve a preguntarle a la caja por sus jornadas anuladas. No cambia nada en
+ * la caja: repara las que Central se quedó contando como abiertas.
+ */
+export const reemitirJornadasAnuladas = (f: { registerId?: number | null } = {}) =>
+  pedir<{ reenviadas: number }>(
+    "/sessions/resync-voided",
+    json({ registerId: f.registerId ?? null })
+  );
+
+/**
  * Vuelve a pedirle a la caja que cuente sus ingresos. No cambia nada en la
  * caja: repara lo que Central no llegó a ver.
  */

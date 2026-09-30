@@ -933,6 +933,31 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
       )!.enCajonesCentimos;
       expect(cajonDespues).toBe(2000);
       expect((await queries.posicionGlobal(EMPRESA)).enCajonesCentimos).toBeGreaterThanOrEqual(2000);
+
+      /*
+       * Y el camino por el que se repara lo que YA estaba mal: las jornadas
+       * que se anularon antes de que existiera el evento. No hay nada que
+       * reproyectar, así que hay que volver a contarlo. Se simula dejando la
+       * proyección como estaba —abierta—, que es el estado real de las siete
+       * de Tarragona, y se comprueba que el botón la devuelve a su sitio.
+       */
+      await db.query(`UPDATE central_sessions SET estado = 'OPEN' WHERE session_id = $1`, [
+        mala.id,
+      ]);
+      expect((await queries.resumenRed(EMPRESA)).jornadasAbiertas).toBe(
+        antes.jornadasAbiertas + 1
+      );
+
+      const servicioCaja = await import("../cash/service.ts");
+      const reparadas = await servicioCaja.reemitirJornadasAnuladas(ctx, { registerId: caja });
+      expect(reparadas.reenviadas).toBe(1);
+      await vaciar();
+
+      expect((await queries.resumenRed(EMPRESA)).jornadasAbiertas).toBe(antes.jornadasAbiertas);
+
+      // Y pulsarlo otra vez no reenvía nada: ya no hay ninguna descuadrada.
+      expect((await servicioCaja.reemitirJornadasAnuladas(ctx, { registerId: caja })).reenviadas)
+        .toBe(0);
     } finally {
       transporteCaja.registrarTransporte(null);
     }

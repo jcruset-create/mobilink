@@ -30,6 +30,7 @@ import {
 } from "./queries.ts";
 import * as jerarquia from "../cash/hierarchy.ts";
 import * as ingresosCaja from "../cash/bankdeposits.ts";
+import * as servicioCaja from "../cash/service.ts";
 import * as reglas from "./rules/service.ts";
 import * as avisos from "./notifications/service.ts";
 import * as clientes from "./api/clients.ts";
@@ -656,6 +657,33 @@ export function createCentralRouter(): Router {
         typeof b.zonaId === "string" ? b.zonaId : null
       );
       res.json({ ok: true });
+    })
+  );
+
+  /**
+   * Volver a preguntarle a la caja por sus jornadas anuladas.
+   *
+   * Anular una jornada no emitía ningún evento, así que Central se quedaba
+   * contándola como abierta para siempre. Desplegar el evento nuevo no repara
+   * lo ya ocurrido: aquellas se anularon sin evento y no hay nada que
+   * reproyectar. Esto lo vuelve a contar, con la fecha y el motivo que la caja
+   * guardó. No cambia ni un dato de la caja.
+   *
+   * Pide `central.zones.configure` y no `central.view`, por lo mismo que el de
+   * los ingresos: escribe en la cola de eventos y sube la versión del
+   * agregado. Mirar no es repararlo.
+   */
+  r.post(
+    "/sessions/resync-voided",
+    exigirPermiso("central.zones.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const ctx = { empresaId: req.authCtx!.empresaId, userId: req.authCtx!.userId, ip: req.ip };
+      res.json(
+        await servicioCaja.reemitirJornadasAnuladas(ctx, {
+          registerId: typeof b.registerId === "number" ? b.registerId : null,
+        })
+      );
     })
   );
 

@@ -24,7 +24,12 @@
  */
 
 import pool from "../server/db.ts";
-import { centroDeCaja, emitirEvento } from "../server/cash/events/emitter.ts";
+/*
+ * El trabajo lo hace `reemitirJornadasAnuladas`, el MISMO servicio que el botón
+ * de Central. Dos copias de esto se habrían separado en cuanto una de las dos
+ * cambiara, y la que se quedara vieja repararía mal sin decirlo.
+ */
+import { reemitirJornadasAnuladas } from "../server/cash/service.ts";
 
 const APLICAR = process.argv.includes("--aplicar");
 
@@ -37,14 +42,8 @@ const fechaIso = (v: unknown): string | null =>
 
 async function main(): Promise<void> {
   /* eslint-disable @typescript-eslint/no-explicit-any */
-  /*
-   * Solo las que están DESCUADRADAS entre las dos: anuladas en la caja y
-   * abiertas en Central. Reenviar las que ya cuadran no haría daño —el evento
-   * es idempotente por su clave— pero llenaría la cola de ruido y escondería
-   * en el listado las que de verdad hay que reparar.
-   */
   const { rows } = await pool.query<any>(
-    `SELECT s.id, s.empresa_id, s.register_id, s.fecha, s.notas,
+    `SELECT s.id, s.empresa_id, s.register_id, s.fecha,
             c.estado AS dice_central,
             COALESCE(r.centro || ' · ', '') || r.nombre AS caja
        FROM cash_sessions s
@@ -73,34 +72,14 @@ async function main(): Promise<void> {
     return;
   }
 
-  let hechas = 0;
-  for (const s of rows) {
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      await emitirEvento(client, {
-        empresaId: String(s.empresa_id),
-        centroId: await centroDeCaja(client, Number(s.register_id)),
-        registerId: Number(s.register_id),
-        sessionId: Number(s.id),
-        agregado: { tipo: "SESSION", id: Number(s.id) },
-        tipo: "SESSION_VOIDED",
-        ocurridoEnMs: Date.now(),
-        actorUserId: null,
-        // El motivo vive en las notas de la jornada, que es donde lo dejó
-        // `anularJornada`. Se manda tal cual: inventarlo sería peor que nada.
-        datos: { fecha: fechaIso(s.fecha), motivo: s.notas ?? null },
-      });
-      await client.query("COMMIT");
-      hechas++;
-    } catch (e) {
-      await client.query("ROLLBACK");
-      throw e;
-    } finally {
-      client.release();
-    }
+  // Una empresa por vuelta: el servicio filtra por la del contexto.
+  const empresas = [...new Set(rows.map((s) => String(s.empresa_id)))];
+  let total = 0;
+  for (const empresaId of empresas) {
+    const x = await reemitirJornadasAnuladas({ empresaId, userId: null, ip: null } as any);
+    total += x.reenviadas;
   }
-  console.log(`\n      ${hechas} reenviada(s). Central avisada.`);
+  console.log(`\n      ${total} reenviada(s). Central avisada.`);
   /* eslint-enable @typescript-eslint/no-explicit-any */
 }
 

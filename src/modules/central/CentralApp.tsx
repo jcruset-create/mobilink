@@ -238,6 +238,8 @@ export default function CentralApp() {
 function Red() {
   const [datos, setDatos] = useState<Awaited<ReturnType<typeof api.red>> | null>(null);
   const [error, setError] = useState("");
+  const [resync, setResync] = useState("");
+  const [ocupado, setOcupado] = useState(false);
 
   const cargar = useCallback(async () => {
     try {
@@ -253,6 +255,7 @@ function Red() {
 
   if (error) return <ErrorBox>{error}</ErrorBox>;
   const r = datos?.resumen;
+  const puedeConfigurar = datos?.permisos?.includes("central.zones.configure") ?? false;
 
   return (
     <div className="space-y-4">
@@ -277,6 +280,53 @@ function Red() {
           hint="llegaron fuera de orden"
         />
       </div>
+
+      {/*
+        * Reparar las jornadas que la caja anuló y Central se quedó contando
+        * como abiertas.
+        *
+        * Anular no emitía ningún evento, así que la cuenta de arriba crecía con
+        * cada despiste y no bajaba nunca. Desplegar el arreglo no repara lo ya
+        * ocurrido: aquellas se anularon sin evento y hay que volver a contarlo.
+        *
+        * Va aquí, debajo del número que miente, y no en una pantalla de
+        * mantenimiento: quien ve el número raro es quien tiene que poder
+        * arreglarlo, en el sitio donde lo ve.
+        */}
+      {puedeConfigurar && (
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            className={btnSecondary}
+            disabled={ocupado}
+            title="Vuelve a preguntarle a la caja por sus jornadas anuladas. No cambia nada en la caja."
+            onClick={() =>
+              void (async () => {
+                setOcupado(true);
+                setResync("");
+                try {
+                  const x = await api.reemitirJornadasAnuladas();
+                  setResync(
+                    x.reenviadas === 0
+                      ? "No había ninguna descuadrada: todas las anuladas ya constan."
+                      : `${x.reenviadas} jornada${x.reenviadas === 1 ? "" : "s"} anulada${
+                          x.reenviadas === 1 ? "" : "s"
+                        } reenviada${x.reenviadas === 1 ? "" : "s"}. Tarda unos segundos en verse.`
+                  );
+                  await cargar();
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : "No se ha podido resincronizar");
+                } finally {
+                  setOcupado(false);
+                }
+              })()
+            }
+          >
+            <RefreshCw className="h-3.5 w-3.5" />{" "}
+            {ocupado ? "Resincronizando…" : "Resincronizar jornadas anuladas"}
+          </button>
+          {resync && <span className="text-[11px] text-emerald-300">{resync}</span>}
+        </div>
+      )}
 
       <TableWrap>
         <thead>
