@@ -8,6 +8,9 @@
  */
 
 import { sessionHeaders } from "../sessionHeaders";
+// El desglose pieza a pieza es la pantalla de la caja, pintada con su mismo
+// componente: sus tipos se reusan en vez de copiarse.
+import type { Denominacion, PosicionCaja as PosicionDeCaja } from "../cash/types";
 
 const BASE = "/api/central";
 
@@ -87,6 +90,24 @@ export type PosicionGlobal = {
   /** Monedas que el banco no admitió y se quedaron en la tienda. */
   remanenteCentimos: number;
   totalCentimos: number;
+};
+
+/**
+ * El desglose pieza a pieza de un taller o de una caja.
+ *
+ * Los tipos son los de la CAJA a propósito: es su misma pantalla, pintada con
+ * su mismo componente. Duplicarlos aquí sería garantizar que algún día digan
+ * cosas distintas.
+ */
+export const desglosePosicion = (f: { centroId?: string | null; registerId?: number | null }) => {
+  const q = new URLSearchParams();
+  if (f.centroId) q.set("centroId", f.centroId);
+  if (f.registerId != null) q.set("registerId", String(f.registerId));
+  return pedir<{
+    cajas: PosicionDeCaja[];
+    actualizadoMs: number;
+    denominaciones: Denominacion[];
+  }>(`/position/breakdown?${q.toString()}`);
 };
 
 /** La posición de una caja concreta: los mismos cubos, más de quién es. */

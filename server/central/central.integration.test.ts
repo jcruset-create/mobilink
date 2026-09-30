@@ -776,6 +776,79 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
   });
 
   /*
+   * El botón «Desglose» de la tabla de Central lleva a la MISMA pantalla que
+   * ve la caja, calculada por el MISMO servicio.
+   *
+   * Lo que hay que demostrar es que las dos cuadran, porque quien pulsa ese
+   * botón viene justo de leer la fila de al lado y va a comparar. Los dos
+   * reparten el mismo dinero de forma distinta a propósito —Central separa el
+   * remanente en su propia columna y la caja lo mete dentro de lo pendiente—,
+   * así que la igualdad no es campo a campo: es la que dice el comentario.
+   */
+  it("el desglose de una caja cuadra con su fila en la posición de Central", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const { rows: creada } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
+         VALUES ($1,'desglose',$2,$3,$3) RETURNING id`,
+        [EMPRESA, `desg-${String(process.hrtime.bigint()).slice(-9)}`, Date.now()]
+      );
+      const caja = creada[0].id;
+
+      const { sesion } = await servicio.abrirJornada(ctx, {
+        registerId: caja,
+        fondoManual: [{ valor: 1000, cantidad: 2 }],
+      });
+      await servicio.registrarCobro(ctx, {
+        sessionId: sesion.id,
+        importeCentimos: 4000,
+        formasPago: [{ forma: "CASH", importe: 4000 }],
+        efectivoRecibido: [{ valor: 2000, cantidad: 2 }],
+      });
+      await servicio.guardarArqueo(ctx, {
+        sessionId: sesion.id,
+        contado: [{ valor: 2000, cantidad: 2 }, { valor: 1000, cantidad: 2 }],
+      });
+      await servicio.cerrarJornada(ctx, {
+        sessionId: sesion.id,
+        cambioFinal: [{ valor: 1000, cantidad: 2 }],
+      });
+      // Se ingresan 39,50 € de los 40 €: los 0,50 € se quedan de remanente, que
+      // es el campo que las dos pantallas colocan en sitios distintos.
+      await ingresosCaja.crearIngreso(ctx, {
+        registerId: caja,
+        sessionIds: [sesion.id],
+        importeCentimos: 3950,
+        fechaIngreso: "2026-09-30",
+      });
+      await vaciar();
+
+      const posicionCaja = await import("../cash/posicion.ts");
+      const desglose = await posicionCaja.posicionGlobal(EMPRESA, null, caja);
+      // El filtro por caja trae esa caja y solo esa.
+      expect(desglose.cajas).toHaveLength(1);
+      expect(desglose.cajas[0].registerId).toBe(caja);
+
+      const fila = (await queries.posicionPorCaja(EMPRESA)).find((c) => c.registerId === caja)!;
+      const d = desglose.cajas[0];
+
+      // El cajón: el mismo número por los dos caminos, aunque uno lo saque del
+      // stock vivo de la caja y el otro de lo que Central tiene proyectado.
+      expect(d.cajaCentimos).toBe(fila.enCajonesCentimos);
+      expect(d.cajaCentimos).toBe(2000);
+
+      // Y la bolsa: lo que la caja llama «pendiente de ingresar» es lo que
+      // Central separa en «esperando al banco» más «remanente en tienda».
+      expect(d.pendienteCentimos).toBe(fila.pendienteBancoCentimos + fila.remanenteCentimos);
+      expect(d.remanenteCentimos).toBe(fila.remanenteCentimos);
+      expect(d.repuestoCentimos).toBe(fila.repuestoCentimos);
+      expect(d.pendienteCentimos).toBe(50);
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
+  });
+
+  /*
    * La reposición del fondo, que es lo que hacía descuadrar la pantalla contra
    * la caja.
    *

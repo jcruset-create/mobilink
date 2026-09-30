@@ -37,6 +37,11 @@ import * as webhooks from "./api/webhooks.ts";
 import * as conciliacion from "./reconciliation/service.ts";
 import { salud } from "./health.ts";
 import { informeIngreso } from "../cash/report.ts";
+// El desglose pieza a pieza lo calcula la caja. Se renombra al importarlo
+// porque Central tiene su propia `posicionGlobal`, que es el total de la red:
+// dos funciones distintas con el mismo nombre en el mismo fichero se confunden.
+import { posicionGlobal as desgloseDeCajas } from "../cash/posicion.ts";
+import { cargarDenominaciones } from "../cash/repository.ts";
 import * as kpis from "./reports/kpis.ts";
 import { aCsv, importe } from "./reports/csv.ts";
 import * as prediccion from "./forecast/service.ts";
@@ -122,6 +127,41 @@ export function createCentralRouter(): Router {
         transitosAbiertos(empresaId),
       ]);
       res.json({ posicion, porCaja, transitos });
+    })
+  );
+
+  /**
+   * El desglose pieza a pieza de un taller o de una caja.
+   *
+   * Es la misma pantalla de «Posición global» que ve la caja, y lo calcula el
+   * MISMO servicio: un desglose que Central recalculara por su cuenta acabaría
+   * diciendo otra cosa que la caja, y entonces no serviría para comprobar
+   * nada. Aquí solo se elige el ámbito y se manda pintar.
+   *
+   * Ruta propia y no la de la caja, por lo mismo que el resguardo en PDF:
+   * aquélla exige `cash.view` y se ciñe al taller del usuario, y un supervisor
+   * de red mira talleres que no son el suyo sin tener que ser cajero de todos.
+   *
+   * La empresa sale de la sesión, nunca de la petición. Un `centroId` o un
+   * `registerId` de otra empresa no devuelve cajas: el filtro de empresa va
+   * dentro de la misma consulta.
+   *
+   * Las denominaciones viajan con los datos porque la tabla se pinta por
+   * pieza y Central no tiene el catálogo de la caja a mano; pedirlo aparte
+   * serían dos viajes para pintar una sola tabla.
+   */
+  r.get(
+    "/position/breakdown",
+    exigirPermiso("central.view"),
+    ruta(async (req, res) => {
+      const empresaId = req.authCtx!.empresaId;
+      const centroId = typeof req.query.centroId === "string" ? req.query.centroId : null;
+      const registerId = Number(req.query.registerId);
+      const [desglose, denominaciones] = await Promise.all([
+        desgloseDeCajas(empresaId, centroId, Number.isInteger(registerId) ? registerId : null),
+        cargarDenominaciones(),
+      ]);
+      res.json({ ...desglose, denominaciones });
     })
   );
 
