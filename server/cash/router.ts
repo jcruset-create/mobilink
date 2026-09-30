@@ -311,6 +311,30 @@ export function createCashRouter(): Router {
     })
   );
 
+  /**
+   * La posición global en PDF, para descargarla y mandarla. `?caja=ID` para
+   * una caja; sin ella, todas las que ve el usuario.
+   */
+  r.get(
+    "/posicion/report.pdf",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const { informePosicion } = await import("./posicionReport.ts");
+      const caja =
+        typeof req.query.caja === "string" && req.query.caja !== "" && req.query.caja !== "todas"
+          ? enteroPositivo(req.query.caja, "caja")
+          : null;
+      const { pdf, nombre } = await informePosicion(
+        req.authCtx!.empresaId,
+        req.cashCentroId ?? null,
+        caja
+      );
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="${nombre}"`);
+      res.send(pdf);
+    })
+  );
+
   // ── Contexto de arranque de la interfaz ─────────────────────────────────
   r.get(
     "/bootstrap",
