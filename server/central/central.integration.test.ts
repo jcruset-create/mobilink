@@ -589,6 +589,193 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
   });
 
   /*
+   * El desglose por taller y caja de la posición de efectivo.
+   *
+   * Lo que de verdad hay que demostrar no es que la tabla salga, sino que
+   * **suma exactamente el total de arriba**. Son dos consultas distintas sobre
+   * las mismas tablas: en cuanto una se toca sin la otra, la pantalla enseña un
+   * total y un detalle que no cuadran, y entonces no sirve ninguno de los dos.
+   *
+   * Se comprueba cubo a cubo y no solo el total: dos errores que se compensen
+   * —dinero que pasa de un cubo a otro— darían el mismo total y estarían mal.
+   */
+  it("el detalle por caja suma exactamente la posición global", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const crear = async (mote: string) => {
+        const { rows } = await db.query(
+          `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
+           VALUES ($1,'detalle',$2,$3,$3) RETURNING id`,
+          [EMPRESA, `${mote}-${String(process.hrtime.bigint()).slice(-9)}`, Date.now()]
+        );
+        await db.query(`UPDATE cash_registers SET codigo = $2 || id WHERE id = $1`, [
+          rows[0].id,
+          mote.slice(0, 2).toUpperCase(),
+        ]);
+        return rows[0].id as number;
+      };
+
+      /*
+       * Caja A: cajón, dinero fuera con una persona y una REPOSICIÓN viva.
+       * La reposición es la que importa: es el único cubo que se calcula
+       * restando, y si el detalle dejara de restarlo el total seguiría
+       * saliendo igual en la tarjeta y distinto en la tabla.
+       */
+      const a = await crear("detalle-a");
+      await db.query(`UPDATE cash_registers SET fondo_objetivo_centimos = 35000 WHERE id = $1`, [a]);
+      const fondo = [
+        { valor: 5000, cantidad: 3 },
+        { valor: 2000, cantidad: 5 },
+        { valor: 1000, cantidad: 5 },
+        { valor: 500, cantidad: 4 },
+        { valor: 200, cantidad: 5 },
+        { valor: 100, cantidad: 10 },
+        { valor: 50, cantidad: 10 },
+        { valor: 20, cantidad: 20 },
+        { valor: 10, cantidad: 10 },
+      ];
+      const cambio250 = fondo.map((l) => (l.valor === 5000 ? { valor: 5000, cantidad: 1 } : l));
+      const { sesion: a1 } = await servicio.abrirJornada(ctx, {
+        registerId: a,
+        fondoManual: fondo,
+      });
+      await servicio.guardarArqueo(ctx, { sessionId: a1.id, contado: fondo });
+      await servicio.cerrarJornada(ctx, { sessionId: a1.id, cambioFinal: cambio250 });
+      const { sesion: a2 } = await servicio.abrirJornada(ctx, { registerId: a });
+      const propuesta = await ingresosCaja.proponerReposicion(EMPRESA, a, [a1.id]);
+      await ingresosCaja.registrarReposicion(ctx, {
+        registerId: a,
+        sessionIds: [a1.id],
+        sacar: propuesta.reposicion!.sacar,
+        devolver: propuesta.reposicion!.devolver,
+      });
+      // Y 20 € que se lleva alguien: el tercer cubo, para que un error que
+      // mueva dinero entre cubos no pase desapercibido por compensación.
+      await tesoreria.entregarDinero(ctx, {
+        sessionId: a2.id,
+        persona: "Nuria",
+        motivo: "Compra de material",
+        importeCentimos: 2000,
+        entregado: [{ valor: 2000, cantidad: 1 }],
+      });
+
+      /*
+       * Caja B: un ingreso que deja REMANENTE, el cuarto cubo. El banco no se
+       * lleva las monedas, así que se ingresan 39,50 € de los 40 € del cierre
+       * y los 0,50 € se quedan en la tienda.
+       */
+      const b = await crear("detalle-b");
+      const { sesion: b1 } = await servicio.abrirJornada(ctx, {
+        registerId: b,
+        fondoManual: [{ valor: 1000, cantidad: 2 }],
+      });
+      await servicio.registrarCobro(ctx, {
+        sessionId: b1.id,
+        importeCentimos: 4000,
+        formasPago: [{ forma: "CASH", importe: 4000 }],
+        efectivoRecibido: [{ valor: 2000, cantidad: 2 }],
+      });
+      await servicio.guardarArqueo(ctx, {
+        sessionId: b1.id,
+        contado: [{ valor: 2000, cantidad: 2 }, { valor: 1000, cantidad: 2 }],
+      });
+      await servicio.cerrarJornada(ctx, {
+        sessionId: b1.id,
+        cambioFinal: [{ valor: 1000, cantidad: 2 }],
+      });
+      await ingresosCaja.crearIngreso(ctx, {
+        registerId: b,
+        sessionIds: [b1.id],
+        importeCentimos: 3950,
+        fechaIngreso: "2026-09-30",
+      });
+
+      /*
+       * Y un SEGUNDO ingreso en la misma caja. El remanente es una cadena —cada
+       * ingreso arranca del que dejó el anterior—, así que con un solo ingreso
+       * sumarlos todos y quedarse con el último dan el mismo número y la
+       * prueba no distinguiría lo correcto de lo que cuenta dos veces.
+       */
+      const { sesion: b2 } = await servicio.abrirJornada(ctx, { registerId: b });
+      await servicio.registrarCobro(ctx, {
+        sessionId: b2.id,
+        importeCentimos: 3000,
+        formasPago: [{ forma: "CASH", importe: 3000 }],
+        efectivoRecibido: [{ valor: 2000, cantidad: 1 }, { valor: 1000, cantidad: 1 }],
+      });
+      await servicio.guardarArqueo(ctx, {
+        sessionId: b2.id,
+        contado: [{ valor: 2000, cantidad: 1 }, { valor: 1000, cantidad: 3 }],
+      });
+      await servicio.cerrarJornada(ctx, {
+        sessionId: b2.id,
+        cambioFinal: [{ valor: 1000, cantidad: 2 }],
+      });
+      await ingresosCaja.crearIngreso(ctx, {
+        registerId: b,
+        sessionIds: [b2.id],
+        importeCentimos: 3000,
+        fechaIngreso: "2026-09-30",
+      });
+      await vaciar();
+
+      const global = await queries.posicionGlobal(EMPRESA);
+      const porCaja = await queries.posicionPorCaja(EMPRESA);
+
+      // Los cuatro cubos tienen dinero de verdad: si alguno fuera cero, la
+      // comprobación de abajo no probaría nada sobre él.
+      expect(global.enCajonesCentimos).toBeGreaterThan(0);
+      expect(global.enTransitoCentimos).toBeGreaterThan(0);
+      expect(global.repuestoCentimos).toBeGreaterThan(0);
+      expect(global.remanenteCentimos).toBeGreaterThan(0);
+
+      const suma = (campo: keyof (typeof porCaja)[number]) =>
+        porCaja.reduce((acc, c) => acc + (c[campo] as number), 0);
+
+      expect(suma("enCajonesCentimos")).toBe(global.enCajonesCentimos);
+      expect(suma("enTransitoCentimos")).toBe(global.enTransitoCentimos);
+      expect(suma("enTransitoBancoCentimos")).toBe(global.enTransitoBancoCentimos);
+      expect(suma("enTransitoPersonasCentimos")).toBe(global.enTransitoPersonasCentimos);
+      expect(suma("pendienteBancoCentimos")).toBe(global.pendienteBancoCentimos);
+      expect(suma("repuestoCentimos")).toBe(global.repuestoCentimos);
+      expect(suma("remanenteCentimos")).toBe(global.remanenteCentimos);
+      expect(suma("transitosAbiertos")).toBe(global.transitosAbiertos);
+      expect(suma("totalCentimos")).toBe(global.totalCentimos);
+
+      // Y cada fila dice lo SUYO, no lo de la red.
+      const filaA = porCaja.find((c) => c.registerId === a);
+      expect(filaA).toBeTruthy();
+      // 250 € heredados + 100 € repuestos − 20 € que se lleva Nuria.
+      expect(filaA!.enCajonesCentimos).toBe(33000);
+      expect(filaA!.enTransitoPersonasCentimos).toBe(2000);
+      expect(filaA!.transitosAbiertos).toBe(1);
+      expect(filaA!.repuestoCentimos).toBe(10000);
+      // Los 100 € del cierre, menos los 100 € que volvieron al cajón.
+      expect(filaA!.pendienteBancoCentimos).toBe(0);
+      expect(filaA!.totalCentimos).toBe(35000);
+
+      const filaB = porCaja.find((c) => c.registerId === b);
+      expect(filaB!.remanenteCentimos).toBe(50);
+      expect(filaB!.pendienteBancoCentimos).toBe(0);
+      expect(filaB!.repuestoCentimos).toBe(0);
+
+      /*
+       * Y una caja recién dada de alta, sin un solo evento, sale con ceros en
+       * vez de no salir: no enseñarla haría creer que no existe, y una caja
+       * que nadie mira es justo la que acaba con dinero olvidado dentro.
+       */
+      const virgen = await crear("detalle-nueva");
+      const sinEventos = (await queries.posicionPorCaja(EMPRESA)).find(
+        (c) => c.registerId === virgen
+      );
+      expect(sinEventos).toBeTruthy();
+      expect(sinEventos!.totalCentimos).toBe(0);
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
+  });
+
+  /*
    * La reposición del fondo, que es lo que hacía descuadrar la pantalla contra
    * la caja.
    *

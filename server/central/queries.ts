@@ -256,6 +256,19 @@ export type PosicionGlobal = {
   totalCentimos: number;
 };
 
+/**
+ * La posición de una caja. Mismos campos que el total de la red, más de quién
+ * es: sin el taller, una lista de cajas no dice a quién llamar.
+ */
+export type PosicionCaja = PosicionGlobal & {
+  registerId: number;
+  /** Nombre de la caja. Nulo si ya no existe en el catálogo y solo la conoce Central. */
+  caja: string | null;
+  codigo: string | null;
+  centroId: string | null;
+  centro: string | null;
+};
+
 export type TransitoAbierto = {
   clase: string;
   documentoId: number;
@@ -359,6 +372,126 @@ export async function posicionGlobal(empresaId: string): Promise<PosicionGlobal>
     remanenteCentimos: remanente,
     totalCentimos: enCajones + enTransito + pendiente + remanente,
   };
+}
+
+/**
+ * La misma posición, pero caja por caja.
+ *
+ * Los cuatro cubos del total de arriba, abiertos por caja y con su taller, que
+ * es la pregunta siguiente en cuanto el total no cuadra: **dónde**. Un total de
+ * red no dice a qué taller llamar.
+ *
+ * Las columnas se calculan exactamente igual que en `posicionGlobal` —mismas
+ * tablas, mismos filtros, misma resta de lo repuesto— para que la suma de las
+ * filas dé el total y no «casi». Si alguna vez dejaran de cuadrar, el fallo
+ * está en que una de las dos consultas se tocó sin la otra.
+ *
+ * Se arranca de la UNIÓN de cajas vivas y cajas conocidas por Central, como el
+ * listado de la red: una caja recién dada de alta y sin un solo evento sale con
+ * ceros, que es la verdad, en vez de no salir.
+ */
+export async function posicionPorCaja(empresaId: string): Promise<PosicionCaja[]> {
+  const centro = await joinCentro("t", "COALESCE(r.centro_id, c.centro_id)");
+  const { rows } = await pool.query(
+    `WITH ids AS (
+       SELECT id AS register_id FROM cash_registers
+        WHERE empresa_id = $1 AND activa
+       UNION
+       SELECT register_id FROM central_registers WHERE empresa_id = $1
+     ),
+     ultima AS (
+       SELECT DISTINCT ON (register_id)
+              register_id, estado, fondo_inicial_centimos,
+              efectivo_neto_centimos, cambio_final_centimos
+         FROM central_sessions
+        WHERE empresa_id = $1
+        ORDER BY register_id, fecha DESC NULLS LAST, session_id DESC
+     ),
+     cajon AS (
+       SELECT register_id,
+              CASE WHEN estado IN ('OPEN','REOPENED')
+                   THEN fondo_inicial_centimos + efectivo_neto_centimos
+                   ELSE COALESCE(cambio_final_centimos, 0) END AS centimos
+         FROM ultima
+     ),
+     transito AS (
+       SELECT register_id,
+              SUM(importe_centimos) AS centimos,
+              SUM(CASE WHEN clase = 'CHANGE_ORDER' THEN importe_centimos ELSE 0 END) AS banco,
+              SUM(CASE WHEN clase = 'ADVANCE' THEN importe_centimos ELSE 0 END) AS personas,
+              COUNT(*)::int AS abiertos
+         FROM central_transits
+        WHERE empresa_id = $1 AND estado = 'ABIERTO'
+        GROUP BY register_id
+     ),
+     pendiente AS (
+       SELECT register_id, SUM(ingreso_bancario_centimos) AS centimos
+         FROM central_sessions
+        WHERE empresa_id = $1 AND estado = 'CLOSED' AND NOT conciliada
+        GROUP BY register_id
+     ),
+     repuesto AS (
+       SELECT register_id, SUM(importe_centimos) AS centimos
+         FROM central_float_topups
+        WHERE empresa_id = $1 AND deposit_id IS NULL
+        GROUP BY register_id
+     ),
+     -- Solo el último ingreso confirmado de cada caja: el remanente es una
+     -- cadena y sumar todos contaría las mismas monedas una vez por ingreso.
+     remanente AS (
+       SELECT DISTINCT ON (register_id) register_id, remanente_nuevo_centimos AS centimos
+         FROM central_bank_deposits
+        WHERE empresa_id = $1 AND estado = 'CONFIRMADO'
+        ORDER BY register_id, deposit_id DESC
+     )
+     SELECT ids.register_id,
+            c.nombre AS caja, c.codigo,
+            COALESCE(r.centro_id, c.centro_id) AS centro_id,
+            ${centro.select},
+            COALESCE(cajon.centimos, 0) AS cajon,
+            COALESCE(transito.centimos, 0) AS transito,
+            COALESCE(transito.banco, 0) AS transito_banco,
+            COALESCE(transito.personas, 0) AS transito_personas,
+            COALESCE(transito.abiertos, 0) AS abiertos,
+            COALESCE(pendiente.centimos, 0) AS pendiente,
+            COALESCE(repuesto.centimos, 0) AS repuesto,
+            COALESCE(remanente.centimos, 0) AS remanente
+       FROM ids
+       LEFT JOIN cash_registers c ON c.id = ids.register_id
+       LEFT JOIN central_registers r ON r.register_id = ids.register_id
+       ${centro.join}
+       LEFT JOIN cajon ON cajon.register_id = ids.register_id
+       LEFT JOIN transito ON transito.register_id = ids.register_id
+       LEFT JOIN pendiente ON pendiente.register_id = ids.register_id
+       LEFT JOIN repuesto ON repuesto.register_id = ids.register_id
+       LEFT JOIN remanente ON remanente.register_id = ids.register_id
+      ORDER BY centro_nombre NULLS FIRST, c.nombre NULLS LAST, ids.register_id`,
+    [empresaId]
+  );
+
+  return rows.map((f: any) => {
+    const enCajones = Number(f.cajon);
+    const enTransito = Number(f.transito);
+    const repuesto = Number(f.repuesto);
+    const pendiente = Number(f.pendiente) - repuesto;
+    const remanente = Number(f.remanente);
+    return {
+      registerId: Number(f.register_id),
+      caja: f.caja ?? null,
+      codigo: f.codigo ?? null,
+      centroId: f.centro_id ?? null,
+      centro: f.centro_nombre ?? null,
+      enCajonesCentimos: enCajones,
+      enTransitoCentimos: enTransito,
+      enTransitoBancoCentimos: Number(f.transito_banco),
+      enTransitoPersonasCentimos: Number(f.transito_personas),
+      transitosAbiertos: Number(f.abiertos),
+      pendienteBancoCentimos: pendiente,
+      repuestoCentimos: repuesto,
+      remanenteCentimos: remanente,
+      totalCentimos: enCajones + enTransito + pendiente + remanente,
+    };
+  });
 }
 
 /** Lo que está fuera ahora mismo, con quién y desde cuándo. */

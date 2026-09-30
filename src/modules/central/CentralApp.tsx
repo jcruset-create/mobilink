@@ -11,7 +11,7 @@
  * funcionando aunque esto se caiga.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { NavLink, Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import logoCentral from "../../assets/logo-central.png";
 import {
@@ -377,6 +377,12 @@ function Posicion() {
         cada euro se cuenta una vez y en un solo sitio.
       </p>
 
+      <DetallePorCaja cajas={datos?.porCaja ?? []} />
+
+      <section className="space-y-2">
+        <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+          Fuera del cajón ahora mismo
+        </h2>
       <TableWrap>
         <thead>
           <tr>
@@ -416,8 +422,156 @@ function Posicion() {
           ))}
         </tbody>
       </TableWrap>
-
+      </section>
     </div>
+  );
+}
+
+/**
+ * La posición caja por caja, agrupada por taller.
+ *
+ * Agrupada y no una lista plana: la pregunta que trae aquí a alguien es «¿de
+ * quién es este dinero?», y con veinte cajas seguidas hay que ir sumando de
+ * cabeza para contestarla. Cada taller lleva su subtotal en la fila de arriba,
+ * así que el reparto se lee sin sumar nada.
+ *
+ * Las columnas son las mismas cuatro tarjetas de arriba, en el mismo orden. Los
+ * ceros se pintan apagados: en una tabla de talleres, lo que se busca es la
+ * fila que tiene algo.
+ */
+function DetallePorCaja({ cajas }: { cajas: api.PosicionCaja[] }) {
+  /*
+   * Por defecto solo las cajas que tienen dinero.
+   *
+   * El servidor las manda TODAS a propósito —una caja que no sale parece que no
+   * existe—, pero una empresa con cientos de cajas llenaría la pantalla de
+   * ceros y escondería las cuatro filas que importan. Así que el filtro vive
+   * aquí, a la vista y reversible, y no en la consulta.
+   */
+  const [todas, setTodas] = useState(false);
+  const vacias = cajas.filter((c) => c.totalCentimos === 0 && c.transitosAbiertos === 0).length;
+
+  /*
+   * Un taller por grupo, en el orden en que vienen del servidor: ya llegan
+   * ordenadas por taller y caja, así que reordenar aquí solo serviría para que
+   * el día que el servidor cambie de criterio la pantalla diga otra cosa.
+   */
+  const talleres = useMemo(() => {
+    const visibles = todas
+      ? cajas
+      : cajas.filter((c) => c.totalCentimos !== 0 || c.transitosAbiertos !== 0);
+    const grupos: { centro: string; cajas: api.PosicionCaja[] }[] = [];
+    for (const c of visibles) {
+      const centro = c.centro ?? "Sin taller asignado";
+      const ultimo = grupos[grupos.length - 1];
+      if (ultimo && ultimo.centro === centro) ultimo.cajas.push(c);
+      else grupos.push({ centro, cajas: [c] });
+    }
+    return grupos;
+  }, [cajas, todas]);
+
+  const suma = (l: api.PosicionCaja[], campo: keyof api.PosicionCaja) =>
+    l.reduce((a, c) => a + (c[campo] as number), 0);
+
+  return (
+    <section className="space-y-2">
+      <div className="flex flex-wrap items-baseline gap-3">
+        <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+          Detalle por taller y caja
+        </h2>
+        {vacias > 0 && (
+          <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-slate-400">
+            <input
+              type="checkbox"
+              checked={todas}
+              onChange={(e) => setTodas(e.target.checked)}
+              className="h-3 w-3 accent-sky-500"
+            />
+            Ver también {vacias} caja{vacias === 1 ? "" : "s"} sin dinero
+          </label>
+        )}
+      </div>
+      <TableWrap>
+        <thead>
+          <tr>
+            <th className={thCls}>Taller</th>
+            <th className={thCls}>Caja</th>
+            <th className={`${thCls} text-right`}>En el cajón</th>
+            <th className={`${thCls} text-right`}>Fuera del cajón</th>
+            <th className={`${thCls} text-right`}>Esperando al banco</th>
+            <th className={`${thCls} text-right`}>Remanente</th>
+            <th className={`${thCls} text-right`}>Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {talleres.length === 0 && (
+            <EmptyRow
+              cols={7}
+              text={
+                cajas.length === 0
+                  ? "No hay ninguna caja en la red."
+                  : "Ninguna caja tiene dinero ahora mismo."
+              }
+            />
+          )}
+          {talleres.map((g) => (
+            <Fragment key={g.centro}>
+              <tr className="border-t border-slate-700 bg-slate-800/40">
+                <td className={`${tdCls} font-bold`}>{g.centro}</td>
+                <td className={`${tdCls} text-[11px] text-slate-500`}>
+                  {g.cajas.length} caja{g.cajas.length === 1 ? "" : "s"}
+                </td>
+                <Importes fila={g.cajas} suma={suma} negrita />
+              </tr>
+              {g.cajas.map((c) => (
+                <tr key={c.registerId} className="border-t border-slate-800">
+                  <td className={tdCls}></td>
+                  <td className={tdCls}>
+                    {c.caja ?? `Caja #${c.registerId}`}
+                    {c.codigo && (
+                      <span className="ml-2 font-mono text-[11px] text-slate-500">{c.codigo}</span>
+                    )}
+                  </td>
+                  <Importes fila={[c]} suma={suma} />
+                </tr>
+              ))}
+            </Fragment>
+          ))}
+        </tbody>
+      </TableWrap>
+    </section>
+  );
+}
+
+/** Las cinco celdas de dinero, iguales en la fila del taller y en la de la caja. */
+function Importes({
+  fila,
+  suma,
+  negrita = false,
+}: {
+  fila: api.PosicionCaja[];
+  suma: (l: api.PosicionCaja[], campo: keyof api.PosicionCaja) => number;
+  negrita?: boolean;
+}) {
+  const cajon = suma(fila, "enCajonesCentimos");
+  const transito = suma(fila, "enTransitoCentimos");
+  const pendiente = suma(fila, "pendienteBancoCentimos");
+  const remanente = suma(fila, "remanenteCentimos");
+  const abiertos = suma(fila, "transitosAbiertos");
+  const total = suma(fila, "totalCentimos");
+  const cls = (v: number, extra = "") =>
+    `${tdCls} text-right tabular-nums ${v === 0 ? "text-slate-600" : extra} ${
+      negrita ? "font-bold" : ""
+    }`;
+
+  return (
+    <>
+      <td className={cls(cajon)}>{euros(cajon)}</td>
+      <td className={cls(transito, abiertos ? "text-amber-400" : "")}>{euros(transito)}</td>
+      <td className={cls(pendiente)}>{euros(pendiente)}</td>
+      <td className={cls(remanente)}>{euros(remanente)}</td>
+      <td className={`${cls(total)} ${total === 0 ? "" : "text-sky-400"}`}>{euros(total)}</td>
+    </>
   );
 }
 
