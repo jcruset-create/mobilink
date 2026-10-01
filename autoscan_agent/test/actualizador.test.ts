@@ -12,7 +12,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Actualizador, type Lanzador } from "../src/actualizador.ts";
+import { Actualizador, guardarConTecho, type Lanzador } from "../src/actualizador.ts";
 import type { Config } from "../src/config.ts";
 
 let raiz: string;
@@ -188,5 +188,72 @@ describe("la descarga", () => {
        descarga que sí termina deja su paquete a propósito —lo necesita
        PowerShell— y contarlos todos mezclaría las dos cosas. */
     expect(zipsSueltos()).toEqual(antes);
+  });
+});
+
+describe("guardar la descarga sin dejar restos", () => {
+  /*
+   * Lo que salía de vez en cuando en la CI, hecho determinista: la descarga
+   * falla nada más empezar, antes de que el fichero se haya abierto, con
+   * escrituras todavía en vuelo. Antes el fichero aparecía DESPUÉS del
+   * borrado, y el stream destruido soltaba un ERR_STREAM_DESTROYED sin nadie
+   * escuchando.
+   */
+  it("si falla al empezar, no queda fichero ni error suelto", async () => {
+    const carpeta = fs.mkdtempSync(path.join(os.tmpdir(), "mobilink-autoscan-techo-"));
+    const sueltos: unknown[] = [];
+    const recoger = (e: unknown) => sueltos.push(e);
+    process.on("uncaughtException", recoger);
+    try {
+      for (let i = 0; i < 20; i++) {
+        const destino = path.join(carpeta, `paquete-${i}.zip`);
+        // Trozos pequeños: caben en el búfer del stream, así que no hay que
+        // esperar a que el fichero se abra y el fallo llega antes que la apertura.
+        async function* trozos() {
+          yield new Uint8Array(1024);
+          yield new Uint8Array(1024);
+          throw new Error("se corta la red");
+        }
+        await expect(guardarConTecho(trozos(), destino, 30 * 1024 * 1024)).rejects.toThrow("se corta la red");
+      }
+      // Lo que tuviera que llegar tarde, que llegue.
+      await new Promise((r) => setTimeout(r, 300));
+      expect(fs.readdirSync(carpeta)).toEqual([]);
+      expect(sueltos).toEqual([]);
+    } finally {
+      process.off("uncaughtException", recoger);
+      fs.rmSync(carpeta, { recursive: true, force: true });
+    }
+  });
+
+  it("si cabe, lo guarda entero", async () => {
+    const carpeta = fs.mkdtempSync(path.join(os.tmpdir(), "mobilink-autoscan-techo-"));
+    try {
+      const destino = path.join(carpeta, "paquete.zip");
+      async function* trozos() {
+        yield new TextEncoder().encode("PK ");
+        yield new TextEncoder().encode("paquete");
+      }
+      await guardarConTecho(trozos(), destino, 1024);
+      expect(fs.readFileSync(destino, "utf8")).toBe("PK paquete");
+    } finally {
+      fs.rmSync(carpeta, { recursive: true, force: true });
+    }
+  });
+
+  it("si pasa del techo, se descarta y no queda nada", async () => {
+    const carpeta = fs.mkdtempSync(path.join(os.tmpdir(), "mobilink-autoscan-techo-"));
+    try {
+      const destino = path.join(carpeta, "paquete.zip");
+      async function* trozos() {
+        yield new Uint8Array(600);
+        yield new Uint8Array(600);
+      }
+      await expect(guardarConTecho(trozos(), destino, 1000)).rejects.toThrow("tamaño razonable");
+      await new Promise((r) => setTimeout(r, 100));
+      expect(fs.readdirSync(carpeta)).toEqual([]);
+    } finally {
+      fs.rmSync(carpeta, { recursive: true, force: true });
+    }
   });
 });
