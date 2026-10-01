@@ -93,9 +93,53 @@ jobs:
       - name: Compilar el bundle (lo mismo que hace Render)
         run: npx vite build
 
-      # Una sola pasada: el informe JSON sirve para la comprobación siguiente.
+      # Una sola pasada: el informe JSON sirve para los dos pasos siguientes.
+      #
+      # La salida se guarda ADEMÁS en un fichero, y no es un capricho: el
+      # informe JSON de vitest NO guarda el motivo cuando lo que revienta es un
+      # `beforeAll` —el fichero sale «failed», sus casos «skipped» y sin
+      # mensaje—, y ése es justo el fallo que más cuesta diagnosticar. El motivo
+      # solo aparece en la salida de texto, bajo «Failed Suites».
+      #
+      # `pipefail` para que el estado del job siga siendo el de `npm test` y no
+      # el de `tee`, que siempre sale en verde.
       - name: Pruebas (unitarias + integración contra PostgreSQL)
-        run: npm test -- --reporter=verbose --reporter=json --outputFile.json=/tmp/tests.json
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test -- --reporter=verbose --reporter=json --outputFile.json=/tmp/tests.json \
+            2>&1 | tee /tmp/tests.txt
+
+      # ── Qué ha fallado, en un sitio donde se pueda leer ──────────────────
+      #
+      # Un rojo de esta CI era desproporcionadamente difícil de leer: el log del
+      # job se descarga de un almacén aparte que las redes restringidas no
+      # alcanzan, y la COLA que devuelve la API es el log del contenedor de
+      # PostgreSQL, que se concatena al final y tapa el resumen de vitest. Lo
+      # que se leía eran cien líneas de «duplicate key value violates…» de
+      # pruebas que esperaban fallar, y ni rastro del fallo de verdad.
+      #
+      # Las anotaciones se leen por api.github.com, sin pasar por ese almacén.
+      # Por eso el resumen sale como anotación y no solo como artefacto.
+      #
+      # `if: always()` porque esto solo sirve cuando algo ha ido mal, que es
+      # cuando el paso anterior ha cortado el job.
+      - name: Qué ha fallado (anotaciones + resumen)
+        if: always()
+        run: node scripts/ci-resumen-pruebas.mjs /tmp/tests.json /tmp/tests.txt
+
+      # El informe y la salida completos, para quien pueda bajárselos: las
+      # anotaciones llevan la cabeza del error, no la pila entera.
+      - name: Guardar el resultado de las pruebas
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: resultado-pruebas
+          path: |
+            /tmp/tests.json
+            /tmp/tests.txt
+          retention-days: 14
+          if-no-files-found: warn
 
       # Si las de integración se saltaran por un fallo de configuración, el job
       # seguiría verde y no nos enteraríamos: eso es peor que no tenerlas.
