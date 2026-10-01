@@ -67,6 +67,73 @@ const MAXIMO_BYTES = 30 * 1024 * 1024;
 
 const TIEMPO_DESCARGA_MS = 120_000;
 
+/**
+ * Guarda una descarga en `destino` sin pasar de `maximo` bytes, y si algo
+ * falla no deja nada en el disco.
+ *
+ * El techo se comprueba mientras llega, no al final: fiarse de
+ * `content-length` es fiarse de que el otro lado dice la verdad, y para
+ * entonces el disco ya estaría lleno.
+ *
+ * Al fallar, el fichero se borra DESPUÉS de que el stream se haya cerrado del
+ * todo. Antes se borraba nada más destruirlo y salían dos fallos según la
+ * carga de la máquina:
+ *
+ * · `createWriteStream` abre el fichero de forma asíncrona. Si la descarga
+ *   fallaba antes de que se abriera, el borrado no encontraba nada y el
+ *   fichero aparecía después, vacío o a medias, y se quedaba en el disco.
+ * · Una escritura todavía en vuelo al destruir el stream acababa en un
+ *   `ERR_STREAM_DESTROYED` sin nadie escuchando, y Node lo lanzaba como
+ *   excepción no controlada. En la CI salía de vez en cuando y la ponía roja
+ *   con todas las pruebas en verde.
+ */
+export async function guardarConTecho(
+  trozos: AsyncIterable<Uint8Array>,
+  destino: string,
+  maximo: number
+): Promise<void> {
+  const salida = fs.createWriteStream(destino);
+  // Desde el primer momento: un error sin nadie escuchando tumba el proceso.
+  let fallo: Error | null = null;
+  salida.on("error", (e) => {
+    fallo ??= e;
+  });
+
+  try {
+    let bytes = 0;
+    for await (const trozo of trozos) {
+      if (fallo) throw fallo;
+      bytes += trozo.byteLength;
+      if (bytes > maximo) {
+        throw new Error("El paquete pasa del tamaño razonable para el agente. Se descarta.");
+      }
+      if (!salida.write(trozo)) {
+        await new Promise<void>((sigue, falla) => {
+          salida.once("drain", () => sigue());
+          salida.once("error", falla);
+        });
+      }
+    }
+    await new Promise<void>((listo, falla) => {
+      if (fallo) return falla(fallo);
+      salida.once("error", falla);
+      salida.end(() => listo());
+    });
+  } catch (e) {
+    await new Promise<void>((cerrado) => {
+      if (salida.closed) return cerrado();
+      salida.once("close", () => cerrado());
+      salida.destroy();
+    });
+    try {
+      fs.unlinkSync(destino);
+    } catch {
+      /* Si no llegó a existir, mejor. */
+    }
+    throw e;
+  }
+}
+
 export class Actualizador {
   readonly #cfg: Config;
   readonly #log: (m: string) => void;
@@ -157,36 +224,7 @@ export class Actualizador {
     }
     if (!res.body) throw new Error("La descarga ha venido vacía.");
 
-    /*
-     * El techo se comprueba mientras llega, no al final: fiarse de
-     * `content-length` es fiarse de que el otro lado dice la verdad, y para
-     * entonces el disco ya estaría lleno.
-     */
-    let bytes = 0;
-    const salida = fs.createWriteStream(destino);
-    try {
-      for await (const trozo of res.body as unknown as AsyncIterable<Uint8Array>) {
-        bytes += trozo.byteLength;
-        if (bytes > MAXIMO_BYTES) {
-          throw new Error("El paquete pasa del tamaño razonable para el agente. Se descarta.");
-        }
-        if (!salida.write(trozo)) {
-          await new Promise((sigue) => salida.once("drain", sigue));
-        }
-      }
-      await new Promise<void>((listo, falla) => {
-        salida.end(() => listo());
-        salida.on("error", falla);
-      });
-    } catch (e) {
-      salida.destroy();
-      try {
-        fs.unlinkSync(destino);
-      } catch {
-        /* Si no llegó a existir, mejor. */
-      }
-      throw e;
-    }
+    await guardarConTecho(res.body as unknown as AsyncIterable<Uint8Array>, destino, MAXIMO_BYTES);
   }
 
   /** Copia `actualizar.ps1` fuera de `app\`, que es lo que va a moverse. */
