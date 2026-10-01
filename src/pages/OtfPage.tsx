@@ -19,6 +19,8 @@ import type { KnownPlace } from "../modules/roadsideAssistanceTypes";
 import KnownPlaceMapModal from "../components/KnownPlaceMapModal";
 import TyreControlVehiculo from "../components/TyreControlVehiculo";
 import AssistSidebar from "../components/AssistSidebar";
+import { apiFetch } from "../modules/apiFetch";
+import { abrirPdfConSesion } from "../modules/pdfConSesion";
 
 const STATUS_OTF: Record<string, string> = {
   planificada: "border-amber-500/40 bg-amber-500/15 text-amber-300",
@@ -476,8 +478,14 @@ function OtfDetail({ otf, plantillas, onChange }: { otf: any; plantillas: OtfPla
           <div className="mt-1 text-sm font-black text-orange-400">{otf.progreso?.hechos ?? 0} / {otf.progreso?.total ?? 0}</div>
           <button
             onClick={() => {
-              const token = localStorage.getItem("sea-admin-token") ?? "";
-              window.open(`/api/otf/${otf.id}/report.pdf?token=${encodeURIComponent(token)}`, "_blank");
+              // Con la sesión en la cabecera: ver `modules/pdfConSesion.ts`.
+              void abrirPdfConSesion(
+                apiFetch,
+                `/api/otf/${otf.id}/report.pdf`,
+                `otf_${otf.id}.pdf`
+              ).catch((e) =>
+                window.alert(e instanceof Error ? e.message : "No se pudo abrir el informe.")
+              );
             }}
             className="mt-2 rounded-lg border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs font-black text-slate-200 hover:bg-slate-700"
           >
