@@ -11,7 +11,7 @@
  */
 
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
-import { FileDown, Share2 } from "lucide-react";
+import { FileDown, FileSpreadsheet, Share2 } from "lucide-react";
 import { useCash } from "../contexts/CashContext";
 import { Aviso, Cabecera, ErrorBox } from "../components/ui";
 import ContarRemanente from "../components/ContarRemanente";
@@ -145,6 +145,7 @@ export function VistaPosicion({
       >
         <BotonesInforme
           ruta={`/posicion/report.pdf?caja=${vista === "todas" ? "todas" : estaCaja?.registerId ?? "todas"}`}
+          rutaExcel={`/posicion/report.xlsx?caja=${vista === "todas" ? "todas" : estaCaja?.registerId ?? "todas"}`}
           nombre={`posicion-${vista === "todas" ? "todas" : (estaCaja?.nombre ?? "caja").toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${new Date(datos.actualizadoMs).toISOString().slice(0, 10)}`}
         />
         <button
@@ -492,14 +493,14 @@ function Linea({ texto, valor: v }: { texto: string; valor: number }) {
 }
 
 /**
- * Descargar el informe en PDF y, donde el navegador sabe, mandarlo.
+ * Descargar el informe en PDF o en Excel y, donde el navegador sabe, mandar el PDF.
  *
  * «Enviar» usa el menú de compartir del sistema (correo, WhatsApp…) con el PDF
  * adjunto. Solo sale donde el navegador puede compartir ficheros; donde no, se
  * descarga y se adjunta a mano.
  */
-function BotonesInforme({ ruta, nombre }: { ruta: string; nombre: string }) {
-  const [ocupado, setOcupado] = useState<"" | "descargar" | "enviar">("");
+function BotonesInforme({ ruta, rutaExcel, nombre }: { ruta: string; rutaExcel: string; nombre: string }) {
+  const [ocupado, setOcupado] = useState<"" | "descargar" | "excel" | "enviar">("");
   const [error, setError] = useState("");
   const fichero = `${nombre}.pdf`;
   const sePuedeCompartir =
@@ -508,14 +509,16 @@ function BotonesInforme({ ruta, nombre }: { ruta: string; nombre: string }) {
     typeof File !== "undefined" &&
     navigator.canShare({ files: [new File([""], fichero, { type: "application/pdf" })] });
 
-  async function descargar() {
-    setOcupado("descargar");
+  async function descargar(que: "descargar" | "excel") {
+    setOcupado(que);
     setError("");
     try {
-      const url = URL.createObjectURL(await api.descargarPdf(ruta));
+      // El mismo camino sirve para el PDF y el Excel: lleva la sesión en la
+      // cabecera y devuelve el fichero tal cual.
+      const url = URL.createObjectURL(await api.descargarPdf(que === "excel" ? rutaExcel : ruta));
       const a = document.createElement("a");
       a.href = url;
-      a.download = fichero;
+      a.download = que === "excel" ? `${nombre}.xlsx` : fichero;
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
@@ -548,9 +551,17 @@ function BotonesInforme({ ruta, nombre }: { ruta: string; nombre: string }) {
     "flex items-center gap-1.5 rounded-lg bg-sky-700 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-sky-600 disabled:opacity-60";
   return (
     <>
-      <button onClick={() => void descargar()} disabled={ocupado !== ""} className={cls}>
+      <button onClick={() => void descargar("descargar")} disabled={ocupado !== ""} className={cls}>
         <FileDown className="h-3.5 w-3.5" />
         {ocupado === "descargar" ? "Generando…" : "Descargar PDF"}
+      </button>
+      <button
+        onClick={() => void descargar("excel")}
+        disabled={ocupado !== ""}
+        className="flex items-center gap-1.5 rounded-lg bg-emerald-700 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-emerald-600 disabled:opacity-60"
+      >
+        <FileSpreadsheet className="h-3.5 w-3.5" />
+        {ocupado === "excel" ? "Generando…" : "Excel"}
       </button>
       {sePuedeCompartir && (
         <button onClick={() => void enviar()} disabled={ocupado !== ""} className={cls}>

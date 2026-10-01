@@ -335,6 +335,23 @@ export function createCashRouter(): Router {
     })
   );
 
+  /** La posición global en Excel. Mismos datos y mismos filtros que el PDF. */
+  r.get(
+    "/posicion/report.xlsx",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const { excelPosicion } = await import("./posicionReport.ts");
+      const caja =
+        typeof req.query.caja === "string" && req.query.caja !== "" && req.query.caja !== "todas"
+          ? enteroPositivo(req.query.caja, "caja")
+          : null;
+      const { xlsx, nombre } = await excelPosicion(req.authCtx!.empresaId, req.cashCentroId ?? null, caja);
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", `attachment; filename="${nombre}"`);
+      res.send(xlsx);
+    })
+  );
+
   // ── Contexto de arranque de la interfaz ─────────────────────────────────
   r.get(
     "/bootstrap",

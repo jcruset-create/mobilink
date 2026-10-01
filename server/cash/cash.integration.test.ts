@@ -1386,6 +1386,44 @@ describe.runIf(RUN)("ingresos bancarios", () => {
     await expect(informePosicion(EMPRESA, null, 999999)).rejects.toMatchObject({ codigo: "CAJA_NO_ENCONTRADA" });
   });
 
+  it("posición global en Excel: las mismas cifras, como números con formato de euros", async () => {
+    const { excelPosicion } = await import("./posicionReport.ts");
+    const XLSX = await import("xlsx");
+    const caja = await crearCaja("posicion-excel");
+    const s1 = await cerrarJornadaCon(caja, 435045);
+    await ingresos.crearIngreso(ctx, { registerId: caja, sessionIds: [s1], importeCentimos: 435000 });
+    await cerrarJornadaCon(caja, 72580);
+    await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: componer(35000) });
+
+    const { xlsx, nombre } = await excelPosicion(EMPRESA, null, caja);
+    expect(nombre).toMatch(/^posicion-.*\.xlsx$/);
+    const libro = XLSX.read(xlsx, { type: "buffer", cellNF: true });
+    expect(libro.SheetNames).toEqual(["Posición"]);
+    const hoja = libro.Sheets["Posición"];
+    const filas = XLSX.utils.sheet_to_json<(string | number)[]>(hoja, { header: 1, blankrows: true });
+
+    // Las tres cifras, como números en euros.
+    expect(filas[4]).toEqual(["Efectivo disponible total", 1076.25]);
+    expect(filas[5]).toEqual(["En la caja", 350]);
+    expect(filas[6]).toEqual(["Pendiente de ingresar", 726.25]);
+    expect(hoja["B5"].t).toBe("n");
+    expect(hoja["B5"].z).toContain("€");
+
+    // La fila del total de la tabla cuadra con las tres cifras.
+    const total = filas.find((f) => f[0] === "TOTAL EFECTIVO")!;
+    expect(total[3]).toBe(350);
+    expect(total[5]).toBe(726.25);
+    expect(total[7]).toBe(1076.25);
+    // Y las piezas pendientes suman lo pendiente.
+    const piezas = filas.filter((f) => f[1] === "Billete" || f[1] === "Moneda");
+    const pendiente = piezas.reduce((a, f) => a + Number(f[5] ?? 0), 0);
+    expect(Math.round(pendiente * 100)).toBe(72625);
+
+    // Con varias cajas, una hoja más.
+    const todas = XLSX.read((await excelPosicion(EMPRESA, null, null)).xlsx, { type: "buffer" });
+    expect(todas.SheetNames).toContain("Por caja");
+  });
+
   it("no se puede ingresar más de lo que hay bajo control", async () => {
     const caja = await crearCaja("ingresos-exceso");
     const s1 = await cerrarJornadaCon(caja, 10000);
