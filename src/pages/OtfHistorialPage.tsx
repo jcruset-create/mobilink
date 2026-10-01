@@ -8,6 +8,8 @@ import { useEffect, useMemo, useState } from "react";
 import { RefreshCw, Search } from "lucide-react";
 import AssistSidebar from "../components/AssistSidebar";
 import { fetchOtfList } from "../modules/roadsideAssistanceApi";
+import { apiFetch } from "../modules/apiFetch";
+import { abrirPdfConSesion } from "../modules/pdfConSesion";
 
 const STATUS_OTF: Record<string, string> = {
   planificada: "border-amber-500/40 bg-amber-500/15 text-amber-300",
@@ -70,8 +72,11 @@ export default function OtfHistorialPage() {
   }, [list, q, estado, operario]);
 
   function abrirPdf(id: number) {
-    const token = localStorage.getItem("sea-admin-token") ?? "";
-    window.open(`/api/otf/${id}/report.pdf?token=${encodeURIComponent(token)}`, "_blank");
+    // Por `apiFetch`, que lleva la sesión en la cabecera: el token clásico que
+    // iba en la URL ya no existe para quien entra por el hub.
+    void abrirPdfConSesion(apiFetch, `/api/otf/${id}/report.pdf`, `otf_${id}.pdf`).catch(
+      (e) => window.alert(e instanceof Error ? e.message : "No se pudo abrir el informe.")
+    );
   }
 
   return (

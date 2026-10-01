@@ -1,4 +1,5 @@
 import { apiFetch } from "../modules/apiFetch";
+import { abrirPdfConSesion } from "../modules/pdfConSesion";
 import { useEffect, useRef, useState } from "react";
 import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import L from "leaflet";
@@ -81,11 +82,13 @@ export default function FlotaMapPage() {
     const day = new Date(`${reportDate}T00:00:00`);
     const from = day.getTime();
     const to = from + 24 * 60 * 60 * 1000 - 1;
-    const token =
-      (typeof localStorage !== "undefined" && (localStorage.getItem("sea-admin-token") || localStorage.getItem("adminToken"))) || "";
-    window.open(
-      `${API_BASE}/api/webfleet/vehicle/${objectno}/tracking-report.pdf?from=${from}&to=${to}&token=${encodeURIComponent(token)}`,
-      "_blank"
+    // Con la sesión en la cabecera: ver `modules/pdfConSesion.ts`.
+    void abrirPdfConSesion(
+      apiFetch,
+      `${API_BASE}/api/webfleet/vehicle/${objectno}/tracking-report.pdf?from=${from}&to=${to}`,
+      `seguimiento_${objectno}_${reportDate}.pdf`
+    ).catch((e) =>
+      window.alert(e instanceof Error ? e.message : "No se pudo abrir el informe.")
     );
   }
 

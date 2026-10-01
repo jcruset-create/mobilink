@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { fetchVehiculoHistorial } from "../modules/roadsideAssistanceApi";
+import { apiFetch } from "../modules/apiFetch";
+import { abrirPdfConSesion } from "../modules/pdfConSesion";
 
 function fmt(ms?: number | null) {
   if (!ms) return "—";
@@ -93,8 +95,16 @@ export default function VehiculoHistorialPage() {
                         <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${ASIST_BADGE[a.status] ?? "bg-slate-100 text-slate-700"}`}>{a.status}</span>
                         <button
                           onClick={() => {
-                            const token = localStorage.getItem("sea-admin-token") ?? "";
-                            window.open(`/api/roadside-assistances/${a.id}/report.pdf?token=${encodeURIComponent(token)}`, "_blank");
+                            // Con la sesión en la cabecera: ver `modules/pdfConSesion.ts`.
+                            void abrirPdfConSesion(
+                              apiFetch,
+                              `/api/roadside-assistances/${a.id}/report.pdf`,
+                              `asistencia_${a.id}.pdf`
+                            ).catch((e) =>
+                              window.alert(
+                                e instanceof Error ? e.message : "No se pudo abrir el informe."
+                              )
+                            );
                           }}
                           className="rounded border border-slate-200 px-2 py-1 text-[11px] font-bold text-slate-600 hover:bg-white"
                         >PDF</button>

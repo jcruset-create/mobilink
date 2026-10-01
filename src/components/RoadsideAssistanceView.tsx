@@ -62,6 +62,7 @@ import {
 } from "../modules/roadsideAssistanceTypes";
 import { aMilisegundos, fechaHoraCorta } from "../modules/roadsideFechaHora";
 import { formatCoords } from "../modules/roadsideCoordenadas";
+import { abrirPdfConSesion } from "../modules/pdfConSesion";
 import {
   colaDe,
   comoEntraria,
@@ -364,6 +365,29 @@ function isClosed(status: RoadsideAssistanceStatus) {
   return estadoCerrado(status);
 }
 
+/**
+ * Abre un informe en PDF con la sesión del panel.
+ *
+ * Pasa por `apiFetch`, que es quien pone el Bearer de la sesión unificada.
+ * Antes se abría la URL con el token clásico pegado detrás, y desde que el
+ * login del hub dejó de guardar ese token en el navegador —a propósito: era por
+ * donde se escapaba la contraseña maestra— el enlace salía con «?token=» vacío
+ * y el servidor contestaba «No autorizado».
+ *
+ * `avisar` es cómo se le cuenta el fallo a quien pulsa. Las tarjetas de la
+ * lista tienen su banda de errores y la pasan; la tarjeta de cerradas no tiene
+ * ninguna, y para ella un aviso del navegador es mejor que quedarse callado.
+ */
+function abrirInforme(
+  url: string,
+  nombreDeFichero: string,
+  avisar: (mensaje: string) => void = (m) => window.alert(m)
+) {
+  return abrirPdfConSesion(apiFetch, url, nombreDeFichero).catch((e) => {
+    avisar(e instanceof Error ? e.message : "No se pudo abrir el informe.");
+  });
+}
+
 function getTrackingUrl(assistance: RoadsideAssistance) {
   const path = `/seguimiento/${assistance.trackingToken}`;
 
@@ -507,8 +531,10 @@ function ClosedAssistanceCard({
             type="button"
             className="shrink-0 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-[10px] font-semibold text-slate-300 hover:bg-slate-700"
             onClick={() => {
-              const token = localStorage.getItem("sea-admin-token") ?? "";
-              window.open(`/api/roadside-assistances/${assistance.id}/report.pdf?token=${encodeURIComponent(token)}`, "_blank");
+              void abrirInforme(
+                `${API_BASE}/api/roadside-assistances/${assistance.id}/report.pdf`,
+                `asistencia_${assistance.id}.pdf`
+              );
             }}
           >
             Ver informe
@@ -2808,26 +2834,34 @@ export default function RoadsideAssistanceView({
                         Seguimiento
                       </a>
 
-                      <a
-                        href={`${API_BASE}/api/roadside-assistances/${assistance.id}/report.pdf`}
-                        target="_blank"
-                        rel="noreferrer"
+                      {/* Botón y no <a>: el informe pide credencial, y un enlace
+                          del navegador no puede llevarla. Éste iba sin token
+                          ninguno, así que no funcionaba para nadie. */}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void abrirInforme(
+                            `${API_BASE}/api/roadside-assistances/${assistance.id}/report.pdf`,
+                            `asistencia_${assistance.id}.pdf`,
+                            setLocalError
+                          )
+                        }
                         className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm font-bold text-slate-200 hover:bg-slate-700"
                       >
                         <FileText className="h-4 w-4" />
                         Informe PDF
-                      </a>
+                      </button>
 
                       {assistance.webfleetVehicleId && (
                         <button
                           type="button"
-                          onClick={() => {
-                            const token = localStorage.getItem("sea-admin-token") ?? "";
-                            window.open(
-                              `${API_BASE}/api/roadside-assistances/${assistance.id}/tracking-report.pdf?token=${encodeURIComponent(token)}`,
-                              "_blank"
-                            );
-                          }}
+                          onClick={() =>
+                            void abrirInforme(
+                              `${API_BASE}/api/roadside-assistances/${assistance.id}/tracking-report.pdf`,
+                              `seguimiento_${assistance.id}.pdf`,
+                              setLocalError
+                            )
+                          }
                           className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm font-bold text-slate-200 hover:bg-slate-700"
                         >
                           🛰️ Seguimiento furgoneta
@@ -3180,8 +3214,11 @@ export default function RoadsideAssistanceView({
                                   type="button"
                                   className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-[10px] font-semibold text-slate-300 hover:bg-slate-700"
                                   onClick={() => {
-                                    const token = localStorage.getItem("sea-admin-token") ?? "";
-                                    window.open(`/api/roadside-assistances/${item.id}/report.pdf?token=${encodeURIComponent(token)}`, "_blank");
+                                    void abrirInforme(
+                                      `${API_BASE}/api/roadside-assistances/${item.id}/report.pdf`,
+                                      `asistencia_${item.id}.pdf`,
+                                      setLocalError
+                                    );
                                   }}
                                 >
                                   PDF
