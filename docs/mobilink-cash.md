@@ -463,6 +463,13 @@ con la cabecera de los demás informes de caja. En la pantalla hay dos botones:
 «Descargar PDF» y «Enviar». «Enviar» abre el menú de compartir del sistema con
 el PDF adjunto, y solo sale donde el navegador sabe compartir ficheros.
 
+El botón «Excel» descarga las mismas cifras en hoja de cálculo
+(`GET /api/cash/posicion/report.xlsx`, mismos parámetros). Los importes van
+como números con formato de euros, no como texto, para poder sumar y filtrar:
+el resumen, el desglose pieza a pieza (en la caja, pendiente y total, en
+unidades y en euros) y de dónde sale lo pendiente de ingresar. Con «todas las
+cajas» lleva una segunda hoja, «Por caja».
+
 ## 7 sexies. Días atrasados (arranque del módulo)
 
 Al poner la caja en marcha hay días que ya se llevaron a mano en papel y que

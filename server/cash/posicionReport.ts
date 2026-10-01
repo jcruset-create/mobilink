@@ -11,6 +11,7 @@
  */
 
 import PDFDocument from "pdfkit";
+import * as XLSX from "xlsx";
 import pool from "../db.ts";
 import { formatearEuros } from "./domain/money.ts";
 import { ErrorCaja, cargarDenominaciones } from "./repository.ts";
@@ -41,13 +42,11 @@ function fechaCorta(iso: string | null): string {
 }
 
 /**
- * @param registerId la caja, o `null` para todas las que ve el usuario.
+ * Lo que comparten el PDF y el Excel: las cajas elegidas, su suma, el
+ * catálogo y cómo se llama lo que se enseña. Que salga de un solo sitio es lo
+ * que garantiza que los dos ficheros digan las mismas cifras.
  */
-export async function informePosicion(
-  empresaId: string,
-  centroId: string | null,
-  registerId: number | null
-): Promise<{ pdf: Buffer; nombre: string }> {
+async function prepararInforme(empresaId: string, centroId: string | null, registerId: number | null) {
   const datos = await posicionGlobal(empresaId, centroId);
   const cajas: PosicionCaja[] =
     registerId == null ? datos.cajas : datos.cajas.filter((c) => c.registerId === registerId);
@@ -55,9 +54,7 @@ export async function informePosicion(
     throw new ErrorCaja("CAJA_NO_ENCONTRADA", "No hay ninguna caja que enseñar.", 404);
   }
   const p = agregarPosicion(cajas);
-
   const denominaciones = (await cargarDenominaciones(pool, false)).sort((a, b) => b.valor - a.valor);
-  const imagenes = await imagenesDelCatalogo(denominaciones);
 
   const centros = new Set(datos.cajas.map((c) => c.centro ?? ""));
   const subtitulo =
@@ -66,6 +63,26 @@ export async function informePosicion(
       : centros.size === 1 && [...centros][0]
         ? `Todas las cajas de ${[...centros][0]} (${cajas.length})`
         : `Todas las cajas (${cajas.length})`;
+  const fecha = new Date(datos.actualizadoMs).toISOString().slice(0, 10);
+  const quien =
+    registerId == null ? "todas" : cajas[0].nombre.toLowerCase().normalize("NFD").replace(/[^a-z0-9]+/g, "-");
+  return { datos, cajas, p, denominaciones, subtitulo, base: `posicion-${quien}-${fecha}` };
+}
+
+/**
+ * @param registerId la caja, o `null` para todas las que ve el usuario.
+ */
+export async function informePosicion(
+  empresaId: string,
+  centroId: string | null,
+  registerId: number | null
+): Promise<{ pdf: Buffer; nombre: string }> {
+  const { datos, cajas, p, denominaciones, subtitulo, base } = await prepararInforme(
+    empresaId,
+    centroId,
+    registerId
+  );
+  const imagenes = await imagenesDelCatalogo(denominaciones);
 
   const doc = new PDFDocument({ margin: M, size: "A4" });
   const trozos: Buffer[] = [];
@@ -405,7 +422,134 @@ export async function informePosicion(
     );
 
   doc.end();
-  const fecha = new Date(datos.actualizadoMs).toISOString().slice(0, 10);
-  const quien = registerId == null ? "todas" : cajas[0].nombre.toLowerCase().normalize("NFD").replace(/[^a-z0-9]+/g, "-");
-  return { pdf: await listo, nombre: `posicion-${quien}-${fecha}.pdf` };
+  return { pdf: await listo, nombre: `${base}.pdf` };
+}
+
+/**
+ * La misma posición en Excel: para quien la quiere sumar, filtrar o pegar en
+ * su hoja. Los importes van como NÚMEROS en euros, con formato de moneda, no
+ * como texto: un «1.250,00 €» escrito no se puede sumar.
+ *
+ * Hojas:
+ * · «Posición»: cabecera, las tres cifras, la tabla pieza a pieza (con lo que
+ *   quedó sin desglose) y de dónde sale lo pendiente.
+ * · «Por caja», solo si son varias: cada caja con su caja, pendiente y total.
+ */
+export async function excelPosicion(
+  empresaId: string,
+  centroId: string | null,
+  registerId: number | null
+): Promise<{ xlsx: Buffer; nombre: string }> {
+  const { datos, cajas, p, denominaciones, subtitulo, base } = await prepararInforme(
+    empresaId,
+    centroId,
+    registerId
+  );
+  const e = (c: number) => Math.round(c) / 100;
+  const billetes = denominaciones.filter((d) => d.tipo === "BILLETE");
+  const monedas = denominaciones.filter((d) => d.tipo === "MONEDA");
+  const totalDe = (m: Map<number, number>, grupo: typeof denominaciones) =>
+    grupo.reduce((a, d) => a + (m.get(d.valor) ?? 0) * d.valor, 0);
+  const cajaB = totalDe(p.caja, billetes);
+  const cajaM = totalDe(p.caja, monedas);
+  const pendB = totalDe(p.pendiente, billetes);
+  const pendM = totalDe(p.pendiente, monedas) + p.sinDesgloseCentimos;
+
+  type Celda = string | number | null;
+  const filas: Celda[][] = [
+    ["Posición global de efectivo"],
+    [subtitulo],
+    [`Generado el ${fechaHora(datos.actualizadoMs)}`],
+    [],
+    ["Efectivo disponible total", e(p.cajaCentimos + p.pendienteCentimos)],
+    ["En la caja", e(p.cajaCentimos)],
+    ["Pendiente de ingresar", e(p.pendienteCentimos)],
+    [],
+    ["Pieza", "Tipo", "En la caja (uds.)", "En la caja (€)", "Pendiente (uds.)", "Pendiente (€)", "Total (uds.)", "Total (€)"],
+  ];
+  /** Filas cuyo importe va en la columna B (resumen y «de dónde sale»). */
+  const filasResumen: number[] = [4, 5, 6];
+  /** Filas de la tabla: importes en las columnas D, F y H. */
+  const filasEuros: number[] = [];
+
+  const grupo = (lista: typeof denominaciones, tipo: string) => {
+    for (const d of lista) {
+      const c = p.caja.get(d.valor) ?? 0;
+      const pe = p.pendiente.get(d.valor) ?? 0;
+      if (c + pe === 0) continue;
+      filasEuros.push(filas.length);
+      filas.push([d.etiqueta || `${e(d.valor)} €`, tipo, c, e(c * d.valor), pe, e(pe * d.valor), c + pe, e((c + pe) * d.valor)]);
+    }
+  };
+  grupo(billetes, "Billete");
+  filasEuros.push(filas.length);
+  filas.push(["Total billetes", "", null, e(cajaB), null, e(pendB), null, e(cajaB + pendB)]);
+  grupo(monedas, "Moneda");
+  if (p.sinDesgloseCentimos > 0) {
+    filasEuros.push(filas.length);
+    filas.push(["Sin desglose, del último ingreso", "Moneda", null, null, null, e(p.sinDesgloseCentimos), null, e(p.sinDesgloseCentimos)]);
+  }
+  filasEuros.push(filas.length);
+  filas.push(["Total monedas", "", null, e(cajaM), null, e(pendM), null, e(cajaM + pendM)]);
+  filasEuros.push(filas.length);
+  filas.push(["TOTAL EFECTIVO", "", null, e(p.cajaCentimos), null, e(p.pendienteCentimos), null, e(p.cajaCentimos + p.pendienteCentimos)]);
+
+  filas.push([]);
+  filas.push(["De dónde sale lo pendiente de ingresar"]);
+  for (const [texto, valor] of [
+    [`Cierres sin ingresar (${p.numCierres})`, p.cierresCentimos],
+    ["Sin ingresar del último ingreso", p.remanenteCentimos],
+    ["Repuesto al cajón", -p.repuestoCentimos],
+    ["Pendiente de ingresar", p.pendienteCentimos],
+  ] as const) {
+    filasResumen.push(filas.length);
+    filas.push([texto, e(valor)]);
+  }
+
+  const descuadre = p.piezasPendienteCentimos + p.sinDesgloseCentimos - p.pendienteCentimos;
+  if (descuadre !== 0) {
+    filas.push([]);
+    filas.push([
+      `Atención: las piezas pendientes suman ${eur(p.piezasPendienteCentimos + p.sinDesgloseCentimos)} y lo pendiente de ingresar son ${eur(p.pendienteCentimos)}. El total usa lo pendiente de la cuenta.`,
+    ]);
+  }
+
+  const hoja = XLSX.utils.aoa_to_sheet(filas);
+  hoja["!cols"] = [{ wch: 34 }, { wch: 9 }, { wch: 16 }, { wch: 15 }, { wch: 16 }, { wch: 15 }, { wch: 12 }, { wch: 15 }];
+  // Formato de moneda en las columnas de euros; las de unidades, enteras.
+  const FORMATO_EUR = '#,##0.00 "€"';
+  const conFormato = (r: number, c: number) => {
+    const celda = hoja[XLSX.utils.encode_cell({ r, c })];
+    if (celda && celda.t === "n") celda.z = FORMATO_EUR;
+  };
+  for (const r of filasResumen) conFormato(r, 1);
+  for (const r of filasEuros) for (const c of [3, 5, 7]) conFormato(r, c);
+
+  const libro = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(libro, hoja, "Posición");
+
+  if (cajas.length > 1) {
+    const porCaja: Celda[][] = [["Taller", "Caja", "Estado", "En la caja (€)", "Pendiente de ingresar (€)", "Total (€)"]];
+    for (const c of cajas) {
+      porCaja.push([
+        c.centro ?? "",
+        c.nombre,
+        c.estado === "ABIERTA" ? "Abierta" : c.estado === "CERRADA" ? "Cerrada" : "Sin jornadas",
+        e(c.cajaCentimos),
+        e(c.pendienteCentimos),
+        e(c.cajaCentimos + c.pendienteCentimos),
+      ]);
+    }
+    const h2 = XLSX.utils.aoa_to_sheet(porCaja);
+    h2["!cols"] = [{ wch: 18 }, { wch: 22 }, { wch: 12 }, { wch: 16 }, { wch: 24 }, { wch: 14 }];
+    for (let r = 1; r < porCaja.length; r++) {
+      for (const col of [3, 4, 5]) {
+        const celda = h2[XLSX.utils.encode_cell({ r, c: col })];
+        if (celda) celda.z = FORMATO_EUR;
+      }
+    }
+    XLSX.utils.book_append_sheet(libro, h2, "Por caja");
+  }
+
+  return { xlsx: XLSX.write(libro, { type: "buffer", bookType: "xlsx" }) as Buffer, nombre: `${base}.xlsx` };
 }
