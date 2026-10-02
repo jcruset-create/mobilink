@@ -33,6 +33,7 @@ const POR_MODULO: Record<string, Pestana> = {
   therefore: { titulo: "Mobilink Therefore" },
   recepciones: { titulo: "Mobilink Recepciones" },
   "or-manuales": { titulo: "Mobilink OR Manuales" },
+  "self-storage": { titulo: "Mobilink Self Storage" },
 };
 
 /**

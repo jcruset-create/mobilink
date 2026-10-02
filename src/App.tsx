@@ -103,6 +103,7 @@ const TacografosApp = lazy(() => import("./modules/tacografos/TacografosApp"));
 const ThereforeApp = lazy(() => import("./modules/therefore/ThereforeApp"));
 const CentralApp = lazy(() => import("./modules/central/CentralApp"));
 const RecepcionesApp = lazy(() => import("./modules/recepciones/RecepcionesApp"));
+const SelfStorageApp = lazy(() => import("./modules/self-storage/SelfStorageApp"));
 const OrManualesApp = lazy(() => import("./modules/or-manuales/OrManualesApp"));
 import AccesoPage from "./pages/AccesoPage";
 import InicioPage from "./pages/InicioPage";
@@ -413,6 +414,8 @@ export default function App() {
       <Route path="/central/*" element={<CentralApp />} />
       {/* Recepciones — control de la recepción física de mercancía de proveedores */}
       <Route path="/recepciones/*" element={<RecepcionesApp />} />
+      {/* Self Storage — alquiler de trasteros (dominio aislado, clientes propios) */}
+      <Route path="/self-storage/*" element={<SelfStorageApp />} />
 
       {/* Mobilink OR Manuales */}
       <Route path="/or-manuales/*" element={<OrManualesApp />} />

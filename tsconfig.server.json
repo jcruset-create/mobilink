@@ -49,6 +49,8 @@
     "server/tacografos/**/*.ts",
     "server/therefore/**/*.ts",
     "server/recepciones/**/*.ts",
+    // Self Storage se añade el mismo día que se escribe (§14 de ARCHITECTURE.md).
+    "server/self-storage/**/*.ts",
     // Recepción de vehículos desde el patio. Se añade el día que se descubre
     // que faltaba, no diez fases después: al renombrar la carpeta de
     // `recepciones` a `recepcionVehiculos` —porque aquel nombre ya era de la

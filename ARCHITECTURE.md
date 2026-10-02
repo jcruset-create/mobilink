@@ -516,3 +516,46 @@ funciones que el alta manual, con `origen = 'CORREO'` y el Message-ID en
 - **Sin cantidades en el correo de albarán se da por expedido todo lo
   pendiente** (configurable, `correo.asumir_expedicion_completa`): es lo que
   hace Soledad en la práctica, y el operario corrige en el muelle si no cuadra.
+
+## 16. Self Storage: un dominio con clientes propios
+
+`server/self-storage/` (tablas `self_storage_*`, API
+`/api/self-storage/admin`, panel en `src/modules/self-storage/`). Alquiler de
+trasteros: centros → zonas → trasteros, clientes, contratos, facturación con
+Stripe, accesos físicos con Teltonika RUT241. Se construye por fases; la
+arquitectura completa y las decisiones confirmadas están en
+`docs/self-storage/ARQUITECTURA.md`.
+
+La decisión que gobierna el módulo: **sus clientes son suyos.**
+`self_storage_customers` no se relaciona con ninguna otra tabla de clientes de
+Mobilink, y ninguna tabla de fuera apunta a las suyas. De la plataforma sólo
+usa lo transversal: la empresa (`empresa_id`), la sesión de los empleados y su
+rol en `app_usuario_modulos`. Si algún día hay que relacionar entidades de
+módulos distintos, será con una tabla de enlaces opcional, nunca reutilizando
+la del otro módulo. Dos pruebas lo vigilan: una recorre el código y otra mira
+las FKs en la base.
+
+Decisiones fijadas con pruebas:
+
+- **El esquema vive en `supabase/migrations/self_storage/*.sql`** y el
+  servidor aplica esos mismos ficheros al arrancar. Es una sola fuente, no
+  un `.sql` gemelo que se desincroniza.
+- **`empresa_id` en todas las tablas, con FKs compuestas.** Un contrato no
+  puede unir un cliente de una empresa con un trastero de otra, ni una zona
+  de un centro colarse en un trastero de otro, aunque el servidor se
+  equivoque.
+- **La doble contratación es imposible en la base**: un índice único parcial
+  de reserva activa por trastero y otro de contrato vivo por trastero.
+  Probado también con dos transacciones a la vez.
+- **El estado del trastero lo mueve quien debe.** A mano sólo se pasa entre
+  disponible, mantenimiento y bloqueado, y nunca con un contrato vivo o una
+  reserva activa. «Reservado» y «Alquilado» los ponen las reservas y los
+  contratos.
+- **RLS como segunda barrera.** El servidor entra como propietario; por
+  PostgREST, `anon` no ve nada y un cliente sólo lee lo suyo. Fuera de
+  Supabase el RLS se activa sin políticas, y la prueba de RLS crea un
+  `auth.uid()` equivalente para comprobarlo.
+- **El SVG del plano se guarda saneado con lista blanca** y se pinta con
+  `DOMParser`, nunca como HTML. La vista pública de un trastero también es
+  lista blanca: se construye campo a campo, no quitando campos a la del
+  panel.

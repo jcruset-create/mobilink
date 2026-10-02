@@ -25,6 +25,7 @@ export type ModuloApp = {
     | "therefore"
     | "recepciones"
     | "or-manuales"
+    | "self-storage"
     | "assist"
     | "taller";
   label: string;
@@ -196,6 +197,26 @@ export const MODULOS_APP: ModuloApp[] = [
       { key: "avisos", label: "Avisos" },
       { key: "historico", label: "Histórico" },
       { key: "configuracion", label: "Configuración" },
+    ],
+  },
+  {
+    key: "self-storage",
+    label: "Self Storage",
+    // Mismos roles que traduce server/self-storage/auth/permissions.ts. El
+    // superadministrador lo es por app_usuarios.es_superadmin, no por esta lista.
+    roles: [
+      { value: "admin", label: "Administrador" },
+      { value: "employee", label: "Empleado (mostrador)" },
+      { value: "maintenance", label: "Mantenimiento" },
+    ],
+    pantallas: [
+      { key: "dashboard", label: "Dashboard" },
+      { key: "clientes", label: "Clientes" },
+      { key: "trasteros", label: "Trasteros" },
+      { key: "plano", label: "Plano interactivo" },
+      { key: "centros", label: "Centros y zonas" },
+      { key: "tipos", label: "Tipos de trastero" },
+      { key: "importar", label: "Importar trasteros" },
     ],
   },
   {
