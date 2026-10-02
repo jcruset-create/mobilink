@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+/* El modo oscuro lo decide una clase `dark` en el contenedor, no el sistema:
+   Operativo 2 lleva su propio botón de tema y el resto del panel es claro. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
