@@ -9,6 +9,7 @@ import React, {
 import AgendaView from "./components/AgendaView";
 import QuickTemplateEditor from "./components/QuickTemplateEditor";
 import Operativo2View from "./components/Operativo2View";
+import { esTecnicoDePrueba } from "./modules/tecnicosDePrueba";
 import SelectorFurgoneta from "./components/SelectorFurgoneta";
 import UsersScreen from "./components/UsersScreen";
 import EmptyState from "./components/EmptyState";
@@ -149,6 +150,7 @@ import {
   saveJobToBackend,
   saveTechToBackend,
   patchTechRoadsideCapable,
+  deleteTechFromBackend,
 } from "./modules/workshopApi";
 import {
   buildOperationReport,
@@ -4372,6 +4374,25 @@ function removeSupportFromActiveJob(jobId: number) {
    * ofrecerse para asignar y se le retiran el PIN y el código, así que tampoco
    * puede entrar en la tablet.
    */
+  /**
+   * Borrado de un técnico de PRUEBA. Es lo único que se borra de verdad: los
+   * técnicos reales se dan de baja y conservan su histórico. Se comprueba aquí
+   * también, no solo en el botón, para que no haya forma de llegar sin pasar
+   * por la regla.
+   */
+  async function eliminarTecnicoDePrueba(name: string) {
+    if (!esTecnicoDePrueba(name)) return;
+
+    try {
+      await deleteTechFromBackend(name);
+      setTechs((prev) => prev.filter((t) => t.name !== name));
+      appendLog(`Técnico de prueba eliminado: ${name}.`);
+    } catch (error) {
+      console.error("Error eliminando técnico de prueba:", error);
+      appendLog(`Error al eliminar a ${name}.`);
+    }
+  }
+
   async function darDeBaja(name: string) {
     if (name === "Ramón") return;
 
@@ -4451,6 +4472,7 @@ if (view === "tecnicos" && canView("tecnicos")) {
     <TecnicosView
       techs={visibleTechs}
       darDeBaja={darDeBaja}
+      eliminarTecnicoDePrueba={eliminarTecnicoDePrueba}
       handleTechImageUpload={handleTechImageUpload}
       onSetWorkshopPin={(techName) => {
         setWorkshopPinModal({ techName });
