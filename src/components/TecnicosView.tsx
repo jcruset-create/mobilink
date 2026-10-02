@@ -10,6 +10,7 @@ import type {
   Tech,
 } from "../modules/workshopTypes";
 import { getTechAvatarUrl } from "../modules/techAvatar";
+import { esTecnicoDePrueba } from "../modules/tecnicosDePrueba";
 import {
   defaultCompetencies,
   defaultPriorities,
@@ -19,6 +20,11 @@ type Props = {
   techs: Tech[];
   /** Baja del técnico: conserva la ficha y el histórico, pero deja de asignarse. */
   darDeBaja: (name: string) => void;
+  /**
+   * Borrado de verdad, SOLO para técnicos de prueba. Los de verdad se dan de
+   * baja: su histórico hace falta para nóminas y reclamaciones.
+   */
+  eliminarTecnicoDePrueba: (name: string) => void;
   handleTechImageUpload: (
     event: ChangeEvent<HTMLInputElement>,
     techName: string
@@ -78,6 +84,7 @@ type ModalState =
 export default function TecnicosView({
   techs,
   darDeBaja,
+  eliminarTecnicoDePrueba,
   handleTechImageUpload,
   onSetWorkshopPin,
   onSaveTech,
@@ -295,6 +302,24 @@ export default function TecnicosView({
                         className="rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-bold text-red-700 hover:bg-red-50"
                       >
                         Dar de baja
+                      </button>
+                    )}
+                    {esTecnicoDePrueba(tech.name) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (
+                            window.confirm(
+                              `¿Eliminar definitivamente a ${tech.name}?\n\n` +
+                                "Es un usuario de prueba: se borra la ficha entera y no se puede deshacer."
+                            )
+                          ) {
+                            eliminarTecnicoDePrueba(tech.name);
+                          }
+                        }}
+                        className="rounded-lg bg-red-600 px-3 py-2 text-xs font-bold text-white hover:bg-red-700"
+                      >
+                        Eliminar
                       </button>
                     )}
                   </div>
