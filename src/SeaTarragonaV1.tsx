@@ -2800,6 +2800,35 @@ async function reactivatePausedJob(jobId: number) {
   }
 }
 
+/**
+ * Cambia la matrícula de una entrada pendiente de validar.
+ *
+ * La matrícula se escribe a mano en la entrada rápida y se equivoca uno con
+ * frecuencia: una letra bailada, un número de más. Hasta ahora había que
+ * eliminar la entrada y crearla otra vez, perdiendo el responsable y el apoyo
+ * propuestos. Se corrige sobre la marcha, desde la misma tarjeta, y SOLO
+ * mientras está en validación: una vez autorizada, la matrícula ya está en el
+ * parte y se cambia por el camino de siempre.
+ */
+function updateValidationPlate(jobId: number, nextPlate: string) {
+  const job = jobs.find((item) => item.id === jobId);
+  if (!job || job.status !== "validacion") return;
+
+  // Igual que al crear la entrada: mayúsculas y sin espacios alrededor.
+  const plate = nextPlate.trim().toUpperCase();
+  if (!plate || plate === job.plate) return;
+
+  const updatedJob: Job = { ...job, plate };
+
+  setJobs((prev) =>
+    prev.map((item) => (item.id === jobId ? updatedJob : item))
+  );
+
+  saveJobToBackend(updatedJob);
+
+  appendLog(`Matrícula corregida en validación: ${job.plate} → ${plate}.`);
+}
+
 function updateValidationResponsible(jobId: number, responsibleName: string) {
   const job = jobs.find((item) => item.id === jobId);
   if (!job || job.status !== "validacion") return;
@@ -4729,6 +4758,7 @@ const operativo2Element = (
     pauseJob={pauseJob}
     reactivatePausedJob={reactivatePausedJob}
     updateValidationResponsible={updateValidationResponsible}
+    updateValidationPlate={updateValidationPlate}
     addValidationExtraSupport={addValidationExtraSupport}
     removeValidationSupportByName={removeValidationSupportByName}
     authorizeProposedJob={authorizeProposedJob}

@@ -9,4 +9,4 @@
  * que nadie se acuerde. Este número sirve para hablar, el commit para
  * comprobar.
  */
-export const APP_VERSION = "v2.31.0";
+export const APP_VERSION = "v2.32.0";
