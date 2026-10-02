@@ -87,6 +87,7 @@ export type Operativo2ViewProps = {
   pauseJob: (jobId: number) => Promise<void> | void;
   reactivatePausedJob: (jobId: number) => Promise<void> | void;
   updateValidationResponsible: (jobId: number, responsibleName: string) => void;
+  updateValidationPlate: (jobId: number, plate: string) => void;
   addValidationExtraSupport: (jobId: number, supportName: string) => void;
   removeValidationSupportByName: (jobId: number, nameToRemove: string) => void;
   authorizeProposedJob: (jobId: number) => Promise<void> | void;
@@ -122,6 +123,60 @@ export type Operativo2ViewProps = {
  * llega aquí como props, de modo que la vista pueda montarse también desde
  * Mobilink WorkPlanner.
  */
+/**
+ * La matrícula de una entrada en validación, corregible con un clic.
+ *
+ * Se teclea a mano y se equivoca uno a menudo. Hasta ahora había que eliminar
+ * la entrada y crearla de nuevo; ahora se pulsa, se corrige, y Enter (o salir
+ * del campo) la guarda. Escape deja la que había.
+ */
+function MatriculaEditable({
+  valor,
+  urgente,
+  onCambiar,
+}: {
+  valor: string;
+  urgente: boolean;
+  onCambiar: (plate: string) => void;
+}) {
+  const [editando, setEditando] = useState(false);
+  const [texto, setTexto] = useState(valor);
+
+  function confirmar() {
+    setEditando(false);
+    const limpia = texto.trim().toUpperCase();
+    if (limpia && limpia !== valor) onCambiar(limpia);
+    else setTexto(valor);
+  }
+
+  if (!editando) {
+    return (
+      <button
+        type="button"
+        title="Corregir matrícula"
+        onClick={() => { setTexto(valor); setEditando(true); }}
+        className="rounded border border-transparent px-1 text-[12px] font-bold hover:border-slate-500 hover:bg-slate-800"
+      >
+        {valor}{urgente ? " ⚠️" : ""} <span className="text-[10px] font-normal text-slate-500">✎</span>
+      </button>
+    );
+  }
+
+  return (
+    <input
+      autoFocus
+      value={texto}
+      onChange={(e) => setTexto(e.target.value.toUpperCase())}
+      onBlur={confirmar}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") { e.preventDefault(); confirmar(); }
+        if (e.key === "Escape") { setTexto(valor); setEditando(false); }
+      }}
+      className="w-24 rounded border border-emerald-500 bg-slate-800 px-1.5 py-0.5 text-[12px] font-bold uppercase text-white outline-none"
+    />
+  );
+}
+
 export default function Operativo2View({
   userName,
   setView,
@@ -164,6 +219,7 @@ export default function Operativo2View({
   pauseJob,
   reactivatePausedJob,
   updateValidationResponsible,
+  updateValidationPlate,
   addValidationExtraSupport,
   removeValidationSupportByName,
   authorizeProposedJob,
@@ -451,7 +507,11 @@ export default function Operativo2View({
               return (
                 <div key={job.id} className="rounded-lg bg-slate-900 p-2">
                   <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-[12px] font-bold">{job.plate}{job.urgent ? " ⚠️" : ""}</span>
+                  <MatriculaEditable
+                    valor={job.plate}
+                    urgente={Boolean(job.urgent)}
+                    onCambiar={(plate) => updateValidationPlate(job.id, plate)}
+                  />
                   <span className="text-[11px] text-slate-400">{getOperationLabel(job)}</span>
                   <select
                     value=""
