@@ -14,6 +14,7 @@ import { loadScheduledTechStatusesFromBackend } from "../scheduledTechStatusApi"
 import { cargarConfigVacaciones, guardarConfigVacaciones } from "../vacacionesConfigApi";
 import { loadAgendaConfig } from "../agendaConfigApi";
 import { loadTechsFromBackend } from "../workshopApi";
+import { esTecnicoDePrueba } from "../tecnicosDePrueba";
 import { DEFAULT_AGENDA_CONFIG, type AgendaConfig } from "../agendaConfig";
 import { getTodayDateValue, type ScheduledTechStatus } from "../techStatusScheduleHelpers";
 import { DEFAULT_WORKSHOP_ID, WORKSHOPS, normalizeWorkshopId } from "../workshops";
@@ -87,7 +88,7 @@ export default function AusenciasTecnicosPage() {
       // año el resumen los añade igualmente para no perder su histórico.
       setTecnicos(
         (listaTecnicos as { name?: string; activo?: boolean }[])
-          .filter((t) => t?.name && t.activo !== false)
+          .filter((t) => t?.name && t.activo !== false && !esTecnicoDePrueba(t.name))
           .map((t) => String(t.name))
       );
 

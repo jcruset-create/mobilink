@@ -12,6 +12,7 @@ import {
   weekdayIndexMonFirst,
   type AgendaConfig,
 } from "./agendaConfig";
+import { esTecnicoDePrueba } from "./tecnicosDePrueba";
 import type { ScheduledTechStatus } from "./techStatusScheduleHelpers";
 import type { TechStatus } from "./workshopTypes";
 
@@ -274,8 +275,10 @@ export function resumenPorTecnico(
 
   const nombres = [...tecnicos.map((n) => String(n || "").trim()).filter(Boolean)];
 
+  // Los que tuvieron ausencias este año aunque ya no estén en la lista; los de
+  // prueba no, aunque alguien les programara algo trasteando.
   for (const nombre of porNombre.keys()) {
-    if (!nombres.includes(nombre)) nombres.push(nombre);
+    if (!nombres.includes(nombre) && !esTecnicoDePrueba(nombre)) nombres.push(nombre);
   }
 
   return nombres.map((techName) => {
