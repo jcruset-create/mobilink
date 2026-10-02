@@ -2,9 +2,13 @@
 -- Mobilink Self Storage — PROPUESTA de esquema PostgreSQL (fase de diseño)
 -- =============================================================================
 --
--- Estado: BORRADOR PARA REVISIÓN. Todavía no lo ejecuta nada.
+-- Estado: borrador de diseño de las FASES 2 a 4. La fase 1 ya no está aquí:
+-- vive en supabase/migrations/self_storage/ (fuente única, la aplica el servidor).
+-- Las decisiones confirmadas (docs/self-storage/ARQUITECTURA.md §0) mandan sobre
+-- este borrador: device_outputs, sincronización de teléfonos, conceptos
+-- facturables con su tratamiento fiscal, política del primer SEPA, etc.
 --
--- Cuando se confirme, este contenido pasa a `server/self-storage/schema/*.sql`
+-- Al llegar cada fase, su parte pasa a `supabase/migrations/self_storage/NNNN_*.sql`
 -- y se aplica al arrancar con `prepararEsquema("Self Storage", ...)`, como el
 -- resto de módulos (ver ARCHITECTURE.md §14). Por eso todo es idempotente:
 -- `IF NOT EXISTS`, tipos creados dentro de bloques DO, políticas con DROP+CREATE.

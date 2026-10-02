@@ -1,15 +1,16 @@
 # Mobilink Self Storage: arquitectura propuesta
 
-> **Estado: PROPUESTA, pendiente de confirmación.** No hay código de aplicación
-> todavía. El esquema completo (enums, FKs, índices, constraints, triggers, RLS
-> y Storage) está en [`esquema.sql`](./esquema.sql). Se ha ejecutado contra
-> PostgreSQL 16: aplica limpio, es idempotente (se puede ejecutar dos veces
-> seguidas) y se han probado la doble reserva, el doble contrato, la tabla de
-> eventos que no admite cambios y la RLS entre dos clientes.
+> **Estado: arquitectura CONFIRMADA (2 de octubre de 2026) y fase 1
+> implementada.** Las decisiones confirmadas del §0 mandan sobre cualquier
+> otra parte de este documento que diga lo contrario. El esquema de la fase 1
+> vive en [`supabase/migrations/self_storage/`](../../supabase/migrations/self_storage/),
+> que es la fuente única y la aplica el servidor al arrancar. [`esquema.sql`](./esquema.sql)
+> queda como borrador de diseño de las fases 2 a 4 y se irá pasando a
+> migraciones fase a fase.
 
 Índice:
 
-0. Resumen de decisiones que necesito que confirmes
+0. Decisiones confirmadas
 1. Análisis de requisitos: inconsistencias y huecos
 2. Arquitectura
 3. Estructura de carpetas
@@ -24,22 +25,31 @@
 12. Importación de trasteros (CSV / Reus)
 13. Tareas programadas
 14. Plan por fases y criterio de éxito
+15. Fase 1: lo que está hecho
 
 ---
 
-## 0. Decisiones que necesito que confirmes
+## 0. Decisiones confirmadas
 
-| # | Decisión | Propuesta | Alternativa |
-|---|---|---|---|
-| D1 | **Stack de frontend** | El repo **no usa Next.js**: es Vite + React 18 + React Router y un único Express en Render. Propongo construir el módulo **dentro de ese stack**: API en `server/self-storage/`, panel, portal y web pública en `src/modules/self-storage/`. Mismo despliegue, misma sesión de Supabase, mismo correo, Twilio y rate limit. | Crear una app Next.js aparte (`apps/self-storage-web`) **solo para la web pública**, si el SEO importa desde el primer día. Sería un segundo servicio en Render que consume la misma API. El dominio no cambia. |
-| D2 | **Plan de Render** | `render.yaml` está en **`plan: free`**, que **duerme el servicio** a los 15 min. Un cliente en la puerta esperaría de 30 a 60 s a que abra, y los trabajos programados (caducar reservas, impagos) no se ejecutarían. **Hace falta un plan de pago** antes de la fase 3. | Mantener el plan gratuito solo para desarrollo. |
-| D3 | **Cómo se factura** | Stripe Subscriptions cobra (reintentos, mandato SEPA, SCA). La **factura legal es la nuestra**: numeración propia correlativa, datos congelados y PDF propio. Se crea al llegar `invoice.finalized` de Stripe. | Generar nosotros la factura cada mes y cobrar con PaymentIntents fuera de sesión, sin suscripción. Da más control, pero hay que reimplementar los reintentos. |
-| D4 | **Apertura por llamada** | El cliente llama a un número de **Twilio** (ya está en el stack) → webhook → el backend valida → orden al RUT241. Así **toda** apertura pasa por las mismas reglas y queda registrada. | La lista blanca nativa del RUT241 (*call to open*). Abre sin pasar por el backend, así que **incumple** el requisito «el backend valida antes de abrir». Solo valdría como modo de emergencia sin conexión. |
-| D5 | **Conectividad del RUT241** | Un router 4G suele estar detrás de **CGNAT**: el backend no puede conectarse a él directamente. Se programa contra una interfaz `DoorController` con tres implementaciones: `rms` (API de Teltonika RMS), `rut_http` (API HTTP de RutOS, con SIM de IP fija o VPN) y `mock`. **Hay que probarlo con el hardware real** antes de cerrar la fase 3. | — |
-| D6 | **Primer cobro SEPA** | Un SEPA tarda de 2 a 5 días hábiles. Propongo activar el contrato y el acceso cuando el pago está en `processing`, ajustable con `billing.sepa_activate_on_processing`, activado por defecto. Si después falla, entra el motor de impagos. | Esperar a `succeeded`: el cliente pasaría días sin poder entrar. |
-| D7 | **Precio** | `monthly_price` = **base imponible** (sin IVA). `tax_rate` va en cada trastero. El PVP es una columna calculada. La fianza **no lleva IVA**. | Guardar el PVP y deducir la base. |
-
----
+| # | Decisión |
+|---|---|
+| D1 | **Un solo stack**: Vite + React + TypeScript + Express + Supabase/PostgreSQL + Render. Ni migración a Next.js ni una segunda app Next.js para la web pública en el MVP. Si más adelante el SEO lo pide, se valorará una web pública aparte. |
+| D2 | **Render**: en desarrollo, la infraestructura actual. Se diseña **suponiendo que en producción el servicio no se duerme**; antes de poner en producción el control de accesos se pasa a un plan adecuado. Las tareas críticas (caducidad de reservas, impagos, reintentos, sincronización con dispositivos, procesamiento de eventos) son **trabajos programados del servidor**, nunca dependen de que alguien tenga el panel abierto (§13). |
+| D3 | **Facturación propia**. Stripe es el medio de cobro, no la única fuente contable. La factura emitida guarda **instantáneas** (nombre o razón social, NIF, dirección fiscal, conceptos, bases, impuestos y totales); un cambio posterior del cliente no altera facturas antiguas. Las emitidas no se borran ni se renumeran; la numeración es **transaccional y correlativa**. El modelo deja sitio para la facturación electrónica (Veri*factu) sin rehacer el módulo. |
+| D4 | **Tratamiento fiscal configurable por concepto**. No se presupone en el código si la fianza lleva IVA. `invoice_items` guarda como mínimo concepto, `quantity`, `unit_price`, `tax_rate`, `tax_amount`, `total` e `item_type` (`rental`, `deposit`, `insurance`, `lock`, `penalty`, `discount`, `other`). El trastero guarda base, IVA y PVP **del alquiler**, sin suponer que otras líneas tengan el mismo tratamiento. En la fase 2 habrá un catálogo de conceptos facturables con su tratamiento fiscal. |
+| D5 | **SEPA, dos situaciones**. *Cliente nuevo, primer cobro*: tarjeta confirmada → se activa; SEPA en `processing` → **por defecto NO se da acceso** hasta confirmarse (`billing.first_sepa_payment_access_policy` = `wait_for_success` \| `allow_while_processing`, más un *override* administrativo auditado). *Cliente con contrato activo*: una mensualidad SEPA en `processing` **no bloquea**; la política de impago sólo empieza cuando Stripe informa de fallo o devolución. |
+| D6 | **Bloqueos separados por motivo** (`self_storage_access_blocks`). Puede haber varios a la vez; cobrar la deuda levanta **sólo** el de impago. El acceso efectivo se calcula con **todos** los bloqueos activos. |
+| D7 | **Acceso telefónico por adaptador**: `rut_whitelist` (el RUT241 abre a los números autorizados), `backend_validated` y `twilio`. **Twilio no es obligatorio** y la aplicación no se acopla a él. Para el MVP se conserva la apertura por llamada del RUT241: el backend **sincroniza** los teléfonos autorizados con el dispositivo (contrato activo → alta; suspensión → baja; reactivación → alta otra vez) y guarda un **registro de sincronización** que dice si la configuración del RUT241 está al día. |
+| D8 | **Dispositivo → salidas → puertas**. No se asume ni «1 RUT241 = 1 puerta» ni «1 RUT241 = varias». Entidad `self_storage_device_outputs` (`device_id`, `output_number`, `name`, `output_type`, `pulse_duration_ms`, `enabled`) y la puerta referencia `device_output_id`. Adaptadores separados (RMS / API / VPN, módulos de relés, otros controladores); la conectividad física se decide tras las pruebas con el equipo. |
+| D9 | **Plano SVG** con `floor_plan_shape_id` y colores del estado REAL en la base. En el panel, la ficha del trastero muestra número, medidas, m², m³, precio, estado, cliente, contrato, estado de pagos y zona, con accesos rápidos: ver cliente, contrato, facturas y accesos, cambiar trastero y finalizar contrato. |
+| D10 | **Tipos de trastero** (`self_storage_unit_types`) con la imagen 3D y la descripción de capacidad compartidas. Cada trastero conserva sus medidas reales y apunta a su tipo con `unit_type_id`. |
+| D11 | **Reservas**: la garantía contra la doble contratación está en PostgreSQL (índices únicos parciales y transacciones), con `expires_at`. |
+| D12 | **Accesos temporales** asociados al contrato: si el contrato pierde el derecho de acceso, el temporal tampoco abre. |
+| D13 | **Personas autorizadas por contrato** (`self_storage_contract_members`): nombre, teléfono, email opcional, estado y métodos de acceso, con sus propios eventos de acceso. |
+| D14 | **Sólo inserción** donde tiene sentido: eventos de acceso, eventos de Stripe, cambios de seguridad, aperturas de administrador y auditoría. |
+| D15 | **Importador** con dry-run, validación, listado de errores, confirmación e importación sin duplicados. Identificador comercial: número de trastero + centro. Ningún dato de Reus en el código. |
+| D16 | **Multi-centro** desde el primer día. 1 cliente → N contratos (incluso en centros distintos); 1 contrato → 1 trastero (inicialmente). |
+| D17 | **Aislamiento**: los clientes de Self Storage no se mezclan con los de ningún otro módulo. Sólo se comparte lo transversal: la autenticación y los permisos de los usuarios internos, la empresa (tenant) y la configuración común cuando tenga sentido. |
 
 ## 1. Análisis de requisitos: inconsistencias y huecos
 
@@ -493,47 +503,84 @@ y firma) · `POST /api/self-storage/webhooks/voice` (firma `X-Twilio-Signature`)
 
 ## 8. Servicio RUT241 (control de puertas)
 
+Revisado tras la confirmación (D7 y D8). Se programa en la fase 3.
+
+**Modelo físico: dispositivo → salidas → puertas.**
+
+```
+self_storage_devices         (center_id, model, driver, endpoint, credentials_secret_name, status, last_seen_at)
+ └─ self_storage_device_outputs (device_id, output_number, name, output_type, pulse_duration_ms, enabled)
+      └─ self_storage_doors       (center_id, zone_id?, name, type, device_output_id, status, allow_app, allow_phone)
+```
+
+`UNIQUE (device_id, output_number)` en las salidas y una puerta por salida
+como mucho. Un RUT241 con una salida, un módulo de relés con ocho u otro
+controlador son el mismo modelo: la lógica de accesos sólo habla de puertas.
+
+**Adaptadores de apertura** (`integrations/doors/`), uno por conectividad:
+
 ```ts
 interface DoorController {
-  pulse(door: DoorTarget, ms: number): Promise<{ ok: boolean; latencyMs: number; error?: string }>;
+  pulse(output: OutputTarget, ms: number): Promise<{ ok: boolean; latencyMs: number; error?: string }>;
   ping(device: DeviceTarget): Promise<{ online: boolean; firmware?: string }>;
 }
 ```
 
-- **Implementaciones**:
-  - `rmsController`: API de Teltonika RMS, para los routers detrás de CGNAT.
-  - `rutHttpController`: API HTTP de RutOS. Hace login, enciende la salida,
-    espera `pulse_duration_ms` y la apaga, siempre con `finally` para que la
-    salida no se quede encendida.
-  - `mockController`: para desarrollo y pruebas; registra la orden y devuelve
-    ok.
-- **Credenciales**: se leen con `resolverSecreto(device.credentials_secret_name)`.
-  Nunca se guardan en base de datos, no se registran en logs (errores
-  saneados) y no viajan al frontend.
-- **Tiempo de espera**: 5 s. Si falla, se registra el evento con resultado
-  `denied` y motivo `DEVICE_TIMEOUT` o `DEVICE_ERROR`, y el dispositivo queda
-  `offline` hasta el siguiente heartbeat.
-- **Un dispositivo, una orden a la vez**: cerrojo por dispositivo en memoria;
-  la segunda petición espera.
-- **`access/service.ts` → `openDoor({actor, doorId, method})`**:
-  1. límite de frecuencia por cliente, puerta e IP;
-  2. carga el contexto;
-  3. `accessDecision`;
-  4. si se concede, incrementa los usos del acceso temporal de forma atómica
-     y envía `pulse`;
-  5. **siempre** inserta en `self_storage_access_events`;
-  6. si es apertura manual, deja también una fila en `audit_logs` con el
-     motivo.
-- **Llamada** (`integrations/voice`):
-  1. Twilio llama al webhook con `From`.
-  2. Se busca el número en `customer_phones` con `allow_door_access` o en
-     `temporary_accesses.guest_phone`.
-  3. Si el cliente tiene una sola puerta posible, o el número de Twilio está
-     asociado a una puerta, se abre directamente. Si hay varias, se responde
-     con un menú de tonos (TwiML `<Gather>`).
-  4. Se cuelga sin coste para el que llama: `<Reject>` primero; se confirma
-     al probar.
-  5. Se abre por `openDoor(method='phone')`.
+- `rms`: API de Teltonika RMS (routers detrás de CGNAT).
+- `rut_http`: API HTTP de RutOS (SIM con IP fija o VPN). Enciende la salida,
+  espera `pulse_duration_ms` y la apaga, siempre con `finally`.
+- `relay_*`: módulos de relés u otros controladores, cuando los haya.
+- `mock`: desarrollo y pruebas.
+
+La conectividad definitiva se decide después de las pruebas con el equipo.
+
+**Acceso telefónico por adaptador** (`integrations/phone-access/`):
+
+| Modo | Quién decide | Para qué |
+|---|---|---|
+| `rut_whitelist` | el RUT241, con su lista de números autorizados | **MVP**. Es como se trabaja hoy. |
+| `backend_validated` | el backend: el dispositivo avisa de la llamada y el backend decide y ordena abrir | cuando el firmware o la conectividad lo permitan |
+| `twilio` | el backend, vía un número de Twilio | opcional, **no** es requisito |
+
+Con `rut_whitelist` el RUT241 abre sin preguntar al backend. Por eso el
+backend tiene que **mantener la lista al día** y saber si lo está:
+
+- **Qué números van a la lista**: los `customer_phones` con
+  `allow_door_access`, los de las personas autorizadas (`contract_members`
+  con `allow_phone`) y los de los accesos temporales con teléfono. Sólo
+  entran mientras su acceso efectivo está permitido: contrato activo, sin
+  bloqueos activos y dentro de fechas.
+- **Cuándo cambia**: alta o activación de un contrato → alta; suspensión o
+  bloqueo → baja; reactivación → alta otra vez. Cada cambio de acceso
+  efectivo **encola** la sincronización de los dispositivos afectados.
+- **`self_storage_device_phone_sync`** (registro de sincronización): por
+  dispositivo, la lista deseada (con su huella), la última aplicada con
+  éxito, el intento, el resultado y el error. «Al día» significa que la
+  huella deseada es igual a la aplicada. El dashboard enseña los
+  dispositivos desfasados.
+- **Trabajo `deviceSync`**: aplica las sincronizaciones pendientes con
+  reintentos y espera creciente. Si el RUT241 no responde, la puerta sigue
+  con la lista anterior y la desviación queda a la vista. Por eso un bloqueo
+  por seguridad se señala como **«pendiente de aplicar en el dispositivo»**
+  hasta que la sincronización se confirma.
+- Una llamada que abre por la lista blanca no pasa por el backend. Si el
+  dispositivo informa del evento (registro, SMS o RMS), se importa a
+  `access_events` con `method = 'phone'`.
+
+**Credenciales**: sólo en variables de entorno (`credentials_secret_name`
+guarda el NOMBRE). Nunca se guardan en la base, no se escriben en los
+registros y no llegan al frontend.
+
+**Apertura desde app o panel** (`access/service.ts → openDoor`):
+
+1. Límite de frecuencia.
+2. Carga del contexto.
+3. `accessDecision`, que tiene en cuenta **todos** los bloqueos activos.
+4. Incremento atómico de usos si es un acceso temporal.
+5. `pulse` sobre la salida de la puerta.
+6. Registro **siempre** en `access_events`, con `contract_member_id` si abre
+   una persona autorizada.
+7. Si es una apertura de administrador, además una línea en `audit_logs`.
 
 ## 9. Seguridad y RLS
 
@@ -715,3 +762,67 @@ perezosa. La tarea solo pone orden en los estados.
 integración automatizada (`flujoMvp.integration.test.ts`) con Stripe simulado
 por eventos firmados y `mockController`. Además se hace una vez a mano con
 Stripe en modo prueba y el RUT241 real.
+
+## 15. Fase 1: lo que está hecho
+
+**Integración en Mobilink**:
+
+- Módulo `self-storage` en `MODULOS_SAAS` y licenciable.
+- Roles en el catálogo de usuarios: `admin`, `employee` y `maintenance`; el
+  `superadmin` sale de `es_superadmin`.
+- Entrada en el hub de Inicio, en los accesos de cabecera y en la pestaña
+  del navegador.
+- Rutas `/self-storage/*`.
+
+**Backend** (`server/self-storage/`, en el `include` de `tsconfig.server.json`):
+
+- API `/api/self-storage/admin/*` con
+  `authenticate → requireModule → cargarPermisos`.
+- Validación con zod (objetos estrictos: un campo inesperado es un 422).
+- Errores de PostgreSQL traducidos a mensajes y códigos estables.
+- Auditoría en la misma transacción que el cambio.
+
+**Base de datos** (`supabase/migrations/self_storage/0001…0004`):
+
+- 14 tablas.
+- Enums.
+- FKs compuestas con `empresa_id`.
+- Índices únicos parciales contra la doble reserva y el doble contrato.
+- Triggers: `updated_at`, tipo del mismo centro, y sólo inserción en la
+  auditoría y en las versiones del plano.
+- RLS, que fuera de Supabase se activa sin políticas.
+
+**Diferencias con el borrador de diseño**:
+
+- **Plano en `self_storage_floor_plans`** (SVG saneado y versionado en la
+  base) en lugar de en Storage: pesa poco, se versiona y se prueba sin
+  Supabase.
+- **`monthly_price_gross` guardado y no calculado**, con un CHECK que lo ata a
+  base + IVA con un céntimo de margen. Así se guarda el PVP redondo publicado.
+- **Clientes creados desde el panel nacen `active`**. Los de la web (fase 4)
+  nacerán `inactive` hasta activar su primer contrato.
+- **`reservations`, `contracts` y `contract_members` ya existen** como
+  modelo, para que la base garantice la exclusión desde el primer día, pero
+  **no tienen endpoints**: su lógica es de la fase 2.
+
+**Pantallas**:
+
+- Dashboard de ocupación.
+- Plano interactivo con vínculo de formas.
+- Trasteros.
+- Clientes y su ficha, con teléfonos y bloqueo con motivo.
+- Centros y zonas.
+- Tipos de trastero.
+- Importar CSV.
+
+Contratos, facturas, pagos, accesos, puertas, incidencias y configuración
+aparecen en el menú con su fase.
+
+**Pruebas**:
+
+- Unitarias de dominio.
+- Aislamiento del módulo por código.
+- Integración por HTTP contra PostgreSQL (`selfStorage.integration.test.ts`).
+- RLS entre clientes con roles y `auth.uid()` equivalentes a los de
+  Supabase (`rls.integration.test.ts`).
+

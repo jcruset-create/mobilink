@@ -55,6 +55,7 @@ export async function setup(): Promise<void> {
   const { initOrManuales } = await import("./server/or-manuales/schema.ts");
   const { initSatisfaction } = await import("./server/satisfaction/schema.ts");
   const { initAuditoria } = await import("./server/core/auditoriaSchema.ts");
+  const { initSelfStorage } = await import("./server/self-storage/schema.ts");
 
   await initDb();
   await initIntegrationHub();
@@ -72,6 +73,7 @@ export async function setup(): Promise<void> {
   await initRecepciones();
   await initOrManuales();
   await initSatisfaction();
+  await initSelfStorage();
   // No está en la cadena del arranque —la auditoría la prepara su propio
   // módulo— pero varias pruebas escriben en ella y no deben depender de quién
   // corra primero, que es justo el fallo que arregla este fichero.

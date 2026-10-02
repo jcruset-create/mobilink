@@ -21,6 +21,7 @@ export const BASES: Record<string, string> = {
   therefore: "/therefore",
   recepciones: "/recepciones",
   "or-manuales": "/or-manuales",
+  "self-storage": "/self-storage",
 };
 
 /**

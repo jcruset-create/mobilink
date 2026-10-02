@@ -53,6 +53,7 @@ import {
 } from "./therefore/index.ts";
 import { initCentral, mountCentral } from "./central/index.ts";
 import { initRecepciones, mountRecepciones, startRecepcionesBuzon } from "./recepciones/index.ts";
+import { initSelfStorage, mountSelfStorage } from "./self-storage/index.ts";
 import { initOrManuales, mountOrManuales, startOrManualesWorker } from "./or-manuales/index.ts";
 import { initLicenses, mountLicenses, startLicenseWorker } from "./licenses/index.ts";
 import { pedirIA, transcribirAudio } from "./core/openaiService.ts";
@@ -20443,6 +20444,8 @@ mountTacografos(app);
 mountTherefore(app);
 mountRecepciones(app);
 mountOrManuales(app);
+// Self Storage: alquiler de trasteros. Dominio aislado: sus clientes son suyos.
+mountSelfStorage(app);
 
 /* =========================================================
    MOBILINK LICENCIAS (API bajo /api/licenses)
@@ -21048,6 +21051,9 @@ initDb()
   // Satisfaction: encuestas y casos de calidad. No engancha todavía con el
   // cierre de asistencias — solo crea el esquema y siembra las plantillas.
   .then(() => prepararEsquema("Satisfaction", initSatisfaction))
+  // Self Storage: aplica supabase/migrations/self_storage/*.sql (idempotentes).
+  // Sólo tablas self_storage_*; no depende de ningún otro esquema.
+  .then(() => prepararEsquema("Self Storage", initSelfStorage))
   .then(() => {
     app.listen(PORT, () => {
       console.log(`Servidor backend en puerto ${PORT}`);

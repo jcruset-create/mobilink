@@ -31,6 +31,7 @@ export const MODULOS_SAAS = [
   "therefore",
   "recepciones",
   "or-manuales",
+  "self-storage",
 ] as const;
 
 export type ModuloSaas = (typeof MODULOS_SAAS)[number];
@@ -59,6 +60,7 @@ export const NOMBRE_MODULO: Record<ModuloSaas, string> = {
   therefore: "Therefore",
   recepciones: "Recepciones",
   "or-manuales": "OR Manuales",
+  "self-storage": "Self Storage",
 };
 
 /** Nombre del módulo, o su clave si es uno que aún no conocemos. */
