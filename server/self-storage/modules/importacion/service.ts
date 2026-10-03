@@ -20,7 +20,7 @@ import { auditar, type Actor } from "../../shared/audit.ts";
 import { enTx, pool, type Ejecutor } from "../../shared/db.ts";
 import { leerAjuste } from "../../shared/settings.ts";
 import { ErrorSelfStorage, noExiste } from "../../errors.ts";
-import { decidirAcciones, leerFilas, normalizarCabecera, resumen, type ContextoCentro, type FilaDecidida, type TrasteroExistente } from "../../domain/importUnits.ts";
+import { decidirAcciones, leerFilas, normalizarCabecera, resumen, ZONA_GENERAL_NUEVA, type ContextoCentro, type FilaDecidida, type TrasteroExistente } from "../../domain/importUnits.ts";
 import type { importacionAlta } from "../../schemas.ts";
 import * as repoCentros from "../centros/repository.ts";
 import * as repoTrasteros from "../trasteros/repository.ts";
@@ -46,6 +46,8 @@ async function contextoCentro(db: Ejecutor, empresaId: string, centerId: string,
   const zonaPorDefecto = zonaElegida ?? (zonas.rows.length === 1 ? zonas.rows[0].id : null);
   return {
     crearTiposQueFalten,
+    // Sin ninguna zona en el centro no hay nada que elegir: se crea «General».
+    crearZonaGeneral: zonas.rows.length === 0,
     existentes: new Map(unidades.rows.map((u: TrasteroExistente) => [u.code, u])),
     zonasPorCodigo: new Map(zonas.rows.map((z: { id: string; code: string }) => [z.code, z.id])),
     // Si hay un tipo común y uno del centro con el mismo código, gana el del centro.
@@ -155,6 +157,16 @@ export function aplicar(actor: Actor, id: string) {
         422,
         { resumen: res }
       );
+    }
+
+    // Zona «General» si el centro no tenía ninguna (se avisó en la vista previa).
+    if (filas.some((f) => f.valores?.zone_id === ZONA_GENERAL_NUEVA)) {
+      const { rows: z } = await c.query(
+        `INSERT INTO self_storage_zones (empresa_id, center_id, code, name) VALUES ($1,$2,'GENERAL','General') RETURNING id`,
+        [actor.empresaId, imp.center_id]
+      );
+      for (const f of filas) if (f.valores?.zone_id === ZONA_GENERAL_NUEVA) f.valores.zone_id = z[0].id;
+      await auditar(c, actor, { action: "zone.created", entityType: "zone", entityId: z[0].id, after: { code: "GENERAL", name: "General", via: "import", importId: id } });
     }
 
     // Tipos nuevos: uno por código, con las medidas del primer trastero que lo

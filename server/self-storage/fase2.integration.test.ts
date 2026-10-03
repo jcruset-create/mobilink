@@ -647,6 +647,18 @@ describe.skipIf(!RUN)("Self Storage · fase 2 contra PostgreSQL", () => {
       expect(malo.summary.error).toBe(1);
     });
 
+    it("centro sin zonas: el CSV de Reus se importa creando la zona «General» y los tipos", async () => {
+      const vacio = await ok(api("/centers", admin, { method: "POST", body: { code: "NUEVO", name: "Nuevo", city: "Reus" } }), 201);
+      const csv = "codigo,tipo,numero,largo_cm,ancho_cm,alto_cm,m2,m3,precio_base,cuota_iva,pvp\nTaquilla 113,taquilla,113,100,100,100,1.0,1.0,20.66,4.34,25.0\nTrastero 5,trastero,5,130,150,290,2.0,5.8,49.59,10.41,60.0\n";
+      const v = await ok(api(`/centers/${vacio.id}/imports`, admin, { method: "POST", body: { fileName: "reus.csv", content: csv } }), 201);
+      expect(v.summary).toMatchObject({ create: 2, error: 0 });
+      await ok(api(`/imports/${v.id}/apply`, admin, { method: "POST", body: {} }));
+      const zonas = await ok(api(`/centers/${vacio.id}/zones`, admin));
+      expect(zonas.map((z: any) => z.code)).toEqual(["GENERAL"]);
+      const units = await ok(api(`/units?centerId=${vacio.id}`, admin));
+      expect(units.map((u: any) => u.zone.code)).toEqual(["GENERAL", "GENERAL"]);
+    });
+
     it("la migración corrige un trastero cuya cuota se guardó como porcentaje (y lo deja en la auditoría)", async () => {
       const u = await trastero("9");
       // Como lo dejaba el importador antiguo: «iva» = 4,34 leído como 4,34 %.
