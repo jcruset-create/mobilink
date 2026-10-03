@@ -28,6 +28,12 @@ export type AuthContext = {
   nombre: string;
   empresaId: string;
   esSuperadmin: boolean;
+  /**
+   * Administrador: el superadmin de Mobilink o el rol `admin` de una empresa
+   * cliente. Es el mismo criterio que `app_es_admin()` en la base, y el que
+   * decide quién gestiona usuarios (de la suya, salvo el superadmin).
+   */
+  esAdmin: boolean;
 };
 
 declare module "express-serve-static-core" {
@@ -68,8 +74,10 @@ export async function resolveAuthContext(token: string): Promise<AuthContext | n
   if (error || !data.user) return null;
 
   const r = await db.query(
-    `SELECT username, nombre, activo, es_superadmin, empresa_id
-     FROM app_usuarios WHERE id = $1`,
+    `SELECT u.username, u.nombre, u.activo, u.es_superadmin, u.empresa_id,
+            coalesce((SELECT a.rol = 'admin' FROM adm_usuarios a
+                       WHERE a.id = u.id AND a.activo), false) AS adm_admin
+     FROM app_usuarios u WHERE u.id = $1`,
     [data.user.id]
   );
   const u = r.rows[0];
@@ -82,6 +90,7 @@ export async function resolveAuthContext(token: string): Promise<AuthContext | n
       nombre: u.nombre,
       empresaId: u.empresa_id,
       esSuperadmin: Boolean(u.es_superadmin),
+      esAdmin: Boolean(u.es_superadmin) || Boolean(u.adm_admin),
     };
   } else if (!u) {
     // Puente fase 1: usuarios que solo existen en tc_usuarios (operarios
@@ -99,6 +108,8 @@ export async function resolveAuthContext(token: string): Promise<AuthContext | n
         nombre: t.nombre ?? "Operario",
         empresaId: DEFAULT_EMPRESA_ID,
         esSuperadmin: Boolean(t.es_superadmin),
+        // Un operario de tc_usuarios no administra nada salvo que sea superadmin.
+        esAdmin: Boolean(t.es_superadmin),
       };
     }
   }
@@ -176,6 +187,21 @@ export function protectWhenStrict(...handlers: RequestHandler[]): RequestHandler
     run();
   };
 }
+
+/**
+ * Deja pasar al superadmin de Mobilink y al administrador de una empresa.
+ *
+ * Lo que cada uno puede VER lo decide la ruta: el administrador de empresa se
+ * queda en la suya. La barrera de verdad está en la base (RLS por empresa,
+ * fase 13); esto evita además que llegue a rutas que no le tocan.
+ */
+export const requireAdmin: RequestHandler = (req, res, next) => {
+  if (!req.authCtx) return res.status(401).json({ error: "Sesión requerida" });
+  if (!req.authCtx.esAdmin) {
+    return res.status(403).json({ error: "Solo un administrador puede hacer esto" });
+  }
+  next();
+};
 
 export const requireSuperadmin: RequestHandler = (req, res, next) => {
   if (!req.authCtx) return res.status(401).json({ error: "Sesión requerida" });

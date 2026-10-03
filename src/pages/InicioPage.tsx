@@ -132,6 +132,8 @@ export default function InicioPage() {
   /** Assist y Panel de taller, si el usuario se los ha ganado. */
   const [tarjetasPropias, setTarjetasPropias] = useState<Set<string>>(() => new Set());
   const [esSuperadmin, setEsSuperadmin] = useState(false);
+  /** Superadmin o administrador de una empresa: gestiona usuarios. */
+  const [esAdmin, setEsAdmin] = useState(false);
   const [cargando, setCargando] = useState(true);
 
   useEffect(() => {
@@ -198,10 +200,22 @@ export default function InicioPage() {
         lista.push({ modulo: m, rolLabel, pantallas: permitidas });
       }
       const propias = tarjetasPropiasVisibles(accesos.keys(), esSuperadmin);
+
+      // ¿Administra usuarios? Se pregunta a la base con el mismo criterio que
+      // usan la RLS y el backend, en vez de reconstruirlo aquí. Si la consulta
+      // falla, se queda en lo de siempre: solo el superadmin.
+      let administra = esSuperadmin;
+      if (!administra) {
+        try {
+          const { data } = await supabase.rpc("app_es_admin");
+          administra = data === true;
+        } catch { /* sin la función: como antes */ }
+      }
       if (activo) {
         setTarjetas(lista);
         setTarjetasPropias(propias);
         setEsSuperadmin(esSuperadmin);
+        setEsAdmin(administra);
         setCargando(false);
       }
     })();
@@ -337,23 +351,29 @@ export default function InicioPage() {
               </div>
             )}
 
-            {esSuperadmin && (
+            {/* Usuarios y licencias. El superadmin entra en todas las empresas;
+                el administrador de un cliente, en la suya y a gestionar su gente. */}
+            {esAdmin && (
               <div className="flex flex-col rounded-2xl border border-slate-700 bg-slate-800 p-4 transition hover:border-slate-500">
                 <div className="mb-2 flex items-center gap-2">
                   <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-500/15">
                     <ShieldCheck className="h-5 w-5 text-indigo-400" />
                   </div>
-                  <span className="text-sm font-bold">Empresas y licencias</span>
-                  <span className="ml-auto whitespace-nowrap rounded-full bg-indigo-500/15 px-2 py-0.5 text-[11px] font-bold text-indigo-300">Superadmin</span>
+                  <span className="text-sm font-bold">{esSuperadmin ? "Empresas y licencias" : "Mi empresa"}</span>
+                  {esSuperadmin && (
+                    <span className="ml-auto whitespace-nowrap rounded-full bg-indigo-500/15 px-2 py-0.5 text-[11px] font-bold text-indigo-300">Superadmin</span>
+                  )}
                 </div>
                 <p className="mb-3 text-[12px] text-slate-500">
-                  Alta de empresas cliente y módulos contratados (plataforma SaaS).
+                  {esSuperadmin
+                    ? "Empresas cliente, sus módulos contratados y sus usuarios."
+                    : "Los usuarios de tu empresa: altas, contraseñas y módulos."}
                 </p>
                 <button
                   onClick={() => navigate("/admin/empresas")}
                   className="mt-auto rounded-lg bg-indigo-600 px-3 py-2 text-xs font-bold hover:bg-indigo-500"
                 >
-                  Abrir gestión
+                  {esSuperadmin ? "Abrir gestión" : "Gestionar usuarios"}
                 </button>
               </div>
             )}

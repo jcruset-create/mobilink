@@ -3,7 +3,14 @@
  *
  * CRUD de empresas, centros y licencias sobre las tablas de la fase 1
  * (app_empresas / app_centros / app_licencias), con auditoría de cada
- * mutación. Todas las rutas exigen authenticate + requireSuperadmin.
+ * mutación.
+ *
+ * Quién entra (fase 13): crear empresas, cambiar su estado, tocar licencias y
+ * centros sigue siendo cosa del superadmin de Mobilink. Lo que se abre es la
+ * LECTURA de la propia empresa, para que el administrador de un cliente pueda
+ * gestionar a su gente desde aquí: ve su ficha y lo que tiene contratado, y
+ * nada de las demás. El reparto no se fía solo de estas rutas: la RLS por
+ * empresa lo sostiene por debajo.
  *
  * Incluye también el worker diario de caducidad de app_licencias:
  * marca 'caducada' las vencidas y registra avisos a 30/15/5 días.
@@ -11,8 +18,9 @@
 
 import { Router } from "express";
 import db from "../db.ts";
-import { authenticate, requireSuperadmin, registrarAuditoria } from "./auth.ts";
+import { authenticate, requireAdmin, registrarAuditoria } from "./auth.ts";
 import { MODULOS_SAAS } from "../../src/modules/modulosSaas.ts";
+import { admiteAdminDeEmpresa, puedeVerEmpresa } from "./adminAcceso.ts";
 import { ErrorCentro, actualizarCentro, crearCentro, listarCentrosDeEmpresa } from "./centros.ts";
 
 /*
@@ -34,11 +42,24 @@ function slugify(nombre: string): string {
 
 export function createAdminRouter(): Router {
   const router = Router();
-  router.use(authenticate, requireSuperadmin);
+  router.use(authenticate, requireAdmin);
+
+  // Lista blanca de lo que puede pedir un administrador de empresa: todo lo
+  // demás es del superadmin. Ver adminAcceso.ts para el porqué.
+  router.use((req, res, next) => {
+    if (req.authCtx?.esSuperadmin) return next();
+    if (!admiteAdminDeEmpresa(req.method, req.path)) {
+      return res.status(403).json({ error: "Solo un administrador de Mobilink puede hacer esto" });
+    }
+    next();
+  });
 
   // ── Empresas ─────────────────────────────────────────────
-  router.get("/empresas", async (_req, res) => {
+  router.get("/empresas", async (req, res) => {
     try {
+      // Este endpoint va por el pool del servidor, que NO pasa por la RLS de
+      // Supabase: aquí el filtro por empresa es la barrera, no un adorno.
+      const soloLaSuya = !req.authCtx!.esSuperadmin;
       const r = await db.query(`
         SELECT e.id, e.nombre, e.slug, e.cif, e.estado, e.created_at,
                count(distinct u.id) AS usuarios,
@@ -50,9 +71,10 @@ export function createAdminRouter(): Router {
         FROM app_empresas e
         LEFT JOIN app_usuarios u ON u.empresa_id = e.id AND u.activo
         LEFT JOIN app_licencias l ON l.empresa_id = e.id
+        WHERE ($1::uuid IS NULL OR e.id = $1::uuid)
         GROUP BY e.id
         ORDER BY e.created_at
-      `);
+      `, [soloLaSuya ? req.authCtx!.empresaId : null]);
       res.json(r.rows);
     } catch (e) {
       console.error("GET /api/admin/empresas:", e);
@@ -201,6 +223,9 @@ export function createAdminRouter(): Router {
   // ── Licencias ────────────────────────────────────────────
   router.get("/empresas/:id/licencias", async (req, res) => {
     try {
+      if (!puedeVerEmpresa(req.authCtx, req.params.id)) {
+        return res.status(404).json({ error: "Empresa no encontrada" });
+      }
       const r = await db.query(
         `SELECT * FROM app_licencias WHERE empresa_id = $1 ORDER BY modulo, fecha_inicio DESC`,
         [req.params.id]
