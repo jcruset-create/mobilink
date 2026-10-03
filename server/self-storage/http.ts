@@ -22,6 +22,8 @@ const MENSAJES_RESTRICCION: Record<string, { codigo: string; mensaje: string; es
   self_storage_units_type_fk: { codigo: "TIPO_NO_VALIDO", mensaje: "El tipo de trastero no existe.", estado: 422 },
   self_storage_units_type_center: { codigo: "TIPO_DE_OTRO_CENTRO", mensaje: "El tipo de trastero es de otro centro.", estado: 422 },
   self_storage_units_gross_chk: { codigo: "PVP_NO_CUADRA", mensaje: "El PVP no corresponde a la base con su IVA.", estado: 422 },
+  self_storage_units_vat_amount_chk: { codigo: "PVP_NO_CUADRA", mensaje: "Precio base + cuota de IVA no es el PVP.", estado: 422 },
+  self_storage_billing_items_vat_policy_chk: { codigo: "IVA_OBLIGATORIO", mensaje: "Un concepto con IVA propio necesita su tipo de IVA.", estado: 422 },
   self_storage_customers_tax_id_uq: { codigo: "CLIENTE_DUPLICADO", mensaje: "Ya existe un cliente con ese NIF/NIE/CIF." },
   self_storage_customer_phones_uq: { codigo: "TELEFONO_DUPLICADO", mensaje: "El cliente ya tiene ese teléfono." },
   self_storage_customer_phones_access_uq: {

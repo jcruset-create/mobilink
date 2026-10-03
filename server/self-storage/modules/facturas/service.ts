@@ -26,6 +26,7 @@ import * as archivos from "../../shared/archivos.ts";
 import { ErrorSelfStorage, noExiste } from "../../errors.ts";
 import { calcularLinea, lineasDelPeriodo, periodoDesde, sumarDias, totales, type LineaCalculada, type Periodo } from "../../domain/facturacion.ts";
 import { pdfFactura, type InstantaneaFactura } from "../../documentos/pdf.ts";
+import * as conceptos from "../conceptos/service.ts";
 import { encolar } from "../notificaciones/service.ts";
 import type { facturaBorrador } from "../../schemas.ts";
 import type { InvoiceStatus } from "../../../../src/modules/self-storage/types/enums.ts";
@@ -321,25 +322,23 @@ export async function crearBorrador(actor: Actor, d: z.infer<typeof facturaBorra
 async function lineasDesdeCatalogo(c: Ejecutor, empresaId: string, lines: z.infer<typeof facturaBorrador>["lines"]): Promise<LineaCalculada[]> {
   const out: LineaCalculada[] = [];
   for (const l of lines) {
-    const { rows } = await c.query(
-      `SELECT id, item_type, name, default_price::float8 AS price, tax_rate::float8 AS tax_rate, active
-         FROM self_storage_billing_items WHERE empresa_id = $1 AND id = $2`,
-      [empresaId, l.billingItemId]
-    );
-    if (!rows.length) throw noExiste("El concepto");
-    if (!rows[0].active) throw new ErrorSelfStorage("CONCEPTO_INACTIVO", `El concepto «${rows[0].name}» está inactivo.`, 409);
-    const precio = l.unitPrice ?? rows[0].price;
-    if (rows[0].item_type === "discount" ? precio > 0 : precio < 0) {
-      throw new ErrorSelfStorage("PRECIO_NO_VALIDO", `El precio de «${rows[0].name}» no tiene el signo correcto.`, 422);
+    // Tipo EFECTIVO del concepto (hereda el IVA general o el suyo), copiado a
+    // la línea: emitida la factura, ya no cambia aunque cambie la configuración.
+    const item = await conceptos.obtener(c, empresaId, l.billingItemId);
+    if (!item) throw noExiste("El concepto");
+    if (!item.active) throw new ErrorSelfStorage("CONCEPTO_INACTIVO", `El concepto «${item.name}» está inactivo.`, 409);
+    const precio = l.unitPrice ?? (item.defaultPrice as number);
+    if (item.itemType === "discount" ? precio > 0 : precio < 0) {
+      throw new ErrorSelfStorage("PRECIO_NO_VALIDO", `El precio de «${item.name}» no tiene el signo correcto.`, 422);
     }
     out.push(
       calcularLinea({
-        itemType: rows[0].item_type,
-        description: l.description?.trim() || rows[0].name,
+        itemType: item.itemType as LineaCalculada["itemType"],
+        description: l.description?.trim() || (item.name as string),
         quantity: l.quantity,
         unitPrice: precio,
-        taxRate: rows[0].tax_rate,
-        billingItemId: rows[0].id,
+        taxRate: item.taxRate,
+        billingItemId: item.id as string,
       })
     );
   }

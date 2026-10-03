@@ -94,7 +94,6 @@ const datosTrastero = (centerId: string, zoneId: string, code: string, extra: Re
   lengthCm: 200,
   heightCm: 250,
   monthlyPriceGross: 60,
-  taxRate: 21,
   ...extra,
 });
 async function trastero(quien: Quien, centerId: string, zoneId: string, code: string, extra: Record<string, unknown> = {}) {
@@ -335,12 +334,12 @@ describe.skipIf(!RUN)("Self Storage · fase 1 contra PostgreSQL", () => {
       expect((await errorPg(`DELETE FROM self_storage_zones WHERE id = $1`, [z.id]))?.code).toBe("23503");
     });
 
-    it("base, IVA y PVP que no cuadran no entran ni por SQL", async () => {
+    it("base + cuota de IVA y PVP que no cuadran no entran ni por SQL", async () => {
       const c = await centro(adminA, "REUS");
       const z = await zona(adminA, c.id, "Z1");
       const u = await trastero(adminA, c.id, z.id, "1");
-      expect((await errorPg(`UPDATE self_storage_units SET monthly_price_gross = 99 WHERE id = $1`, [u.id]))?.constraint).toBe("self_storage_units_gross_chk");
-      expect((await api(`/units/${u.id}`, adminA, { method: "PATCH", body: { monthlyPrice: 40, monthlyPriceGross: 60 } })).body.code).toBe("PVP_NO_CUADRA");
+      expect((await errorPg(`UPDATE self_storage_units SET monthly_price_gross = 99 WHERE id = $1`, [u.id]))?.constraint).toBe("self_storage_units_vat_amount_chk");
+      expect((await api(`/units/${u.id}`, adminA, { method: "PATCH", body: { monthlyPrice: 40, vatAmount: 8.4, monthlyPriceGross: 60 } })).body.code).toBe("PVP_NO_CUADRA");
     });
   });
 
@@ -550,7 +549,8 @@ describe.skipIf(!RUN)("Self Storage · fase 1 contra PostgreSQL", () => {
 
   // ── 7 ──────────────────────────────────────────────────────────────────────
   describe("7 · importación de trasteros", () => {
-    const CSV = ["Nº trastero;largo;ancho;alto;m²;m³;precio;IVA;PVP", "1;2;1,5;2,5;3;7,5;49,59;21;60", "2;2;1,5;2,5;3;7,5;49,59;21;60", "3;3;2;2,5;6;15;82,64;21;100"].join("\n");
+    // cuota_iva en EUROS (no porcentaje): base + cuota = PVP.
+    const CSV = ["codigo;largo;ancho;alto;m2;m3;precio_base;cuota_iva;pvp", "1;2;1,5;2,5;3;7,5;49,59;10,41;60", "2;2;1,5;2,5;3;7,5;49,59;10,41;60", "3;3;2;2,5;6;15;82,64;17,36;100"].join("\n");
     let c: any, z: any;
     beforeEach(async () => {
       c = await centro(adminA, "REUS");
@@ -570,7 +570,7 @@ describe.skipIf(!RUN)("Self Storage · fase 1 contra PostgreSQL", () => {
       const unidades = await ok(api(`/units?centerId=${c.id}`, adminA));
       expect(unidades).toHaveLength(3);
       const u3 = unidades.find((u: any) => u.code === "3");
-      expect(u3).toMatchObject({ widthCm: 200, lengthCm: 300, heightCm: 250, areaM2: 6, volumeM3: 15, monthlyPrice: 82.64, taxRate: 21, monthlyPriceGross: 100, status: "available" });
+      expect(u3).toMatchObject({ widthCm: 200, lengthCm: 300, heightCm: 250, areaM2: 6, volumeM3: 15, monthlyPrice: 82.64, vatAmount: 17.36, taxRate: 21, monthlyPriceGross: 100, status: "available" });
 
       const otra = await ok(validar(CSV), 201);
       expect(otra.summary).toMatchObject({ create: 0, update: 0, skip: 3 });
@@ -592,7 +592,7 @@ describe.skipIf(!RUN)("Self Storage · fase 1 contra PostgreSQL", () => {
       await ok(api(`/imports/${(await ok(validar(CSV), 201)).id}/apply`, adminA, { method: "POST", body: {} }));
       const u1 = (await ok(api(`/units?centerId=${c.id}&q=1`, adminA))).find((u: any) => u.code === "1");
       await ok(api(`/units/${u1.id}/status`, adminA, { method: "POST", body: { status: "maintenance", reason: "pintura" } }));
-      const v = await ok(validar(CSV.replace("1;2;1,5;2,5;3;7,5;49,59;21;60", "1;2;1,5;2,5;3;7,5;57,85;21;70")), 201);
+      const v = await ok(validar(CSV.replace("1;2;1,5;2,5;3;7,5;49,59;10,41;60", "1;2;1,5;2,5;3;7,5;57,85;12,15;70")), 201);
       expect(v.summary).toMatchObject({ update: 1, skip: 2 });
       await ok(api(`/imports/${v.id}/apply`, adminA, { method: "POST", body: {} }));
       const despues = await ok(api(`/units/${u1.id}`, adminA));
@@ -603,7 +603,7 @@ describe.skipIf(!RUN)("Self Storage · fase 1 contra PostgreSQL", () => {
     });
 
     it("fichero con números repetidos o errores: no se importa NADA", async () => {
-      const malo = CSV + "\n2;2;1;2;;;10;21;\n4;dos;1;2;;;10;21;";
+      const malo = CSV + "\n2;2;1;2;;;10;2,1;\n4;dos;1;2;;;10;2,1;";
       const v = await ok(validar(malo), 201);
       expect(v.summary.error).toBe(3); // las dos filas del «2» y la del «dos»
       // La vista previa dice QUÉ trastero falla aunque la fila no se haya podido leer.

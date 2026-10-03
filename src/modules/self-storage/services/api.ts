@@ -121,7 +121,7 @@ export const quitarTelefono = (id: string, phoneId: string) => pedir<Telefono[]>
 
 // Importación
 export const importaciones = (centerId: string) => pedir<Importacion[]>(`/centers/${centerId}/imports`);
-export const validarImportacion = (centerId: string, d: { fileName: string; content: string; defaultZoneId?: string | null; measureUnit?: string; defaultTaxRate?: number }) =>
+export const validarImportacion = (centerId: string, d: { fileName: string; content: string; defaultZoneId?: string | null; measureUnit?: string; createMissingTypes?: boolean }) =>
   pedir<Importacion>(`/centers/${centerId}/imports`, json(d));
 export const importacion = (id: string) => pedir<Importacion>(`/imports/${id}`);
 export const aplicarImportacion = (id: string) => pedir<Importacion>(`/imports/${id}/apply`, json({}));

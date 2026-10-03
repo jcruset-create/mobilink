@@ -20,17 +20,17 @@ import { auditar, type Actor } from "../../shared/audit.ts";
 import { enTx, pool, type Ejecutor } from "../../shared/db.ts";
 import { leerAjuste } from "../../shared/settings.ts";
 import { ErrorSelfStorage, noExiste } from "../../errors.ts";
-import { decidirAcciones, leerFilas, resumen, type ContextoCentro, type FilaDecidida, type TrasteroExistente } from "../../domain/importUnits.ts";
+import { decidirAcciones, leerFilas, normalizarCabecera, resumen, type ContextoCentro, type FilaDecidida, type TrasteroExistente } from "../../domain/importUnits.ts";
 import type { importacionAlta } from "../../schemas.ts";
 import * as repoCentros from "../centros/repository.ts";
 import * as repoTrasteros from "../trasteros/repository.ts";
 
-async function contextoCentro(db: Ejecutor, empresaId: string, centerId: string, zonaPorDefecto: string | null): Promise<ContextoCentro> {
+async function contextoCentro(db: Ejecutor, empresaId: string, centerId: string, zonaElegida: string | null, crearTiposQueFalten: boolean): Promise<ContextoCentro> {
   const [unidades, zonas, tipos] = await Promise.all([
     db.query(
       `SELECT id, code, zone_id, unit_type_id, name, width_cm, length_cm, height_cm,
               area_m2::float8 AS area_m2, volume_m3::float8 AS volume_m3, monthly_price::float8 AS monthly_price,
-              tax_rate::float8 AS tax_rate, monthly_price_gross::float8 AS monthly_price_gross,
+              tax_rate::float8 AS tax_rate, vat_amount::float8 AS vat_amount, monthly_price_gross::float8 AS monthly_price_gross,
               deposit_amount::float8 AS deposit_amount
          FROM self_storage_units WHERE empresa_id = $1 AND center_id = $2`,
       [empresaId, centerId]
@@ -42,7 +42,10 @@ async function contextoCentro(db: Ejecutor, empresaId: string, centerId: string,
       [empresaId, centerId]
     ),
   ]);
+  // Sin zona elegida y con UNA sola zona en el centro, no hay nada que elegir.
+  const zonaPorDefecto = zonaElegida ?? (zonas.rows.length === 1 ? zonas.rows[0].id : null);
   return {
+    crearTiposQueFalten,
     existentes: new Map(unidades.rows.map((u: TrasteroExistente) => [u.code, u])),
     zonasPorCodigo: new Map(zonas.rows.map((z: { id: string; code: string }) => [z.code, z.id])),
     // Si hay un tipo común y uno del centro con el mismo código, gana el del centro.
@@ -58,12 +61,13 @@ export async function validar(actor: Actor, centerId: string, d: z.infer<typeof 
     const zona = await repoCentros.obtenerZona(pool, actor.empresaId, d.defaultZoneId);
     if (!zona || zona.centerId !== centerId) throw new ErrorSelfStorage("ZONA_DE_OTRO_CENTRO", "La zona por defecto no es de este centro.", 422);
   }
-  const ivaPorDefecto = d.defaultTaxRate ?? (await leerAjuste(pool, actor.empresaId, centerId, "units.default_rental_tax_rate"));
-  const opciones = { unidadMedidas: d.measureUnit, ivaPorDefecto };
-  const leido = leerFilas(d.content, opciones);
-  const ctx = await contextoCentro(pool, actor.empresaId, centerId, d.defaultZoneId ?? null);
+  // El tipo de IVA no viene del fichero: es el IVA general de la EMPRESA.
+  const ivaGeneral = await leerAjuste(pool, actor.empresaId, null, "default_vat_rate");
+  const opciones = { unidadMedidas: d.measureUnit, crearTiposQueFalten: d.createMissingTypes };
+  const leido = leerFilas(d.content, { ...opciones, ivaGeneral });
+  const ctx = await contextoCentro(pool, actor.empresaId, centerId, d.defaultZoneId ?? null, d.createMissingTypes);
   const filas = decidirAcciones(leido.filas, ctx);
-  const res = { ...resumen(filas), columnasIgnoradas: leido.desconocidas, columnas: leido.mapa };
+  const res = { ...resumen(filas), columnasIgnoradas: leido.desconocidas, columnas: leido.mapa, avisos: leido.avisos, ivaGeneral };
   const sha = createHash("sha256").update(d.content).digest("hex");
 
   return enTx(async (c) => {
@@ -137,9 +141,11 @@ export function aplicar(actor: Actor, id: string) {
     // altas manuales concurrentes no pueden colar un número a medias.
     await repoCentros.obtenerCentro(c, actor.empresaId, imp.center_id, true);
 
-    const opciones = imp.options as { unidadMedidas: "auto" | "m" | "cm"; ivaPorDefecto: number; content: string };
-    const leido = leerFilas(opciones.content, opciones);
-    const ctx = await contextoCentro(c, actor.empresaId, imp.center_id, imp.default_zone_id);
+    // Se vuelve a calcular con el IVA general de AHORA: es el que vale al aplicar.
+    const opciones = imp.options as { unidadMedidas: "auto" | "m" | "cm"; content: string; crearTiposQueFalten?: boolean };
+    const ivaGeneral = await leerAjuste(c, actor.empresaId, null, "default_vat_rate");
+    const leido = leerFilas(opciones.content, { unidadMedidas: opciones.unidadMedidas, ivaGeneral });
+    const ctx = await contextoCentro(c, actor.empresaId, imp.center_id, imp.default_zone_id, Boolean(opciones.crearTiposQueFalten));
     const filas = decidirAcciones(leido.filas, ctx);
     const res = resumen(filas);
     if (res.error > 0) {
@@ -149,6 +155,27 @@ export function aplicar(actor: Actor, id: string) {
         422,
         { resumen: res }
       );
+    }
+
+    // Tipos nuevos: uno por código, con las medidas del primer trastero que lo
+    // trae (son las «nominales»; cada trastero conserva las suyas).
+    const tiposCreados: string[] = [];
+    for (const f of filas) {
+      if (!f.tipoACrear || !f.valores || ctx.tiposPorCodigo.has(f.tipoACrear)) continue;
+      const v = f.valores;
+      const original = (f.raw[Object.keys(f.raw).find((k) => normalizarCabecera(k) === "tipo") ?? ""] ?? f.tipoACrear).trim();
+      const nombre = original ? original.charAt(0).toUpperCase() + original.slice(1).toLowerCase() : f.tipoACrear;
+      const { rows: t } = await c.query(
+        `INSERT INTO self_storage_unit_types (empresa_id, center_id, code, name, width_cm, length_cm, height_cm, nominal_area_m2, nominal_volume_m3)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+        [actor.empresaId, imp.center_id, f.tipoACrear, nombre, v.width_cm, v.length_cm, v.height_cm, v.area_m2, v.volume_m3]
+      );
+      ctx.tiposPorCodigo.set(f.tipoACrear, t[0].id);
+      tiposCreados.push(f.tipoACrear);
+      await auditar(c, actor, { action: "unit_type.created", entityType: "unit_type", entityId: t[0].id, after: { code: f.tipoACrear, name: nombre, via: "import", importId: id } });
+    }
+    for (const f of filas) {
+      if (f.tipoACrear && f.valores) f.valores.unit_type_id = ctx.tiposPorCodigo.get(f.tipoACrear) ?? null;
     }
 
     let creados = 0;
@@ -179,6 +206,7 @@ export function aplicar(actor: Actor, id: string) {
           volume_m3: v.volume_m3,
           monthly_price: v.monthly_price,
           tax_rate: v.tax_rate,
+          vat_amount: v.vat_amount,
           monthly_price_gross: v.monthly_price_gross,
           deposit_amount: v.deposit_amount ?? 0,
         });
@@ -190,13 +218,13 @@ export function aplicar(actor: Actor, id: string) {
           before: Object.fromEntries(f.cambios.map((k) => [k, antes[k as keyof TrasteroExistente]])),
           after: { ...Object.fromEntries(f.cambios.map((k) => [k, v[k as keyof typeof v]])), via: "import", importId: id },
         });
-        if (f.cambios.some((k) => k === "monthly_price" || k === "tax_rate" || k === "monthly_price_gross")) {
+        if (f.cambios.some((k) => k === "monthly_price" || k === "vat_amount" || k === "monthly_price_gross")) {
           await auditar(c, actor, {
             action: "unit.price_changed",
             entityType: "unit",
             entityId: f.storageUnitId,
-            before: { monthlyPrice: antes.monthly_price, taxRate: antes.tax_rate, monthlyPriceGross: antes.monthly_price_gross },
-            after: { monthlyPrice: v.monthly_price, taxRate: v.tax_rate, monthlyPriceGross: v.monthly_price_gross, via: "import", importId: id },
+            before: { monthlyPrice: antes.monthly_price, vatAmount: antes.vat_amount, monthlyPriceGross: antes.monthly_price_gross },
+            after: { monthlyPrice: v.monthly_price, vatAmount: v.vat_amount, monthlyPriceGross: v.monthly_price_gross, via: "import", importId: id },
           });
         }
         actualizados++;
@@ -205,7 +233,7 @@ export function aplicar(actor: Actor, id: string) {
 
     await c.query(`DELETE FROM self_storage_unit_import_rows WHERE import_id = $1`, [id]);
     await guardarFilas(c, id, filas);
-    const resumenFinal = { ...res, creados, actualizados };
+    const resumenFinal = { ...res, creados, actualizados, tiposCreados };
     await c.query(
       `UPDATE self_storage_unit_imports SET status = 'applied', applied_at = now(), applied_by = $2, summary = summary || $3::jsonb WHERE id = $1`,
       [id, actor.userId || null, JSON.stringify(resumenFinal)]

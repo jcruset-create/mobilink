@@ -3,14 +3,17 @@
  * avisos por fila → confirmar. Nada se escribe en los trasteros hasta
  * confirmar, y el servidor lo vuelve a comprobar en ese momento.
  *
- * Columnas reconocidas: Nº trastero, zona, tipo, largo, ancho, alto, m², m³,
- * precio (base), IVA, PVP, fianza. Separador «;», «,» o tabulador.
+ * Formato recomendado (separador «;», «,» o tabulador):
+ *   codigo;tipo;numero;largo_cm;ancho_cm;alto_cm;m2;m3;precio_base;cuota_iva;pvp
+ * `cuota_iva` es el IMPORTE del IVA en euros, no el porcentaje: el tipo de IVA
+ * sale de la configuración de la empresa. La columna antigua `iva` se acepta
+ * como alias deprecado de `cuota_iva`.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "../services/api";
 import type { Importacion, Zona } from "../types";
-import { Aviso, Cabecera, EmptyRow, ErrorBox, SelectField, TableWrap, TextField, btnMini, btnPrimary, btnSecondary, tdCls, thCls } from "../components/ui";
+import { Aviso, Cabecera, CheckField, EmptyRow, ErrorBox, SelectField, TableWrap, btnMini, btnPrimary, btnSecondary, tdCls, thCls } from "../components/ui";
 import { useSelfStorage } from "../contexts/SelfStorageContext";
 
 const ETIQUETA_ACCION = { create: "Nuevo", update: "Actualizar", skip: "Sin cambios", error: "Error" } as const;
@@ -23,7 +26,7 @@ const CAMPO: Record<string, string> = {
   area_m2: "m²",
   volume_m3: "m³",
   monthly_price: "precio base",
-  tax_rate: "IVA",
+  vat_amount: "cuota IVA",
   monthly_price_gross: "PVP",
   deposit_amount: "fianza",
   zone_id: "zona",
@@ -42,7 +45,7 @@ export default function Importar() {
   const [zonas, setZonas] = useState<Zona[]>([]);
   const [zonaDefecto, setZonaDefecto] = useState("");
   const [unidad, setUnidad] = useState("auto");
-  const [iva, setIva] = useState("");
+  const [crearTipos, setCrearTipos] = useState(true);
   const [imp, setImp] = useState<Importacion | null>(null);
   const [historial, setHistorial] = useState<Importacion[]>([]);
   const [soloProblemas, setSoloProblemas] = useState(false);
@@ -77,7 +80,7 @@ export default function Importar() {
           content: contenido,
           defaultZoneId: zonaDefecto || null,
           measureUnit: unidad,
-          defaultTaxRate: iva.trim() ? Number(iva.replace(",", ".")) : undefined,
+          createMissingTypes: crearTipos,
         })
       );
       await cargar();
@@ -115,10 +118,15 @@ export default function Importar() {
         duplica. El estado de los trasteros y los precios de los contratos no se tocan.
       </Aviso>
       {error && <ErrorBox>{error}</ErrorBox>}
+      {zonas.length === 0 && (
+        <Aviso tono="aviso">
+          Este centro no tiene zonas. Crea al menos una en «Centros y zonas» antes de importar: cada trastero va en una zona.
+        </Aviso>
+      )}
 
       <div className="grid grid-cols-1 gap-3 rounded-xl bg-slate-800 p-4 sm:grid-cols-4">
         <SelectField label="Zona para los nuevos (si el CSV no la trae)" value={zonaDefecto} onChange={setZonaDefecto}>
-          <option value="">—</option>
+          <option value="">{zonas.length === 1 ? `— (${zonas[0].name}, la única)` : "—"}</option>
           {zonas.map((z) => (
             <option key={z.id} value={z.id}>
               {z.name}
@@ -130,7 +138,7 @@ export default function Importar() {
           <option value="m">Metros</option>
           <option value="cm">Centímetros</option>
         </SelectField>
-        <TextField label="IVA si el CSV no lo trae (%)" value={iva} onChange={setIva} placeholder="por defecto del centro" />
+        <CheckField label="Crear los tipos que no existan" checked={crearTipos} onChange={setCrearTipos} />
         <div className="flex items-end">
           <input ref={fichero} type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => e.target.files?.[0] && void validar(e.target.files[0])} />
           <button className={btnPrimary} disabled={trabajando} onClick={() => fichero.current?.click()}>
@@ -152,6 +160,7 @@ export default function Importar() {
             {imp.status === "applied" ? (
               <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-xs font-bold text-emerald-300">
                 Aplicada: {s.creados ?? 0} creados, {s.actualizados ?? 0} actualizados
+                {s.tiposCreados?.length ? ` · tipos nuevos: ${s.tiposCreados.join(", ")}` : ""}
               </span>
             ) : (
               <>
@@ -165,6 +174,17 @@ export default function Importar() {
             )}
           </div>
           {s.error > 0 && imp.status !== "applied" && <Aviso tono="mal">Corrige las filas con error y vuelve a validar el fichero: no se importa nada mientras haya errores.</Aviso>}
+          {s.avisos?.map((a) => (
+            <Aviso key={a} tono="aviso">
+              {a}
+            </Aviso>
+          ))}
+          {s.ivaGeneral != null && (
+            <p className="text-[12px] text-slate-400">
+              La cuota de IVA del fichero se guarda en euros. El tipo de IVA es el general de la empresa ({String(s.ivaGeneral).replace(".", ",")} %), no
+              sale del fichero.
+            </p>
+          )}
           {s.columnasIgnoradas && s.columnasIgnoradas.length > 0 && (
             <Aviso tono="aviso">Columnas que no se usan: {s.columnasIgnoradas.join(", ")}.</Aviso>
           )}

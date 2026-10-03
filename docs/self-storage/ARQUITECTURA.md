@@ -710,25 +710,48 @@ plano admite zoom y desplazamiento táctil.
 
 ## 12. Importación de trasteros (CSV / Reus)
 
-- **Columnas reconocidas**, con mapeo de cabeceras editable en la vista
-  previa: número, zona, largo, ancho, alto, m², m³, precio, IVA, PVP. Se
-  admiten `,` o `.` decimal y medidas en m o en cm (si el valor es menor de
-  20, se interpreta como metros).
-- **Reglas** (`domain/importUnits.ts`, pura y probada):
-  - sin m² o m³, se calculan a partir de las medidas;
-  - si vienen y difieren más de un 5 % del cálculo, se avisa (no es un
-    error);
-  - `precio` es la base; si solo viene el PVP, base = PVP / (1 + IVA);
-  - si vienen los tres y `|precio × (1 + IVA) − PVP| > 0,01`, se avisa;
-  - una zona que no existe se crea al aplicar, con confirmación;
-  - un código que ya existe se **actualiza** (medidas y precio) pero **nunca**
-    se cambia su estado ni el precio de los contratos vivos: el precio del
-    contrato está congelado.
-- **Proceso en tres pasos**: subir, vista previa con errores y avisos por
-  fila, y aplicar en una transacción con auditoría. Se puede repetir:
-  importar dos veces el mismo fichero no duplica nada.
-- **Para los datos de Reus**, el mismo proceso con `source='reus_seed'`, en
-  cuanto me pases el fichero o la tabla.
+Revisado con la corrección del IVA (§17).
+
+**Formato recomendado** (separador `,`, `;` o tabulador; decimal `,` o `.`):
+
+```
+codigo,tipo,numero,largo_cm,ancho_cm,alto_cm,m2,m3,precio_base,cuota_iva,pvp
+Taquilla 113,taquilla,113,100,100,100,1.0,1.0,20.66,4.34,25.0
+```
+
+- `codigo` identifica el trastero en el centro. `numero`, si viene junto a
+  `codigo`, es su nombre visible; sin `codigo`, `numero` es el identificador
+  (formato antiguo).
+- `tipo` es el código del tipo de trastero. Con «Crear los tipos que no
+  existan» (marcado por defecto), un tipo nuevo se crea al aplicar, con las
+  medidas del primer trastero de ese tipo.
+- Medidas con sufijo `_cm` o `_m` se leen en esa unidad. Sin sufijo, un valor
+  menor de 20 se entiende en metros.
+- **`cuota_iva` es el IMPORTE del IVA en euros**, no el porcentaje. La regla
+  es `precio_base + cuota_iva = pvp` con 0,01 € de tolerancia; si no cuadra,
+  la fila es un error.
+- Con dos de los tres importes, el tercero sale de los otros dos. Con sólo
+  base o sólo PVP, se completa con el **IVA general** de la empresa.
+- El **tipo de IVA no viene del fichero ni se deduce de él**: es el IVA
+  general configurado. Si una cuota no corresponde al IVA general sobre la
+  base, se avisa (no es un error).
+- **Compatibilidad**: la columna antigua `iva` se acepta como **alias
+  deprecado de `cuota_iva`** (se avisa en la vista previa). Una columna con
+  un porcentaje de IVA (`tipo_iva`, `iva %`, `tax_rate`…) se rechaza con un
+  mensaje claro.
+- **Zona**: columna `zona` o «Zona para los nuevos» en la pantalla; si el
+  centro sólo tiene una zona, se usa esa.
+
+**Reglas que no cambian** (`domain/importUnits.ts`, pura y probada):
+
+- sin m² o m³, se calculan a partir de las medidas; si vienen y difieren más
+  de un 5 % del cálculo, se avisa;
+- un código que ya existe se **actualiza** (medidas y precio) pero **nunca**
+  se cambia su estado ni el precio de los contratos: el del contrato está
+  congelado;
+- tres pasos: subir, vista previa con errores y avisos por fila, y aplicar en
+  una transacción con auditoría. Importar dos veces el mismo fichero no
+  duplica nada.
 
 ## 13. Tareas programadas
 
@@ -1090,4 +1113,53 @@ los apaga):
 5. Revisar con la asesoría el IVA de los conceptos (fianza, seguro y
    penalización vienen como no sujetos o exentos) y el texto de las
    condiciones.
+
+## 17. IVA: tipo (porcentaje) frente a cuota (euros)
+
+Corrección hecha antes de la fase 3. En el CSV de Reus la columna `iva` era
+la **cuota** en euros (4,34), y el importador la leía como **porcentaje**
+(4,34 %).
+
+**Vocabulario**:
+
+| Concepto | Qué es | Dónde |
+|---|---|---|
+| tipo de IVA (`vat_rate`) | porcentaje: 21,00, 10,00, 4,00, 0,00 | columnas `tax_rate` de trasteros, contratos, conceptos y líneas; ajuste `default_vat_rate` |
+| cuota de IVA (`vat_amount`, `cuota_iva`) | importe en euros: 4,34 | `self_storage_units.vat_amount`; `tax_amount` de las líneas y `tax` de las facturas |
+
+**Reglas**:
+
+- **IVA general por empresa**: ajuste `default_vat_rate` (21,00 por defecto),
+  en Configuración → IVA general. No hay ningún tipo escrito en el código.
+  Sustituye a `units.default_rental_tax_rate` (la migración copia su valor).
+- **Trastero**: guarda su precio comercial como base + cuota + PVP (CHECK
+  `base + cuota = PVP ± 0,01`). Su `tax_rate` es informativo: el IVA general
+  cuando se fijó el precio.
+- **Contrato**: al crearlo se copia el tipo vigente del concepto de alquiler
+  (hereda el IVA general salvo que tenga uno propio) y se parte de la BASE del
+  trastero. Es una fotografía fiscal: cambiar después la configuración no lo
+  toca, y sus facturas futuras siguen con ese tipo mientras no haya una
+  actualización fiscal específica.
+- **Facturas**: cada línea guarda su `tax_rate` y su `tax_amount`, copiados
+  del contrato o del concepto al generarla. Una emitida es inmutable.
+- **Conceptos**: política `inherit_default` (usa el IVA general) o `custom`
+  (su tipo propio, con motivo si es 0 %). De partida heredan alquiler,
+  candado, alta, descuento y otros; fianza, seguro y penalización tienen tipo
+  propio 0 % (revisar con la asesoría).
+
+**Migración `0008_iva_tipo_y_cuota.sql`**:
+
+1. Crea `default_vat_rate` por empresa desde el ajuste antiguo.
+2. Añade `self_storage_units.vat_amount` (= PVP − base en lo existente; un
+   trigger la rellena si se inserta sin ella) y cambia el CHECK del PVP por
+   `base + cuota = PVP`.
+3. **Corrige los datos mal importados** sin perder nada. Un trastero cuyo
+   `tax_rate` es justo la cuota del IVA general sobre la base, y cuyo PVP
+   salió de tratarla como porcentaje, pasa a: cuota = ese valor, tipo = IVA
+   general y PVP = base + cuota. Deja `unit.vat_fixed` en la auditoría con los
+   valores anteriores. Es idempotente y se comprueba en cada arranque.
+4. Añade `vat_policy` a los conceptos. Los de partida que llevaban el IVA
+   general pasan a heredarlo (su `tax_rate` se conserva).
+
+Contratos y facturas **no** se tocan: son fotografías fiscales.
 

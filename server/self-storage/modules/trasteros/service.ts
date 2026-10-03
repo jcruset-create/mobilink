@@ -3,7 +3,7 @@
  *
  * Reglas que aplica este fichero (las decisiones están en `domain/`):
  *   · m² y m³ se calculan de las medidas si no se indican;
- *   · precio: base + IVA + PVP coherentes (`resolverPrecio`);
+ *   · precio: base + cuota de IVA = PVP (`resolverPrecioTrastero`);
  *   · el estado sólo se cambia a mano entre disponible / mantenimiento /
  *     bloqueado, y nunca con un contrato vivo o una reserva activa;
  *   · todo cambio deja su línea en la auditoría, y un cambio de precio, una
@@ -15,7 +15,7 @@ import { auditar, diferencias, type Actor } from "../../shared/audit.ts";
 import { enTx, pool } from "../../shared/db.ts";
 import { leerAjuste } from "../../shared/settings.ts";
 import { ErrorSelfStorage, noExiste } from "../../errors.ts";
-import { areaM2, resolverPrecio, volumenM3 } from "../../domain/pricing.ts";
+import { areaM2, resolverPrecioTrastero, volumenM3 } from "../../domain/pricing.ts";
 import { validarCambioEstado } from "../../domain/unitStatus.ts";
 import { vistaTrasteroPanel } from "../../domain/vistas.ts";
 import type { tipoAlta, tipoCambio, trasteroAlta, trasteroCambio, trasteroEstado } from "../../schemas.ts";
@@ -73,8 +73,9 @@ export function crearTrastero(actor: Actor, d: z.infer<typeof trasteroAlta>) {
   return enTx(async (c) => {
     const centro = await repoCentros.obtenerCentro(c, actor.empresaId, d.centerId);
     if (!centro) throw noExiste("El centro");
-    const ivaPorDefecto = await leerAjuste(c, actor.empresaId, d.centerId, "units.default_rental_tax_rate");
-    const precio = resolverPrecio({ base: d.monthlyPrice, iva: d.taxRate ?? ivaPorDefecto, pvp: d.monthlyPriceGross });
+    // El tipo de IVA no lo pone nadie a mano: es el IVA general de la empresa.
+    const ivaGeneral = await leerAjuste(c, actor.empresaId, null, "default_vat_rate");
+    const precio = resolverPrecioTrastero({ base: d.monthlyPrice, cuota: d.vatAmount, pvp: d.monthlyPriceGross }, ivaGeneral);
     const id = await repo.crearTrastero(c, actor.empresaId, d.centerId, {
       zone_id: d.zoneId,
       unit_type_id: d.unitTypeId ?? null,
@@ -87,6 +88,7 @@ export function crearTrastero(actor: Actor, d: z.infer<typeof trasteroAlta>) {
       volume_m3: d.volumeM3 ?? volumenM3(d.widthCm, d.lengthCm, d.heightCm),
       monthly_price: precio.base,
       tax_rate: precio.iva,
+      vat_amount: precio.cuota,
       monthly_price_gross: precio.pvp,
       deposit_amount: d.depositAmount,
       image_3d_url: d.image3dUrl ?? null,
@@ -100,7 +102,7 @@ export function crearTrastero(actor: Actor, d: z.infer<typeof trasteroAlta>) {
   });
 }
 
-const CAMPOS_PRECIO = ["monthly_price", "tax_rate", "monthly_price_gross"] as const;
+const CAMPOS_PRECIO = ["monthly_price", "vat_amount", "monthly_price_gross"] as const;
 
 export function actualizarTrastero(actor: Actor, id: string, d: z.infer<typeof trasteroCambio>, verClientes: boolean) {
   return enTx(async (c) => {
@@ -131,14 +133,14 @@ export function actualizarTrastero(actor: Actor, id: string, d: z.infer<typeof t
     if (d.volumeM3 !== undefined) v.volume_m3 = d.volumeM3;
     else if (medidasCambian) v.volume_m3 = volumenM3(ancho, largo, alto);
 
-    // Precio: lo que se toque manda; lo que no, se deduce. Si sólo cambia el
-    // IVA se conserva la base y se recalcula el PVP.
-    if (d.monthlyPrice !== undefined || d.monthlyPriceGross !== undefined || d.taxRate !== undefined) {
-      const iva = d.taxRate ?? antes.tax_rate;
-      const base = d.monthlyPrice ?? (d.monthlyPriceGross !== undefined ? null : antes.monthly_price);
-      const precio = resolverPrecio({ base, iva, pvp: d.monthlyPriceGross ?? null });
+    // Precio: se fija con lo que llegue (base, cuota, PVP) y el IVA general de
+    // AHORA para completar lo que falte. Un cambio de precio refresca el tipo.
+    if (d.monthlyPrice !== undefined || d.monthlyPriceGross !== undefined || d.vatAmount !== undefined) {
+      const ivaGeneral = await leerAjuste(c, actor.empresaId, null, "default_vat_rate");
+      const precio = resolverPrecioTrastero({ base: d.monthlyPrice, cuota: d.vatAmount, pvp: d.monthlyPriceGross }, ivaGeneral);
       v.monthly_price = precio.base;
       v.tax_rate = precio.iva;
+      v.vat_amount = precio.cuota;
       v.monthly_price_gross = precio.pvp;
     }
 
@@ -152,8 +154,8 @@ export function actualizarTrastero(actor: Actor, id: string, d: z.infer<typeof t
           action: "unit.price_changed",
           entityType: "unit",
           entityId: id,
-          before: { monthlyPrice: antes.monthly_price, taxRate: antes.tax_rate, monthlyPriceGross: antes.monthly_price_gross },
-          after: { monthlyPrice: v.monthly_price, taxRate: v.tax_rate, monthlyPriceGross: v.monthly_price_gross },
+          before: { monthlyPrice: antes.monthly_price, vatAmount: antes.vat_amount, monthlyPriceGross: antes.monthly_price_gross },
+          after: { monthlyPrice: v.monthly_price, vatAmount: v.vat_amount, monthlyPriceGross: v.monthly_price_gross },
         });
       }
     }
