@@ -81,14 +81,14 @@ async function irA(fn: () => Promise<{ url: string }>, onError: (m: string) => v
 function Login() {
   const [email, setEmail] = useState("");
   const [enviado, setEnviado] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Un enlace caducado vuelve con «#error=…» en la URL.
+  const [error, setError] = useState<string | null>(() =>
+    window.location.hash.includes("error") ? "El enlace ha caducado o no es válido. Pide uno nuevo." : null
+  );
   const [cargando, setCargando] = useState(false);
 
   useEffect(() => {
-    if (window.location.hash.includes("error")) {
-      setError("El enlace ha caducado o no es válido. Pide uno nuevo.");
-      window.history.replaceState(null, "", window.location.pathname);
-    }
+    if (window.location.hash.includes("error")) window.history.replaceState(null, "", window.location.pathname);
   }, []);
 
   const enviar = async () => {

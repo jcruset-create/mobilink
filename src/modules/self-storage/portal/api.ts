@@ -28,7 +28,7 @@ async function pedir<T>(ruta: string, init?: RequestInit): Promise<T> {
     throw new ErrorPortal("No hay conexión con el servidor.", "SIN_CONEXION", 0);
   }
   const texto = await r.text();
-  let cuerpo: { error?: string; code?: string } | null = null;
+  let cuerpo: { error?: string; code?: string } | null;
   try {
     cuerpo = texto ? JSON.parse(texto) : null;
   } catch {
