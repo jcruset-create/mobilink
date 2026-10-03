@@ -64,6 +64,8 @@
     "server/core/idDeTrabajo.ts",
     "server/core/jsonAjeno.ts",
     "server/core/auditoriaSchema.ts",
+    // Quién puede qué en el router de empresas. Se añade el día que nace.
+    "server/core/adminAcceso.ts",
     "server/dbBackup.ts",
     // El grueso del backend. Llevaba sin comprobarse: no estaba aquí y
     // `tsc -b` tampoco lo mira, así que 19.600 líneas pasaban de largo. Es el

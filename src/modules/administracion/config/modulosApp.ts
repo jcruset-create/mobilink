@@ -75,7 +75,10 @@ export const MODULOS_APP: ModuloApp[] = [
       { key: "formas-pago", label: "Configuración" },
       { key: "informes", label: "Informes" },
       { key: "estado-ots", label: "Estado de OTs" },
-      { key: "usuarios", label: "Usuarios" },
+      // Ya no hay pantalla "usuarios" aquí: se gestionan desde «Empresas y
+      // licencias». Puede quedar la clave guardada en las pantallas de algún
+      // usuario; es inocua -no hay pantalla que abrir- y desaparece la próxima
+      // vez que se edite, porque el editor solo conserva las del catálogo.
     ],
   },
   {

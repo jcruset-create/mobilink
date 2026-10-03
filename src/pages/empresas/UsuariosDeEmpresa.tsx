@@ -1,21 +1,33 @@
+/**
+ * Usuarios de UNA empresa, dentro de «Empresas y licencias».
+ *
+ * Vivía en Administración (`/administracion/usuarios`) como una lista plana
+ * con todos los usuarios de todos los clientes mezclados. Ahora cuelga de la
+ * empresa: se entra por ella y se ve y gestiona su gente.
+ *
+ * La maquinaria -servicios, editor de accesos, comprobación de licencias- se
+ * queda en el módulo de Administración, porque la comparte con la pestaña
+ * Acceso de la ficha del empleado. Lo que cambia es dónde se monta y que
+ * trabaja siempre sobre una empresa concreta.
+ */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Plus, Search, Pencil, Trash2, KeyRound, ShieldCheck } from "lucide-react";
-import { useAdminAuth } from "../contexts/AdminAuthContext";
+import { supabase } from "../../modules/administracion/services/supabase";
 import {
   listAppUsuarios, crearUsuarioAuth, guardarAppUsuario, resetPasswordUsuario,
   eliminarAppUsuario, listSeaEmployees, listTcEmpresas, licenciasDeUsuario,
   type AppUsuario,
-} from "../services/data";
-import { MODULOS_APP } from "../config/modulosApp";
-import AccesosModulos from "../components/AccesosModulos";
+} from "../../modules/administracion/services/data";
+import { MODULOS_APP } from "../../modules/administracion/config/modulosApp";
+import AccesosModulos from "../../modules/administracion/components/AccesosModulos";
 import {
   accesosAPayload, estadoInicialAccesos, modulosGuardados,
   type AccesoEdit, type LicenciaModulo,
-} from "../components/accesosModulosHelpers";
+} from "../../modules/administracion/components/accesosModulosHelpers";
 import {
   Modal, TableWrap, thCls, tdCls, TextField, SelectField, CheckField,
   btnPrimary, btnSecondary, btnDanger, btnMini, inputCls, Pill, EmptyRow, ErrorBox,
-} from "../components/ui";
+} from "../../modules/administracion/components/ui";
 
 const MODULO_LABELS: Record<string, string> = Object.fromEntries(MODULOS_APP.map((m) => [m.key, m.label]));
 
@@ -24,8 +36,13 @@ function rolLabel(modulo: string, rol: string): string {
   return m?.roles.find((r) => r.value === rol)?.label ?? rol;
 }
 
-export default function UsuariosApp() {
-  const { perfil } = useAdminAuth();
+export default function UsuariosDeEmpresa({ empresaId }: { empresaId: string }) {
+  // Quién soy, para no ofrecerme borrarme a mí mismo. Antes salía del perfil
+  // de Administración; fuera de ese módulo se pregunta a la sesión.
+  const [miId, setMiId] = useState<string | null>(null);
+  useEffect(() => {
+    void supabase.auth.getUser().then(({ data }) => setMiId(data.user?.id ?? null));
+  }, []);
   const [usuarios, setUsuarios] = useState<AppUsuario[]>([]);
   const [filtro, setFiltro] = useState("");
   const [cargando, setCargando] = useState(true);
@@ -39,13 +56,13 @@ export default function UsuariosApp() {
     setCargando(true);
     setError("");
     try {
-      setUsuarios(await listAppUsuarios());
+      setUsuarios(await listAppUsuarios(empresaId));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error cargando usuarios. ¿Está aplicada la migración fase 11?");
     } finally {
       setCargando(false);
     }
-  }, []);
+  }, [empresaId]);
 
   useEffect(() => { void cargar(); }, [cargar]);
 
@@ -124,7 +141,7 @@ export default function UsuariosApp() {
                   <button onClick={() => setEditando(u)} className={btnMini} title="Editar usuario">
                     <Pencil className="h-3.5 w-3.5" />
                   </button>
-                  {u.id !== perfil?.id && (
+                  {u.id !== miId && (
                     <button onClick={() => setEliminando(u)} className={`${btnMini} text-rose-300`} title="Eliminar usuario">
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
@@ -139,6 +156,7 @@ export default function UsuariosApp() {
       {editando && (
         <ModalUsuarioApp
           usuario={editando === "nuevo" ? null : editando}
+          empresaId={empresaId}
           onClose={() => setEditando(null)}
           onSaved={(msg) => { setEditando(null); setAviso(msg); void cargar(); }}
         />
@@ -164,9 +182,11 @@ export default function UsuariosApp() {
 }
 
 // ── Crear / editar usuario ───────────────────────────────────
-function ModalUsuarioApp({ usuario, onClose, onSaved }: {
+function ModalUsuarioApp({ usuario, empresaId, onClose, onSaved }: {
   usuario: AppUsuario | null;
   onClose: () => void;
+  /** Empresa en la que nace el usuario si es un alta. */
+  empresaId: string;
   onSaved: (msg: string) => void;
 }) {
   const [username, setUsername] = useState(usuario?.username ?? "");
@@ -222,6 +242,7 @@ function ModalUsuarioApp({ usuario, onClose, onSaved }: {
         es_superadmin: superadmin,
         employee_id: employeeId || null,
         accesos: payload,
+        empresa_id: empresaId,
       });
       onSaved(usuario ? "Usuario actualizado." : `Usuario ${username.trim()} creado. Comunícale su usuario y contraseña.`);
     } catch (e) {

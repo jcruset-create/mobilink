@@ -409,10 +409,17 @@ async function tokenSesion(): Promise<string> {
   return token;
 }
 
-export async function listAppUsuarios(): Promise<AppUsuario[]> {
-  const { data, error } = await supabase.from("app_usuarios")
+/**
+ * Usuarios de una empresa. El filtro hace falta para el superadmin, que por
+ * la RLS lo ve todo; al administrador de un cliente la base ya no le deja ver
+ * otra cosa que los suyos (fase 13).
+ */
+export async function listAppUsuarios(empresaId?: string | null): Promise<AppUsuario[]> {
+  let consulta = supabase.from("app_usuarios")
     .select("*, accesos:app_usuario_modulos(modulo, rol, pantallas, empresa_id)")
     .order("username");
+  if (empresaId) consulta = consulta.eq("empresa_id", empresaId);
+  const { data, error } = await consulta;
   if (error) fail(error.message, "usuarios de la aplicación");
   return (data ?? []) as AppUsuario[];
 }
@@ -448,8 +455,14 @@ export async function guardarAppUsuario(u: {
   es_superadmin: boolean;
   employee_id: string | null;
   accesos: AccesoModulo[];
+  /**
+   * Empresa en la que nace el usuario, cuando se da de alta desde la ficha de
+   * una empresa. Sin ella, la base usa la del administrador, que es lo que
+   * hacía siempre y lo que sigue haciendo la pestaña Acceso del empleado.
+   */
+  empresa_id?: string | null;
 }): Promise<void> {
-  const { error } = await supabase.rpc("app_guardar_usuario", {
+  const args: Record<string, unknown> = {
     p_id: u.id,
     p_username: u.username,
     p_nombre: u.nombre,
@@ -459,8 +472,24 @@ export async function guardarAppUsuario(u: {
     p_es_superadmin: u.es_superadmin,
     p_employee_id: u.employee_id,
     p_accesos: u.accesos,
-  });
-  if (error) fail(error.message, "guardar usuario");
+  };
+  // Solo se manda si viene: así quien no la pasa sigue llamando a la firma de
+  // siempre, y funciona aunque la migración de la fase 13 no esté pegada.
+  if (u.empresa_id) args.p_empresa_id = u.empresa_id;
+
+  const { error } = await supabase.rpc("app_guardar_usuario", args);
+  if (error) {
+    // Con la empresa por delante y la función antigua en la base, PostgREST no
+    // encuentra una firma que la acepte. NO se reintenta sin ella: el usuario
+    // nacería en la empresa del administrador, que es el fallo que se corrige.
+    if (u.empresa_id && /could not find the function|p_empresa_id/i.test(error.message)) {
+      fail(
+        "Falta aplicar en Supabase la migración administracion_fase13_usuarios_por_empresa.sql",
+        "guardar usuario"
+      );
+    }
+    fail(error.message, "guardar usuario");
+  }
 }
 
 export async function resetPasswordUsuario(userId: string, pin: string): Promise<void> {

@@ -12,13 +12,19 @@ import ClienteFicha from "./pages/ClienteFicha";
 import FormasPago from "./pages/FormasPago";
 import Informes from "./pages/Informes";
 import EstadoOts from "./pages/EstadoOts";
-import UsuariosApp from "./pages/UsuariosApp";
 
 export default function AdministracionApp() {
   return (
     <AdminAuthProvider>
       <Routes>
         <Route path="login" element={<Login />} />
+        {/* Los usuarios se gestionan ahora desde «Empresas y licencias», dentro
+            de cada empresa. La ruta vieja redirige: hay marcadores y hay
+            costumbre, y un 404 no explica nada. Va FUERA de ProtectedRoute a
+            propósito: quien la siga no tiene por qué tener sesión en
+            Administración, y dentro se quedaba esperando un perfil que no iba
+            a llegar. */}
+        <Route path="usuarios" element={<Navigate to="/admin/empresas" replace />} />
         <Route element={<ProtectedRoute />}>
           <Route element={<AdminLayout />}>
             <Route index element={<Navigate to="/administracion/dashboard" replace />} />
@@ -46,10 +52,6 @@ export default function AdministracionApp() {
               <Route path="formas-pago" element={<FormasPago />} />
             </Route>
 
-            {/* Solo admin: gestión de usuarios de toda la aplicación */}
-            <Route element={<RoleRoute roles={[]} />}>
-              <Route path="usuarios" element={<UsuariosApp />} />
-            </Route>
           </Route>
         </Route>
         <Route path="*" element={<Navigate to="/administracion/dashboard" replace />} />

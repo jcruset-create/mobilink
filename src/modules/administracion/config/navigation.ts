@@ -1,5 +1,5 @@
 import {
-  LayoutDashboard, Euro, ClipboardList, AlertTriangle, Users, Settings, BarChart3, Wrench, ShieldCheck,
+  LayoutDashboard, Euro, ClipboardList, AlertTriangle, Users, Settings, BarChart3, Wrench,
   type LucideIcon,
 } from "lucide-react";
 import type { Rol } from "../types";
@@ -22,7 +22,6 @@ export const NAV: NavItem[] = [
   { key: "formas-pago", path: "formas-pago", label: "Configuración", icon: Settings, roles: ["administracion"] },
   { key: "informes", path: "informes", label: "Informes", icon: BarChart3, roles: ["administracion", "supervisor"] },
   { key: "estado-ots", path: "estado-ots", label: "Estado de OTs", icon: Wrench, roles: ["tecnico", "supervisor"] },
-  { key: "usuarios", path: "usuarios", label: "Usuarios", icon: ShieldCheck, adminOnly: true },
 ];
 
 export function navVisible(item: NavItem, rol: Rol | undefined, pantallas?: string[] | null): boolean {
