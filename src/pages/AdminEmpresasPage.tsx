@@ -3,11 +3,23 @@ import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Building2, Plus, ShieldCheck, Store } from "lucide-react";
 import { apiFetch } from "../modules/apiFetch";
 import { MODULOS_SAAS, nombreModulo } from "../modules/modulosSaas";
+import { esSuperadmin as resolverSuperadmin } from "../modules/superadmin";
+import UsuariosDeEmpresa from "./empresas/UsuariosDeEmpresa";
 
 /**
- * SaaS fase 2 — panel SuperAdmin de empresas y licencias.
- * Alta de empresas, estado del tenant y gestión de licencias por módulo
- * sin tocar la base de datos a mano.
+ * Empresas, sus licencias y su gente.
+ *
+ * Dos públicos con la misma pantalla:
+ *   · el superadmin de Mobilink ve todas las empresas, las da de alta, cambia
+ *     su estado, gestiona licencias y talleres, y entra en los usuarios de
+ *     cualquiera;
+ *   · el administrador de un cliente ve SOLO la suya: su gente y, en solo
+ *     lectura, lo que tiene contratado. Ni alta de empresas, ni licencias, ni
+ *     talleres: eso es de Mobilink.
+ *
+ * Lo que se ve aquí no es la barrera: el backend devuelve a cada uno solo su
+ * empresa y la RLS por empresa (fase 13) hace lo mismo en la base. La pantalla
+ * solo evita enseñar botones que no van a funcionar.
  */
 
 type Empresa = {
@@ -53,6 +65,11 @@ export default function AdminEmpresasPage() {
   const [nuevaEmpresa, setNuevaEmpresa] = useState({ nombre: "", cif: "" });
   const [nuevaLic, setNuevaLic] = useState({ modulo: "taller", fecha_fin: "" });
   const [guardando, setGuardando] = useState(false);
+  // null mientras no se sabe: así no se pinta un instante lo del superadmin
+  // a quien no lo es.
+  const [soySuper, setSoySuper] = useState<boolean | null>(null);
+  /** Qué se ve de la empresa abierta: sus usuarios o sus licencias. */
+  const [vista, setVista] = useState<"usuarios" | "licencias">("usuarios");
 
   const cargar = useCallback(async () => {
     setCargando(true);
@@ -70,10 +87,21 @@ export default function AdminEmpresasPage() {
   }, []);
 
   useEffect(() => { void cargar(); }, [cargar]);
+  useEffect(() => { void resolverSuperadmin().then(setSoySuper); }, []);
+
+  // El administrador de un cliente solo tiene una empresa: se le abre sola,
+  // sin hacerle pulsar en una lista de uno.
+  useEffect(() => {
+    if (soySuper === false && empresas.length === 1 && abierta === null) {
+      void abrirEmpresa(empresas[0].id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [soySuper, empresas]);
 
   async function abrirEmpresa(id: string) {
     if (abierta === id) { setAbierta(null); return; }
     setAbierta(id);
+    setVista("usuarios");
     setLicencias([]);
     const r = await apiFetch(`/api/admin/empresas/${id}/licencias`);
     if (r.ok) setLicencias(await r.json());
@@ -159,9 +187,11 @@ export default function AdminEmpresasPage() {
           </button>
           <ShieldCheck className="h-6 w-6 text-indigo-400" />
           <div>
-            <h1 className="text-lg font-bold">Empresas y licencias</h1>
+            <h1 className="text-lg font-bold">{soySuper === false ? "Mi empresa" : "Empresas y licencias"}</h1>
             <p className="text-xs text-slate-400">
-              Gestión de tenants de la plataforma (SuperAdmin Mobilink)
+              {soySuper === false
+                ? "Los usuarios de tu empresa y lo que tiene contratado"
+                : "Empresas cliente, sus licencias y sus usuarios"}
             </p>
           </div>
         </div>
@@ -172,7 +202,8 @@ export default function AdminEmpresasPage() {
           </div>
         )}
 
-        {/* Alta de empresa */}
+        {/* Alta de empresa: solo Mobilink */}
+        {soySuper && (
         <div className="mb-6 flex flex-wrap items-end gap-3 rounded-2xl border border-slate-700 bg-slate-800 p-4">
           <div className="flex-1 min-w-48">
             <label className="mb-1 block text-xs text-slate-400">Nombre de la empresa</label>
@@ -200,6 +231,7 @@ export default function AdminEmpresasPage() {
             <Plus className="h-4 w-4" /> Crear empresa
           </button>
         </div>
+        )}
 
         {/* Lista de empresas */}
         {cargando ? (
@@ -226,6 +258,7 @@ export default function AdminEmpresasPage() {
 
                 {abierta === e.id && (
                   <div className="border-t border-slate-700 p-4">
+                    {soySuper && (
                     <div className="mb-3 flex items-center gap-2 text-xs">
                       <span className="text-slate-400">Estado del tenant:</span>
                       {(["activa", "prueba", "suspendida"] as const).map((est) => (
@@ -240,8 +273,29 @@ export default function AdminEmpresasPage() {
                         </button>
                       ))}
                     </div>
+                    )}
 
-                    <Talleres empresaId={e.id} onError={setError} />
+                    {soySuper && <Talleres empresaId={e.id} onError={setError} />}
+
+                    <div className="mb-3 flex gap-1 border-b border-slate-700">
+                      {(["usuarios", "licencias"] as const).map((v) => (
+                        <button
+                          key={v}
+                          onClick={() => setVista(v)}
+                          className={`-mb-px border-b-2 px-3 py-2 text-sm font-semibold ${
+                            vista === v
+                              ? "border-indigo-400 text-slate-100"
+                              : "border-transparent text-slate-500 hover:text-slate-300"
+                          }`}
+                        >
+                          {v === "usuarios" ? `Usuarios (${e.usuarios})` : `Licencias (${e.licencias_activas})`}
+                        </button>
+                      ))}
+                    </div>
+
+                    {vista === "usuarios" && <UsuariosDeEmpresa empresaId={e.id} />}
+
+                    {vista === "licencias" && (<>
 
                     <table className="w-full text-sm">
                       <thead>
@@ -265,7 +319,7 @@ export default function AdminEmpresasPage() {
                               </span>
                             </td>
                             <td className="text-right">
-                              {l.estado === "activa" ? (
+                              {!soySuper ? null : l.estado === "activa" ? (
                                 <button
                                   onClick={() => void cambiarEstadoLicencia(l, "suspendida")}
                                   className="text-xs text-slate-400 hover:text-red-300"
@@ -289,6 +343,7 @@ export default function AdminEmpresasPage() {
                       </tbody>
                     </table>
 
+                    {soySuper && (
                     <div className="mt-3 flex flex-wrap items-end gap-2 border-t border-slate-700/60 pt-3">
                       <div>
                         <label className="mb-1 block text-xs text-slate-400">Módulo</label>
@@ -317,6 +372,8 @@ export default function AdminEmpresasPage() {
                         <Plus className="h-4 w-4" /> Añadir licencia
                       </button>
                     </div>
+                    )}
+                    </>)}
                   </div>
                 )}
               </div>
