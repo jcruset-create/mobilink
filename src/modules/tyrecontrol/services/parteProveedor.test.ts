@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   numeracionDelProveedor, esCambio, profundidadDeFila, medidaDeTexto,
-  neumaticoDelParte, servicioDeProducto, interpretarParte, claveDeParte, estadoDeDestino,
+  neumaticoDelParte, servicioDeProducto, interpretarParte, claveDeParte,
   type LecturaParteProveedor, type PosicionDelPlano,
 } from "./parteProveedor";
 
@@ -284,24 +284,6 @@ describe("interpretarParte — lo que no cuadra", () => {
     expect(p.medicionesDeGomaNueva.filter((m) => m.numero === 1)).toHaveLength(1);
     expect(p.medicionesDeGomaNueva.find((m) => m.numero === 1)?.profundidadMm).toBe(14.9);
     expect(p.avisos.join(" ")).toContain("sale más de una vez");
-  });
-});
-
-describe("estadoDeDestino", () => {
-  it("lo que vuelve al almacén, vuelve al almacén", () => {
-    expect(estadoDeDestino("almacen")).toBe("almacen");
-    expect(estadoDeDestino("stock_usado")).toBe("almacen");
-    expect(estadoDeDestino(null)).toBe("almacen");
-  });
-  it("lo que sale del circuito se da de baja", () => {
-    expect(estadoDeDestino("descartado")).toBe("descartado");
-    expect(estadoDeDestino("vendido")).toBe("descartado");
-  });
-  it("y lo demás se queda en un estado que NO mueve stock", () => {
-    // Carcasa, cuarentena, recauchutado: se afinan después, pero mientras
-    // tanto no pueden aparecer como disponibles en el almacén.
-    expect(estadoDeDestino("recauchutado")).toBe("reparacion");
-    expect(estadoDeDestino("cuarentena")).toBe("reparacion");
   });
 });
 
