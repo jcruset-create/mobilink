@@ -1,14 +1,17 @@
 /**
  * Bloqueos de acceso por motivo (`self_storage_access_blocks`).
  *
- * En la fase 2 no hay puertas: un bloqueo es un HECHO registrado que la fase 3
- * convertirá en «no abre». Lo que sí hace ya: decidir si un contrato suspendido
- * puede volver a `active` (sólo si no le queda NINGÚN bloqueo).
+ * Desde la fase 3 un bloqueo tiene efecto físico: el motor de accesos
+ * (`evaluateAccess`) lo mira en cada intento, y cada alta o levantamiento
+ * recalcula permisos y listas de teléfonos de los dispositivos afectados
+ * (`cambioDeAccesoEnTx`). También decide si un contrato suspendido puede
+ * volver a `active` (sólo si no le queda NINGÚN bloqueo).
  */
 
 import type { Ejecutor } from "../../shared/db.ts";
 import { auditar, type Actor } from "../../shared/audit.ts";
 import { quedanBloqueos, type Bloqueo } from "../../domain/bloqueos.ts";
+import { cambioDeAccesoEnTx } from "../accesos/sincronizacion.ts";
 import type { BlockReason } from "../../../../src/modules/self-storage/types/enums.ts";
 
 export async function bloqueosDelContrato(c: Ejecutor, contractId: string): Promise<Bloqueo[]> {
@@ -34,6 +37,7 @@ export async function bloquear(
   );
   if (rows.length) {
     await auditar(c, actor, { action: "access_block.created", entityType: "contract", entityId: d.contractId, after: { blockId: rows[0].id, reason: d.reason, notes: d.notes ?? null } });
+    await cambioDeAccesoEnTx(c, d.empresaId, d.contractId ? { contractIds: [d.contractId] } : { customerId: d.customerId });
   }
   return rows[0]?.id ?? null;
 }
@@ -41,11 +45,12 @@ export async function bloquear(
 export async function levantar(c: Ejecutor, actor: Actor, blockId: string, motivo: string): Promise<boolean> {
   const { rows } = await c.query(
     `UPDATE self_storage_access_blocks SET lifted_at = now(), lifted_by = $2, lift_reason = $3
-      WHERE id = $1 AND lifted_at IS NULL RETURNING contract_id, reason`,
+      WHERE id = $1 AND lifted_at IS NULL RETURNING contract_id, customer_id, empresa_id, reason`,
     [blockId, actor.userId || null, motivo]
   );
   if (rows.length) {
     await auditar(c, actor, { action: "access_block.lifted", entityType: "contract", entityId: rows[0].contract_id, after: { blockId, reason: rows[0].reason, liftReason: motivo } });
+    await cambioDeAccesoEnTx(c, rows[0].empresa_id, rows[0].contract_id ? { contractIds: [rows[0].contract_id] } : { customerId: rows[0].customer_id });
   }
   return rows.length > 0;
 }
@@ -61,6 +66,7 @@ export async function reactivarSiProcede(c: Ejecutor, actor: Actor, contractId: 
   if (quedanBloqueos(await bloqueosDelContrato(c, contractId)).length) return estado;
   await c.query(`UPDATE self_storage_contracts SET status = 'active', suspended_at = NULL WHERE id = $1`, [contractId]);
   await auditar(c, actor, { action: "contract.reactivated", entityType: "contract", entityId: contractId, before: { status: "suspended" }, after: { status: "active" } });
+  await cambioDeAccesoEnTx(c, actor.empresaId, { contractIds: [contractId] });
   return "active";
 }
 
@@ -69,6 +75,7 @@ export async function suspenderSiActivo(c: Ejecutor, actor: Actor, contractId: s
   const { rows } = await c.query(`UPDATE self_storage_contracts SET status = 'suspended', suspended_at = now() WHERE id = $1 AND status = 'active' RETURNING id`, [contractId]);
   if (rows.length) {
     await auditar(c, actor, { action: "contract.suspended", entityType: "contract", entityId: contractId, before: { status: "active" }, after: { status: "suspended", reason: motivo } });
+    await cambioDeAccesoEnTx(c, actor.empresaId, { contractIds: [contractId] });
   }
   return rows.length > 0;
 }

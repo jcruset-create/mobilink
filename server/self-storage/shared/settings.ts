@@ -48,6 +48,8 @@ export const AJUSTES = {
       .nullable(),
     defecto: null as null | { name: string; taxId: string; address: string; email?: string; phone?: string },
   },
+  /** Intentos de apertura por persona y minuto (app, enlace temporal, administración). */
+  "access.rate_limit_per_minute": { esquema: z.number().int().min(1).max(120), defecto: 6 },
   /** Series de numeración: facturas, rectificativas y contratos. */
   "billing.invoice_series": { esquema: z.string().regex(/^[A-Z]{1,5}$/), defecto: "F" },
   "billing.rectifying_series": { esquema: z.string().regex(/^[A-Z]{1,5}$/), defecto: "R" },

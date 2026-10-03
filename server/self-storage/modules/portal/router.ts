@@ -10,9 +10,14 @@
  */
 
 import { Router, type Request } from "express";
-import { autenticarCliente, actorCliente } from "../../auth/customer.ts";
+import { autenticarCliente, actorCliente, soloTitular } from "../../auth/customer.ts";
 import { idDe, ruta, validar } from "../../http.ts";
-import { firmaContrato } from "../../schemas.ts";
+import { aperturaEnlace, aperturaPortal, firmaContrato } from "../../schemas.ts";
+import { pool } from "../../shared/db.ts";
+import { evaluateAccess } from "../../domain/accesos.ts";
+import { abrirPuerta } from "../accesos/apertura.ts";
+import { cargarActor, cargarPuerta, type Quien } from "../accesos/contexto.ts";
+import { temporalPorToken } from "../accesos/service.ts";
 import { urlsRetorno } from "../../shared/urls.ts";
 import { noExiste } from "../../errors.ts";
 import * as contratos from "../contratos/service.ts";
@@ -79,12 +84,94 @@ const vistaFactura = (f: Record<string, unknown>) => ({
 
 export function createPortalRouter(): Router {
   const r = Router();
+
+  // ── Enlace de un acceso temporal (sin sesión: la identidad es el token) ──
+  // El token sólo existe en el enlace; en la base, su huella. Límite de
+  // frecuencia por acceso y por IP (abrirPuerta).
+  r.post("/access/temporary/doors", ruta(async (req, res) => {
+    const d = validar(aperturaEnlace.pick({ token: true }), req.body);
+    const t = await temporalPorToken(d.token);
+    if (!t) throw noExiste("El enlace");
+    const { rows } = await pool.query(
+      `SELECT t.full_name AS "fullName", t.starts_at AS "startsAt", t.ends_at AS "endsAt", t.max_uses AS "maxUses", t.uses_count AS "usesCount", t.status,
+              coalesce((SELECT json_agg(json_build_object('id', d.id, 'name', d.name)) FROM self_storage_temporary_access_doors td
+                         JOIN self_storage_doors d ON d.id = td.door_id WHERE td.temporary_access_id = t.id), '[]') AS doors
+         FROM self_storage_temporary_accesses t WHERE t.id = $1`,
+      [t.id]
+    );
+    res.json(rows[0]);
+  }));
+  r.post("/access/temporary/open", ruta(async (req, res) => {
+    const d = validar(aperturaEnlace, req.body);
+    const t = await temporalPorToken(d.token);
+    if (!t) throw noExiste("El enlace");
+    res.json(
+      await abrirPuerta({ empresaId: t.empresaId, quien: { tipo: "temporary", temporaryAccessId: t.id }, doorId: d.doorId, method: "temporary_link", ip: req.ip ?? null, userAgent: req.get("user-agent") ?? null })
+    );
+  }));
+
   r.use(autenticarCliente);
 
+  /** Titular o persona autorizada: la identidad SIEMPRE de la sesión. */
+  const quien = (req: Request): { empresaId: string; quien: Quien; nombre: string } =>
+    req.ssCliente
+      ? { empresaId: req.ssCliente.empresaId, quien: { tipo: "customer", customerId: req.ssCliente.customerId }, nombre: req.ssCliente.nombre }
+      : { empresaId: req.ssMiembro!.empresaId, quien: { tipo: "member", memberId: req.ssMiembro!.memberId }, nombre: req.ssMiembro!.nombre };
+
   r.get("/me", ruta(async (req, res) => {
+    if (req.ssMiembro) {
+      const m = req.ssMiembro;
+      return res.json({ kind: "member", name: m.nombre, email: m.email, status: "active", debt: null });
+    }
     const c = cliente(req);
-    res.json({ name: c.nombre, email: c.email, status: c.status, debt: await pagos.deuda(c.empresaId, c.customerId) });
+    res.json({ kind: "customer", name: c.nombre, email: c.email, status: c.status, debt: await pagos.deuda(c.empresaId, c.customerId) });
   }));
+
+  // ── Accesos (titular y personas autorizadas) ──
+  /** Puertas de sus centros con lo que diría el motor ahora (para pintar «Abrir» o el motivo). */
+  r.get("/access/doors", ruta(async (req, res) => {
+    const q = quien(req);
+    const { rows } = await pool.query(
+      `SELECT DISTINCT d.id FROM self_storage_doors d
+         JOIN self_storage_contracts k ON k.center_id = d.center_id AND k.status NOT IN ('draft','cancelled')
+        WHERE d.empresa_id = $1 AND d.enabled AND d.allow_app
+          AND ${q.quien.tipo === "customer" ? "k.customer_id = $2" : "k.id = $2"}`,
+      [q.empresaId, q.quien.tipo === "customer" ? q.quien.customerId : req.ssMiembro!.contractId]
+    );
+    const ahora = new Date();
+    const out = [];
+    for (const { id } of rows) {
+      const p = await cargarPuerta(pool, q.empresaId, id);
+      const a = await cargarActor(pool, q.empresaId, q.quien, p);
+      if (!a) continue;
+      const ev = evaluateAccess(p, a.actor, ahora, "app");
+      // Puertas que no son suyas ni por zona ni por permiso: no se enseñan.
+      if (ev.reason === "DOOR_NOT_ALLOWED") continue;
+      out.push({ id: p.id, name: p.name, doorType: p.doorType, canOpen: ev.granted, reason: ev.reason });
+    }
+    res.json(out);
+  }));
+
+  r.post("/access/open", ruta(async (req, res) => {
+    const d = validar(aperturaPortal, req.body);
+    const q = quien(req);
+    res.json(await abrirPuerta({ empresaId: q.empresaId, quien: q.quien, doorId: d.doorId, method: "app", ip: req.ip ?? null, userAgent: req.get("user-agent") ?? null }));
+  }));
+
+  r.get("/access/events", ruta(async (req, res) => {
+    const q = quien(req);
+    const { rows } = await pool.query(
+      `SELECT e.id, e.requested_at AS "requestedAt", d.name AS "doorName", e.method, e.decision, e.reason, e.execution_status AS "executionStatus", e.actor_name AS "actorName"
+         FROM self_storage_access_events e LEFT JOIN self_storage_doors d ON d.id = e.door_id
+        WHERE e.empresa_id = $1 AND ${q.quien.tipo === "customer" ? "e.customer_id = $2" : "e.contract_member_id = $2"}
+        ORDER BY e.requested_at DESC LIMIT 50`,
+      [q.empresaId, q.quien.tipo === "customer" ? q.quien.customerId : req.ssMiembro!.memberId]
+    );
+    res.json(rows);
+  }));
+
+  // Lo demás (contratos, facturas, pagos, métodos de pago): sólo el titular.
+  r.use(soloTitular);
 
   r.get("/contracts", ruta(async (req, res) => {
     const c = cliente(req);

@@ -24,6 +24,7 @@ import { routerImportacion } from "./modules/importacion/router.ts";
 import { routerDashboard } from "./modules/dashboard/router.ts";
 import { routerContratos } from "./modules/contratos/router.ts";
 import { routerFacturacion } from "./modules/facturas/router.ts";
+import { routerAccesos } from "./modules/accesos/router.ts";
 import {
   CONTRACT_STATUSES,
   CUSTOMER_STATUSES,
@@ -37,6 +38,10 @@ import {
   ETIQUETA_PAYMENT_METHOD,
   ETIQUETA_PAYMENT_STATUS,
   ETIQUETA_BLOCK_REASON,
+  ETIQUETA_ACCESS_REASON,
+  ETIQUETA_ACCESS_METHOD,
+  ETIQUETA_DOOR_TYPE,
+  ETIQUETA_CONNECTION_TYPE,
   UNIT_STATUSES,
 } from "../../src/modules/self-storage/types/enums.ts";
 
@@ -69,6 +74,10 @@ export function createSelfStorageAdminRouter(): Router {
             paymentMethod: ETIQUETA_PAYMENT_METHOD,
             paymentStatus: ETIQUETA_PAYMENT_STATUS,
             blockReason: ETIQUETA_BLOCK_REASON,
+            accessReason: ETIQUETA_ACCESS_REASON,
+            accessMethod: ETIQUETA_ACCESS_METHOD,
+            doorType: ETIQUETA_DOOR_TYPE,
+            connectionType: ETIQUETA_CONNECTION_TYPE,
           },
         },
       });
@@ -83,6 +92,7 @@ export function createSelfStorageAdminRouter(): Router {
   r.use(routerImportacion());
   r.use(routerContratos());
   r.use(routerFacturacion());
+  r.use(routerAccesos());
 
   r.get(
     "/audit",

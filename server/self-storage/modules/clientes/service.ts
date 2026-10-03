@@ -16,6 +16,7 @@ import { ErrorSelfStorage, noExiste } from "../../errors.ts";
 import { normalizarTelefono, validarDocumento } from "../../domain/identidad.ts";
 import type { clienteAlta, clienteCambio, filtroClientes, telefonoAlta } from "../../schemas.ts";
 import * as repo from "./repository.ts";
+import { cambioDeAccesoEnTx } from "../accesos/sincronizacion.ts";
 
 export const listar = (actor: Actor, f: z.infer<typeof filtroClientes>) => repo.listar(pool, actor.empresaId, f);
 
@@ -88,6 +89,8 @@ export function actualizar(actor: Actor, id: string, entrada: z.infer<typeof cli
         after: { status, reason: cambios.statusReason ?? null },
       });
     }
+    // Bloquear o desbloquear al cliente cambia lo que puede abrir.
+    if (status !== undefined && status !== antes.status) await cambioDeAccesoEnTx(c, actor.empresaId, { customerId: id });
     return (await repo.obtener(c, actor.empresaId, id))!;
   });
 }
@@ -103,6 +106,7 @@ export function anadirTelefono(actor: Actor, customerId: string, d: z.infer<type
       entityId: customerId,
       after: { phoneId: id, phone, label: d.label ?? null, allowDoorAccess: d.allowDoorAccess },
     });
+    await cambioDeAccesoEnTx(c, actor.empresaId, { customerId });
     return repo.telefonos(c, actor.empresaId, customerId);
   });
 }
@@ -113,6 +117,7 @@ export function quitarTelefono(actor: Actor, customerId: string, phoneId: string
     const borrado = await repo.borrarTelefono(c, actor.empresaId, customerId, phoneId);
     if (!borrado) throw noExiste("El teléfono");
     await auditar(c, actor, { action: "customer.phone_removed", entityType: "customer", entityId: customerId, before: { phoneId, ...borrado } });
+    await cambioDeAccesoEnTx(c, actor.empresaId, { customerId });
     return repo.telefonos(c, actor.empresaId, customerId);
   });
 }
