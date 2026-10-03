@@ -18,9 +18,20 @@
  *   · El estado del trastero nunca lo cambia una importación, ni el precio de
  *     un contrato (que está congelado en el contrato).
  *   · Nada de precios ni de datos de Reus en el código: todo sale del fichero.
+ *   · PRECIO: `precio_base`, `cuota_iva` (IMPORTE en euros, no porcentaje) y
+ *     `pvp`, con la regla base + cuota = PVP (±0,01 €). El TIPO de IVA nunca
+ *     sale del fichero ni se deduce de él: es el IVA general de la empresa.
+ *     La antigua columna `iva` se acepta como ALIAS DEPRECADO de `cuota_iva`
+ *     (con aviso): en el CSV de Reus siempre fue la cuota.
+ *
+ * Formato recomendado:
+ *   codigo;tipo;numero;largo_cm;ancho_cm;alto_cm;m2;m3;precio_base;cuota_iva;pvp
+ * `codigo` es el identificador del trastero en el centro; `numero`, si viene
+ * junto a `codigo`, es su nombre visible. Las medidas con sufijo `_cm` o `_m`
+ * se leen en esa unidad, sin adivinar.
  */
 
-import { areaM2, desviacion, IVAS_HABITUALES, leerIva, leerNumero, medidaACm, resolverPrecio, volumenM3 } from "./pricing.ts";
+import { areaM2, cuotaCuadraConIva, desviacion, leerNumero, medidaACm, resolverPrecioTrastero, volumenM3 } from "./pricing.ts";
 import { ErrorSelfStorage } from "../errors.ts";
 
 // ── CSV ──────────────────────────────────────────────────────────────────────
@@ -86,7 +97,7 @@ export const CAMPOS = [
   "area",
   "volume",
   "price",
-  "tax",
+  "vat",
   "gross",
   "deposit",
 ] as const;
@@ -102,33 +113,66 @@ export function normalizarCabecera(h: string): string {
 }
 
 const SINONIMOS: Record<Campo, string[]> = {
-  code: ["notrastero", "nodetrastero", "ntrastero", "numtrastero", "numerotrastero", "numerodetrastero", "trastero", "numero", "codigo", "code", "box", "nbox", "n", "no", "num", "nro"],
+  code: ["codigo", "code", "notrastero", "nodetrastero", "ntrastero", "numtrastero", "numerotrastero", "numerodetrastero", "trastero", "numero", "box", "nbox", "n", "no", "num", "nro"],
   zone: ["zona", "zone", "codigozona"],
   type: ["tipo", "type", "tipologia", "tipotrastero", "codigotipo"],
-  name: ["nombre", "name", "descripcion"],
+  // «numero» junto a «codigo»: el código identifica y el número se enseña.
+  name: ["nombre", "name", "descripcion", "numero"],
   length: ["largo", "length", "longitud", "fondo", "largocm", "largom"],
   width: ["ancho", "width", "anchura", "anchocm", "anchom"],
   height: ["alto", "height", "altura", "altocm", "altom"],
   area: ["m2", "superficie", "area", "metroscuadrados", "superficiem2"],
   volume: ["m3", "volumen", "volume", "metroscubicos", "volumenm3"],
-  price: ["precio", "base", "preciobase", "baseimponible", "price", "preciomensual", "preciosiniva"],
-  tax: ["iva", "tax", "impuesto", "tipoiva", "iva%"],
+  price: ["preciobase", "precio", "base", "baseimponible", "price", "preciomensual", "preciosiniva"],
+  // CUOTA de IVA en euros. «iva» es el alias deprecado del CSV antiguo.
+  vat: ["cuotaiva", "cuota", "importeiva", "ivaimporte", "vatamount", "iva"],
   gross: ["pvp", "preciofinal", "total", "pvpmensual", "precioconiva", "precioiva"],
   deposit: ["fianza", "deposit", "deposito"],
 };
 
 export type MapaColumnas = Partial<Record<Campo, number>>;
+type CampoMedida = "length" | "width" | "height";
 
-export function mapearCabeceras(cabecera: string[]): { mapa: MapaColumnas; desconocidas: string[] } {
+/**
+ * Cabeceras que antes eran un PORCENTAJE de IVA y ya no se aceptan: el tipo de
+ * IVA no viene del fichero. Se rechazan con un mensaje claro en vez de
+ * ignorarlas sin decir nada.
+ */
+const CABECERAS_DE_TIPO = ["tipoiva", "iva%", "porcentajeiva", "ivaporcentaje", "vatrate", "taxrate", "tax", "impuesto"];
+
+export function mapearCabeceras(cabecera: string[]): {
+  mapa: MapaColumnas;
+  desconocidas: string[];
+  unidades: Partial<Record<CampoMedida, "m" | "cm">>;
+  aliasDeprecados: string[];
+  columnasDeTipo: string[];
+} {
   const mapa: MapaColumnas = {};
   const desconocidas: string[] = [];
+  const unidades: Partial<Record<CampoMedida, "m" | "cm">> = {};
+  const aliasDeprecados: string[] = [];
+  const columnasDeTipo: string[] = [];
   cabecera.forEach((h, i) => {
     const n = normalizarCabecera(h);
-    const campo = (Object.keys(SINONIMOS) as Campo[]).find((c) => SINONIMOS[c].includes(n));
-    if (campo && mapa[campo] === undefined) mapa[campo] = i;
-    else if (n) desconocidas.push(h.trim());
+    if (CABECERAS_DE_TIPO.includes(n) || /^(iva|tipo).*%$/.test(h.trim().toLowerCase().replace(/\s/g, ""))) {
+      columnasDeTipo.push(h.trim());
+      return;
+    }
+    // El primer campo libre que reconozca la cabecera («numero» es el código
+    // si no hay «codigo», y el nombre si lo hay).
+    const campo = (Object.keys(SINONIMOS) as Campo[]).find((c) => SINONIMOS[c].includes(n) && mapa[c] === undefined);
+    if (!campo) {
+      if (n) desconocidas.push(h.trim());
+      return;
+    }
+    mapa[campo] = i;
+    if (campo === "vat" && n === "iva") aliasDeprecados.push(h.trim());
+    if (campo === "length" || campo === "width" || campo === "height") {
+      if (n.endsWith("cm")) unidades[campo] = "cm";
+      else if (["largom", "anchom", "altom"].includes(n)) unidades[campo] = "m";
+    }
   });
-  return { mapa, desconocidas };
+  return { mapa, desconocidas, unidades, aliasDeprecados, columnasDeTipo };
 }
 
 // ── Filas ────────────────────────────────────────────────────────────────────
@@ -136,8 +180,12 @@ export function mapearCabeceras(cabecera: string[]): { mapa: MapaColumnas; desco
 export type OpcionesImportacion = {
   /** Unidad de largo/ancho/alto. `auto`: < 20 son metros. */
   unidadMedidas?: "auto" | "m" | "cm";
-  /** IVA si el fichero no trae columna (porcentaje). */
-  ivaPorDefecto?: number;
+  /**
+   * IVA GENERAL de la empresa (porcentaje). Sólo se usa para completar la
+   * cuota cuando el fichero trae únicamente base o PVP, y para avisar si una
+   * cuota no corresponde a él. Nunca sale del fichero.
+   */
+  ivaGeneral: number;
   /** Tolerancia de m²/m³ declarados frente a los calculados (0,05 = 5 %). */
   toleranciaMedidas?: number;
 };
@@ -153,7 +201,10 @@ export type DatosTrastero = {
   area_m2: number;
   volume_m3: number;
   monthly_price: number;
+  /** Tipo (porcentaje): el IVA general vigente al importar. */
   tax_rate: number;
+  /** Cuota de IVA en euros (base + cuota = PVP). */
+  vat_amount: number;
   monthly_price_gross: number;
   deposit_amount: number | null;
 };
@@ -174,25 +225,39 @@ export function normalizarCodigo(c: string): string {
 }
 
 /** Lee el CSV entero y valida cada fila por sí misma (sin mirar la base). */
-export function leerFilas(texto: string, opciones: OpcionesImportacion = {}): { filas: FilaLeida[]; cabecera: string[]; mapa: MapaColumnas; desconocidas: string[] } {
+export function leerFilas(
+  texto: string,
+  opciones: OpcionesImportacion
+): { filas: FilaLeida[]; cabecera: string[]; mapa: MapaColumnas; desconocidas: string[]; avisos: string[] } {
   const tabla = leerCsv(texto);
   if (tabla.length < 2) {
     throw new ErrorSelfStorage("CSV_VACIO", "El fichero no tiene filas de datos (hace falta una cabecera y al menos una fila).", 422);
   }
   const [cabecera, ...datos] = tabla;
-  const { mapa, desconocidas } = mapearCabeceras(cabecera);
+  const { mapa, desconocidas, unidades, aliasDeprecados, columnasDeTipo } = mapearCabeceras(cabecera);
+  if (columnasDeTipo.length) {
+    throw new ErrorSelfStorage(
+      "CSV_CON_TIPO_DE_IVA",
+      `El fichero trae un porcentaje de IVA (${columnasDeTipo.join(", ")}). El tipo de IVA no se importa: sale de la configuración de la empresa. Usa las columnas precio_base, cuota_iva (importe en euros) y pvp.`,
+      422,
+      { columnas: columnasDeTipo }
+    );
+  }
+  const avisos: string[] = aliasDeprecados.map(
+    (h) => `La columna «${h}» se ha leído como CUOTA de IVA en euros (no como porcentaje). Está deprecada: renómbrala a «cuota_iva».`
+  );
 
   const faltan: string[] = [];
   if (mapa.code === undefined) faltan.push("número de trastero");
   if (mapa.length === undefined) faltan.push("largo");
   if (mapa.width === undefined) faltan.push("ancho");
   if (mapa.height === undefined) faltan.push("alto");
-  if (mapa.price === undefined && mapa.gross === undefined) faltan.push("precio o PVP");
+  if (mapa.price === undefined && mapa.gross === undefined) faltan.push("precio_base o pvp");
   if (faltan.length) {
     throw new ErrorSelfStorage("CSV_SIN_COLUMNAS", `Faltan columnas obligatorias: ${faltan.join(", ")}.`, 422, { cabecera, mapa });
   }
 
-  const unidad = opciones.unidadMedidas ?? "auto";
+  const unidad = (c: CampoMedida) => unidades[c] ?? opciones.unidadMedidas ?? "auto";
   const tol = opciones.toleranciaMedidas ?? 0.05;
 
   const filas = datos.map((celdas, i): FilaLeida => {
@@ -225,34 +290,25 @@ export function leerFilas(texto: string, opciones: OpcionesImportacion = {}): { 
         errors.push(`${nombre}: tiene que ser mayor que cero.`);
         return null;
       }
-      return medidaACm(n, unidad);
+      return medidaACm(n, unidad(c));
     });
     const [length_cm, width_cm, height_cm] = medidas;
 
-    let iva: number | null;
-    if (mapa.tax !== undefined) {
-      iva = leerIva(valor("tax"));
-      if (Number.isNaN(iva)) {
-        errors.push(`IVA: «${valor("tax")}» no es un número.`);
-        iva = null;
-      } else if (iva == null) {
-        iva = opciones.ivaPorDefecto ?? null;
-        if (iva == null) errors.push("IVA: falta.");
-      }
-    } else {
-      iva = opciones.ivaPorDefecto ?? 21;
-    }
-    if (iva != null && !IVAS_HABITUALES.includes(iva)) warnings.push(`IVA del ${iva} %: no es un tipo habitual en España, revísalo.`);
-
-    const base = mapa.price !== undefined ? num("price", "Precio") : null;
+    const base = mapa.price !== undefined ? num("price", "Precio base") : null;
+    const cuota = mapa.vat !== undefined ? num("vat", "Cuota de IVA") : null;
     const pvp = mapa.gross !== undefined ? num("gross", "PVP") : null;
-    let precio: { base: number; iva: number; pvp: number } | null = null;
-    if (iva != null && !errors.some((e) => /^(Precio|PVP)/.test(e))) {
+    let precio: ReturnType<typeof resolverPrecioTrastero> | null = null;
+    if (!errors.some((e) => /^(Precio base|Cuota de IVA|PVP)/.test(e))) {
       try {
-        precio = resolverPrecio({ base, iva, pvp });
+        precio = resolverPrecioTrastero({ base, cuota, pvp }, opciones.ivaGeneral);
       } catch (e) {
         errors.push(e instanceof Error ? e.message : String(e));
       }
+    }
+    if (precio && cuota != null && !cuotaCuadraConIva(precio.base, precio.cuota, opciones.ivaGeneral)) {
+      warnings.push(
+        `La cuota de IVA (${precio.cuota.toFixed(2).replace(".", ",")} €) no corresponde al IVA general (${String(opciones.ivaGeneral).replace(".", ",")} %) sobre la base. Se importa tal cual; revísala.`
+      );
     }
 
     let area_m2: number | null = null;
@@ -291,6 +347,7 @@ export function leerFilas(texto: string, opciones: OpcionesImportacion = {}): { 
             volume_m3,
             monthly_price: precio.base,
             tax_rate: precio.iva,
+            vat_amount: precio.cuota,
             monthly_price_gross: precio.pvp,
             deposit_amount: deposit,
           }
@@ -315,7 +372,7 @@ export function leerFilas(texto: string, opciones: OpcionesImportacion = {}): { 
     }
   }
 
-  return { filas, cabecera, mapa, desconocidas };
+  return { filas, cabecera, mapa, desconocidas, avisos };
 }
 
 // ── Contra la base ───────────────────────────────────────────────────────────
@@ -333,6 +390,7 @@ export type TrasteroExistente = {
   volume_m3: number;
   monthly_price: number;
   tax_rate: number;
+  vat_amount: number;
   monthly_price_gross: number;
   deposit_amount: number;
 };
@@ -342,6 +400,8 @@ export type Accion = "create" | "update" | "skip" | "error";
 export type FilaDecidida = FilaLeida & {
   action: Accion;
   storageUnitId: string | null;
+  /** Código del tipo que se creará al aplicar (si no existe y se pidió crearlo). */
+  tipoACrear?: string | null;
   /** Lo que se escribiría: valores finales con zona y tipo ya resueltos. */
   valores: (Omit<DatosTrastero, "zoneCode" | "typeCode"> & { zone_id: string; unit_type_id: string | null }) | null;
   cambios: string[];
@@ -352,6 +412,8 @@ export type ContextoCentro = {
   zonasPorCodigo: Map<string, string>;
   tiposPorCodigo: Map<string, string>;
   zonaPorDefecto: string | null;
+  /** Un tipo que no existe: crearlo al aplicar (con aviso) en vez de dar error. */
+  crearTiposQueFalten?: boolean;
 };
 
 const CAMPOS_COMPARADOS = [
@@ -361,8 +423,10 @@ const CAMPOS_COMPARADOS = [
   "height_cm",
   "area_m2",
   "volume_m3",
+  // El tipo (`tax_rate`) no se compara: es el IVA general al importar, y
+  // reimportar el mismo fichero tras cambiar el IVA general no es un cambio.
   "monthly_price",
-  "tax_rate",
+  "vat_amount",
   "monthly_price_gross",
   "deposit_amount",
   "zone_id",
@@ -383,16 +447,21 @@ export function decidirAcciones(filas: FilaLeida[], ctx: ContextoCentro): FilaDe
       if (!zone_id) errors.push(`La zona ${p.zoneCode} no existe en este centro. Créala antes de importar.`);
     } else {
       zone_id = existente?.zone_id ?? ctx.zonaPorDefecto;
-      if (!zone_id) errors.push("Sin zona: añade una columna «zona» o elige una zona por defecto para los trasteros nuevos.");
+      if (!zone_id) errors.push("Sin zona: el fichero no trae columna «zona». Elige arriba la «Zona para los nuevos» y vuelve a validar (o añade una columna «zona»).");
     }
 
     let unit_type_id: string | null = existente?.unit_type_id ?? null;
+    let tipoACrear: string | null = null;
+    const warnings = [...f.warnings];
     if (p.typeCode) {
       unit_type_id = ctx.tiposPorCodigo.get(p.typeCode) ?? null;
-      if (!unit_type_id) errors.push(`El tipo ${p.typeCode} no existe para este centro.`);
+      if (!unit_type_id && ctx.crearTiposQueFalten) {
+        tipoACrear = p.typeCode;
+        warnings.push(`El tipo ${p.typeCode} no existe: se creará al importar (con las medidas del primer trastero de ese tipo).`);
+      } else if (!unit_type_id) errors.push(`El tipo ${p.typeCode} no existe para este centro.`);
     }
 
-    if (errors.length) return { ...f, errors, action: "error", storageUnitId: existente?.id ?? null, valores: null, cambios: [] };
+    if (errors.length) return { ...f, errors, warnings, action: "error", storageUnitId: existente?.id ?? null, valores: null, cambios: [] };
 
     const valores = {
       code: p.code,
@@ -403,6 +472,7 @@ export function decidirAcciones(filas: FilaLeida[], ctx: ContextoCentro): FilaDe
       volume_m3: p.volume_m3,
       monthly_price: p.monthly_price,
       tax_rate: p.tax_rate,
+      vat_amount: p.vat_amount,
       monthly_price_gross: p.monthly_price_gross,
       name: p.name ?? existente?.name ?? null,
       deposit_amount: p.deposit_amount ?? existente?.deposit_amount ?? 0,
@@ -410,7 +480,7 @@ export function decidirAcciones(filas: FilaLeida[], ctx: ContextoCentro): FilaDe
       unit_type_id,
     };
 
-    if (!existente) return { ...f, action: "create", storageUnitId: null, valores, cambios: [] };
+    if (!existente) return { ...f, warnings, tipoACrear, action: "create", storageUnitId: null, valores, cambios: [] };
 
     const cambios = CAMPOS_COMPARADOS.filter((k) => {
       const a = existente[k as keyof TrasteroExistente];
@@ -418,7 +488,9 @@ export function decidirAcciones(filas: FilaLeida[], ctx: ContextoCentro): FilaDe
       return typeof a === "number" || typeof b === "number" ? Number(a) !== Number(b) : (a ?? null) !== (b ?? null);
     }).map(String);
 
-    return { ...f, action: cambios.length ? "update" : "skip", storageUnitId: existente.id, valores, cambios };
+    // Un tipo que se va a crear también es un cambio para un trastero existente.
+    if (tipoACrear && !cambios.includes("unit_type_id")) cambios.push("unit_type_id");
+    return { ...f, warnings, tipoACrear, action: cambios.length ? "update" : "skip", storageUnitId: existente.id, valores, cambios };
   });
 }
 

@@ -135,8 +135,9 @@ const camposTrastero = {
   areaM2: medida,
   volumeM3: medida,
   monthlyPrice: importe,
+  /** Cuota de IVA en EUROS (no porcentaje). El tipo es el IVA general. */
+  vatAmount: importe,
   monthlyPriceGross: importe,
-  taxRate: iva,
   depositAmount: importe,
   image3dUrl: urlHttps,
   floorPlanShapeId: idForma,
@@ -149,8 +150,8 @@ export const trasteroAlta = z.strictObject({
   areaM2: medida.optional(),
   volumeM3: medida.optional(),
   monthlyPrice: importe.optional(),
+  vatAmount: importe.optional(),
   monthlyPriceGross: importe.optional(),
-  taxRate: iva.optional(),
   depositAmount: importe.default(0),
   publicVisible: z.boolean().default(true),
 });
@@ -226,7 +227,8 @@ export const importacionAlta = z.strictObject({
   content: z.string().min(1).max(5_000_000),
   defaultZoneId: uuid.nullable().optional(),
   measureUnit: z.enum(["auto", "m", "cm"]).default("auto"),
-  defaultTaxRate: iva.optional(),
+  /** Crear al aplicar los tipos (columna `tipo`) que todavía no existan. */
+  createMissingTypes: z.boolean().default(true),
 });
 
 // ── Fase 2: conceptos, contratos, facturas y pagos ───────────────────────────
@@ -237,7 +239,9 @@ const motivo = z.string().trim().min(1, "indica el motivo").max(500);
 const camposConcepto = {
   name: texto(120),
   defaultPrice: z.number().min(-100_000).max(100_000),
-  taxRate: iva,
+  /** `inherit_default`: usa el IVA general; `custom`: `customTaxRate`. */
+  vatPolicy: z.enum(["inherit_default", "custom"]),
+  customTaxRate: iva.nullable(),
   taxExemptionReason: textoOpcional(300),
   isRecurring: z.boolean(),
   isRentalComponent: z.boolean(),
@@ -253,10 +257,15 @@ export const conceptoAlta = z.strictObject({
     .regex(/^[A-Z0-9][A-Z0-9_-]{0,29}$/, "sólo letras, números, guion y guion bajo"),
   itemType: z.enum(INVOICE_ITEM_TYPES),
   defaultPrice: camposConcepto.defaultPrice.default(0),
+  vatPolicy: camposConcepto.vatPolicy.default("inherit_default"),
+  customTaxRate: iva.nullable().optional(),
   isRecurring: z.boolean().default(false),
   isRentalComponent: z.boolean().default(false),
   active: z.boolean().default(true),
   sortOrder: camposConcepto.sortOrder.default(100),
+}).refine((d) => d.vatPolicy === "inherit_default" || d.customTaxRate != null, {
+  message: "con IVA propio hay que indicar el tipo",
+  path: ["customTaxRate"],
 });
 export const conceptoCambio = z.strictObject(camposConcepto).partial();
 

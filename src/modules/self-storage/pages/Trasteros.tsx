@@ -1,7 +1,8 @@
 /**
  * Trasteros del centro: lista con filtros, alta, edición y cambio de estado.
  *
- * El precio se introduce como base o como PVP (con su IVA): el servidor
+ * El precio se introduce como base o como PVP, y opcionalmente la cuota de IVA
+ * en euros; el tipo de IVA es el general de la empresa: el servidor
  * calcula lo que falte y comprueba que cuadre. Ningún precio vive en el panel.
  */
 
@@ -64,7 +65,8 @@ function ModalTrastero({
     volumeM3: t ? String(t.volumeM3) : "",
     modoPrecio: "pvp" as "pvp" | "base",
     precio: t ? String(t.monthlyPriceGross) : "",
-    taxRate: t ? String(t.taxRate) : "",
+    // Cuota de IVA en EUROS (no porcentaje). Vacía = la calcula el servidor con el IVA general.
+    vatAmount: t ? String(t.vatAmount) : "",
     depositAmount: String(t?.depositAmount ?? 0),
     image3dUrl: t?.image3dUrl ?? "",
     publicVisible: t?.publicVisible ?? true,
@@ -86,7 +88,7 @@ function ModalTrastero({
       heightCm: n(f.heightCm),
       areaM2: n(f.areaM2),
       volumeM3: n(f.volumeM3),
-      taxRate: n(f.taxRate),
+      vatAmount: n(f.vatAmount),
       depositAmount: n(f.depositAmount) ?? 0,
       image3dUrl: f.image3dUrl.trim() || null,
       publicVisible: f.publicVisible,
@@ -96,8 +98,8 @@ function ModalTrastero({
     // En una edición, sólo se mandan las medidas derivadas si se han tocado.
     if (t && f.areaM2 === String(t.areaM2)) delete datos.areaM2;
     if (t && f.volumeM3 === String(t.volumeM3)) delete datos.volumeM3;
-    if (t && f.taxRate === String(t.taxRate) && precio === (f.modoPrecio === "pvp" ? t.monthlyPriceGross : t.monthlyPrice)) {
-      delete datos.taxRate;
+    if (t && f.vatAmount === String(t.vatAmount) && precio === (f.modoPrecio === "pvp" ? t.monthlyPriceGross : t.monthlyPrice)) {
+      delete datos.vatAmount;
       delete datos.monthlyPriceGross;
       delete datos.monthlyPrice;
     }
@@ -156,7 +158,7 @@ function ModalTrastero({
             <input className={inputCls} value={f.precio} onChange={(e) => set("precio", e.target.value)} inputMode="decimal" />
           </div>
         </label>
-        <TextField label="IVA del alquiler % (vacío = por defecto)" value={f.taxRate} onChange={(v) => set("taxRate", v)} />
+        <TextField label="Cuota de IVA en € (vacío = con el IVA general)" value={f.vatAmount} onChange={(v) => set("vatAmount", v)} />
         <TextField label="Fianza (€)" value={f.depositAmount} onChange={(v) => set("depositAmount", v)} />
         <TextField label="Imagen 3D propia (URL https, opcional)" value={f.image3dUrl} onChange={(v) => set("image3dUrl", v)} />
         <CheckField label="Visible en la web pública" checked={f.publicVisible} onChange={(v) => set("publicVisible", v)} />
@@ -166,8 +168,8 @@ function ModalTrastero({
       </div>
       {t && (
         <p className="mt-2 text-[11px] text-slate-400">
-          Ahora: base {euros(t.monthlyPrice)} + IVA {decimal(t.taxRate)} % = PVP {euros(t.monthlyPriceGross)}. El precio de un contrato ya firmado no cambia
-          al cambiar el del trastero.
+          Ahora: base {euros(t.monthlyPrice)} + cuota de IVA {euros(t.vatAmount)} = PVP {euros(t.monthlyPriceGross)} (IVA general al fijarlo:{" "}
+          {decimal(t.taxRate)} %). El precio de un contrato ya firmado no cambia al cambiar el del trastero.
         </p>
       )}
     </Modal>

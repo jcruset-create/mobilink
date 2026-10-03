@@ -106,7 +106,10 @@ export type Trastero = {
   areaM2: number;
   volumeM3: number;
   monthlyPrice: number;
+  /** Tipo de IVA (porcentaje) vigente cuando se fijó el precio. */
   taxRate: number;
+  /** Cuota de IVA en euros: base + cuota = PVP. */
+  vatAmount: number;
   monthlyPriceGross: number;
   depositAmount: number;
   status: UnitStatus;
@@ -235,6 +238,9 @@ export type Importacion = {
     columnasIgnoradas?: string[];
     creados?: number;
     actualizados?: number;
+    tiposCreados?: string[];
+    avisos?: string[];
+    ivaGeneral?: number;
   };
   createdAt: string;
   appliedAt: string | null;
@@ -460,6 +466,10 @@ export type Concepto = {
   name: string;
   itemType: InvoiceItemType;
   defaultPrice: number;
+  /** `inherit_default`: usa el IVA general; `custom`: `customTaxRate`. */
+  vatPolicy: "inherit_default" | "custom";
+  customTaxRate: number | null;
+  /** Tipo EFECTIVO hoy (lo resuelve el servidor). */
   taxRate: number;
   taxExemptionReason: string | null;
   isRecurring: boolean;
@@ -486,7 +496,8 @@ export type Emisor = { name: string; taxId: string; address: string; email?: str
 
 /** Valores efectivos de la configuración; `isDefault` = nadie lo ha tocado. */
 export type Ajustes = {
-  "units.default_rental_tax_rate": { value: number; isDefault: boolean };
+  /** IVA general de la empresa (porcentaje). */
+  default_vat_rate: { value: number; isDefault: boolean };
   "reservations.ttl_minutes": { value: number; isDefault: boolean };
   "billing.first_sepa_payment_access_policy": { value: FirstSepaPolicy; isDefault: boolean };
   "billing.issuer": { value: Emisor | null; isDefault: boolean };

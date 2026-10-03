@@ -11,8 +11,16 @@ import { z } from "zod";
 import type { Ejecutor } from "./db.ts";
 
 export const AJUSTES = {
-  /** IVA por defecto del ALQUILER de un trastero nuevo (no de otros conceptos). */
-  "units.default_rental_tax_rate": { esquema: z.number().min(0).max(100), defecto: 21 },
+  /**
+   * IVA general de la empresa: TIPO (porcentaje, 21.00), nunca una cuota en
+   * euros. Lo usan los contratos NUEVOS (que se quedan con una copia) y los
+   * conceptos con política `inherit_default`. Cambiarlo no toca contratos ni
+   * facturas existentes. Sustituye a `units.default_rental_tax_rate` (0008).
+   */
+  default_vat_rate: {
+    esquema: z.number().min(0).max(100).refine((v) => Math.abs(Math.round(v * 100) - v * 100) < 1e-6, "como mucho dos decimales"),
+    defecto: 21,
+  },
   /** Minutos que dura una reserva temporal (fase 2/4). */
   "reservations.ttl_minutes": { esquema: z.number().int().min(1).max(24 * 60), defecto: 15 },
   /**

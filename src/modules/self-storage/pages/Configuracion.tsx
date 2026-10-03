@@ -1,7 +1,7 @@
 /**
  * Configuración de facturación y contratos de la empresa: emisor, series,
  * vencimiento, plazos de impago, política del primer SEPA, condiciones
- * generales e IVA por defecto del alquiler. Cada cambio queda auditado.
+ * generales e IVA general de la empresa. Cada cambio queda auditado.
  *
  * Los valores y sus límites los valida el servidor; aquí sólo se editan.
  */
@@ -52,7 +52,7 @@ export default function Configuracion() {
       const p = r["dunning.policy"].value;
       setImpago({ firstNoticeDays: String(p.firstNoticeDays), secondNoticeDays: String(p.secondNoticeDays), suspendDays: String(p.suspendDays) });
       setSepa(r["billing.first_sepa_payment_access_policy"].value);
-      setIva(String(r["units.default_rental_tax_rate"].value));
+      setIva(r.default_vat_rate.value.toFixed(2).replace(".", ","));
       setTerminos({ version: r["contracts.terms_version"].value, texto: r["contracts.terms_text"].value });
       setError(null);
     } catch (e) {
@@ -88,6 +88,7 @@ export default function Configuracion() {
 
   if (!a && !error) return <Cargando />;
   const n = (s: string) => Number(s.replace(",", "."));
+  const cambiaIva = Boolean(a) && n(iva) !== a!.default_vat_rate.value;
 
   return (
     <div className="space-y-4">
@@ -123,6 +124,17 @@ export default function Configuracion() {
               }
             >
               Guardar emisor
+            </button>
+          </Bloque>
+
+          <Bloque titulo="IVA general" ayuda="Se aplicará por defecto a nuevos contratos y conceptos configurados para heredar el IVA general.">
+            <div className="flex max-w-xs items-end gap-2">
+              <TextField label="IVA general (%)" value={iva} onChange={setIva} />
+              <span className="pb-2 text-sm text-slate-400">%</span>
+            </div>
+            {cambiaIva && <Aviso tono="aviso">El cambio no modifica contratos ni facturas existentes.</Aviso>}
+            <button className={btnPrimary} disabled={!cambiaIva || !Number.isFinite(n(iva))} onClick={() => void guardar({ default_vat_rate: n(iva) }, "IVA general")}>
+              Guardar
             </button>
           </Bloque>
 
@@ -190,15 +202,6 @@ export default function Configuracion() {
               className={btnPrimary}
               onClick={() => void guardar({ "contracts.terms_version": terminos.version, "contracts.terms_text": terminos.texto }, "Condiciones")}
             >
-              Guardar
-            </button>
-          </Bloque>
-
-          <Bloque titulo="IVA por defecto del alquiler" ayuda="Sólo para trasteros nuevos y el concepto de alquiler del catálogo. El IVA de los demás conceptos está en el catálogo.">
-            <div className="max-w-[10rem]">
-              <TextField label="IVA (%)" value={iva} onChange={setIva} />
-            </div>
-            <button className={btnPrimary} onClick={() => void guardar({ "units.default_rental_tax_rate": n(iva) }, "IVA del alquiler")}>
               Guardar
             </button>
           </Bloque>

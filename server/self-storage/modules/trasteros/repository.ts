@@ -91,7 +91,7 @@ const SELECT_TRASTERO = `
          u.unit_type_id, t.code AS type_code, t.name AS type_name, t.image_3d_url AS type_image_3d_url,
          t.capacity_description AS type_capacity_description, t.capacity_examples AS type_capacity_examples,
          u.code, u.name, u.width_cm, u.length_cm, u.height_cm, u.area_m2, u.volume_m3,
-         u.monthly_price, u.tax_rate, u.monthly_price_gross, u.deposit_amount,
+         u.monthly_price, u.tax_rate, u.vat_amount, u.monthly_price_gross, u.deposit_amount,
          u.status, u.status_reason, u.image_3d_url, u.floor_plan_shape_id, u.public_visible, u.notes
     FROM self_storage_units u
     JOIN self_storage_zones z ON z.id = u.zone_id
@@ -104,6 +104,7 @@ function aFila(r: Record<string, unknown>): FilaTrastero {
     volume_m3: Number(r.volume_m3),
     monthly_price: Number(r.monthly_price),
     tax_rate: Number(r.tax_rate),
+    vat_amount: Number(r.vat_amount),
     monthly_price_gross: Number(r.monthly_price_gross),
     deposit_amount: Number(r.deposit_amount),
   };
@@ -180,7 +181,10 @@ export type ValoresTrastero = {
   area_m2: number;
   volume_m3: number;
   monthly_price: number;
+  /** Tipo (porcentaje): el IVA general cuando se fijó el precio. */
   tax_rate: number;
+  /** Cuota de IVA en euros: base + cuota = PVP. */
+  vat_amount: number;
   monthly_price_gross: number;
   deposit_amount: number;
   image_3d_url: string | null;
@@ -191,7 +195,7 @@ export type ValoresTrastero = {
 
 const COLUMNAS_ESCRIBIBLES = [
   "zone_id", "unit_type_id", "code", "name", "width_cm", "length_cm", "height_cm", "area_m2", "volume_m3",
-  "monthly_price", "tax_rate", "monthly_price_gross", "deposit_amount", "image_3d_url", "floor_plan_shape_id",
+  "monthly_price", "tax_rate", "vat_amount", "monthly_price_gross", "deposit_amount", "image_3d_url", "floor_plan_shape_id",
   "public_visible", "notes",
 ] as const;
 

@@ -22,6 +22,7 @@ const fila: FilaTrastero = {
   volume_m3: 7.5,
   monthly_price: 49.59,
   tax_rate: 21,
+  vat_amount: 10.41,
   monthly_price_gross: 60,
   deposit_amount: 60,
   status: "occupied",

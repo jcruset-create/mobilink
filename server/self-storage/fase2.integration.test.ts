@@ -142,7 +142,7 @@ function facturaStripe(d: { id: string; sub: string; contractId: string; lineas:
 // ── Datos ───────────────────────────────────────────────────────────────────
 let centro: any, zona: any;
 async function trastero(code: string, extra: Record<string, unknown> = {}) {
-  return ok(api("/units", admin, { method: "POST", body: { centerId: centro.id, zoneId: zona.id, code, widthCm: 150, lengthCm: 200, heightCm: 250, monthlyPriceGross: 60, taxRate: 21, depositAmount: 60, ...extra } }), 201);
+  return ok(api("/units", admin, { method: "POST", body: { centerId: centro.id, zoneId: zona.id, code, widthCm: 150, lengthCm: 200, heightCm: 250, monthlyPriceGross: 60, depositAmount: 60, ...extra } }), 201);
 }
 async function cliente(taxId: string, auth: string | null, email: string) {
   const c = await ok(api("/customers", admin, { method: "POST", body: { customerType: "individual", firstName: "Ana", lastName: taxId, taxId, phone: "600112233", email, address: "Calle Mayor 1", city: "Reus", postalCode: "43201" } }), 201);
@@ -178,6 +178,8 @@ async function limpiar() {
   await db.query(`DELETE FROM self_storage_contract_documents WHERE empresa_id = $1`, [EMPRESA]);
   await db.query(`DELETE FROM self_storage_contract_items WHERE empresa_id = $1`, [EMPRESA]);
   await db.query(`DELETE FROM self_storage_contracts WHERE empresa_id = $1`, [EMPRESA]);
+  await db.query(`DELETE FROM self_storage_unit_import_rows WHERE import_id IN (SELECT id FROM self_storage_unit_imports WHERE empresa_id = $1)`, [EMPRESA]);
+  await db.query(`DELETE FROM self_storage_unit_imports WHERE empresa_id = $1`, [EMPRESA]);
   for (const t of ["self_storage_billing_items", "self_storage_sequences", "self_storage_customer_phones", "self_storage_customers", "self_storage_units", "self_storage_unit_types", "self_storage_zones", "self_storage_settings", "self_storage_centers"]) {
     await db.query(`DELETE FROM ${t} WHERE empresa_id = $1`, [EMPRESA]);
   }
@@ -396,7 +398,7 @@ describe.skipIf(!RUN)("Self Storage · fase 2 contra PostgreSQL", () => {
     it("el IVA de una línea manual sale del catálogo, no del panel", async () => {
       const conceptos = await ok(api("/billing-items", admin));
       const fianza = conceptos.find((c: any) => c.itemType === "deposit");
-      await ok(api(`/billing-items/${fianza.id}`, admin, { method: "PATCH", body: { taxRate: 21, taxExemptionReason: null } }));
+      await ok(api(`/billing-items/${fianza.id}`, admin, { method: "PATCH", body: { vatPolicy: "custom", customTaxRate: 21, taxExemptionReason: null } }));
       const b = await ok(api("/invoices", empleado, { method: "POST", body: { customerId: ana.id, lines: [{ billingItemId: fianza.id, quantity: 1, unitPrice: 100 }] } }), 201);
       expect(b.lines[0].taxRate).toBe(21);
       // El panel no puede colar un tipo impositivo.
@@ -574,6 +576,92 @@ describe.skipIf(!RUN)("Self Storage · fase 2 contra PostgreSQL", () => {
       const { items } = await ok(api(`/invoices?contractId=${s.k.id}`, admin));
       expect(items.find((i: any) => i.kind === "rent").status).toBe("refunded");
       expect(items.find((i: any) => i.kind === "rectifying").total).toBe(-60);
+    });
+  });
+
+  describe("IVA: tipo (porcentaje) frente a cuota (euros)", () => {
+    const ponerIva = (v: number) => ok(api("/settings/default_vat_rate", admin, { method: "PUT", body: { value: v } }));
+
+    it("⚑ cambiar default_vat_rate de 21 a 22 no toca contratos ni facturas existentes; un contrato nuevo usa 22", async () => {
+      const u1 = await trastero("1", { monthlyPriceGross: undefined, monthlyPrice: 100 });
+      const viejo = await firmado(ana.id, u1.id, { depositAmount: 0 });
+      expect(viejo.taxRate).toBe(21);
+      const factura = await ok(api(`/invoices/${viejo.invoices[0].id}`, admin));
+      expect(factura.lines[0]).toMatchObject({ taxRate: 21, subtotal: 100, taxAmount: 21, total: 121 });
+
+      await ponerIva(22);
+      expect((await ok(api("/settings", admin))).default_vat_rate).toEqual({ value: 22, isDefault: false });
+
+      // Lo existente, igual: el contrato es una fotografía fiscal y la factura emitida no cambia.
+      const k = await ok(api(`/contracts/${viejo.id}`, admin));
+      expect(k).toMatchObject({ taxRate: 21, monthlyPrice: 100, monthlyPriceGross: 121 });
+      const f = await ok(api(`/invoices/${viejo.invoices[0].id}`, admin));
+      expect(f.lines[0]).toMatchObject({ taxRate: 21, taxAmount: 21, total: 121 });
+      expect(f.total).toBe(121);
+
+      // Lo nuevo, con 22: misma base, cuota recalculada.
+      const u2 = await trastero("2", { monthlyPriceGross: undefined, monthlyPrice: 100 });
+      const nuevo = await contrato(bea.id, u2.id, { depositAmount: 0 });
+      expect(nuevo).toMatchObject({ taxRate: 22, monthlyPrice: 100, monthlyPriceGross: 122 });
+      // Y las nuevas facturas del contrato VIEJO siguen su política (21).
+      const { rows } = await db.query(`SELECT tax_rate::float8 AS t FROM self_storage_contracts WHERE id = $1`, [viejo.id]);
+      expect(rows[0].t).toBe(21);
+    });
+
+    it("⚑ concepto inherit_default usa el IVA de configuración; custom respeta su porcentaje", async () => {
+      const cat = await ok(api("/billing-items", admin));
+      const candado = cat.find((c: any) => c.code === "LOCK");
+      const fianza = cat.find((c: any) => c.code === "DEPOSIT");
+      expect(candado).toMatchObject({ vatPolicy: "inherit_default", taxRate: 21 });
+      expect(fianza).toMatchObject({ vatPolicy: "custom", customTaxRate: 0, taxRate: 0 });
+
+      await ponerIva(10);
+      const cat2 = await ok(api("/billing-items", admin));
+      expect(cat2.find((c: any) => c.code === "LOCK").taxRate).toBe(10);
+      expect(cat2.find((c: any) => c.code === "DEPOSIT").taxRate).toBe(0);
+
+      // En una factura manual la línea copia el tipo EFECTIVO de cada concepto.
+      const b = await ok(api("/invoices", empleado, { method: "POST", body: { customerId: ana.id, lines: [{ billingItemId: candado.id, quantity: 1, unitPrice: 10 }, { billingItemId: fianza.id, quantity: 1, unitPrice: 50 }] } }), 201);
+      expect(b.lines.map((l: any) => l.taxRate)).toEqual([10, 0]);
+
+      // Un concepto propio con su tipo; sin tipo, no.
+      const seguro = cat2.find((c: any) => c.code === "INSURANCE");
+      expect((await ok(api(`/billing-items/${seguro.id}`, admin, { method: "PATCH", body: { vatPolicy: "custom", customTaxRate: 4 } }))).taxRate).toBe(4);
+      expect((await api("/billing-items", admin, { method: "POST", body: { code: "X1", name: "X", itemType: "other", vatPolicy: "custom" } })).status).toBe(422);
+      const heredado = await ok(api("/billing-items", admin, { method: "POST", body: { code: "X2", name: "X2", itemType: "other" } }), 201);
+      expect(heredado).toMatchObject({ vatPolicy: "inherit_default", taxRate: 10, customTaxRate: null });
+    });
+
+    it("⚑ el importador guarda la cuota en euros y el tipo de la configuración, nunca 4,34 %", async () => {
+      await ponerIva(22);
+      const csv = "codigo,tipo,numero,largo_cm,ancho_cm,alto_cm,m2,m3,precio_base,cuota_iva,pvp\nTaquilla 113,taquilla,113,100,100,100,1.0,1.0,20.66,4.34,25.0\n";
+      const v = await ok(api(`/centers/${centro.id}/imports`, admin, { method: "POST", body: { fileName: "reus.csv", content: csv } }), 201);
+      expect(v.summary).toMatchObject({ create: 1, error: 0, ivaGeneral: 22 });
+      const hecho = await ok(api(`/imports/${v.id}/apply`, admin, { method: "POST", body: {} }));
+      expect(hecho.summary.tiposCreados).toEqual(["TAQUILLA"]);
+      const [u] = await ok(api(`/units?centerId=${centro.id}&q=TAQUILLA`, admin));
+      expect(u).toMatchObject({ code: "TAQUILLA 113", name: "113", monthlyPrice: 20.66, vatAmount: 4.34, monthlyPriceGross: 25, taxRate: 22 });
+      expect(u.unitType).toMatchObject({ code: "TAQUILLA", name: "Taquilla" });
+      // Un fichero donde base + cuota ≠ PVP no se importa.
+      const malo = await ok(api(`/centers/${centro.id}/imports`, admin, { method: "POST", body: { fileName: "malo.csv", content: csv.replace("Taquilla 113", "Taquilla 114").replace(",25.0", ",26.0") } }), 201);
+      expect(malo.summary.error).toBe(1);
+    });
+
+    it("la migración corrige un trastero cuya cuota se guardó como porcentaje (y lo deja en la auditoría)", async () => {
+      const u = await trastero("9");
+      // Como lo dejaba el importador antiguo: «iva» = 4,34 leído como 4,34 %.
+      await db.query(`UPDATE self_storage_units SET monthly_price = 20.66, tax_rate = 4.34, monthly_price_gross = 21.56, vat_amount = 0.90 WHERE id = $1`, [u.id]);
+      const fs = await import("node:fs");
+      const path = await import("node:path");
+      const { DIRECTORIO_MIGRACIONES } = await import("./schema.ts");
+      await db.query(fs.readFileSync(path.join(DIRECTORIO_MIGRACIONES, "0008_iva_tipo_y_cuota.sql"), "utf8"));
+      const d = await ok(api(`/units/${u.id}`, admin));
+      expect(d).toMatchObject({ monthlyPrice: 20.66, vatAmount: 4.34, monthlyPriceGross: 25, taxRate: 21 });
+      const audit = await ok(api(`/audit?entityType=unit&entityId=${u.id}`, admin));
+      expect(audit.find((a: any) => a.action === "unit.vat_fixed").before).toMatchObject({ taxRate: 4.34, monthlyPriceGross: 21.56 });
+      // Idempotente: otra pasada no cambia nada más.
+      await db.query(fs.readFileSync(path.join(DIRECTORIO_MIGRACIONES, "0008_iva_tipo_y_cuota.sql"), "utf8"));
+      expect((await ok(api(`/audit?entityType=unit&entityId=${u.id}`, admin))).filter((a: any) => a.action === "unit.vat_fixed")).toHaveLength(1);
     });
   });
 

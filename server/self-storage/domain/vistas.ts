@@ -31,7 +31,10 @@ export type FilaTrastero = {
   area_m2: number;
   volume_m3: number;
   monthly_price: number;
+  /** Tipo de IVA (porcentaje) vigente cuando se fijó el precio. */
   tax_rate: number;
+  /** Cuota de IVA en euros. */
+  vat_amount: number;
   monthly_price_gross: number;
   deposit_amount: number;
   status: UnitStatus;
@@ -88,6 +91,7 @@ export function vistaTrasteroPanel(u: FilaTrastero, ocupacion: Ocupacion | null,
     volumeM3: u.volume_m3,
     monthlyPrice: u.monthly_price,
     taxRate: u.tax_rate,
+    vatAmount: u.vat_amount,
     monthlyPriceGross: u.monthly_price_gross,
     depositAmount: u.deposit_amount,
     status: u.status,
@@ -141,6 +145,7 @@ export const CAMPOS_PRIVADOS = [
   "customer",
   "contract",
   "monthlyPrice",
+  "vatAmount",
   "depositAmount",
   "paymentStatus",
   "publicVisible",

@@ -9,8 +9,10 @@
  *   · Si sólo llega el PVP, la base sale de él; si sólo llega la base, el PVP.
  *     Si llegan los dos y no cuadran, NO se elige uno en silencio: es un error.
  *   · Esto es el tratamiento fiscal del ALQUILER. No se presupone nada de otros
- *     conceptos (fianza, seguro, candado…): en la fase 2 cada concepto tendrá su
- *     propio tratamiento configurable.
+ *     conceptos (fianza, seguro, candado…): cada concepto tiene su política.
+ *   · `iva` es SIEMPRE un tipo (porcentaje); la cuota en euros es otra cosa
+ *     (`resolverPrecioTrastero`, `vat_amount`). Ningún tipo está escrito en el
+ *     código: sale del ajuste `default_vat_rate` de la empresa.
  *
  */
 
@@ -82,6 +84,76 @@ export function resolverPrecio(entrada: { base?: number | null; iva: number; pvp
   return { base: b, iva, pvp: redondear2(b * (1 + iva / 100)) };
 }
 
+// ── Precio comercial del trastero: base + CUOTA de IVA = PVP ────────────────
+
+/** Precio del trastero: base, cuota de IVA en EUROS y PVP. `iva` = tipo (porcentaje) vigente al fijarlo. */
+export type PrecioTrastero = { base: number; cuota: number; pvp: number; iva: number };
+
+/**
+ * Completa el precio del trastero a partir de lo que llegue.
+ *
+ *   · base + cuota + PVP: tienen que cuadrar (base + cuota = PVP, ±0,01 €). Si
+ *     no, es un error: no se elige uno en silencio.
+ *   · dos de los tres: el tercero sale de los otros dos (sin usar ningún tipo).
+ *   · sólo base o sólo PVP: se usa el IVA GENERAL configurado (`ivaGeneral`,
+ *     porcentaje). Nunca se deduce el tipo de los valores importados.
+ *
+ * `iva` del resultado es siempre el IVA general: el tipo vigente cuando se
+ * fijó el precio. La cuota NO se interpreta jamás como porcentaje.
+ */
+export function resolverPrecioTrastero(entrada: { base?: number | null; cuota?: number | null; pvp?: number | null }, ivaGeneral: number): PrecioTrastero {
+  if (!Number.isFinite(ivaGeneral) || ivaGeneral < 0 || ivaGeneral > 100) {
+    throw new ErrorSelfStorage("IVA_NO_VALIDO", "El IVA general configurado no es válido.", 422);
+  }
+  const base = entrada.base ?? null;
+  const cuota = entrada.cuota ?? null;
+  const pvp = entrada.pvp ?? null;
+  for (const [nombre, v] of [["El precio base", base], ["La cuota de IVA", cuota], ["El PVP", pvp]] as const) {
+    if (v != null && (!Number.isFinite(v) || v < 0)) {
+      throw new ErrorSelfStorage("PRECIO_NO_VALIDO", `${nombre} no es un importe válido.`, 422);
+    }
+  }
+  const r = (b: number, c: number, p: number): PrecioTrastero => ({ base: redondear2(b), cuota: redondear2(c), pvp: redondear2(p), iva: ivaGeneral });
+
+  if (base != null && cuota != null && pvp != null) {
+    if (Math.abs(redondear2(base) + redondear2(cuota) - redondear2(pvp)) > TOLERANCIA_PVP + 1e-9) {
+      throw new ErrorSelfStorage(
+        "PVP_NO_CUADRA",
+        `Precio base (${eur(base)}) + cuota de IVA (${eur(cuota)}) = ${eur(base + cuota)}, que no es el PVP (${eur(pvp)}).`,
+        422
+      );
+    }
+    return r(base, cuota, pvp);
+  }
+  if (base != null && pvp != null) {
+    if (pvp + 1e-9 < base) throw new ErrorSelfStorage("PVP_NO_CUADRA", `El PVP (${eur(pvp)}) es menor que el precio base (${eur(base)}).`, 422);
+    return r(base, pvp - base, pvp);
+  }
+  if (base != null && cuota != null) return r(base, cuota, base + cuota);
+  if (cuota != null && pvp != null) {
+    if (pvp + 1e-9 < cuota) throw new ErrorSelfStorage("PVP_NO_CUADRA", `El PVP (${eur(pvp)}) es menor que la cuota de IVA (${eur(cuota)}).`, 422);
+    return r(pvp - cuota, cuota, pvp);
+  }
+  if (base != null) {
+    const c = redondear2((redondear2(base) * ivaGeneral) / 100);
+    return r(base, c, redondear2(base) + c);
+  }
+  if (pvp != null) {
+    const p = redondear2(pvp);
+    const b = redondear2(p / (1 + ivaGeneral / 100));
+    return r(b, p - b, p);
+  }
+  throw new ErrorSelfStorage("PRECIO_OBLIGATORIO", "Indica el precio base o el PVP.", 422);
+}
+
+/**
+ * ¿La cuota corresponde al IVA general sobre la base? Sólo para AVISAR (un
+ * precio con otro tipo es posible: el importador no lo rechaza ni lo corrige).
+ */
+export function cuotaCuadraConIva(base: number, cuota: number, ivaGeneral: number): boolean {
+  return Math.abs(redondear2((base * ivaGeneral) / 100) - cuota) <= TOLERANCIA_PVP + 1e-9;
+}
+
 /** m² a partir de cm, con dos decimales. */
 export const areaM2 = (anchoCm: number, largoCm: number) => redondear2((anchoCm * largoCm) / 10_000);
 
@@ -115,20 +187,6 @@ export function leerNumero(texto: unknown): number | null {
   if (!/^-?\d+(\.\d+)?$/.test(s)) return NaN;
   return Number(s);
 }
-
-/**
- * IVA en porcentaje a partir de «21», «21 %», «0,21» o «0.21». Un valor ≤ 1 se
- * entiende como fracción (0,21 → 21). Un 1 % real se escribe «1 %»… y es
- * ambiguo, por eso el importador avisa si sale un IVA que no es de los
- * habituales en España.
- */
-export function leerIva(texto: unknown): number | null {
-  const n = leerNumero(texto);
-  if (n == null || Number.isNaN(n)) return n;
-  return n > 0 && n <= 1 ? redondear2(n * 100) : n;
-}
-
-export const IVAS_HABITUALES = [0, 4, 5, 10, 21];
 
 /**
  * Medida en cm a partir de un número que puede venir en metros o en cm. Por

@@ -1,6 +1,7 @@
 /**
- * Catálogo de conceptos facturables. Aquí vive el IVA de cada concepto: el
- * resto del panel lo lee de aquí y no conoce ningún tipo impositivo.
+ * Catálogo de conceptos facturables. Cada concepto HEREDA el IVA general de la
+ * empresa o tiene uno PROPIO (fianza, seguro, penalización…). El tipo efectivo
+ * lo calcula el servidor; el panel no conoce ningún tipo impositivo.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -14,7 +15,8 @@ type Form = {
   name: string;
   itemType: InvoiceItemType;
   defaultPrice: string;
-  taxRate: string;
+  vatPolicy: "inherit_default" | "custom";
+  customTaxRate: string;
   taxExemptionReason: string;
   isRecurring: boolean;
   isRentalComponent: boolean;
@@ -27,7 +29,8 @@ const vacio: Form = {
   name: "",
   itemType: "other",
   defaultPrice: "0",
-  taxRate: "",
+  vatPolicy: "inherit_default",
+  customTaxRate: "",
   taxExemptionReason: "",
   isRecurring: false,
   isRentalComponent: false,
@@ -92,6 +95,7 @@ export default function Conceptos() {
               <td className={tdCls}>{euros(c.defaultPrice)}</td>
               <td className={tdCls}>
                 {pct(c.taxRate)}
+                <span className="block text-[10px] text-slate-500">{c.vatPolicy === "inherit_default" ? "IVA general" : "propio"}</span>
                 {c.taxExemptionReason && <span className="block text-[10px] text-slate-500">{c.taxExemptionReason}</span>}
               </td>
               <td className={tdCls}>{c.isRecurring ? "Sí" : "No"}</td>
@@ -131,7 +135,8 @@ function FormConcepto({ concepto, onCerrar, onHecho }: { concepto: Concepto | nu
           name: concepto.name,
           itemType: concepto.itemType,
           defaultPrice: String(concepto.defaultPrice),
-          taxRate: String(concepto.taxRate),
+          vatPolicy: concepto.vatPolicy,
+          customTaxRate: concepto.customTaxRate == null ? "" : String(concepto.customTaxRate),
           taxExemptionReason: concepto.taxExemptionReason ?? "",
           isRecurring: concepto.isRecurring,
           isRentalComponent: concepto.isRentalComponent,
@@ -149,7 +154,8 @@ function FormConcepto({ concepto, onCerrar, onHecho }: { concepto: Concepto | nu
       const comun = {
         name: f.name,
         defaultPrice: n(f.defaultPrice),
-        taxRate: n(f.taxRate),
+        vatPolicy: f.vatPolicy,
+        customTaxRate: f.vatPolicy === "custom" ? n(f.customTaxRate) : null,
         taxExemptionReason: f.taxExemptionReason.trim() || null,
         isRecurring: f.isRecurring,
         isRentalComponent: f.isRentalComponent,
@@ -173,7 +179,7 @@ function FormConcepto({ concepto, onCerrar, onHecho }: { concepto: Concepto | nu
           <button className={btnSecondary} onClick={onCerrar}>
             Cancelar
           </button>
-          <button className={btnPrimary} disabled={!f.name.trim() || f.taxRate.trim() === "" || (!concepto && !f.code.trim())} onClick={() => void guardar()}>
+          <button className={btnPrimary} disabled={!f.name.trim() || (f.vatPolicy === "custom" && f.customTaxRate.trim() === "") || (!concepto && !f.code.trim())} onClick={() => void guardar()}>
             Guardar
           </button>
         </div>
@@ -194,7 +200,15 @@ function FormConcepto({ concepto, onCerrar, onHecho }: { concepto: Concepto | nu
           <TextField label="Nombre" value={f.name} onChange={(v) => set("name", v)} />
         </div>
         <TextField label="Precio base por defecto (€)" value={f.defaultPrice} onChange={(v) => set("defaultPrice", v)} />
-        <TextField label="IVA (%)" value={f.taxRate} onChange={(v) => set("taxRate", v)} />
+        <SelectField label="IVA" value={f.vatPolicy} onChange={(v) => set("vatPolicy", v as Form["vatPolicy"])}>
+          <option value="inherit_default">Hereda el IVA general</option>
+          <option value="custom">IVA propio del concepto</option>
+        </SelectField>
+        {f.vatPolicy === "custom" ? (
+          <TextField label="IVA propio (%)" value={f.customTaxRate} onChange={(v) => set("customTaxRate", v)} />
+        ) : (
+          <div className="self-end pb-2 text-[12px] text-slate-400">Usa el de Configuración → IVA general.</div>
+        )}
         <div className="col-span-2">
           <TextField label="Motivo si no lleva IVA (exento / no sujeto)" value={f.taxExemptionReason} onChange={(v) => set("taxExemptionReason", v)} />
         </div>

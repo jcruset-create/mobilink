@@ -169,8 +169,14 @@ async function guardarExtras(c: Ejecutor, empresaId: string, contractId: string,
   }
 }
 
-function precioPactado(unidad: { monthly_price: number; tax_rate: number }, d: { monthlyPrice?: number | null; monthlyPriceGross?: number | null; taxRate?: number | null }) {
-  const iva = d.taxRate ?? unidad.tax_rate;
+/**
+ * Precio del contrato. El TIPO de IVA es el vigente al crearlo (el del
+ * concepto de alquiler: hereda el IVA general o tiene uno propio) y se queda
+ * como fotografía en el contrato: cambiar después la configuración no lo toca.
+ * Sin precio pactado se parte de la BASE del trastero con ese tipo.
+ */
+function precioPactado(unidad: { monthly_price: number }, ivaVigente: number, d: { monthlyPrice?: number | null; monthlyPriceGross?: number | null; taxRate?: number | null }) {
+  const iva = d.taxRate ?? ivaVigente;
   if (d.monthlyPrice == null && d.monthlyPriceGross == null) return resolverPrecio({ base: unidad.monthly_price, iva });
   return resolverPrecio({ base: d.monthlyPrice ?? null, iva, pvp: d.monthlyPriceGross ?? null });
 }
@@ -187,7 +193,9 @@ export function crear(actor: Actor, d: z.infer<typeof contratoAlta>) {
     );
     if (!un.length) throw noExiste("El trastero");
     const unidad = un[0];
-    const precio = precioPactado(unidad, d);
+    const alquiler = await conceptos.porTipo(c, actor.empresaId, "rental");
+    const ivaVigente = alquiler?.taxRate ?? (await conceptos.ivaGeneral(c, actor.empresaId));
+    const precio = precioPactado(unidad, ivaVigente, d);
     const fianza = await conceptos.porTipo(c, actor.empresaId, "deposit");
     const extras = await extrasDesdeCatalogo(c, actor.empresaId, d.extras ?? []);
     const politica = await leerAjuste(c, actor.empresaId, unidad.center_id, "billing.first_sepa_payment_access_policy");
