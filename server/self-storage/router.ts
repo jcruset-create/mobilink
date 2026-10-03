@@ -22,6 +22,8 @@ import { routerPlano } from "./modules/plano/router.ts";
 import { routerClientes } from "./modules/clientes/router.ts";
 import { routerImportacion } from "./modules/importacion/router.ts";
 import { routerDashboard } from "./modules/dashboard/router.ts";
+import { routerContratos } from "./modules/contratos/router.ts";
+import { routerFacturacion } from "./modules/facturas/router.ts";
 import {
   CONTRACT_STATUSES,
   CUSTOMER_STATUSES,
@@ -30,6 +32,11 @@ import {
   ETIQUETA_CUSTOMER_STATUS,
   ETIQUETA_CUSTOMER_TYPE,
   ETIQUETA_UNIT_STATUS,
+  ETIQUETA_INVOICE_STATUS,
+  ETIQUETA_ITEM_TYPE,
+  ETIQUETA_PAYMENT_METHOD,
+  ETIQUETA_PAYMENT_STATUS,
+  ETIQUETA_BLOCK_REASON,
   UNIT_STATUSES,
 } from "../../src/modules/self-storage/types/enums.ts";
 
@@ -57,6 +64,11 @@ export function createSelfStorageAdminRouter(): Router {
             customerStatus: ETIQUETA_CUSTOMER_STATUS,
             customerType: ETIQUETA_CUSTOMER_TYPE,
             contractStatus: ETIQUETA_CONTRACT_STATUS,
+            invoiceStatus: ETIQUETA_INVOICE_STATUS,
+            itemType: ETIQUETA_ITEM_TYPE,
+            paymentMethod: ETIQUETA_PAYMENT_METHOD,
+            paymentStatus: ETIQUETA_PAYMENT_STATUS,
+            blockReason: ETIQUETA_BLOCK_REASON,
           },
         },
       });
@@ -69,6 +81,8 @@ export function createSelfStorageAdminRouter(): Router {
   r.use(routerPlano());
   r.use(routerClientes());
   r.use(routerImportacion());
+  r.use(routerContratos());
+  r.use(routerFacturacion());
 
   r.get(
     "/audit",

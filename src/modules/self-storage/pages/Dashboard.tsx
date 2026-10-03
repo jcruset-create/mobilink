@@ -1,13 +1,13 @@
 /**
- * Dashboard MVP — ocupación. Los indicadores de facturación, impagos, accesos
- * y puertas aparecen con su fase en vez de con un cero que parecería un dato.
+ * Dashboard — ocupación y cobros. Accesos y puertas aparecen con su fase en vez
+ * de con un cero que parecería un dato; los cobros, sólo a quien ve facturación.
  */
 
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import * as api from "../services/api";
 import type { Dashboard as DatosDashboard } from "../types";
-import { Aviso, Cabecera, Card, Cargando, ErrorBox, LeyendaPlano, TableWrap, decimal, pct, tdCls, thCls } from "../components/ui";
+import { Aviso, Cabecera, Card, Cargando, ErrorBox, LeyendaPlano, TableWrap, decimal, euros, pct, tdCls, thCls } from "../components/ui";
 import { useSelfStorage } from "../contexts/SelfStorageContext";
 import { COLOR_PLANO } from "../types";
 
@@ -98,9 +98,24 @@ export default function Dashboard() {
       </div>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-        <Pendiente titulo="Facturación mensual" fase={datos.billing.phase} />
-        <Pendiente titulo="Pendiente de cobro" fase={datos.billing.phase} />
-        <Pendiente titulo="Impagos" fase={datos.billing.phase} />
+        {datos.billing.visible && (
+          <>
+            <Link to="/self-storage/facturas">
+              <Card title="Facturado este mes" value={euros(datos.billing.monthlyInvoiced)} />
+            </Link>
+            <Link to="/self-storage/facturas">
+              <Card title="Pendiente de cobro" value={euros(datos.billing.pendingCollection)} accent="text-amber-300" />
+            </Link>
+            <Link to="/self-storage/impagos">
+              <Card
+                title="Impagos"
+                value={euros(datos.billing.overdue)}
+                accent={datos.billing.overdue ? "text-rose-400" : undefined}
+                hint={datos.billing.openDunning != null ? `${datos.billing.openDunning} casos abiertos` : undefined}
+              />
+            </Link>
+          </>
+        )}
         <Pendiente titulo="Accesos hoy" fase={datos.access.phase} />
         <Pendiente titulo="Estado de puertas" fase={datos.access.phase} />
       </div>

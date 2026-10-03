@@ -53,6 +53,11 @@ export type Ocupacion = {
   first_name: string | null;
   last_name: string | null;
   company_name: string | null;
+  /** Precio CONTRATADO (puede no ser el de tarifa del trastero). */
+  contract_monthly_price?: number | null;
+  contract_monthly_price_gross?: number | null;
+  /** Estado de cobros del contrato: al día, con facturas pendientes o en impago. */
+  payment_status?: "up_to_date" | "pending" | "overdue" | null;
 };
 
 export function nombreCliente(c: { customer_type: CustomerType; first_name: string | null; last_name: string | null; company_name: string | null }): string {
@@ -99,11 +104,13 @@ export function vistaTrasteroPanel(u: FilaTrastero, ocupacion: Ocupacion | null,
             status: ocupacion.contract_status,
             startDate: ocupacion.start_date,
             endDate: ocupacion.end_date,
+            monthlyPrice: ocupacion.contract_monthly_price ?? null,
+            monthlyPriceGross: ocupacion.contract_monthly_price_gross ?? null,
           }
         : null,
     customer: ocupacion && verClientes ? { id: ocupacion.customer_id, name: nombreCliente(ocupacion) } : null,
-    /** Estado de cobros: llega con la facturación (fase 2). */
-    paymentStatus: null as null | string,
+    /** Estado de cobros del contrato vivo (sólo para quien ve clientes). */
+    paymentStatus: (ocupacion && verClientes ? (ocupacion.payment_status ?? null) : null) as null | string,
   };
 }
 

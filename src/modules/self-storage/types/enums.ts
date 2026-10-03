@@ -39,8 +39,70 @@ export const LIVE_CONTRACT_STATUSES: readonly ContractStatus[] = ["pending_signa
 export const MEMBER_STATUSES = ["active", "suspended", "revoked"] as const;
 export type MemberStatus = (typeof MEMBER_STATUSES)[number];
 
-export const BLOCK_REASONS = ["non_payment", "security", "incident", "contract_ended", "manual"] as const;
+/** Motivos de bloqueo. Un pago sólo levanta `payment`. */
+export const BLOCK_REASONS = ["payment", "security", "incident", "terminated", "manual"] as const;
 export type BlockReason = (typeof BLOCK_REASONS)[number];
+
+export const INVOICE_STATUSES = ["draft", "pending", "paid", "overdue", "cancelled", "refunded"] as const;
+export type InvoiceStatus = (typeof INVOICE_STATUSES)[number];
+
+export const INVOICE_ITEM_TYPES = ["rental", "deposit", "insurance", "lock", "penalty", "discount", "setup_fee", "other"] as const;
+export type InvoiceItemType = (typeof INVOICE_ITEM_TYPES)[number];
+
+export const PAYMENT_METHODS = ["card", "sepa", "bank_transfer", "cash"] as const;
+export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
+
+export const PAYMENT_STATUSES = ["pending", "processing", "succeeded", "failed", "refunded"] as const;
+export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
+
+export const FIRST_SEPA_POLICIES = ["wait_for_success", "allow_while_processing"] as const;
+export type FirstSepaPolicy = (typeof FIRST_SEPA_POLICIES)[number];
+
+export const DUNNING_STATUSES = ["open", "resolved", "cancelled"] as const;
+export type DunningStatus = (typeof DUNNING_STATUSES)[number];
+
+export const ETIQUETA_INVOICE_STATUS: Record<InvoiceStatus, string> = {
+  draft: "Borrador",
+  pending: "Pendiente",
+  paid: "Pagada",
+  overdue: "Vencida",
+  cancelled: "Anulada",
+  refunded: "Reembolsada",
+};
+
+export const ETIQUETA_ITEM_TYPE: Record<InvoiceItemType, string> = {
+  rental: "Alquiler",
+  deposit: "Fianza",
+  insurance: "Seguro",
+  lock: "Candado",
+  penalty: "Penalización",
+  discount: "Descuento",
+  setup_fee: "Alta",
+  other: "Otros",
+};
+
+export const ETIQUETA_PAYMENT_METHOD: Record<PaymentMethod, string> = {
+  card: "Tarjeta",
+  sepa: "Domiciliación SEPA",
+  bank_transfer: "Transferencia",
+  cash: "Efectivo",
+};
+
+export const ETIQUETA_PAYMENT_STATUS: Record<PaymentStatus, string> = {
+  pending: "Pendiente",
+  processing: "En proceso",
+  succeeded: "Cobrado",
+  failed: "Fallido",
+  refunded: "Reembolsado",
+};
+
+export const ETIQUETA_BLOCK_REASON: Record<BlockReason, string> = {
+  payment: "Impago",
+  security: "Seguridad",
+  incident: "Incidencia",
+  terminated: "Contrato finalizado",
+  manual: "Manual",
+};
 
 export const IMPORT_STATUSES = ["validated", "applied", "failed"] as const;
 export type ImportStatus = (typeof IMPORT_STATUSES)[number];

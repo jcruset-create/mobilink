@@ -8,7 +8,17 @@
  */
 
 import { z } from "zod";
-import { CUSTOMER_STATUSES, CUSTOMER_TYPES, RECORD_STATUSES, UNIT_STATUSES } from "../../src/modules/self-storage/types/enums.ts";
+import {
+  CONTRACT_STATUSES,
+  CUSTOMER_STATUSES,
+  CUSTOMER_TYPES,
+  INVOICE_ITEM_TYPES,
+  INVOICE_STATUSES,
+  PAYMENT_METHODS,
+  PAYMENT_STATUSES,
+  RECORD_STATUSES,
+  UNIT_STATUSES,
+} from "../../src/modules/self-storage/types/enums.ts";
 
 const texto = (max: number) => z.string().trim().min(1, "no puede estar vacío").max(max);
 const textoOpcional = (max: number) =>
@@ -218,3 +228,121 @@ export const importacionAlta = z.strictObject({
   measureUnit: z.enum(["auto", "m", "cm"]).default("auto"),
   defaultTaxRate: iva.optional(),
 });
+
+// ── Fase 2: conceptos, contratos, facturas y pagos ───────────────────────────
+
+const fecha = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "fecha AAAA-MM-DD");
+const motivo = z.string().trim().min(1, "indica el motivo").max(500);
+
+const camposConcepto = {
+  name: texto(120),
+  defaultPrice: z.number().min(-100_000).max(100_000),
+  taxRate: iva,
+  taxExemptionReason: textoOpcional(300),
+  isRecurring: z.boolean(),
+  isRentalComponent: z.boolean(),
+  active: z.boolean(),
+  sortOrder: z.number().int().min(0).max(10_000),
+};
+export const conceptoAlta = z.strictObject({
+  ...camposConcepto,
+  code: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .regex(/^[A-Z0-9][A-Z0-9_-]{0,29}$/, "sólo letras, números, guion y guion bajo"),
+  itemType: z.enum(INVOICE_ITEM_TYPES),
+  defaultPrice: camposConcepto.defaultPrice.default(0),
+  isRecurring: z.boolean().default(false),
+  isRentalComponent: z.boolean().default(false),
+  active: z.boolean().default(true),
+  sortOrder: camposConcepto.sortOrder.default(100),
+});
+export const conceptoCambio = z.strictObject(camposConcepto).partial();
+
+const extra = z.strictObject({
+  billingItemId: uuid,
+  quantity: z.number().positive().max(1000).default(1),
+  unitPrice: z.number().min(-100_000).max(100_000).nullable().optional(),
+  description: textoOpcional(200),
+});
+
+const camposContrato = {
+  startDate: fecha,
+  endDate: fecha.nullable().optional(),
+  // Precio comercial: si no se da, se copia el del trastero.
+  monthlyPrice: importe.nullable().optional(),
+  monthlyPriceGross: importe.nullable().optional(),
+  taxRate: iva.nullable().optional(),
+  depositAmount: importe.optional(),
+  billingDay: z.number().int().min(1).max(28).optional(),
+  paymentMethod: z.enum(PAYMENT_METHODS).nullable().optional(),
+  notes: textoOpcional(2000),
+  extras: z.array(extra).max(20).optional(),
+};
+export const contratoAlta = z
+  .strictObject({ ...camposContrato, customerId: uuid, unitId: uuid })
+  .refine((d) => !d.endDate || d.endDate >= d.startDate, { message: "la fecha de fin no puede ser anterior al inicio", path: ["endDate"] });
+export const contratoCambio = z.strictObject(camposContrato).partial();
+
+export const filtroContratos = z.object({
+  status: z.enum(CONTRACT_STATUSES).optional(),
+  customerId: uuid.optional(),
+  unitId: uuid.optional(),
+  centerId: uuid.optional(),
+  q: z.string().trim().max(60).optional(),
+});
+
+export const firmaContrato = z.strictObject({
+  signerName: texto(200),
+  documentId: uuid.optional(),
+  // Confirmación explícita: la aceptación no se deduce de un clic accidental.
+  accepted: z.literal(true, { message: "hay que aceptar las condiciones" }),
+});
+export const conMotivo = z.strictObject({ reason: motivo });
+export const suspension = z.strictObject({ reason: z.enum(["security", "incident", "manual"]), notes: motivo });
+export const finalizacion = z.strictObject({ endDate: fecha.nullable().optional(), reason: motivo });
+export const anexo = z.strictObject({ text: z.string().trim().min(1).max(5000) });
+
+export const facturaBorrador = z.strictObject({
+  customerId: uuid,
+  contractId: uuid.nullable().optional(),
+  dueDate: fecha.nullable().optional(),
+  notes: textoOpcional(1000),
+  lines: z
+    .array(
+      z.strictObject({
+        billingItemId: uuid,
+        quantity: z.number().positive().max(10_000),
+        unitPrice: z.number().min(-100_000).max(100_000).nullable().optional(),
+        description: textoOpcional(300),
+      })
+    )
+    .min(1)
+    .max(50),
+});
+
+export const filtroFacturas = z.object({
+  customerId: uuid.optional(),
+  contractId: uuid.optional(),
+  status: z.enum(INVOICE_STATUSES).optional(),
+  q: z.string().trim().max(60).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
+export const pagoManual = z.strictObject({
+  invoiceId: uuid,
+  paymentMethod: z.enum(["bank_transfer", "cash"]),
+  paidAt: z.iso.datetime({ offset: true }).optional(),
+  notes: textoOpcional(500),
+});
+
+export const filtroPagos = z.object({
+  customerId: uuid.optional(),
+  contractId: uuid.optional(),
+  invoiceId: uuid.optional(),
+  status: z.enum(PAYMENT_STATUSES).optional(),
+});
+
+export const ajusteCambio = z.strictObject({ value: z.unknown(), centerId: uuid.nullable().optional() });

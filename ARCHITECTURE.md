@@ -559,3 +559,17 @@ Decisiones fijadas con pruebas:
   `DOMParser`, nunca como HTML. La vista pública de un trastero también es
   lista blanca: se construye campo a campo, no quitando campos a la del
   panel.
+- **Facturas propias, con instantánea.** Las de Stripe se reflejan como
+  facturas nuestras, con nuestra numeración (serie y año por empresa, con
+  `INSERT … ON CONFLICT DO UPDATE`). Una emitida no se borra ni se cambia: lo
+  impide un trigger, y se anula con rectificativa.
+- **Un pago lo confirma Stripe, no el navegador.** El webhook verifica la
+  firma y es idempotente: `self_storage_stripe_events` con el evento
+  bloqueado en la misma transacción que su efecto. Los eventos de otros
+  módulos quedan `ignored`.
+- **Bloqueos independientes por motivo.** Cobrar levanta sólo el de impago;
+  seguridad y manual nunca se levantan solos. Una suscripción cancelada en
+  Stripe no finaliza el contrato.
+- **Portal del cliente** en `/trasteros/portal` y `/api/self-storage/portal`.
+  Es otra guarda (`self_storage_customers.auth_user_id`), no la del panel.
+  Detalle de la fase 2 en `docs/self-storage/ARQUITECTURA.md` §16.

@@ -4,7 +4,21 @@
  * los repositorios): aquí no hay ningún dato que el servidor no mande.
  */
 
-import type { ContractStatus, CustomerStatus, CustomerType, RecordStatus, StaffRole, UnitStatus } from "./enums";
+import type {
+  BlockReason,
+  ContractStatus,
+  CustomerStatus,
+  CustomerType,
+  DunningStatus,
+  FirstSepaPolicy,
+  InvoiceItemType,
+  InvoiceStatus,
+  PaymentMethod,
+  PaymentStatus,
+  RecordStatus,
+  StaffRole,
+  UnitStatus,
+} from "./enums";
 
 export * from "./enums";
 
@@ -23,6 +37,11 @@ export type Bootstrap = {
       customerStatus: Record<CustomerStatus, string>;
       customerType: Record<CustomerType, string>;
       contractStatus: Record<ContractStatus, string>;
+      invoiceStatus: Record<InvoiceStatus, string>;
+      itemType: Record<InvoiceItemType, string>;
+      paymentMethod: Record<PaymentMethod, string>;
+      paymentStatus: Record<PaymentStatus, string>;
+      blockReason: Record<BlockReason, string>;
     };
   };
 };
@@ -96,9 +115,17 @@ export type Trastero = {
   floorPlanShapeId: string | null;
   publicVisible: boolean;
   notes: string | null;
-  contract: { id: string; number: string; status: ContractStatus; startDate: string; endDate: string | null } | null;
+  contract: {
+    id: string;
+    number: string;
+    status: ContractStatus;
+    startDate: string;
+    endDate: string | null;
+    monthlyPrice: number | null;
+    monthlyPriceGross: number | null;
+  } | null;
   customer: { id: string; name: string } | null;
-  paymentStatus: string | null;
+  paymentStatus: EstadoCobros | null;
 };
 
 export type Plano = {
@@ -170,7 +197,15 @@ export type Dashboard = {
   byCenter: (Indicadores & { id: string; code: string; name: string })[];
   byZone: (Indicadores & { id: string; code: string; name: string; centerName: string })[];
   customers: { active: number; blocked: number; total: number };
-  billing: { monthlyInvoiced: number | null; pendingCollection: number | null; overdue: number | null; phase: number };
+  billing: {
+    monthlyInvoiced: number | null;
+    pendingCollection: number | null;
+    overdue: number | null;
+    openDunning?: number | null;
+    phase: number;
+    /** false = el rol no ve la facturación (mantenimiento). */
+    visible?: boolean;
+  };
   access: { today: number | null; doors: unknown; phase: number };
 };
 
@@ -205,3 +240,265 @@ export type Importacion = {
   appliedAt: string | null;
   rows?: FilaImportacion[];
 };
+
+// ── Fase 2: contratos, facturas, pagos e impagos ────────────────────────────
+
+/** Estado de cobros de un contrato vivo, tal como lo resume el servidor. */
+export type EstadoCobros = "up_to_date" | "pending" | "overdue";
+
+export type AccionContrato = "issue" | "sign" | "activate" | "suspend" | "reactivate" | "terminate" | "cancel";
+
+export type Contrato = {
+  id: string;
+  contractNumber: string;
+  status: ContractStatus;
+  centerId: string;
+  centerName: string;
+  customerId: string;
+  customerName: string;
+  unitId: string;
+  unitCode: string;
+  zoneName: string;
+  startDate: string;
+  endDate: string | null;
+  listMonthlyPrice: number | null;
+  monthlyPrice: number;
+  taxRate: number;
+  monthlyPriceGross: number;
+  depositAmount: number;
+  depositTaxRate: number;
+  billingDay: number;
+  billingPeriod: string;
+  paymentMethod: PaymentMethod | null;
+  collectionMethod: "stripe" | "manual";
+  notes: string | null;
+  termsVersion: string | null;
+  signedAt: string | null;
+  signatureName: string | null;
+  signedByType: string | null;
+  activatedAt: string | null;
+  suspendedAt: string | null;
+  terminatedAt: string | null;
+  terminationReason: string | null;
+  cancelledAt: string | null;
+  cancellationReason: string | null;
+  stripeSubscriptionId: string | null;
+  stripeSubscriptionStatus: string | null;
+  firstSepaPaymentAccessPolicy: FirstSepaPolicy;
+  firstPaymentStatus: string | null;
+  activationOverrideReason: string | null;
+  nextInvoiceDate: string | null;
+  createdAt: string;
+  pendingAmount?: number;
+  inDunning?: boolean;
+};
+
+export type LineaContrato = {
+  id: string;
+  billingItemId: string | null;
+  itemType: InvoiceItemType;
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  taxRate: number;
+  isRecurring: boolean;
+};
+
+export type DocumentoContrato = {
+  id: string;
+  documentType: "contract" | "annex";
+  version: number;
+  status: "draft" | "final";
+  termsVersion: string | null;
+  sha256: string;
+  sizeBytes: number;
+  acceptedAt: string | null;
+  acceptedByType: string | null;
+  acceptedName: string | null;
+  acceptedIp: string | null;
+  createdAt: string;
+};
+
+export type Bloqueo = {
+  id: string;
+  reason: BlockReason;
+  source: string;
+  notes: string | null;
+  createdAt: string;
+  liftedAt: string | null;
+  liftReason: string | null;
+};
+
+export type FacturaResumen = {
+  id: string;
+  invoiceNumber: string | null;
+  status: InvoiceStatus;
+  total: number;
+  issueDate: string | null;
+  periodStart: string | null;
+  periodEnd: string | null;
+  kind: "rent" | "one_off" | "rectifying";
+};
+
+export type ContratoDetalle = Contrato & {
+  actions: AccionContrato[];
+  items: LineaContrato[];
+  documents: DocumentoContrato[];
+  blocks: Bloqueo[];
+  invoices: FacturaResumen[];
+};
+
+export type EntradaHistorial = {
+  id: string;
+  occurredAt: string;
+  actorType: string;
+  actorName: string | null;
+  action: string;
+  entityType: string;
+  entityId: string | null;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+};
+
+export type Factura = {
+  id: string;
+  customerId: string;
+  contractId: string | null;
+  kind: "rent" | "one_off" | "rectifying";
+  collectionMethod: "stripe" | "manual";
+  series: string | null;
+  invoiceNumber: string | null;
+  issueDate: string | null;
+  dueDate: string | null;
+  periodStart: string | null;
+  periodEnd: string | null;
+  subtotal: number;
+  tax: number;
+  total: number;
+  currency: string;
+  status: InvoiceStatus;
+  customerName: string | null;
+  customerTaxId: string | null;
+  customerAddress: string | null;
+  issuerName: string | null;
+  issuerTaxId: string | null;
+  issuerAddress: string | null;
+  stripeInvoiceId: string | null;
+  stripeHostedUrl: string | null;
+  rectifiesInvoiceId: string | null;
+  rectificationReason: string | null;
+  paidAt: string | null;
+  notes: string | null;
+  createdAt: string;
+  contractNumber: string | null;
+  displayCustomer: string;
+  amountPaid: number;
+};
+
+export type LineaFactura = {
+  id: string;
+  itemType: InvoiceItemType;
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  taxRate: number;
+  subtotal: number;
+  taxAmount: number;
+  total: number;
+  periodStart: string | null;
+  periodEnd: string | null;
+};
+
+export type PagoDeFactura = {
+  id: string;
+  amount: number;
+  refundedAmount: number;
+  paymentMethod: PaymentMethod;
+  status: PaymentStatus;
+  paidAt: string | null;
+  failureReason: string | null;
+  createdAt: string;
+};
+
+export type FacturaDetalle = Factura & { lines: LineaFactura[]; payments: PagoDeFactura[] };
+
+export type Pago = PagoDeFactura & {
+  customerId: string;
+  contractId: string | null;
+  invoiceId: string | null;
+  currency: string;
+  stripePaymentIntentId: string | null;
+  stripeInvoiceId: string | null;
+  invoiceNumber: string | null;
+  customerName: string;
+};
+
+export type CasoImpago = {
+  id: string;
+  status: DunningStatus;
+  openedAt: string;
+  failureReason: string | null;
+  firstNoticeAt: string | null;
+  secondNoticeAt: string | null;
+  suspendedAt: string | null;
+  resolvedAt: string | null;
+  resolution: string | null;
+  invoiceId: string;
+  invoiceNumber: string | null;
+  total: number;
+  invoiceStatus: InvoiceStatus;
+  customerId: string;
+  customerName: string | null;
+  contractId: string | null;
+  contractNumber: string | null;
+  contractStatus: ContractStatus | null;
+};
+
+export type Concepto = {
+  id: string;
+  code: string;
+  name: string;
+  itemType: InvoiceItemType;
+  defaultPrice: number;
+  taxRate: number;
+  taxExemptionReason: string | null;
+  isRecurring: boolean;
+  isRentalComponent: boolean;
+  active: boolean;
+  sortOrder: number;
+};
+
+export type Deuda = { pendiente: number; vencida: number; facturas: number };
+
+export type CobrosCliente = { debt: Deuda; invoices: Factura[]; payments: Pago[] };
+
+export type MetodoPago = {
+  id: string;
+  type: string;
+  brand: string | null;
+  last4: string | null;
+  expMonth: number | null;
+  expYear: number | null;
+  isDefault: boolean;
+};
+
+export type Emisor = { name: string; taxId: string; address: string; email?: string; phone?: string };
+
+/** Valores efectivos de la configuración; `isDefault` = nadie lo ha tocado. */
+export type Ajustes = {
+  "units.default_rental_tax_rate": { value: number; isDefault: boolean };
+  "reservations.ttl_minutes": { value: number; isDefault: boolean };
+  "billing.first_sepa_payment_access_policy": { value: FirstSepaPolicy; isDefault: boolean };
+  "billing.issuer": { value: Emisor | null; isDefault: boolean };
+  "billing.invoice_series": { value: string; isDefault: boolean };
+  "billing.rectifying_series": { value: string; isDefault: boolean };
+  "contracts.series": { value: string; isDefault: boolean };
+  "billing.due_days": { value: number; isDefault: boolean };
+  "dunning.policy": { value: { firstNoticeDays: number; secondNoticeDays: number; suspendDays: number }; isDefault: boolean };
+  "contracts.terms_version": { value: string; isDefault: boolean };
+  "contracts.terms_text": { value: string; isDefault: boolean };
+};
+export type ClaveAjuste = keyof Ajustes;
+
+export const TRABAJOS = ["facturacion", "vencimientos", "impagos", "notificaciones", "stripe_reintentos"] as const;
+export type Trabajo = (typeof TRABAJOS)[number];

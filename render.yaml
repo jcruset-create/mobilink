@@ -85,6 +85,13 @@ services:
         sync: false
       - key: STRIPE_WEBHOOK_SECRET
         sync: false
+      # Self Storage: secreto del endpoint /api/self-storage/webhooks/stripe
+      # (otro endpoint en Stripe, otro secreto). La clave secreta es opcional:
+      # sin ella usa STRIPE_SECRET_KEY.
+      - key: SELF_STORAGE_STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: SELF_STORAGE_STRIPE_SECRET_KEY
+        sync: false
       # Integration Hub — Business Central (valores en el dashboard, nunca en el repo)
       - key: IH_SECRET__BUSINESS_CENTRAL__AAD_TENANT_ID
         sync: false

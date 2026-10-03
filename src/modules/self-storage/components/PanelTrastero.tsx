@@ -10,10 +10,10 @@
 import { Link } from "react-router-dom";
 import type { ReactNode } from "react";
 import type { Trastero } from "../types";
-import { ChipUnidad, Dato, btnMini, decimal, euros, medidas } from "./ui";
+import { ChipCobros, ChipContrato, ChipUnidad, Dato, btnMini, decimal, euros, medidas } from "./ui";
 import { useSelfStorage } from "../contexts/SelfStorageContext";
 
-function Accion({ to, fase, children }: { to?: string; fase?: number; children: ReactNode }) {
+function Accion({ to, fase, titulo, children }: { to?: string; fase?: number; titulo?: string; children: ReactNode }) {
   if (to && !fase) {
     return (
       <Link to={to} className={btnMini}>
@@ -22,7 +22,7 @@ function Accion({ to, fase, children }: { to?: string; fase?: number; children: 
     );
   }
   return (
-    <span className={`${btnMini} cursor-not-allowed opacity-50`} title={fase ? `Disponible en la fase ${fase}` : undefined}>
+    <span className={`${btnMini} cursor-not-allowed opacity-50`} title={titulo ?? (fase ? `Disponible en la fase ${fase}` : undefined)}>
       {children}
       {fase ? ` · F${fase}` : ""}
     </span>
@@ -30,8 +30,9 @@ function Accion({ to, fase, children }: { to?: string; fase?: number; children: 
 }
 
 export default function PanelTrastero({ t, onCambiarEstado }: { t: Trastero; onCambiarEstado?: () => void }) {
-  const { puede, etqContrato } = useSelfStorage();
+  const { puede } = useSelfStorage();
   const verClientes = puede("ss.customers.view");
+  const k = t.contract;
   return (
     <div className="space-y-3 rounded-xl border border-slate-700 bg-slate-800 p-4">
       <div className="flex items-start justify-between gap-2">
@@ -68,19 +69,43 @@ export default function PanelTrastero({ t, onCambiarEstado }: { t: Trastero; onC
               "—"
             )}
           </Dato>
-          <Dato etiqueta="Contrato">{t.contract ? `${t.contract.number} · ${etqContrato(t.contract.status)}` : "—"}</Dato>
-          <Dato etiqueta="Estado de pagos">{t.paymentStatus ?? <span className="text-slate-500">Fase 2</span>}</Dato>
+          <Dato etiqueta="Contrato">
+            {k ? (
+              <span className="flex flex-wrap items-center gap-1">
+                <Link className="text-sky-300 hover:underline" to={`/self-storage/contratos/${k.id}`}>
+                  {k.number}
+                </Link>
+                <ChipContrato estado={k.status} />
+              </span>
+            ) : (
+              "—"
+            )}
+          </Dato>
+          <Dato etiqueta="Precio contratado">
+            {k?.monthlyPriceGross != null ? (
+              <>
+                {euros(k.monthlyPriceGross)}
+                {k.monthlyPrice != null && k.monthlyPrice !== t.monthlyPrice && <span className="ml-1 text-[11px] text-amber-300">pactado</span>}
+              </>
+            ) : (
+              "—"
+            )}
+          </Dato>
+          <Dato etiqueta="Estado de pagos">{k ? <ChipCobros estado={t.paymentStatus} /> : "—"}</Dato>
         </div>
       )}
 
       {/* text-[11px] en el contenedor: el CSS global pone `font: inherit` a los botones. */}
       <div className="flex flex-wrap gap-1.5 border-t border-slate-700 pt-3 text-[11px]">
         {verClientes && <Accion to={t.customer ? `/self-storage/clientes/${t.customer.id}` : undefined}>Ver cliente</Accion>}
-        {verClientes && <Accion fase={2}>Ver contrato</Accion>}
-        {verClientes && <Accion fase={2}>Ver facturas</Accion>}
+        {verClientes && k && <Accion to={`/self-storage/contratos/${k.id}`}>Ver contrato</Accion>}
+        {verClientes && t.customer && puede("ss.billing.view") && <Accion to={`/self-storage/clientes/${t.customer.id}`}>Ver facturas</Accion>}
+        {verClientes && !k && t.status === "available" && puede("ss.contracts.manage") && (
+          <Accion to={`/self-storage/contratos?nuevo=1&unitId=${t.id}`}>Nuevo contrato</Accion>
+        )}
         <Accion fase={3}>Ver accesos</Accion>
-        {verClientes && <Accion fase={2}>Cambiar trastero</Accion>}
-        {verClientes && <Accion fase={2}>Finalizar contrato</Accion>}
+        {verClientes && k && <Accion titulo="Aún no hay cambio directo: finaliza este contrato y crea otro en el trastero nuevo.">Cambiar trastero</Accion>}
+        {verClientes && k && puede("ss.contracts.admin") && <Accion to={`/self-storage/contratos/${k.id}`}>Finalizar contrato</Accion>}
         {puede("ss.units.status") && onCambiarEstado && (
           <button className={btnMini} onClick={onCambiarEstado}>
             Cambiar estado

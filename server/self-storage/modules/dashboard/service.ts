@@ -1,11 +1,12 @@
 /**
- * Dashboard de ocupación (fase 1).
+ * Dashboard de ocupación (fase 1) y de cobros (fase 2).
  *
  * Ocupación por trasteros y por m², sobre el total y sobre lo ALQUILABLE (sin
  * los que están en mantenimiento o bloqueados: no se pueden alquilar y
- * hundirían el porcentaje sin que haya nada que vender). Facturación, impagos,
- * accesos y puertas llegan con sus fases; aquí van a null para que el panel
- * diga «disponible en la fase N» en vez de enseñar un cero que parece un dato.
+ * hundirían el porcentaje sin que haya nada que vender). Accesos y puertas
+ * llegan en la fase 3; aquí van a null para que el panel diga «disponible en
+ * la fase N» en vez de enseñar un cero que parece un dato. Las cifras de
+ * cobros sólo las recibe quien puede ver la facturación.
  */
 
 import type { Actor } from "../../shared/audit.ts";
@@ -42,12 +43,29 @@ const SQL_RECUENTO = `
   coalesce(sum(u.area_m2) FILTER (WHERE u.status = 'occupied'), 0)::float8 AS "areaOcupada",
   coalesce(sum(u.area_m2) FILTER (WHERE u.status NOT IN ('maintenance','blocked')), 0)::float8 AS "areaAlquilable"`;
 
-export async function dashboard(actor: Actor, centerId: string | null) {
+/** Facturado este mes (neto de rectificativas), pendiente de cobro y vencido. */
+async function cobros(empresaId: string, centerId: string | null) {
+  const { rows } = await pool.query(
+    `SELECT coalesce(sum(i.total) FILTER (WHERE i.status <> 'draft' AND i.issue_date >= date_trunc('month', (now() AT TIME ZONE 'Europe/Madrid'))::date), 0)::float8 AS "monthlyInvoiced",
+            coalesce(sum(i.total) FILTER (WHERE i.status IN ('pending','overdue')), 0)::float8 AS "pendingCollection",
+            coalesce(sum(i.total) FILTER (WHERE i.status = 'overdue'), 0)::float8 AS overdue,
+            (SELECT count(*)::int FROM self_storage_dunning_cases d
+               LEFT JOIN self_storage_contracts kd ON kd.id = d.contract_id
+              WHERE d.empresa_id = $1 AND d.status = 'open' ${centerId ? "AND kd.center_id = $2" : ""}) AS "openDunning"
+       FROM self_storage_invoices i
+       LEFT JOIN self_storage_contracts k ON k.id = i.contract_id
+      WHERE i.empresa_id = $1 ${centerId ? "AND k.center_id = $2" : ""}`,
+    centerId ? [empresaId, centerId] : [empresaId]
+  );
+  return rows[0] as { monthlyInvoiced: number; pendingCollection: number; overdue: number; openDunning: number };
+}
+
+export async function dashboard(actor: Actor, centerId: string | null, verCobros = false) {
   if (centerId && !(await repoCentros.obtenerCentro(pool, actor.empresaId, centerId))) throw noExiste("El centro");
   const filtro = centerId ? "AND u.center_id = $2" : "";
   const vals = centerId ? [actor.empresaId, centerId] : [actor.empresaId];
 
-  const [total, zonas, centros, clientes] = await Promise.all([
+  const [total, zonas, centros, clientes, facturacion] = await Promise.all([
     pool.query(`SELECT ${SQL_RECUENTO} FROM self_storage_units u WHERE u.empresa_id = $1 ${filtro}`, vals),
     pool.query(
       `SELECT z.id, z.code, z.name, ce.name AS "centerName", ${SQL_RECUENTO}
@@ -74,6 +92,7 @@ export async function dashboard(actor: Actor, centerId: string | null) {
          FROM self_storage_customers WHERE empresa_id = $1`,
       [actor.empresaId]
     ),
+    verCobros ? cobros(actor.empresaId, centerId) : Promise.resolve(null),
   ]);
 
   return {
@@ -82,8 +101,10 @@ export async function dashboard(actor: Actor, centerId: string | null) {
     byCenter: centros.rows.map((r) => ({ id: r.id, code: r.code, name: r.name, ...indicadores(r) })),
     byZone: zonas.rows.map((r) => ({ id: r.id, code: r.code, name: r.name, centerName: r.centerName, ...indicadores(r) })),
     customers: clientes.rows[0],
-    // Llegan con sus fases. null = todavía no existe, no «cero».
-    billing: { monthlyInvoiced: null, pendingCollection: null, overdue: null, phase: 2 },
+    // null = no lo puede ver (o todavía no existe), no «cero».
+    billing: facturacion
+      ? { ...facturacion, phase: 2, visible: true }
+      : { monthlyInvoiced: null, pendingCollection: null, overdue: null, openDunning: null, phase: 2, visible: false },
     access: { today: null, doors: null, phase: 3 },
   };
 }

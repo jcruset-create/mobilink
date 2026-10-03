@@ -816,7 +816,7 @@ Stripe en modo prueba y el RUT241 real.
 - Importar CSV.
 
 Contratos, facturas, pagos, accesos, puertas, incidencias y configuración
-aparecen en el menú con su fase.
+aparecían en el menú con su fase (los de la fase 2 ya están: ver §16).
 
 **Pruebas**:
 
@@ -825,4 +825,269 @@ aparecen en el menú con su fase.
 - Integración por HTTP contra PostgreSQL (`selfStorage.integration.test.ts`).
 - RLS entre clientes con roles y `auth.uid()` equivalentes a los de
   Supabase (`rls.integration.test.ts`).
+
+## 16. Fase 2: contratos, facturación, pagos y Stripe
+
+Alcance cerrado: contratos con documento y aceptación, catálogo de conceptos,
+facturas propias con numeración, pagos, Stripe (Checkout, suscripción y
+webhook), impagos y bloqueos, notificaciones y la parte financiera del portal.
+**Sin** RUT241, puertas, RMS, VPN ni listas de teléfonos: los bloqueos se
+guardan y la fase 3 los convertirá en puertas cerradas.
+
+### 16.1 Base de datos (`0005…0007`)
+
+- `0005_fase2_tipos_y_contratos.sql`
+  - Enums de factura, concepto, pago, cobro, evento de Stripe, documento,
+    impago y notificación.
+  - Motivos de bloqueo renombrados a `payment` y `terminated`.
+  - Columnas nuevas del contrato: precio de tarifa y pactado, PVP, IVA de la
+    fianza, periodicidad, forma de pago, datos de firma, suscripción,
+    política del primer SEPA, activación por excepción y próxima factura.
+  - CHECKs `NOT VALID`: valen para toda escritura nueva sin revalidar filas
+    anteriores.
+- `0006_fase2_tablas.sql`: `billing_items`, `contract_items`,
+  `contract_documents`, `sequences`, `invoices`, `invoice_items`, `payments`,
+  `stripe_events`, `access_blocks`, `dunning_cases` y `notifications`.
+  - **Una factura de alquiler por contrato y periodo**: índice único parcial,
+    salvo las anuladas.
+  - **Un pago por factura de Stripe**: índice único sobre `stripe_invoice_id`.
+  - **Un bloqueo abierto por motivo** y contrato.
+  - **Un caso de impago abierto por factura**.
+  - **Triggers de inmutabilidad**:
+    - documento firmado: no se toca ni se borra;
+    - factura emitida: no se borra, no vuelve a borrador y no cambia número,
+      importes ni instantáneas;
+    - líneas de una factura emitida: no cambian;
+    - eventos de Stripe: el contenido no cambia.
+- `0007_fase2_rls.sql`: RLS en todas las tablas nuevas. El cliente sólo lee
+  sus contratos, documentos, facturas (nunca borradores), líneas, pagos y
+  bloqueos.
+
+### 16.2 API
+
+**Panel** (`/api/self-storage/admin`, permisos `ss.contracts.*`,
+`ss.billing.*`, `ss.settings.manage`):
+
+| Recurso | Endpoints |
+|---|---|
+| Contratos | `GET/POST /contracts`, `GET/PATCH /contracts/:id` (editar sólo en borrador), `GET …/history`, `POST …/issue`, `…/sign` (firma en presencia), `…/checkout` (primer cobro Stripe), `…/activate` (excepción, admin), `…/suspend`, `…/blocks/:blockId/lift`, `…/terminate` (admin), `…/cancel`, `…/annexes` (admin), `GET …/documents/:docId/pdf` |
+| Facturas | `GET/POST /invoices` (borrador manual desde el catálogo), `GET /invoices/:id`, `POST …/issue`, `DELETE` (sólo borrador), `POST …/rectify` (admin), `…/pay-link`, `GET …/pdf` |
+| Pagos | `GET /payments`, `POST /payments/manual` (transferencia y efectivo; nunca tarjeta ni SEPA) |
+| Cliente | `GET /customers/:id/billing` (deuda, facturas y pagos), `GET /customers/:id/payment-methods`, `POST /customers/:id/portal-invite` |
+| Impagos | `GET /dunning` |
+| Catálogo | `GET/POST /billing-items`, `PATCH /billing-items/:id` |
+| Configuración | `GET /settings`, `PUT /settings/:key` (auditado), `POST /jobs/:name/run` |
+
+**Portal** (`/api/self-storage/portal`): la sesión de Supabase tiene que ser
+la `auth_user_id` de un cliente; si no, `403 SIN_ACCESO`. Todo filtra por ese
+cliente, y lo ajeno contesta 404.
+
+- `GET /me` (con la deuda).
+- `GET /contracts`, `GET /contracts/:id` (sin notas internas ni datos de
+  Stripe), su PDF, `POST …/accept` y `…/checkout`.
+- `GET /invoices`, su PDF y `POST …/pay`.
+- `GET /payments`.
+- `GET /payment-methods` y `POST /payment-methods/setup`.
+
+**Webhook**: `POST /api/self-storage/webhooks/stripe`, con cuerpo crudo y
+firma verificada con `SELF_STORAGE_STRIPE_WEBHOOK_SECRET`.
+
+### 16.3 Stripe
+
+Dos piezas: `pasarela.ts` (interfaz `PasarelaStripe` + implementación con el
+SDK, sustituible en las pruebas) y `servicios.ts` (Customer, métodos de pago,
+Checkout de pago y de alta de método).
+
+- **Cuota recurrente = Subscription creada con Checkout** en modo
+  suscripción.
+  - Productos por contrato con el PVP firmado, sin recalcular desde la base.
+  - `billing_cycle_anchor` en el día de facturación.
+  - Método limitado al elegido: tarjeta o `sepa_debit`.
+  - Mapa `stripe_products` (producto → concepto e IVA) para desglosar cada
+    cobro en nuestras líneas.
+- **Facturas de Stripe → facturas nuestras**: cada `invoice.paid` o
+  `invoice.payment_failed` se refleja como factura propia con nuestra
+  numeración y las instantáneas. El importe de Stripe (IVA incluido) se
+  desglosa por línea para que base + cuota = cargo.
+- **Pagos sueltos** (factura manual pendiente): Checkout en modo pago
+  (PaymentIntent) con el id de nuestra factura en los metadatos.
+- **Nunca se marca un pago desde el navegador.** Volver de Stripe sólo
+  enseña un aviso; lo confirma el webhook.
+
+### 16.4 Webhooks: idempotencia
+
+1. Se verifica la firma.
+2. Se inserta en `self_storage_stripe_events` (PK `event_id`,
+   `ON CONFLICT DO NOTHING`).
+3. En UNA transacción: `SELECT … FOR UPDATE` del evento. Si ya está
+   `processed` o `ignored`, no se hace nada; si no, se ejecuta el manejador y
+   se marca `processed`.
+4. Si falla: `failed` con `error_message`, y 500 para que Stripe reintente.
+   El trabajo `stripe_reintentos` también los reprocesa.
+
+Los eventos de otros módulos de Mobilink (sin metadatos `ss_*`) quedan como
+`ignored`.
+
+Eventos tratados:
+
+| Evento | Qué hace |
+|---|---|
+| `checkout.session.completed` | Primer cobro, pago de factura o alta de método |
+| `invoice.paid` | Factura pagada |
+| `invoice.payment_failed` | Factura fallida e impago |
+| `payment_intent.succeeded` / `payment_intent.payment_failed` | Pago suelto |
+| `customer.subscription.updated` | Sólo refleja el estado; **nunca cambia el contrato** |
+| `customer.subscription.deleted` | Si no la canceló el propio módulo, auditoría y aviso al personal; **el contrato no se finaliza solo** |
+| `charge.refunded` | Total: factura reembolsada + rectificativa. Parcial: se anota |
+
+### 16.5 Reglas de negocio
+
+**Contrato**:
+
+- `draft → pending_signature` al emitir: genera el PDF v1 y reserva el
+  trastero.
+- `→ pending_payment` al firmar: el documento queda `final` e inmutable. Si
+  el cobro es manual, se emite la primera factura.
+- `→ active` con el primer cobro confirmado: trastero ocupado.
+- `active ⇄ suspended` por bloqueos.
+- `→ terminated` al finalizar: trastero libre, bloqueo `terminated` y
+  suscripción cancelada después del COMMIT.
+- `cancelled` antes de activarse: las facturas sin cobrar se anulan con
+  rectificativa.
+
+**Precio**:
+
+- Se copia al crear: tarifa y precio pactado.
+- Cambiar el del trastero no toca el contrato.
+- La cuota se factura desde el **PVP firmado**: 55 € con IVA son 55 €, no
+  54,99 por redondear la base.
+
+**Aceptación simple**: se guardan fecha, quién (empleado en presencia o el
+propio cliente), IP, navegador, SHA-256 del PDF y versión de las condiciones.
+Un cambio importante se hace con un **anexo**, que es otro documento con su
+propia firma.
+
+**Primer SEPA**:
+
+- `wait_for_success` (por defecto): con el recibo en `processing`, el
+  contrato sigue `pending_payment`.
+- `allow_while_processing`: se activa ya. Si después falla, abre un impago.
+- A un cliente ya activo, un recibo en `processing` no lo bloquea nunca.
+  Sólo un fallo real abre impago.
+
+**Impagos** (plazos por defecto: 3, 7 y 10 días, configurables):
+
+1. Factura fallida o vencida → caso de impago.
+2. Primer aviso y segundo aviso.
+3. Bloqueo `payment` y contrato `suspended`.
+
+Cobrar cierra el caso y levanta **sólo** el bloqueo `payment`. El contrato
+vuelve a `active` únicamente si no queda otro bloqueo abierto.
+
+**Bloqueos** (`payment`, `security`, `incident`, `manual`, `terminated`):
+
+- Pueden convivir varios.
+- `payment` no se levanta a mano.
+- `security` sólo lo levanta un administrador.
+- Ni `security` ni `manual` se levantan nunca solos.
+
+**Numeración**:
+
+- Por empresa, serie y año: `F-2026-000001`, `R-…` para rectificativas y
+  `C-…` para contratos.
+- `INSERT … ON CONFLICT DO UPDATE … RETURNING` sobre
+  `self_storage_sequences`: sin huecos por concurrencia y sin dos iguales.
+- El borrador no tiene número; se numera al emitir.
+
+**IVA**: vive en el catálogo de conceptos (con motivo de exención). El panel
+no conoce ningún tipo impositivo.
+
+**Notificaciones**: tabla de salida `self_storage_notifications` con
+`dedupe_key`, enviada por el SMTP común (`server/mail.ts`). Plantillas:
+
+- contrato generado y contrato aceptado;
+- factura emitida y factura vencida;
+- pago correcto y pago fallido;
+- avisos de impago, suspensión y suscripción cancelada fuera.
+
+**Trabajos** (cada 5 minutos, con candado por trabajo; `SELF_STORAGE_JOBS=0`
+los apaga):
+
+- facturar periodos de cobro manual;
+- marcar vencidas;
+- avanzar impagos;
+- enviar notificaciones;
+- reintentar eventos de Stripe.
+
+### 16.6 Pantallas
+
+**Panel**:
+
+- **Contratos** y su ficha:
+  - acciones según el estado (las da el servidor);
+  - documentos con huella y aceptación;
+  - facturas, bloqueos e historial.
+- **Facturas**: lista, ficha, factura manual, emitir, rectificar, PDF,
+  enlace de pago y registrar transferencia o efectivo.
+- **Pagos**.
+- **Impagos**.
+- **Conceptos facturables**.
+- **Configuración**: emisor, series, vencimiento, plazos de impago, política
+  SEPA, condiciones e IVA del alquiler, y ejecución manual de los trabajos.
+
+**Además**:
+
+- Ficha del cliente: deuda, facturas, pagos, método de Stripe e invitación
+  al portal.
+- Ficha del trastero en el plano: contrato, precio contratado y estado de
+  cobros.
+- Dashboard: facturado este mes, pendiente e impagos, sólo para quien ve la
+  facturación.
+
+**Portal del cliente** (`/trasteros/portal`):
+
+- Entrada con enlace por email, sólo para clientes invitados
+  (`shouldCreateUser: false`).
+- Contratos: ver, aceptar y descargar.
+- Facturas: descargar y pagar.
+- Pagos.
+- Método de pago: ver y cambiar con Checkout en modo setup.
+- Sin puertas.
+
+### 16.7 Pruebas
+
+- `domain/fase2.test.ts`: estados, prorrateo, PVP exacto, desglose,
+  decisiones de cobro, impagos y bloqueos.
+- `fase2.integration.test.ts`: HTTP contra PostgreSQL, con la pasarela de
+  Stripe simulada y webhooks **firmados de verdad**. Cubre todas las pruebas
+  obligatorias:
+  - factura doble del mismo periodo;
+  - numeración concurrente;
+  - webhook repetido y pago repetido;
+  - A no ve lo de B;
+  - la factura no cambia si cambia el cliente;
+  - el precio del trastero no cambia el contrato;
+  - SEPA `processing` no es un fallo, y el primer SEPA no activa por defecto;
+  - el pago sólo levanta el bloqueo `payment`;
+  - la suscripción cancelada no finaliza el contrato.
+- `rls.integration.test.ts` ampliado a facturas y pagos.
+
+### 16.8 Puesta en marcha
+
+1. En Stripe, crear un endpoint de webhook a
+   `https://<app>/api/self-storage/webhooks/stripe`.
+   - Eventos: `checkout.session.completed`, `invoice.paid`,
+     `invoice.payment_failed`, `payment_intent.succeeded`,
+     `payment_intent.payment_failed`, `customer.subscription.updated`,
+     `customer.subscription.deleted`, `charge.refunded`.
+   - Poner su secreto en `SELF_STORAGE_STRIPE_WEBHOOK_SECRET`.
+2. Activar SEPA Direct Debit en la cuenta de Stripe.
+3. En Supabase Auth, añadir `https://<app>/trasteros/portal` a las URLs de
+   redirección permitidas, para que lleguen el enlace de invitación y el del
+   login.
+4. En Configuración del módulo, rellenar el **emisor**. Sin él no se emite
+   ningún contrato ni factura.
+5. Revisar con la asesoría el IVA de los conceptos (fianza, seguro y
+   penalización vienen como no sujetos o exentos) y el texto de las
+   condiciones.
 

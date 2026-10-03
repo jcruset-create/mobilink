@@ -116,3 +116,29 @@ export function quitarTelefono(actor: Actor, customerId: string, phoneId: string
     return repo.telefonos(c, actor.empresaId, customerId);
   });
 }
+
+/**
+ * Invita al cliente al portal: crea su usuario de Supabase Auth (por email) y
+ * lo vincula a la ficha. Ese usuario NO es interno: no se crea en app_usuarios.
+ */
+export async function invitarAlPortal(actor: Actor, id: string, redirectTo: string) {
+  const cliente = await repo.obtener(pool, actor.empresaId, id);
+  if (!cliente) throw noExiste("El cliente");
+  if (cliente.hasPortalAccount) throw new ErrorSelfStorage("YA_TIENE_CUENTA", "El cliente ya tiene cuenta en el portal.", 409);
+  const { supabase } = await import("../../../supabase.ts");
+  const { data, error } = await supabase.auth.admin.inviteUserByEmail(cliente.email, { redirectTo });
+  if (error || !data?.user) {
+    throw new ErrorSelfStorage(
+      "INVITACION_FALLIDA",
+      /registered|exists/i.test(error?.message ?? "")
+        ? "Ese email ya tiene una cuenta en Mobilink. Usa otro email para el portal del cliente."
+        : `No se ha podido enviar la invitación: ${error?.message ?? "sin respuesta"}`,
+      409
+    );
+  }
+  return enTx(async (c) => {
+    await c.query(`UPDATE self_storage_customers SET auth_user_id = $3 WHERE empresa_id = $1 AND id = $2 AND auth_user_id IS NULL`, [actor.empresaId, id, data.user.id]);
+    await auditar(c, actor, { action: "customer.portal_invited", entityType: "customer", entityId: id, after: { email: cliente.email } });
+    return { invited: true, email: cliente.email };
+  });
+}

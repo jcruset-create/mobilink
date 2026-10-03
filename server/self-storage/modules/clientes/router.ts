@@ -2,6 +2,7 @@ import { Router } from "express";
 import { exigirPermiso } from "../../auth/permissions.ts";
 import { actorDe, idDe, ruta, validar } from "../../http.ts";
 import { clienteAlta, clienteCambio, filtroClientes, telefonoAlta } from "../../schemas.ts";
+import { baseApp } from "../../shared/urls.ts";
 import * as servicio from "./service.ts";
 
 export function routerClientes(): Router {
@@ -29,6 +30,10 @@ export function routerClientes(): Router {
 
   r.delete("/customers/:id/phones/:phoneId", exigirPermiso("ss.customers.manage"), ruta(async (req, res) => {
     res.json(await servicio.quitarTelefono(actorDe(req), idDe(req, "id", "El cliente"), idDe(req, "phoneId", "El teléfono")));
+  }));
+
+  r.post("/customers/:id/portal-invite", exigirPermiso("ss.customers.manage"), ruta(async (req, res) => {
+    res.json(await servicio.invitarAlPortal(actorDe(req), idDe(req, "id", "El cliente"), `${baseApp()}/trasteros/portal`));
   }));
 
   return r;
