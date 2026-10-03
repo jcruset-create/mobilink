@@ -2,9 +2,10 @@ import { useMemo, useState } from "react";
 import {
   leerParteProveedor, guardarParteGuiado, listarVehiculos, listarPosiciones,
   listarMontajesVehiculo, listarReferenciasNeumatico, listarCatOperaciones, listarMedidas,
+  buscarNeumaticosPorSerie,
 } from "../services/data";
 import {
-  interpretarParte, claveDeParte, estadoDeDestino,
+  interpretar, claveDeParte, numeroDelParte, formatoDe,
   type LecturaParteProveedor, type PropuestaParte,
 } from "../services/parteProveedor";
 import { baseMedida } from "../services/medidas";
@@ -63,6 +64,7 @@ export default function ParteProveedor() {
   const [referenciaId, setReferenciaId] = useState("");
   const [destino, setDestino] = useState("");
   const [cambiosMarcados, setCambiosMarcados] = useState<Set<string>>(new Set());
+  const [avisosSerie, setAvisosSerie] = useState<string[]>([]);
   const [resultado, setResultado] = useState<{ numero: string | null; ya: boolean; avisos: string[] } | null>(null);
 
   async function onFichero(f: File | undefined) {
@@ -95,16 +97,30 @@ export default function ParteProveedor() {
       setDestinos(cat?.destinos ?? []);
 
       const medidaVehiculo = meds.find((m) => m.id === v.medida_id)?.valor ?? null;
-      const p = interpretarParte(l, {
+      const p = interpretar(l, {
         posiciones: posiciones.map((x) => ({
           id: x.id, codigo_posicion: x.codigo_posicion, nombre: x.nombre,
           eje: x.eje, orden_visual: x.orden_visual,
         })),
         kmActual: Number(v.km_actual) || null,
         medidaVehiculo,
+        // Para comprobar que la goma que el parte dice quitar es la nuestra.
+        montajes: mon.map((m) => ({
+          posicionId: m.posicion_id,
+          numeroSerie: m.neumatico?.numero_serie ?? null,
+          dot: m.neumatico?.dot ?? null,
+        })),
       });
       setPropuesta(p);
       setKm(l.km != null ? String(l.km) : "");
+
+      // Series de las gomas que entran que ya tiene otra goma de la empresa.
+      const series = p.cambios.map((c) => c.entra?.numeroSerie).filter((x): x is string => !!x);
+      const ya = await buscarNeumaticosPorSerie(v.empresa_id, series).catch(() => []);
+      setAvisosSerie(ya.map((n) =>
+        `El serie ${n.numero_serie} ya es de la goma ${n.numero_interno ?? "sin número"}` +
+        ` (${n.estado ?? "sin estado"}). Si es su carcasa recauchutada, la nueva entrará sin serie: ` +
+        `no puede haber dos gomas con el mismo.`));
       setCambiosMarcados(new Set(p.cambios.map((c) => c.posicionId)));
 
       // Las referencias de la medida facturada, para elegir cuál se montó.
@@ -142,36 +158,47 @@ export default function ParteProveedor() {
       const p = propuesta!; const v = vehiculo!; const l = lectura!;
       const kmNum = km.trim() === "" ? null : Number(km.trim());
 
-      // Un montaje que sustituye: la RPC de catálogo lo hace en un paso si se
-      // le dice qué montaje había. Se busca aquí porque el panel ya lo tiene.
-      const acciones = cambios.map((c) => {
+      // Cada cambio son DOS acciones, desmontar y montar, y no una sustitución
+      // de un paso. No es por gusto: tras cada acción, tc_guardar_parte_guiado
+      // pone el número de serie leído a las gomas de las operaciones que esa
+      // acción ha creado. Una sustitución crea dos —la de la goma que sale y
+      // la de la que entra—, así que si la que sale no tenía serie (las
+      // «BORRADO» de la O.R.) se llevaría el de la nueva, y el índice único de
+      // serie tumbaría el parte entero. Separadas, cada serie va a su goma.
+      //
+      // Y el desmontaje ya sabe traducir el destino del catálogo («carcasa»,
+      // «reclamación») al estado de la goma: no hay que hacerlo aquí.
+      const acciones = cambios.flatMap((c) => {
         const actual = montajes.find((m) => m.posicion_id === c.posicionId);
-        return {
+        const obs = `Parte del taller ${numeroDelParte(l) ?? ""}`.trim();
+        const desmontar = actual ? [{
+          rpc: "tc_desmontar_neumatico",
+          posicion_origen: c.posicionId,
+          destino_codigo: destino,
+          args: { p_km: kmNum, p_motivo: "desgaste", p_obs: obs },
+        }] : [];
+        const datos: Record<string, string> = {};
+        if (c.entra?.numeroSerie) datos.numero_serie = c.entra.numeroSerie;
+        if (c.entra?.dot) datos.dot = c.entra.dot;
+        return [...desmontar, {
           rpc: "tc_montar_desde_catalogo",
           args: {
             p_vehiculo: v.id, p_posicion: c.posicionId, p_referencia: referenciaId,
-            p_control_individual: null, p_datos: {}, p_km: kmNum, p_fecha: l.fecha || null,
-            p_condicion: "nuevo",
-            p_montaje_actual: actual?.id ?? null,
-            p_motivo_desmontaje: "desgaste",
-            // El catálogo de destinos habla de «carcasa» o «reclamación»; la
-            // RPC quiere un estado. La traducción es la de siempre.
-            p_destino_retirado: estadoDeDestino(
-              destinos.find((d) => d.codigo === destino)?.estado_resultante ?? null),
-            p_obs: `Parte del taller ${l.pt_numero ?? ""}`.trim(),
+            p_control_individual: null, p_datos: datos, p_km: kmNum, p_fecha: l.fecha || null,
+            p_condicion: "nuevo", p_obs: obs,
           },
-        };
+        }];
       });
 
       const r = await guardarParteGuiado({
         // La misma clave para el mismo papel: reimportarlo no monta seis gomas
         // donde se montaron tres.
-        clave: claveDeParte(proveedor, l.pt_numero ?? ""),
+        clave: claveDeParte(proveedor, numeroDelParte(l) ?? ""),
         vehiculo_id: v.id,
         km: kmNum,
         sin_cuentakilometros: kmNum == null,
         lugar_servicio: "taller",
-        observaciones: `Importado del parte ${l.pt_numero ?? ""} de ${
+        observaciones: `Importado del parte ${numeroDelParte(l) ?? ""} de ${
           PROVEEDORES.find((x) => x.codigo === proveedor)?.nombre ?? proveedor}`.trim(),
         mediciones: p.mediciones.map((m) => ({
           posicion_id: m.posicionId,
@@ -254,7 +281,15 @@ export default function ParteProveedor() {
           <div className="rounded-lg bg-slate-800 p-3 text-[13px]">
             <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Lo que pone el parte</div>
             <div className="grid gap-x-6 gap-y-1 sm:grid-cols-3">
-              <div><span className="text-slate-500">PT:</span> {lectura.pt_numero ?? "—"}</div>
+              {formatoDe(lectura) === "orden_reparacion" ? (
+                <>
+                  <div><span className="text-slate-500">Albarán:</span> {lectura.albaran_numero ?? "—"}</div>
+                  <div><span className="text-slate-500">O.R.:</span> {lectura.or_numero ?? "—"}</div>
+                  <div><span className="text-slate-500">Croquis:</span> {lectura.croquis ?? "—"}</div>
+                </>
+              ) : (
+                <div><span className="text-slate-500">PT:</span> {lectura.pt_numero ?? "—"}</div>
+              )}
               <div><span className="text-slate-500">Fecha:</span> {lectura.fecha ?? "—"}</div>
               <div><span className="text-slate-500">Matrícula:</span> {lectura.matricula ?? "—"}</div>
               <div><span className="text-slate-500">Cliente:</span> {lectura.cliente_nombre ?? "—"}</div>
@@ -276,9 +311,9 @@ export default function ParteProveedor() {
             </div>
           ) : null}
 
-          {propuesta && propuesta.avisos.length > 0 && (
+          {propuesta && (propuesta.avisos.length > 0 || avisosSerie.length > 0) && (
             <ul className="list-disc rounded-lg bg-amber-900/20 p-3 pl-8 text-[13px] text-amber-200">
-              {propuesta.avisos.map((x, i) => <li key={i}>{x}</li>)}
+              {[...propuesta.avisos, ...avisosSerie].map((x, i) => <li key={i}>{x}</li>)}
             </ul>
           )}
 
@@ -315,7 +350,7 @@ export default function ParteProveedor() {
                           <td className={tdCls}>{m.presionBar ?? "—"}</td>
                           <td className={tdCls}>
                             {m.profundidadMm ?? "—"} mm
-                            {esCambio && (
+                            {propuesta.medicionesDeGomaNueva.includes(m) && (
                               <span className="ml-2 text-[11px] text-slate-500">
                                 (de la goma nueva: no se guarda)
                               </span>
@@ -350,6 +385,35 @@ export default function ParteProveedor() {
                   </p>
                 )}
               </div>
+
+              {propuesta.cambios.some((c) => c.sale || c.entra) && (
+                <div className="rounded-lg bg-slate-800 p-3">
+                  <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Gomas que salen y entran</div>
+                  <TableWrap>
+                    <thead className="bg-slate-900"><tr>
+                      <th className={thCls}>Nº</th><th className={thCls}>Posición</th>
+                      <th className={thCls}>Sale · serie</th><th className={thCls}>DOT</th><th className={thCls}>mm</th>
+                      <th className={thCls}>Entra · serie</th><th className={thCls}>DOT</th>
+                    </tr></thead>
+                    <tbody>
+                      {propuesta.cambios.map((c) => (
+                        <tr key={c.posicionId} className="border-t border-slate-700/60">
+                          <td className={tdCls + " text-slate-500"}>{c.numero}</td>
+                          <td className={tdCls + " font-semibold"}>{c.codigo}</td>
+                          <td className={tdCls}>{c.sale?.numeroSerie ?? <span className="text-slate-500">borrado</span>}</td>
+                          <td className={tdCls}>{c.sale?.dot ?? "—"}</td>
+                          <td className={tdCls}>{c.sale?.mm ?? "—"}</td>
+                          <td className={tdCls + " text-emerald-300"}>{c.entra?.numeroSerie ?? "—"}</td>
+                          <td className={tdCls}>{c.entra?.dot ?? "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </TableWrap>
+                  <p className="mt-2 text-[11px] text-slate-500">
+                    Los números están escritos a mano: compruébalos contra el papel antes de confirmar.
+                  </p>
+                </div>
+              )}
 
               {propuesta.cambios.length > 0 && (
                 <div className="grid gap-3 rounded-lg bg-slate-800 p-3 sm:grid-cols-2">

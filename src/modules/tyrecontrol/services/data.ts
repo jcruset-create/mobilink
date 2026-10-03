@@ -1420,6 +1420,25 @@ export async function leerParteProveedor(
 }
 
 /**
+ * Las gomas de una empresa que ya llevan alguno de estos números de serie.
+ *
+ * Sirve para avisar ANTES de guardar: el serie es único por empresa, así que
+ * una goma nueva cuyo serie ya existe entraría sin él. Pasa con los
+ * recauchutados, que conservan el serie de la carcasa: si esa carcasa ya
+ * estuvo montada en la flota, el número ya es suyo.
+ */
+export async function buscarNeumaticosPorSerie(empresaId: string, series: string[]): Promise<
+  { numero_serie: string; numero_interno: string | null; estado: string | null }[]
+> {
+  if (series.length === 0) return [];
+  const { data, error } = await supabase.from("tc_neumaticos")
+    .select("numero_serie, numero_interno, estado")
+    .eq("empresa_id", empresaId).in("numero_serie", series);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as never;
+}
+
+/**
  * Guarda un parte entero: revisión con mediciones, montajes y servicios, en
  * una transacción. Es la MISMA RPC que usa la tablet; aquí no se reimplementa
  * ninguna operación.

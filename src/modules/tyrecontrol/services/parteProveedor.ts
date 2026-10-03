@@ -47,9 +47,47 @@ export interface ProductoParteProveedor {
   precio_total: number | null;
 }
 
+/**
+ * Una goma de las tablas de la orden de reparación: «desmontados/permutados»
+ * y «montados/permutados». A mano, con su serie y su DOT.
+ */
+export interface GomaDelParte {
+  posicion: number | null;
+  marca: string | null;
+  medida: string | null;
+  modelo: string | null;
+  /** Tal cual; «BORRADO» cuando el taller no lo ha podido leer en la goma. */
+  numero_serie: string | null;
+  dot: string | null;
+  /** Profundidad con la que sale (en las desmontadas). */
+  mm: number | null;
+  /** Columna «Destino»: D, R, AT, AF, RE, MV… Casi siempre vacía. */
+  destino: string | null;
+}
+
+/**
+ * Los dos impresos del taller que se saben leer.
+ *
+ * - `examen`: el «EXAMEN DEL VEHÍCULO» del PT, con presión y profundidad de
+ *   cada rueda y «NUEV» en las cambiadas.
+ * - `orden_reparacion`: la hoja de la O.R. rellenada a mano, con una tabla de
+ *   gomas que salen y otra de gomas que entran, cada una con serie y DOT. Suele
+ *   llegar grapada a su albarán, que es de donde sale el precio.
+ */
+export type FormatoParte = "examen" | "orden_reparacion";
+
 /** El parte entero tal como lo lee el modelo. Todo puede venir a null. */
 export interface LecturaParteProveedor {
+  /** null o ausente en las lecturas de antes de que hubiera dos formatos: examen. */
+  formato?: FormatoParte | null;
   pt_numero: string | null;
+  /** Nº O.R. de la hoja a mano. */
+  or_numero?: string | null;
+  albaran_numero?: string | null;
+  /** El croquis marcado en la O.R.: "C2-4", "C2-4-2", "R2-2"… */
+  croquis?: string | null;
+  desmontados?: GomaDelParte[];
+  montados?: GomaDelParte[];
   fecha: string | null;
   matricula: string | null;
   numero_unidad: string | null;
@@ -92,6 +130,13 @@ export interface CambioPropuesto {
   codigo: string;
   /** Lo que ponía en la columna OP.: «NUEV», «RECAU»… */
   operacion: string;
+  /** La goma que sale, cuando el parte la describe (orden de reparación). */
+  sale?: { numeroSerie: string | null; dot: string | null; mm: number | null; destino: string | null };
+  /** Y la que entra, con lo que hace falta para darla de alta con su serie. */
+  entra?: {
+    numeroSerie: string | null; dot: string | null;
+    marca: string | null; medida: string | null; modelo: string | null;
+  };
 }
 
 export interface NeumaticoDelParte {
@@ -301,6 +346,11 @@ export interface ContextoParte {
   kmActual?: number | null;
   /** Medida que lleva el vehículo según su ficha, si la tiene. */
   medidaVehiculo?: string | null;
+  /**
+   * Lo que TyreControl tiene montado ahora en cada posición. Sirve para
+   * comprobar que la goma que el parte dice quitar es la que teníamos.
+   */
+  montajes?: { posicionId: string; numeroSerie: string | null; dot: string | null }[];
 }
 
 /**
@@ -412,11 +462,26 @@ export function interpretarParte(
     errores.push("No se ha leído la matrícula.");
   }
 
-  // Servicios: se agrupan por código, porque dos líneas del papel pueden caer
-  // en el mismo servicio nuestro y en el parte son una cantidad, no dos filas.
+  const { servicios, sinCasar } = serviciosDe(lectura.productos ?? []);
+
+  return {
+    mediciones, medicionesDeGomaNueva, cambios, servicios,
+    serviciosSinCasar: sinCasar, neumatico, avisos, errores,
+  };
+}
+
+/**
+ * Los servicios del papel, ya casados con nuestro catálogo.
+ *
+ * Se agrupan por código, porque dos líneas del papel pueden caer en el mismo
+ * servicio nuestro y en el parte son una cantidad, no dos filas.
+ */
+export function serviciosDe(productos: ProductoParteProveedor[]): {
+  servicios: ServicioPropuesto[]; sinCasar: string[];
+} {
   const porCodigo = new Map<string, ServicioPropuesto>();
   const sinCasar: string[] = [];
-  for (const p of lectura.productos ?? []) {
+  for (const p of productos) {
     if (medidaDeTexto(p.descripcion ?? "")) continue; // la cubierta no es un servicio
     const codigo = servicioDeProducto(p.descripcion ?? "");
     const cantidad = p.unidades ?? 0;
@@ -426,29 +491,276 @@ export function interpretarParte(
     if (ya) { ya.cantidad += cantidad; ya.origen += ` · ${p.descripcion}`; }
     else porCodigo.set(codigo, { codigo, cantidad, origen: p.descripcion });
   }
+  return { servicios: [...porCodigo.values()], sinCasar };
+}
 
+// ── La orden de reparación ─────────────────────────────────────────────────
+
+/**
+ * Las ruedas de la O.R., numeradas como las numera ESA hoja: seguidas.
+ *
+ * No es la cuadrícula del «Examen del vehículo». Los croquis impresos en la
+ * O.R. lo dicen sin ambigüedad: en el C2-4-2 el tercer eje, simple, son el 7 y
+ * el 8; en el C2-2-4 el segundo eje simple es 3 y 4 y el gemelo de atrás va del
+ * 5 al 8. Cada impreso numera a su manera, y usar la cuenta de uno con el
+ * otro pondría la medida de una rueda en otra sin que nada fallara.
+ *
+ * Con todos los ejes gemelos las dos cuentas coinciden; con un eje simple
+ * detrás, no.
+ */
+export function numeracionSeguida(posiciones: PosicionDelPlano[]): Map<number, PosicionDelPlano> {
+  const orden = [...posiciones].sort((a, b) =>
+    ((a.eje ?? 0) - (b.eje ?? 0)) || (a.orden_visual - b.orden_visual));
+  return new Map(orden.map((p, i) => [i + 1, p]));
+}
+
+/** "C2-4-2" → [2, 4, 2]. "R2-2" → [2, 2]. null si no se entiende. */
+export function ruedasDelCroquis(croquis: string | null | undefined): number[] | null {
+  const t = (croquis ?? "").toUpperCase().replace(/\s/g, "");
+  const m = /^[A-Z]*(\d(?:-\d)+)$/.exec(t);
+  if (!m) return null;
+  const ejes = m[1].split("-").map(Number);
+  return ejes.every((n) => n === 2 || n === 4) ? ejes : null;
+}
+
+/** Ruedas de cada eje del plano, en orden de eje. null si falta el eje. */
+export function ruedasDelPlano(posiciones: PosicionDelPlano[]): number[] | null {
+  if (posiciones.length === 0 || posiciones.some((p) => p.eje == null)) return null;
+  const cuenta = new Map<number, number>();
+  for (const p of posiciones) cuenta.set(p.eje as number, (cuenta.get(p.eje as number) ?? 0) + 1);
+  return [...cuenta.keys()].sort((a, b) => a - b).map((e) => cuenta.get(e) as number);
+}
+
+/**
+ * Un número de serie comparable: sin espacios ni guiones y en mayúsculas.
+ * null si no hay, o si el taller ha escrito que no se lee («BORRADO»).
+ */
+export function normalizarSerie(s: string | null | undefined): string | null {
+  const t = (s ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (!t || /^(BORRAD[OA]|ILEGIBLE|NOSELEE|SINSERIE|NOVISIBLE)$/.test(t)) return null;
+  return t;
+}
+
+/** Un DOT comparable: sus cuatro últimas cifras (semana y año). */
+export function normalizarDot(s: string | null | undefined): string | null {
+  const d = (s ?? "").replace(/\D/g, "");
+  return d.length >= 4 ? d.slice(-4) : null;
+}
+
+/**
+ * ¿La goma que el parte dice quitar es la que teníamos montada?
+ *
+ * Devuelve null si cuadra, un aviso si no se puede comprobar, o un error si
+ * NO cuadra. Lo acordado es que entonces se PARA: o nuestro registro estaba
+ * mal o el parte no es de este vehículo, y en los dos casos guardar el cambio
+ * encima solo esconde el problema debajo de una operación que parece buena.
+ *
+ * Primero por serie, que identifica la goma. Si en el papel pone «BORRADO» o
+ * nosotros no lo tenemos, por DOT, que no la identifica pero sí descarta: dos
+ * gomas de DOT distinto no son la misma.
+ */
+export function verificarGomaQueSale(
+  numero: number,
+  sale: { numeroSerie: string | null; dot: string | null },
+  nuestra: { numeroSerie: string | null; dot: string | null } | undefined,
+): { error?: string; aviso?: string } | null {
+  if (!nuestra) {
+    return { error:
+      `El parte quita una goma de la rueda ${numero} y en TyreControl no hay ninguna montada ahí. ` +
+      `Falta registrar lo que llevaba antes de poder anotar el cambio.` };
+  }
+  const sp = normalizarSerie(sale.numeroSerie);
+  const sn = normalizarSerie(nuestra.numeroSerie);
+  if (sp && sn) {
+    if (sp === sn) return null;
+    return { error:
+      `En la rueda ${numero} el parte quita la goma ${sp} y en TyreControl está montada la ${sn}. ` +
+      `O nuestro registro está mal o el parte no es de este vehículo.` };
+  }
+  const dp = normalizarDot(sale.dot);
+  const dn = normalizarDot(nuestra.dot);
+  if (dp && dn) {
+    if (dp === dn) return null;
+    return { error:
+      `En la rueda ${numero} la goma que sale es de DOT ${dp} y la que tenemos montada es de DOT ${dn}: ` +
+      `no es la misma goma.` };
+  }
+  return { aviso:
+    `No se puede comprobar que la goma que sale de la rueda ${numero} sea la que teníamos ` +
+    `(${sp ? "no tenemos su serie" : "el serie está borrado"} y falta el DOT para cotejar).` };
+}
+
+/**
+ * Traduce la orden de reparación a lo que se va a guardar.
+ *
+ * Aquí, a diferencia del «Examen», la profundidad que trae el papel SÍ es de
+ * la goma que sale: está en la tabla de desmontadas, medida antes de quitarla.
+ * Es justo el dato que necesita el coste por kilómetro de esa goma, así que se
+ * guarda como medición de su posición.
+ */
+export function interpretarOrdenReparacion(
+  lectura: LecturaParteProveedor,
+  ctx: ContextoParte,
+): PropuestaParte {
+  const avisos: string[] = [];
+  const errores: string[] = [];
+
+  if (ctx.posiciones.length === 0) {
+    errores.push("Este vehículo no tiene plano de ruedas: sin él no se sabe a qué rueda va cada fila.");
+  }
+  const porNumero = numeracionSeguida(ctx.posiciones);
+
+  // El croquis marcado en el papel, contra el plano del vehículo.
+  const delCroquis = ruedasDelCroquis(lectura.croquis);
+  const delPlano = ruedasDelPlano(ctx.posiciones);
+  if (delCroquis && delPlano && delCroquis.join("-") !== delPlano.join("-")) {
+    errores.push(
+      `El parte marca el croquis ${lectura.croquis} (${delCroquis.join("+")} ruedas) y este vehículo ` +
+      `es ${delPlano.join("+")}. O el tipo está mal puesto o el parte no es suyo.`);
+  } else if (lectura.croquis && !delCroquis) {
+    avisos.push(`No se entiende el croquis marcado («${lectura.croquis}»); se sigue con el plano del vehículo.`);
+  }
+
+  const salen = new Map<number, GomaDelParte>();
+  const entran = new Map<number, GomaDelParte>();
+  for (const g of lectura.desmontados ?? []) if (g.posicion != null && !salen.has(g.posicion)) salen.set(g.posicion, g);
+  for (const g of lectura.montados ?? []) if (g.posicion != null && !entran.has(g.posicion)) entran.set(g.posicion, g);
+
+  const numeros = [...new Set([...salen.keys(), ...entran.keys()])].sort((a, b) => a - b);
+  const mediciones: MedicionPropuesta[] = [];
+  const cambios: CambioPropuesto[] = [];
+  const fuera: number[] = [];
+
+  for (const n of numeros) {
+    const pos = porNumero.get(n);
+    if (!pos) { fuera.push(n); continue; }
+    const sale = salen.get(n);
+    const entra = entran.get(n);
+    const nuestra = (ctx.montajes ?? []).find((m) => m.posicionId === pos.id);
+
+    if (sale && sale.mm != null && sale.mm > 0) {
+      mediciones.push({
+        numero: n, posicionId: pos.id, codigo: pos.codigo_posicion,
+        presionBar: null, profundidadMm: sale.mm, mmInt: sale.mm, mmExt: sale.mm,
+      });
+    }
+
+    if (sale && !entra) {
+      errores.push(
+        `La rueda ${n} se desmonta y el parte no dice qué se monta en su lugar. Un desmontaje ` +
+        `sin goma nueva hay que anotarlo a mano.`);
+      continue;
+    }
+    if (entra && !sale && nuestra) {
+      errores.push(
+        `En la rueda ${n} el parte monta una goma pero no dice cuál salió, y en TyreControl hay una ` +
+        `montada. Sin saber qué se quitó no se puede anotar el cambio.`);
+      continue;
+    }
+    if (sale) {
+      const v = verificarGomaQueSale(n, { numeroSerie: sale.numero_serie, dot: sale.dot }, nuestra);
+      if (v?.error) errores.push(v.error);
+      if (v?.aviso) avisos.push(v.aviso);
+    }
+    if (entra) {
+      cambios.push({
+        numero: n, posicionId: pos.id, codigo: pos.codigo_posicion, operacion: "sustitución",
+        sale: sale ? {
+          numeroSerie: normalizarSerie(sale.numero_serie), dot: normalizarDot(sale.dot),
+          mm: sale.mm, destino: sale.destino?.trim() || null,
+        } : undefined,
+        entra: {
+          numeroSerie: normalizarSerie(entra.numero_serie), dot: normalizarDot(entra.dot),
+          marca: entra.marca, medida: entra.medida ? medidaDeTexto(entra.medida) ?? entra.medida : null,
+          modelo: entra.modelo,
+        },
+      });
+      if (!normalizarSerie(entra.numero_serie)) {
+        avisos.push(`La goma que entra en la rueda ${n} no trae número de serie: entrará sin él.`);
+      }
+    }
+  }
+
+  if (fuera.length) {
+    errores.push(
+      `${fuera.length > 1 ? "Las ruedas" : "La rueda"} ${fuera.join(", ")} del parte no ` +
+      `${fuera.length > 1 ? "corresponden" : "corresponde"} a ninguna rueda de este vehículo, que tiene ` +
+      `${ctx.posiciones.length}.`);
+  }
+
+  // Dos gomas nuevas con el mismo serie es un dedazo, o una mala lectura.
+  const series = cambios.map((c) => c.entra?.numeroSerie).filter((x): x is string => !!x);
+  const repetidos = series.filter((x, i) => series.indexOf(x) !== i);
+  if (repetidos.length) {
+    errores.push(`El número de serie ${[...new Set(repetidos)].join(", ")} sale en más de una goma nueva.`);
+  }
+
+  const { neumatico, avisos: avisosGoma } = neumaticoDelParte(lectura.productos ?? []);
+  avisos.push(...avisosGoma);
+  if (neumatico && cambios.length > 0 && neumatico.unidades !== cambios.length) {
+    avisos.push(
+      `Se facturan ${neumatico.unidades} cubiertas y la hoja anota ${cambios.length} gomas montadas. ` +
+      `Comprueba cuál de los dos manda.`);
+  }
+  if (neumatico && ctx.medidaVehiculo &&
+      baseMedida(neumatico.medida) !== baseMedida(ctx.medidaVehiculo)) {
+    avisos.push(
+      `La cubierta facturada (${neumatico.medida}) no es la medida que tiene el vehículo ` +
+      `(${ctx.medidaVehiculo}).`);
+  }
+
+  if (lectura.km != null && ctx.kmActual != null && ctx.kmActual > 0 && lectura.km < ctx.kmActual) {
+    avisos.push(
+      `Los kilómetros del parte (${lectura.km.toLocaleString("es-ES")}) son menores que los ` +
+      `que tenemos (${ctx.kmActual.toLocaleString("es-ES")}).`);
+  }
+  if (lectura.km == null) avisos.push("El parte no trae kilómetros, o no se han podido leer.");
+  if (!numeroDelParte(lectura)) {
+    errores.push("No se ha leído el número de O.R. ni el de albarán, y es lo que evita que el mismo parte entre dos veces.");
+  }
+  if (!lectura.matricula) errores.push("No se ha leído la matrícula.");
+  if (cambios.length === 0 && errores.length === 0) {
+    avisos.push("La hoja no anota ninguna goma montada.");
+  }
+
+  const { servicios, sinCasar } = serviciosDe(lectura.productos ?? []);
   return {
-    mediciones, medicionesDeGomaNueva, cambios, servicios: [...porCodigo.values()],
+    mediciones, medicionesDeGomaNueva: [], cambios, servicios,
     serviciosSinCasar: sinCasar, neumatico, avisos, errores,
   };
 }
 
+/** ¿Qué impreso es? Lo dice el lector; si no, se deduce de lo que trae. */
+export function formatoDe(lectura: LecturaParteProveedor): FormatoParte {
+  if (lectura.formato === "orden_reparacion" || lectura.formato === "examen") return lectura.formato;
+  return (lectura.desmontados?.length || lectura.montados?.length) ? "orden_reparacion" : "examen";
+}
+
 /**
- * El estado con el que se queda la goma que se quita.
+ * El número que identifica al papel, para la clave que impide meterlo dos
+ * veces: el PT en el «Examen»; en la orden de reparación, el ALBARÁN, y la
+ * O.R. solo si no hay albarán.
  *
- * `tc_montar_desde_catalogo` escribe `p_destino_retirado` TAL CUAL en
- * `tc_neumaticos.estado`, así que no admite el código del catálogo de destinos
- * («carcasa», «reclamacion»): admite un estado. La traducción es la misma que
- * hace `tc_guardar_parte_guiado` cuando la tablet manda un destino, y se
- * escribe aquí una vez para no tener dos criterios distintos de a dónde va una
- * goma según por qué pantalla haya entrado.
+ * El albarán primero porque va a máquina y la O.R. a mano. Si la clave saliera
+ * de una cifra manuscrita, leerla una vez como 2501071 y otra como 2501077
+ * daría dos claves para el mismo papel, y el segundo intento montaría las
+ * gomas otra vez: justo lo que la clave está para impedir.
  */
-export function estadoDeDestino(estadoResultante: string | null | undefined): string {
-  const e = (estadoResultante ?? "almacen").trim().toLowerCase();
-  if (["almacen", "stock_usado", "stock_nuevo", "stock_recauchutado"].includes(e)) return "almacen";
-  if (["descartado", "vendido"].includes(e)) return "descartado";
-  // Recauchutado, cuarentena, reparación… no mueven stock y se afinan después.
-  return "reparacion";
+export function numeroDelParte(lectura: LecturaParteProveedor): string | null {
+  if (formatoDe(lectura) === "orden_reparacion") {
+    const alb = lectura.albaran_numero?.trim().toUpperCase();
+    if (alb) return `ALB ${alb}`;
+    const or = lectura.or_numero?.trim().toUpperCase();
+    return or ? `OR ${or}` : null;
+  }
+  return lectura.pt_numero?.trim() || null;
+}
+
+/** El traductor que toca según el impreso. */
+export function interpretar(lectura: LecturaParteProveedor, ctx: ContextoParte): PropuestaParte {
+  return formatoDe(lectura) === "orden_reparacion"
+    ? interpretarOrdenReparacion(lectura, ctx)
+    : interpretarParte(lectura, ctx);
 }
 
 // ── La clave del parte ──────────────────────────────────────────────────────
