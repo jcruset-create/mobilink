@@ -5,7 +5,7 @@
  */
 
 import { sessionHeaders } from "../../sessionHeaders";
-import type { ContractStatus, InvoiceStatus, PaymentMethod, PaymentStatus } from "../types/enums";
+import type { AccessMethod, AccessReason, ContractStatus, DoorType, ExecutionStatus, InvoiceStatus, PaymentMethod, PaymentStatus } from "../types/enums";
 
 const BASE = "/api/self-storage/portal";
 
@@ -40,7 +40,10 @@ async function pedir<T>(ruta: string, init?: RequestInit): Promise<T> {
 
 const post = (body: unknown = {}): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
 
-export type Yo = { name: string; email: string; status: string; debt: { pendiente: number; vencida: number; facturas: number } };
+/** `member` = persona autorizada de un contrato: sólo ve y usa sus accesos. */
+export type Yo =
+  | { kind: "customer"; name: string; email: string; status: string; debt: { pendiente: number; vencida: number; facturas: number } }
+  | { kind: "member"; name: string; email: string; status: string; debt: null };
 export type ContratoPortal = {
   id: string;
   contractNumber: string;
@@ -110,6 +113,34 @@ export const pagarFactura = (id: string) => pedir<{ url: string }>(`/invoices/${
 export const pagos = () => pedir<PagoPortal[]>("/payments");
 export const metodos = () => pedir<MetodoPortal[]>("/payment-methods");
 export const nuevoMetodo = () => pedir<{ url: string }>("/payment-methods/setup", post());
+
+// ── Accesos ──
+export type PuertaPortal = { id: string; name: string; doorType: DoorType; canOpen: boolean; reason: AccessReason };
+export type ResultadoAperturaPortal = { eventId: string; opened: boolean; decision: "granted" | "denied"; reason: AccessReason; executionStatus: ExecutionStatus; message: string };
+export type EventoPortal = { id: string; requestedAt: string; doorName: string | null; method: AccessMethod; decision: "granted" | "denied"; reason: AccessReason; executionStatus: ExecutionStatus; actorName: string | null };
+
+export const puertas = () => pedir<PuertaPortal[]>("/access/doors");
+export const abrir = (doorId: string) => pedir<ResultadoAperturaPortal>("/access/open", post({ doorId }));
+export const aperturas = () => pedir<EventoPortal[]>("/access/events");
+
+/**
+ * Enlace temporal (invitados): sin sesión, el token ES la credencial. Va en el
+ * cuerpo (no en la URL de la API) para que no acabe en logs de acceso.
+ */
+export type EnlacePortal = { fullName: string; startsAt: string; endsAt: string; maxUses: number | null; usesCount: number; status: string; doors: { id: string; name: string }[] };
+async function pedirSinSesion<T>(ruta: string, body: unknown): Promise<T> {
+  let r: Response;
+  try {
+    r = await fetch(`${BASE}${ruta}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  } catch {
+    throw new ErrorPortal("No hay conexión con el servidor.", "SIN_CONEXION", 0);
+  }
+  const cuerpo = (await r.json().catch(() => null)) as { error?: string; code?: string } | null;
+  if (!r.ok) throw new ErrorPortal(cuerpo?.error ?? `Error ${r.status}`, cuerpo?.code ?? "ERROR", r.status);
+  return cuerpo as T;
+}
+export const enlace = (token: string) => pedirSinSesion<EnlacePortal>("/access/temporary/doors", { token });
+export const abrirConEnlace = (token: string, doorId: string) => pedirSinSesion<ResultadoAperturaPortal>("/access/temporary/open", { token, doorId });
 
 /** PDF protegido (contrato o factura) en una pestaña nueva. */
 export async function abrirPdf(ruta: string): Promise<void> {

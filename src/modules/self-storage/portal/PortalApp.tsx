@@ -9,7 +9,11 @@
  * Ve y descarga su contrato, lo acepta, ve y descarga sus facturas, paga lo
  * pendiente y gestiona su método de pago. Pagar le lleva a Stripe; el pago se
  * da por bueno cuando Stripe lo confirma al servidor, no al volver aquí.
- * Abrir puertas llega en la fase 3.
+ *
+ * Fase 3 · Accesos: abrir las puertas de su centro y ver sus aperturas. Las
+ * personas autorizadas de un contrato entran con su propio email y SÓLO ven
+ * esta pestaña (su identidad queda en el registro: «María abrió»). Si se
+ * puede abrir o no lo decide el servidor en cada intento.
  */
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
@@ -20,6 +24,7 @@ import { supabase } from "../../administracion/services/supabase";
 import * as api from "./api";
 import { ModalFirma } from "../components/Dialogos";
 import {
+  ETIQUETA_ACCESS_REASON,
   ETIQUETA_CONTRACT_STATUS,
   ETIQUETA_INVOICE_STATUS,
   ETIQUETA_PAYMENT_METHOD,
@@ -144,7 +149,7 @@ function Login() {
 
 // ── Pantallas ──────────────────────────────────────────────────────────────
 
-function Inicio({ yo }: { yo: api.Yo }) {
+function Inicio({ yo }: { yo: Extract<api.Yo, { kind: "customer" }> }) {
   const [lista, setLista] = useState<api.ContratoPortal[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -420,10 +425,150 @@ function MetodoPago() {
   );
 }
 
+// ── Accesos ─────────────────────────────────────────────────────────────────
+
+const COLOR_RESULTADO: Record<string, string> = { succeeded: "text-emerald-300", failed: "text-rose-300", timeout: "text-rose-300", pending: "text-amber-300" };
+
+function Accesos() {
+  const [puertas, setPuertas] = useState<api.PuertaPortal[] | null>(null);
+  const [eventos, setEventos] = useState<api.EventoPortal[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [abriendo, setAbriendo] = useState<string | null>(null);
+  const [resultado, setResultado] = useState<{ doorId: string; ok: boolean; texto: string } | null>(null);
+
+  const cargar = useCallback(async () => {
+    try {
+      const [p, e] = await Promise.all([api.puertas(), api.aperturas()]);
+      setPuertas(p);
+      setEventos(e);
+      setError(null);
+    } catch (e) {
+      setError(msg(e));
+    }
+  }, []);
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  const abrir = async (p: api.PuertaPortal) => {
+    setAbriendo(p.id);
+    setResultado(null);
+    try {
+      const r = await api.abrir(p.id);
+      setResultado({ doorId: p.id, ok: r.opened, texto: r.decision === "denied" ? `${ETIQUETA_ACCESS_REASON[r.reason]}. ${r.message}` : r.message });
+    } catch (e) {
+      setResultado({ doorId: p.id, ok: false, texto: msg(e) });
+    }
+    setAbriendo(null);
+    void cargar();
+  };
+
+  return (
+    <div className="space-y-3">
+      <h1 className="text-xl font-black">Accesos</h1>
+      {error && <Fallo>{error}</Fallo>}
+      {puertas?.length === 0 && <p className="text-sm text-slate-400">No tienes puertas que abrir desde la app.</p>}
+      {puertas?.map((p) => (
+        <Caja key={p.id}>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="font-bold">{p.name}</div>
+              {!p.canOpen && <div className="text-[12px] text-amber-300">{ETIQUETA_ACCESS_REASON[p.reason]}</div>}
+            </div>
+            <button className={`${btn} min-w-[7rem] py-3`} disabled={!p.canOpen || abriendo !== null} onClick={() => void abrir(p)}>
+              {abriendo === p.id ? "Abriendo…" : "Abrir"}
+            </button>
+          </div>
+          {resultado?.doorId === p.id && <div className={`mt-2 text-sm ${resultado.ok ? "text-emerald-300" : "text-rose-300"}`}>{resultado.texto}</div>}
+        </Caja>
+      ))}
+      <h2 className="pt-2 text-sm font-bold">Últimas aperturas</h2>
+      {eventos?.length === 0 && <p className="text-sm text-slate-400">Todavía no hay aperturas.</p>}
+      <div className="space-y-1">
+        {eventos?.map((e) => (
+          <div key={e.id} className="flex items-center justify-between rounded-xl bg-slate-800 px-3 py-2 text-[13px]">
+            <span>
+              {fechaHora(e.requestedAt)} · {e.doorName ?? "—"}
+              {e.actorName ? <span className="text-slate-400"> · {e.actorName}</span> : null}
+            </span>
+            <span className={e.decision === "denied" ? "text-rose-300" : COLOR_RESULTADO[e.executionStatus] ?? "text-slate-300"}>
+              {e.decision === "denied" ? ETIQUETA_ACCESS_REASON[e.reason] : e.executionStatus === "succeeded" ? "Abierta" : e.executionStatus === "pending" ? "Enviando…" : "No se abrió"}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Página pública de un enlace temporal (`/trasteros/abrir/:token`): sin
+ * sesión, el token es la credencial y el servidor comprueba fechas, usos,
+ * puertas y los bloqueos del contrato en cada intento.
+ */
+export function AbrirConEnlace() {
+  const { token = "" } = useParams();
+  const [datos, setDatos] = useState<api.EnlacePortal | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [abriendo, setAbriendo] = useState<string | null>(null);
+  const [resultado, setResultado] = useState<{ doorId: string; ok: boolean; texto: string } | null>(null);
+  const cargar = useCallback(() => api.enlace(token).then(setDatos, (e) => setError(e instanceof api.ErrorPortal && e.status === 404 ? "Este enlace no es válido." : msg(e))), [token]);
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  const abrir = async (doorId: string) => {
+    setAbriendo(doorId);
+    setResultado(null);
+    try {
+      const r = await api.abrirConEnlace(token, doorId);
+      setResultado({ doorId, ok: r.opened, texto: r.decision === "denied" ? `${ETIQUETA_ACCESS_REASON[r.reason]}. ${r.message}` : r.message });
+    } catch (e) {
+      setResultado({ doorId, ok: false, texto: msg(e) });
+    }
+    setAbriendo(null);
+    void cargar();
+  };
+
+  const usosRestantes = datos?.maxUses != null ? Math.max(0, datos.maxUses - datos.usesCount) : null;
+  return (
+    <div className="min-h-screen bg-slate-900 p-4 text-slate-100">
+      <div className="mx-auto max-w-sm space-y-3 pt-8">
+        <div className="flex items-center gap-2 font-black">
+          <Container className="h-5 w-5 text-orange-400" /> Acceso al trastero
+        </div>
+        {error && <Fallo>{error}</Fallo>}
+        {datos && (
+          <>
+            <p className="text-sm text-slate-300">
+              Hola, {datos.fullName}. Válido del {fechaHora(datos.startsAt)} al {fechaHora(datos.endsAt)}
+              {usosRestantes != null ? ` · te quedan ${usosRestantes} ${usosRestantes === 1 ? "apertura" : "aperturas"}` : ""}.
+            </p>
+            {datos.status !== "active" && <Fallo>Este acceso ha sido revocado.</Fallo>}
+            {datos.doors.map((d) => (
+              <Caja key={d.id}>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="font-bold">{d.name}</div>
+                  <button className={`${btn} min-w-[7rem] py-3`} disabled={abriendo !== null || datos.status !== "active" || usosRestantes === 0} onClick={() => void abrir(d.id)}>
+                    {abriendo === d.id ? "Abriendo…" : "Abrir"}
+                  </button>
+                </div>
+                {resultado?.doorId === d.id && <div className={`mt-2 text-sm ${resultado.ok ? "text-emerald-300" : "text-rose-300"}`}>{resultado.texto}</div>}
+              </Caja>
+            ))}
+          </>
+        )}
+        {!datos && !error && <p className="text-sm text-slate-400">Cargando…</p>}
+      </div>
+    </div>
+  );
+}
+
 // ── Marco ───────────────────────────────────────────────────────────────────
 
 const PESTANAS = [
   { to: "", label: "Inicio", end: true },
+  { to: "accesos", label: "Accesos" },
   { to: "facturas", label: "Facturas" },
   { to: "pagos", label: "Pagos" },
   { to: "pago", label: "Método de pago" },
@@ -466,7 +611,7 @@ function Portal() {
           </button>
         </div>
         <nav className="mx-auto flex max-w-3xl gap-1 overflow-x-auto px-3 pb-2 text-[13px]">
-          {PESTANAS.map((p) => (
+          {(yo.kind === "member" ? PESTANAS.filter((p) => p.to === "accesos") : PESTANAS).map((p) => (
             <NavLink
               key={p.to}
               end={p.end}
@@ -479,14 +624,23 @@ function Portal() {
         </nav>
       </header>
       <main className="mx-auto max-w-3xl p-4">
-        <Routes>
-          <Route index element={<Inicio yo={yo} />} />
-          <Route path="contratos/:id" element={<Contrato yo={yo} />} />
-          <Route path="facturas" element={<Facturas />} />
-          <Route path="pagos" element={<Pagos />} />
-          <Route path="pago" element={<MetodoPago />} />
-          <Route path="*" element={<Navigate to={BASE} replace />} />
-        </Routes>
+        {yo.kind === "member" ? (
+          // Persona autorizada: sólo sus accesos (el servidor tampoco le deja más).
+          <Routes>
+            <Route path="accesos" element={<Accesos />} />
+            <Route path="*" element={<Navigate to={`${BASE}/accesos`} replace />} />
+          </Routes>
+        ) : (
+          <Routes>
+            <Route index element={<Inicio yo={yo} />} />
+            <Route path="accesos" element={<Accesos />} />
+            <Route path="contratos/:id" element={<Contrato yo={yo} />} />
+            <Route path="facturas" element={<Facturas />} />
+            <Route path="pagos" element={<Pagos />} />
+            <Route path="pago" element={<MetodoPago />} />
+            <Route path="*" element={<Navigate to={BASE} replace />} />
+          </Routes>
+        )}
       </main>
     </div>
   );

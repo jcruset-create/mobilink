@@ -36,9 +36,10 @@ export const NAV: NavItem[] = [
   { key: "facturas", path: "facturas", label: "Facturas", icon: FileText, permiso: "ss.billing.view" },
   { key: "pagos", path: "pagos", label: "Pagos", icon: CreditCard, permiso: "ss.billing.view" },
   { key: "impagos", path: "impagos", label: "Impagos", icon: BadgeEuro, permiso: "ss.billing.view" },
-  { key: "accesos", path: "accesos", label: "Accesos", icon: KeyRound, permiso: "ss.view", fase: 3 },
-  { key: "puertas", path: "puertas", label: "Puertas", icon: DoorOpen, permiso: "ss.view", fase: 3 },
-  { key: "incidencias", path: "incidencias", label: "Incidencias", icon: AlertTriangle, permiso: "ss.view", fase: 3 },
+  { key: "accesos", path: "accesos", label: "Accesos", icon: KeyRound, permiso: "ss.access.view" },
+  { key: "puertas", path: "puertas", label: "Puertas", icon: DoorOpen, permiso: "ss.doors.view" },
+  // Incidencias no entra en el alcance de la fase 3 (accesos físicos).
+  { key: "incidencias", path: "incidencias", label: "Incidencias", icon: AlertTriangle, permiso: "ss.view", fase: 4 },
   { key: "centros", path: "centros", label: "Centros y zonas", icon: Building2, permiso: "ss.view" },
   { key: "tipos", path: "tipos", label: "Tipos de trastero", icon: Ruler, permiso: "ss.view" },
   { key: "importar", path: "importar", label: "Importar trasteros", icon: Upload, permiso: "ss.import" },

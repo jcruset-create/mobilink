@@ -7,7 +7,8 @@
  *
  * Fase 1: dashboard, plano, trasteros, clientes, centros/zonas, tipos e
  * importación. Fase 2: contratos, facturas, pagos, impagos, conceptos y
- * configuración. El resto de secciones aparece en el menú con su fase.
+ * configuración. Fase 3: puertas (hardware) y accesos. El resto de secciones
+ * aparece en el menú con su fase.
  */
 
 import { Navigate, Route, Routes } from "react-router-dom";
@@ -28,6 +29,8 @@ import Pagos from "./pages/Pagos";
 import Impagos from "./pages/Impagos";
 import Conceptos from "./pages/Conceptos";
 import Configuracion from "./pages/Configuracion";
+import Puertas from "./pages/Puertas";
+import Accesos from "./pages/Accesos";
 
 function Contenido() {
   const { cargando, error, permisos, puede } = useSelfStorage();
@@ -65,6 +68,8 @@ function Contenido() {
         {puede("ss.billing.view") && <Route path="pagos" element={<Pagos />} />}
         {puede("ss.billing.view") && <Route path="impagos" element={<Impagos />} />}
         {puede("ss.billing.view") && <Route path="conceptos" element={<Conceptos />} />}
+        {puede("ss.doors.view") && <Route path="puertas" element={<Puertas />} />}
+        {puede("ss.access.view") && <Route path="accesos" element={<Accesos />} />}
         {puede("ss.settings.manage") && <Route path="configuracion" element={<Configuracion />} />}
         <Route path="*" element={<Navigate to="/self-storage/dashboard" replace />} />
       </Route>

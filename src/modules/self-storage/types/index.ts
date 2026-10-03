@@ -5,7 +5,13 @@
  */
 
 import type {
+  AccessMethod,
+  AccessReason,
   BlockReason,
+  ConnectionType,
+  DoorType,
+  ExecutionStatus,
+  SyncStatus,
   ContractStatus,
   CustomerStatus,
   CustomerType,
@@ -42,6 +48,10 @@ export type Bootstrap = {
       paymentMethod: Record<PaymentMethod, string>;
       paymentStatus: Record<PaymentStatus, string>;
       blockReason: Record<BlockReason, string>;
+      accessReason?: Record<AccessReason, string>;
+      accessMethod?: Record<AccessMethod, string>;
+      doorType?: Record<DoorType, string>;
+      connectionType?: Record<ConnectionType, string>;
     };
   };
 };
@@ -498,6 +508,7 @@ export type Emisor = { name: string; taxId: string; address: string; email?: str
 export type Ajustes = {
   /** IVA general de la empresa (porcentaje). */
   default_vat_rate: { value: number; isDefault: boolean };
+  "access.rate_limit_per_minute": { value: number; isDefault: boolean };
   "reservations.ttl_minutes": { value: number; isDefault: boolean };
   "billing.first_sepa_payment_access_policy": { value: FirstSepaPolicy; isDefault: boolean };
   "billing.issuer": { value: Emisor | null; isDefault: boolean };
@@ -511,5 +522,159 @@ export type Ajustes = {
 };
 export type ClaveAjuste = keyof Ajustes;
 
-export const TRABAJOS = ["facturacion", "vencimientos", "impagos", "notificaciones", "stripe_reintentos"] as const;
+export const TRABAJOS = ["facturacion", "vencimientos", "impagos", "notificaciones", "stripe_reintentos", "accesos"] as const;
 export type Trabajo = (typeof TRABAJOS)[number];
+
+// ── Fase 3: accesos físicos ─────────────────────────────────────────────────
+
+export type ReglaHorario = { days: number[]; from: string; to: string };
+export type Horario = { timezone?: string; rules: ReglaHorario[] } | null;
+
+export type SalidaDispositivo = {
+  id: string;
+  outputNumber: number;
+  name: string;
+  outputType: "relay" | "digital_output";
+  pulseDurationMs: number;
+  enabled: boolean;
+  doorId: string | null;
+  doorName: string | null;
+};
+
+export type Dispositivo = {
+  id: string;
+  centerId: string;
+  centerName: string;
+  name: string;
+  manufacturer: string;
+  model: string;
+  serial: string | null;
+  imei: string | null;
+  phoneNumber: string | null;
+  connectionType: ConnectionType;
+  endpoint: string | null;
+  /** NOMBRE de la variable de entorno con las credenciales (nunca la credencial). */
+  credentialsSecretName: string | null;
+  driverOptions: Record<string, string | number | boolean | null>;
+  simulation: Record<string, string | number | boolean | null>;
+  phoneAccessMode: "none" | "rut_whitelist";
+  firmware: string | null;
+  status: "unknown" | "online" | "offline";
+  lastSeenAt: string | null;
+  lastError: string | null;
+  lastErrorAt: string | null;
+  enabled: boolean;
+  notes: string | null;
+  syncStatus: SyncStatus | null;
+  syncDesired: string[] | null;
+  syncActual: string[] | null;
+  syncLastAttemptAt: string | null;
+  syncLastSuccessAt: string | null;
+  syncError: string | null;
+  syncAttempts: number | null;
+  syncNextAttemptAt: string | null;
+  outputs: SalidaDispositivo[];
+};
+
+export type Puerta = {
+  id: string;
+  centerId: string;
+  zoneId: string | null;
+  zoneName: string | null;
+  name: string;
+  doorType: DoorType;
+  deviceOutputId: string | null;
+  enabled: boolean;
+  allowApp: boolean;
+  allowPhone: boolean;
+  accessSchedule: Horario;
+  sortOrder: number;
+  outputNumber: number | null;
+  outputName: string | null;
+  outputEnabled: boolean | null;
+  deviceId: string | null;
+  deviceName: string | null;
+  deviceModel: string | null;
+  connectionType: ConnectionType | null;
+  deviceStatus: "unknown" | "online" | "offline" | null;
+  deviceEnabled: boolean | null;
+  lastSeenAt: string | null;
+  lastError: string | null;
+  lastErrorAt: string | null;
+  lastOpenedAt: string | null;
+  syncStatus: SyncStatus | null;
+};
+
+export type EventoAcceso = {
+  id: string;
+  requestedAt: string;
+  method: AccessMethod;
+  decision: "granted" | "denied";
+  reason: AccessReason;
+  executionStatus: ExecutionStatus;
+  executedAt: string | null;
+  latencyMs: number | null;
+  actorType: string;
+  actorName: string | null;
+  doorId: string | null;
+  doorName: string | null;
+  deviceId: string | null;
+  deviceName: string | null;
+  contractId: string | null;
+  contractNumber: string | null;
+  customerId: string | null;
+  contractMemberId: string | null;
+  temporaryAccessId: string | null;
+  adminReason: string | null;
+  deviceResponse: { ok: boolean; code: string | null; message: string | null } | null;
+};
+
+export type ResultadoApertura = {
+  eventId: string;
+  opened: boolean;
+  decision: "granted" | "denied";
+  reason: AccessReason;
+  executionStatus: ExecutionStatus;
+  message: string;
+};
+
+export type MiembroContrato = {
+  id: string;
+  fullName: string;
+  phone: string | null;
+  email: string | null;
+  status: "active" | "suspended" | "revoked";
+  allowApp: boolean;
+  allowPhone: boolean;
+  notes: string | null;
+  hasPortalAccount: boolean;
+};
+
+export type AccesosContrato = {
+  permisos: { id: string; doorId: string; doorName: string; source: "contract" | "manual"; status: "active" | "revoked"; validFrom: string | null; validUntil: string | null; notes: string | null; createdAt: string; revokedAt: string | null }[];
+  puertas: { doorId: string; doorName: string; doorType: DoorType; granted: boolean; reason: AccessReason }[];
+};
+
+export type AccesoTemporal = {
+  id: string;
+  centerId: string;
+  contractId: string | null;
+  contractNumber: string | null;
+  customerId: string | null;
+  holderType: "holder" | "guest";
+  fullName: string;
+  phone: string | null;
+  email: string | null;
+  startsAt: string;
+  endsAt: string;
+  maxUses: number | null;
+  usesCount: number;
+  hasLink: boolean;
+  status: "active" | "revoked";
+  notes: string | null;
+  createdAt: string;
+  revokedAt: string | null;
+  doors: { id: string; name: string }[];
+  /** Sólo en la respuesta de alta, una vez. */
+  token?: string | null;
+};

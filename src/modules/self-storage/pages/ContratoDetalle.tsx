@@ -13,6 +13,7 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import * as api from "../services/api";
 import type { ContratoDetalle as Detalle, EntradaHistorial } from "../types";
 import FormContrato from "../components/FormContrato";
+import AccesosContrato from "../components/AccesosContrato";
 import { ModalFirma, ModalMotivo } from "../components/Dialogos";
 import {
   Aviso,
@@ -387,7 +388,7 @@ export default function ContratoDetalle() {
       <section className="space-y-2">
         <h2 className="text-sm font-bold">Bloqueos de acceso</h2>
         <p className="text-[12px] text-slate-400">
-          Pueden convivir varios. Cobrar sólo levanta el de impago; seguridad y manual nunca se levantan solos. Las puertas llegan en la fase 3.
+          Pueden convivir varios. Cobrar sólo levanta el de impago; seguridad y manual nunca se levantan solos. Cualquier cambio se aplica al momento en la app y se sincroniza con las puertas.
         </p>
         <TableWrap>
           <thead>
@@ -420,6 +421,8 @@ export default function ContratoDetalle() {
           </tbody>
         </TableWrap>
       </section>
+
+      {puede("ss.access.view") && <AccesosContrato contractId={k.id} centerId={k.centerId} />}
 
       <section className="space-y-2">
         <div className="flex items-center gap-2">

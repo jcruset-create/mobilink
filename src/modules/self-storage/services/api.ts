@@ -11,6 +11,13 @@
 
 import { sessionHeaders } from "../../sessionHeaders";
 import type {
+  AccesosContrato,
+  AccesoTemporal,
+  Dispositivo,
+  EventoAcceso,
+  MiembroContrato,
+  Puerta,
+  ResultadoApertura,
   Ajustes,
   Bootstrap,
   CasoImpago,
@@ -207,3 +214,33 @@ export const ajustes = (centerId?: string | null) => pedir<Ajustes>(`/settings${
 export const guardarAjuste = <K extends ClaveAjuste>(key: K, value: Ajustes[K]["value"], centerId?: string | null) =>
   pedir<{ key: K; value: Ajustes[K]["value"] }>(`/settings/${encodeURIComponent(key)}`, json({ value, centerId: centerId ?? null }, "PUT"));
 export const ejecutarTrabajo = (name: Trabajo) => pedir<unknown>(`/jobs/${name}/run`, json({}));
+
+// ── Fase 3 · Accesos físicos ──
+export const dispositivos = (centerId?: string | null) => pedir<Dispositivo[]>(`/devices${query({ centerId })}`);
+export const crearDispositivo = (d: Record<string, unknown>) => pedir<Dispositivo>("/devices", json(d));
+export const editarDispositivo = (id: string, d: Record<string, unknown>) => pedir<Dispositivo>(`/devices/${id}`, json(d, "PATCH"));
+export const probarDispositivo = (id: string) => pedir<{ ok: boolean; latencyMs: number; code: string | null; message: string | null }>(`/devices/${id}/test`, json({}));
+export const sincronizarDispositivo = (id: string) => pedir<Dispositivo>(`/devices/${id}/sync`, json({}));
+export const crearSalida = (deviceId: string, d: Record<string, unknown>) => pedir<Dispositivo>(`/devices/${deviceId}/outputs`, json(d));
+export const editarSalida = (id: string, d: Record<string, unknown>) => pedir<Dispositivo>(`/outputs/${id}`, json(d, "PATCH"));
+
+export const puertas = (centerId?: string | null) => pedir<Puerta[]>(`/doors${query({ centerId })}`);
+export const crearPuerta = (d: Record<string, unknown>) => pedir<Puerta>("/doors", json(d));
+export const editarPuerta = (id: string, d: Record<string, unknown>) => pedir<Puerta>(`/doors/${id}`, json(d, "PATCH"));
+export const abrirPuerta = (id: string, reason?: string) => pedir<ResultadoApertura>(`/doors/${id}/open`, json({ reason: reason || null }));
+
+export const eventosAcceso = (f: { doorId?: string; customerId?: string; contractId?: string; centerId?: string; decision?: string; method?: string; limit?: number }) =>
+  pedir<EventoAcceso[]>(`/access-events${query(f)}`);
+
+export const miembros = (contractId: string) => pedir<MiembroContrato[]>(`/contracts/${contractId}/members`);
+export const crearMiembro = (contractId: string, d: Record<string, unknown>) => pedir<MiembroContrato[]>(`/contracts/${contractId}/members`, json(d));
+export const editarMiembro = (contractId: string, id: string, d: Record<string, unknown>) => pedir<MiembroContrato[]>(`/contracts/${contractId}/members/${id}`, json(d, "PATCH"));
+export const invitarMiembro = (contractId: string, id: string) => pedir<{ invited: boolean; email: string }>(`/contracts/${contractId}/members/${id}/portal-invite`, json({}));
+
+export const accesosContrato = (contractId: string) => pedir<AccesosContrato>(`/contracts/${contractId}/access`);
+export const concederPermiso = (contractId: string, d: Record<string, unknown>) => pedir<AccesosContrato>(`/contracts/${contractId}/permissions`, json(d));
+export const revocarPermiso = (contractId: string, permId: string) => pedir<AccesosContrato>(`/contracts/${contractId}/permissions/${permId}`, { method: "DELETE" });
+
+export const temporales = (f: { contractId?: string; centerId?: string; active?: string }) => pedir<AccesoTemporal[]>(`/temporary-accesses${query(f)}`);
+export const crearTemporal = (d: Record<string, unknown>) => pedir<AccesoTemporal>("/temporary-accesses", json(d));
+export const revocarTemporal = (id: string) => pedir<{ id: string }>(`/temporary-accesses/${id}/revoke`, json({}));

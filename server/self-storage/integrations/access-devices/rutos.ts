@@ -58,6 +58,8 @@ export function esDireccionPrivada(host: string): boolean {
   return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
 }
 
+const esLoopback = (host: string) => host === "localhost" || host === "::1" || host === "[::1]" || /^127\./.test(host);
+
 type Respuesta = { status: number; json: unknown };
 
 const TIEMPO_PETICION_MS = 6_000;
@@ -85,7 +87,7 @@ function peticion(d: DispositivoAcceso, metodo: string, ruta: string, cuerpo: un
       const trozos: Buffer[] = [];
       res.on("data", (c) => trozos.push(c));
       res.on("end", () => {
-        let json: unknown = null;
+        let json: unknown;
         try {
           json = JSON.parse(Buffer.concat(trozos).toString("utf8") || "null");
         } catch {
@@ -110,8 +112,14 @@ export class Rut241Adapter implements AccessDeviceAdapter {
     const cred = credenciales(d);
     const hit = sesiones.get(d.id);
     if (!forzar && hit && hit.caduca > Date.now()) return { token: hit.token, ca: cred.ca };
-    if (d.connectionType === "vpn_http" && !esDireccionPrivada(new URL(d.endpoint ?? "http://x").hostname)) {
+    const destino = new URL(d.endpoint ?? "http://x");
+    const privada = esDireccionPrivada(destino.hostname) || esLoopback(destino.hostname);
+    if (d.connectionType === "vpn_http" && !privada) {
       throw new ErrorDispositivo("NOT_CONFIGURED", "Con conexión por VPN el endpoint tiene que ser una dirección privada.");
+    }
+    // La contraseña nunca cruza Internet en claro ni contra un certificado sin verificar.
+    if (!privada && (destino.protocol !== "https:" || d.driverOptions.tlsInsecure === true)) {
+      throw new ErrorDispositivo("NOT_CONFIGURED", "Por Internet el endpoint tiene que ser https con certificado verificado (fija la CA en las credenciales).");
     }
     const r = await peticion(d, "POST", "/api/login", { username: cred.username, password: cred.password }, null, cred.ca);
     const data = (r.json as { success?: boolean; data?: { token?: string; expires?: number } } | null)?.data;

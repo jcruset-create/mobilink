@@ -573,3 +573,12 @@ Decisiones fijadas con pruebas:
 - **Portal del cliente** en `/trasteros/portal` y `/api/self-storage/portal`.
   Es otra guarda (`self_storage_customers.auth_user_id`), no la del panel.
   Detalle de la fase 2 en `docs/self-storage/ARQUITECTURA.md` §16.
+- **Accesos físicos (fase 3): Mobilink decide, el dispositivo ejecuta.**
+  Un único motor puro (`evaluateAccess`) para la app, la persona
+  autorizada, el enlace temporal, la apertura administrativa y la lista de
+  teléfonos del RUT241. El hardware va detrás de `AccessDeviceAdapter`
+  (mock con simulador, RUT241 por HTTPS directo o VPN, RMS preparado). Las
+  credenciales del equipo viven en una variable de entorno cuyo NOMBRE
+  guarda el dispositivo. Registro de aperturas append-only, límite de
+  frecuencia y sin «abierto» sin confirmación del equipo. Detalle en
+  `docs/self-storage/ARQUITECTURA.md` §18.

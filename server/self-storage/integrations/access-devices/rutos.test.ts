@@ -100,4 +100,10 @@ describe("Rut241Adapter (API RutOS)", () => {
     expect(esDireccionPrivada("8.8.8.8")).toBe(false);
     expect(await rut.testConnection(dispositivo({ connectionType: "vpn_http", endpoint: "https://8.8.8.8" }))).toMatchObject({ ok: false, code: "NOT_CONFIGURED" });
   });
+
+  it("por Internet: nada de http en claro ni de TLS sin verificar (la contraseña no sale)", async () => {
+    expect(await rut.testConnection(dispositivo({ endpoint: "http://203.0.113.10" }))).toMatchObject({ ok: false, code: "NOT_CONFIGURED" });
+    expect(await rut.testConnection(dispositivo({ endpoint: "https://203.0.113.10", driverOptions: { tlsInsecure: true } }))).toMatchObject({ ok: false, code: "NOT_CONFIGURED" });
+    expect(peticiones).toHaveLength(0);
+  });
 });
