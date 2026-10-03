@@ -10,6 +10,14 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import * as api from "../services/api";
 import {
+  ETIQUETA_ACCESS_METHOD,
+  ETIQUETA_ACCESS_REASON,
+  ETIQUETA_CONNECTION_TYPE,
+  ETIQUETA_DOOR_TYPE,
+  type AccessMethod,
+  type AccessReason,
+  type ConnectionType,
+  type DoorType,
   ETIQUETA_BLOCK_REASON,
   ETIQUETA_INVOICE_STATUS,
   ETIQUETA_ITEM_TYPE,
@@ -48,6 +56,10 @@ type Estado = {
   etqMetodo: (m: PaymentMethod | null | undefined) => string;
   etqPago: (e: PaymentStatus) => string;
   etqBloqueo: (r: BlockReason) => string;
+  etqMotivoAcceso: (r: AccessReason) => string;
+  etqMetodoAcceso: (m: AccessMethod) => string;
+  etqTipoPuerta: (t: DoorType) => string;
+  etqConexion: (t: ConnectionType) => string;
   refrescar: () => Promise<void>;
 };
 
@@ -117,6 +129,10 @@ export function SelfStorageProvider({ children }: { children: ReactNode }) {
       etqMetodo: (m) => (m ? (et?.paymentMethod?.[m] ?? ETIQUETA_PAYMENT_METHOD[m] ?? m) : "—"),
       etqPago: (e) => et?.paymentStatus?.[e] ?? ETIQUETA_PAYMENT_STATUS[e] ?? e,
       etqBloqueo: (r) => et?.blockReason?.[r] ?? ETIQUETA_BLOCK_REASON[r] ?? r,
+      etqMotivoAcceso: (r) => et?.accessReason?.[r] ?? ETIQUETA_ACCESS_REASON[r] ?? r,
+      etqMetodoAcceso: (m) => et?.accessMethod?.[m] ?? ETIQUETA_ACCESS_METHOD[m] ?? m,
+      etqTipoPuerta: (t) => et?.doorType?.[t] ?? ETIQUETA_DOOR_TYPE[t] ?? t,
+      etqConexion: (t) => et?.connectionType?.[t] ?? ETIQUETA_CONNECTION_TYPE[t] ?? t,
       refrescar,
     };
   }, [cargando, error, datos, centroId, fijarCentro, refrescar]);

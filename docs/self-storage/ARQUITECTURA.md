@@ -778,7 +778,7 @@ perezosa. La tarea solo pone orden en los estados.
 |---|---|---|
 | **1** | esquema y RLS; auth de empleados y clientes; clientes; centros; zonas; trasteros; plano SVG; importación CSV; auditoría; configuración | se importa Reus, se ve el plano coloreado, se da de alta un cliente y todo queda auditado; pruebas de dominio y de aislamiento en verde |
 | **2** | contratos y documentos PDF; reservas; facturación y PDF; Stripe (Checkout, webhook, idempotencia); pagos manuales; motor de impagos (solo estados y avisos) | un contrato se cobra en modo prueba de Stripe, se genera la factura con PDF, un evento repetido no se procesa dos veces y un impago lleva la factura a `overdue` |
-| **3** | puertas; dispositivos; `DoorController` (mock, después RMS/HTTP con el hardware); permisos; bloqueos; accesos temporales; llamada Twilio; límite de frecuencia; suspensión y restauración automáticas | con hardware real: abre la puerta autorizada, deniega la de otra zona, bloquea al suspender y restaura al pagar |
+| **3** | puertas; dispositivos; `AccessDeviceAdapter` (mock, RUT241 por HTTP directo/VPN, RMS preparado); permisos; bloqueos; accesos temporales; llamada a la lista blanca del RUT241 (sin Twilio); límite de frecuencia; suspensión y restauración automáticas (§18) | con hardware real: abre la puerta autorizada, deniega la de otra zona, bloquea al suspender y restaura al pagar |
 | **4** | portal del cliente; web pública con «Ver capacidad»; contratación online de principio a fin; cuenta del cliente con enlace mágico | el flujo B completo en modo prueba |
 
 **Criterio de éxito del MVP**: el flujo A completo es una prueba de
@@ -1163,3 +1163,247 @@ la **cuota** en euros (4,34), y el importador la leía como **porcentaje**
 
 Contratos y facturas **no** se tocan: son fotografías fiscales.
 
+
+## 18. Fase 3: accesos físicos, puertas, dispositivos y RUT241
+
+**Regla de oro: quién puede entrar lo decide Mobilink; el dispositivo sólo
+ejecuta.** El derecho de acceso (contrato, permisos, bloqueos) está separado
+del mecanismo físico (dispositivo → salida → puerta). Cambiar de RUT241 a
+otro Teltonika, a un módulo de relés o a otro controlador no toca ninguna
+regla de negocio: se cambia el adapter.
+
+### Modelo (migración `0009_fase3_accesos.sql`)
+
+| Tabla | Para qué |
+|---|---|
+| `self_storage_devices` | equipo físico por centro: fabricante, modelo, serie, IMEI, SIM, `connection_type` (`mock` / `direct_http` / `vpn_http` / `rms`), `endpoint`, `credentials_secret_name` (el **nombre** de una variable de entorno, nunca el secreto), `driver_options` (no secretas), `phone_access_mode` (`none` / `rut_whitelist`), `status`, `last_seen_at`, `last_error` |
+| `self_storage_device_outputs` | salidas del equipo (número, tipo, duración del pulso 100–30 000 ms). Una puerta apunta a UNA salida (`unique`) |
+| `self_storage_doors` | `center_id`, `zone_id` (nulo salvo `zone`), `door_type` (`main`/`zone`/`internal`/`other`), `device_output_id`, `enabled`, `allow_app`, `allow_phone`, `access_schedule` |
+| `self_storage_contract_members` | + `auth_user_id`: la persona autorizada entra al portal con su cuenta y abre con SU identidad |
+| `self_storage_access_permissions` | permisos `contract` (generados) y `manual`. **No son la fuente de verdad**: el motor vuelve a comprobar contrato, bloqueos y zona en cada intento |
+| `self_storage_temporary_accesses` (+ `_doors`) | fechas, usos (1, N o sin límite), puertas concretas, teléfono, titular/invitado, enlace (sólo se guarda el **sha256** del token) |
+| `self_storage_access_events` | registro **append-only** (trigger): centro, puerta, dispositivo, salida, contrato, cliente, miembro, temporal, personal, método, `requested_at`, decisión, motivo, `execution_status`, `executed_at`, `latency_ms`, `device_response` saneada. Sólo se permite UNA transición `pending → succeeded/failed/timeout` |
+| `self_storage_device_syncs` | estado deseado y real de la lista de teléfonos por dispositivo, con huella, `status` (`pending`/`synced`/`failed`), intentos, `last_attempt_at`, `last_success_at`, `next_attempt_at`, error |
+
+RLS: el cliente ve sus eventos, permisos y temporales; dispositivos, puertas
+y sincronizaciones sólo por el backend (service role).
+
+### Motor único: `evaluateAccess` (`domain/accesos.ts`)
+
+Función pura `evaluateAccess(puerta, actor, instante, método)` →
+`{ granted, reason, contractId }`. La usan TODOS los caminos: app del
+titular, app de la persona autorizada, enlace temporal, apertura
+administrativa, el cálculo de la lista de teléfonos y la ficha del contrato.
+No hay reglas duplicadas.
+
+Orden de comprobación: puerta habilitada → método permitido en la puerta →
+persona (cliente activo, miembro activo con app/teléfono, temporal vigente
+con usos) → contratos y bloqueos (prioridad seguridad > finalizado > manual >
+incidencia > impago) → estado del contrato → permiso → puerta derivada (zona
+del trastero) → horario (no aplica al personal) → dispositivo en línea.
+
+Motivos: `GRANTED`, `CONTRACT_NOT_ACTIVE`, `CONTRACT_TERMINATED`,
+`PAYMENT_BLOCK`, `SECURITY_BLOCK`, `MANUAL_BLOCK`, `INCIDENT_BLOCK`,
+`DOOR_NOT_ALLOWED`, `OUTSIDE_SCHEDULE`, `TEMPORARY_ACCESS_EXPIRED`,
+`TEMPORARY_ACCESS_EXHAUSTED`, `DEVICE_OFFLINE`, `DEVICE_NOT_CONFIGURED`,
+`RATE_LIMITED`, `PERMISSION_EXPIRED`… (lista completa con etiquetas en
+`types/enums.ts`).
+
+Contrato de la zona 2 → puerta principal + puerta de la zona 2. No abre la
+zona 1 aunque alguien cree un permiso a mano por error: la puerta derivada
+se recalcula siempre.
+
+### Apertura (`modules/accesos/apertura.ts`)
+
+`POST /api/self-storage/portal/access/open {doorId}` — la identidad sale de
+la sesión (titular o persona autorizada), **nunca del cuerpo**.
+
+1. La puerta tiene que ser de la empresa (si no, 404).
+2. Límite de frecuencia: `access.rate_limit_per_minute` por persona
+   (Configuración, 6 por defecto) y 30/min por IP. El intento limitado
+   también queda registrado (`RATE_LIMITED`, HTTP 429).
+3. Si el equipo figura offline se le pregunta en el momento (latido de 4 s).
+4. En UNA transacción: evaluar → insertar el evento (`pending` o
+   `not_attempted`) → consumir el uso del temporal (con `FOR UPDATE`) →
+   auditoría `door.opened_by_admin` si es administrativa.
+5. Fuera de la transacción: `activateOutput` con 12 s de tope → el evento
+   pasa a `succeeded` / `failed` / `timeout` con la respuesta saneada
+   (código, HTTP, mensaje; nunca tokens ni credenciales).
+6. Sin confirmación del equipo **no hay «abierto»** (sin falsos positivos).
+   Si no se abrió, el temporal recupera su uso.
+
+Apertura administrativa: `POST /api/self-storage/admin/doors/:id/open
+{reason?}` (permiso `ss.access.open`), mismo camino con método `admin`.
+
+### Adapters (`integrations/access-devices/`)
+
+```ts
+interface AccessDeviceAdapter {
+  testConnection(d): Promise<ResultadoConexion>;
+  getStatus(d): Promise<{ online; latencyMs }>;
+  activateOutput(d, salida): Promise<ResultadoSalida>;
+  syncAuthorizedPhones(d, phones): Promise<{ ok; applied; code?; message? }>;
+  getAuthorizedPhones(d): Promise<string[]>;
+}
+```
+
+| Adapter | `connection_type` | Estado |
+|---|---|---|
+| `MockAccessDeviceAdapter` | `mock` | completo; simulador por dispositivo (`simulation`): online/offline, apertura ok/timeout/salida que falla, sincronización ok/fallo |
+| `Rut241Adapter` | `direct_http`, `vpn_http` | apertura completa sobre la API REST de RutOS; teléfonos sólo si se configura `phoneGroupPath` (ver abajo) |
+| `RmsAdapter` | `rms` | preparado (devuelve `NOT_SUPPORTED`) |
+
+El dominio no sabe cómo se llega al equipo: `adapterDe(dispositivo)` elige
+por `connection_type`.
+
+### Protocolo con el RUT241 (lo confirmado y lo que no)
+
+El contenedor de desarrollo no llega a la documentación de Teltonika, así
+que lo de abajo sale de la documentación pública consultada indirectamente y
+**se tiene que verificar con el equipo real antes de producción**.
+
+Confirmado:
+
+- El RUT241 tiene **1 entrada digital y 1 salida digital de colector
+  abierto** (30 V / 300 mA). Para una cerradura hace falta un **relé
+  externo** (o un módulo de relés).
+- API REST de RutOS (≥ 7.x): `POST /api/login {username,password}` →
+  token Bearer (~5 min). Se renueva antes de caducar y, ante un 401, se
+  vuelve a iniciar sesión una vez.
+- Salida: `POST /api/io/dout1/actions/change_state {"data":{"value":"1"}}`.
+  Desde RutOS 7.18 admite duración (pulso nativo). Para firmware anterior,
+  `driver_options.pulseMode = "on_off"`: enciende, espera y **siempre**
+  apaga (`finally`).
+- La interfaz CGI antigua desapareció en RutOS 7.14: no se usa.
+- «Call utilities» puede accionar una salida al recibir una llamada de un
+  número de un grupo de teléfonos, sin descolgar y sin Twilio.
+
+**Sin confirmar** (y por eso desactivado por defecto):
+
+- La ruta exacta de la API para leer/escribir el **grupo de teléfonos** de
+  Call utilities. El adapter la toma de `driver_options.phoneGroupPath` y
+  `phoneGroupField`. Mientras no se configure, la sincronización queda
+  `failed` con `NOT_SUPPORTED` y lo dice en el panel: nunca se escribe a
+  medias.
+- El nombre exacto del campo de duración del pulso nativo
+  (`driver_options.pulseTimeField`, `pulseTimeUnit`).
+
+Transporte y credenciales:
+
+- Variable de entorno con el **nombre** guardado en el dispositivo
+  (`^[A-Z][A-Z0-9_]{2,80}$`), con JSON
+  `{"username":"…","password":"…","ca":"-----BEGIN CERTIFICATE-----…"}`.
+  El valor nunca llega a la base, al log ni al navegador.
+- `ca`: el certificado autofirmado del router se **fija** (pinning).
+- Por Internet sólo `https` con certificado verificado; `http` en claro o
+  `tlsInsecure` sólo se aceptan contra direcciones privadas (VPN/LAN).
+- `vpn_http` exige una dirección privada (10/8, 172.16/12, 192.168/16,
+  100.64/10 de CGNAT/Tailscale).
+
+### Sincronización de teléfonos (`rut_whitelist`)
+
+El backend calcula la lista; el equipo sólo la aplica.
+
+- **Estado deseado calculado**: para cada dispositivo, los teléfonos de
+  titulares (`allow_door_access`), miembros con `allow_phone` y temporales
+  con teléfono **y sin límite de usos** (una llamada no se puede contar) a
+  los que `evaluateAccess(…, "phone")` concede alguna de sus puertas
+  **ahora**.
+- **Números compartidos**: como la lista es el resultado de evaluar a TODAS
+  las personas, un número no se quita mientras otro contrato, miembro o
+  temporal siga necesitándolo.
+- Activo → entra; suspendido → sale; reactivado → vuelve; finalizado →
+  sale. Ninguna de esas reglas está escrita aparte: salen del motor.
+- **Cuándo**: cualquier cambio que afecta a accesos (bloquear, levantar,
+  activar, suspender, finalizar, cancelar, estado del cliente, teléfonos,
+  miembros, permisos, temporales, puertas) llama a `marcarCambioAcceso` en
+  su misma transacción → recalcula el deseado de los dispositivos del
+  centro (huella sha256; si cambia, `pending`) → tras el COMMIT se aplica a
+  los 1,5 s. El webhook de Stripe que suspende o reactiva pasa por los
+  mismos hooks.
+- **Reintentos**: el trabajo `accesos` (con los demás trabajos programados, con su lock)
+  hace latido de los equipos, recalcula y aplica los `pending`/`failed`
+  con espera exponencial (máx. 60 min).
+- La **app** aplica los cambios al instante (evalúa en cada intento); la
+  llamada, en cuanto el equipo acepta la lista. Mientras tanto el panel
+  enseña «Pendiente de aplicar» y el deseado frente al real.
+
+### Endpoints
+
+Panel (`/api/self-storage/admin`):
+
+| Método y ruta | Permiso |
+|---|---|
+| `GET/POST /devices`, `PATCH /devices/:id` | `ss.doors.view` / `ss.devices.manage` |
+| `POST /devices/:id/test` | `ss.devices.test` |
+| `POST /devices/:id/sync` | `ss.devices.manage` |
+| `POST /devices/:id/outputs`, `PATCH /outputs/:id` | `ss.devices.manage` |
+| `GET/POST /doors`, `PATCH /doors/:id` | `ss.doors.view` / `ss.devices.manage` |
+| `POST /doors/:id/open` | `ss.access.open` |
+| `GET /access-events` | `ss.access.view` |
+| `GET/POST /contracts/:id/members`, `PATCH …/:memberId`, `POST …/:memberId/portal-invite` | `ss.access.view` / `ss.access.manage` |
+| `GET /contracts/:id/access`, `POST /contracts/:id/permissions`, `DELETE …/:permId` | `ss.access.view` / `ss.access.manage` |
+| `GET/POST /temporary-accesses`, `POST /temporary-accesses/:id/revoke` | `ss.access.view` / `ss.access.manage` |
+
+Portal (`/api/self-storage/portal`):
+
+| Método y ruta | Quién |
+|---|---|
+| `GET /access/doors` | titular o persona autorizada (sesión) |
+| `POST /access/open {doorId}` | titular o persona autorizada (sesión) |
+| `GET /access/events` | titular o persona autorizada (sesión) |
+| `POST /access/temporary/doors {token}` | invitado con enlace (sin sesión) |
+| `POST /access/temporary/open {token, doorId}` | invitado con enlace (sin sesión) |
+
+Las personas autorizadas no pasan de ahí: contratos, facturas y pagos
+llevan `soloTitular`.
+
+### Pantallas
+
+- **Self Storage → Puertas**: por puerta, dispositivo, salida, en
+  línea/sin conexión, última comunicación, última apertura y último error;
+  «Probar conexión» y «Abrir» (con motivo opcional) según permisos.
+  Pestaña de dispositivos: salidas, teléfonos deseados frente a aplicados,
+  estado de la sincronización y los mandos del simulador.
+- **Self Storage → Accesos**: registro de aperturas con filtros (puerta,
+  decisión, método) y accesos temporales (alta, enlace que se muestra una
+  sola vez, revocar).
+- **Ficha del contrato → Accesos**: qué puertas abre ahora y por qué,
+  personas autorizadas (alta, estado, invitar al portal), permisos
+  (manuales), temporales y últimas aperturas.
+- **Configuración**: «Aperturas de puerta» (límite por minuto).
+- **Portal → Accesos**: botones «Abrir» por puerta con el motivo si no
+  se puede, y sus últimas aperturas. La persona autorizada sólo ve esto.
+- **`/trasteros/abrir/:token`**: página pública del enlace temporal.
+
+### Producción: pasos en Render y en el RUT241
+
+En el RUT241 (verificar cada punto con el firmware instalado):
+
+1. Actualizar RutOS a ≥ 7.18 (pulso nativo) o configurar
+   `pulseMode: "on_off"`.
+2. Cablear la salida digital a un **relé** que mueva la cerradura (la
+   salida no la alimenta directamente).
+3. Crear un usuario de API dedicado (no `admin`) con permiso sólo sobre
+   E/S (y Call utilities si se usa la llamada).
+4. Acceso remoto: IP pública fija con HTTPS y regla de cortafuegos
+   limitada a la IP de salida de Render, o **VPN** (WireGuard/OpenVPN/
+   Tailscale) si la SIM está tras CGNAT. RMS queda como alternativa
+   (adapter preparado; cuesta créditos y tiene cupo mensual).
+5. Exportar el certificado del router (o instalar uno propio) para fijar
+   su CA.
+6. Call utilities: crear el grupo «Mobilink» y una regla «Switch digital
+   output» para llamadas de ese grupo. Localizar la ruta de la API del
+   grupo y ponerla en `driver_options.phoneGroupPath`.
+
+En Render:
+
+1. Una variable por equipo, p. ej. `SS_RUT_REUS_1`, con el JSON de
+   credenciales (+ `ca`). En el dispositivo se guarda sólo ese nombre.
+2. Con VPN: la conexión de Render a la red privada (p. ej. un sidecar o
+   un servicio con Tailscale) y `connection_type = vpn_http`.
+3. Mantener `SELF_STORAGE_JOBS` activo para latidos y reintentos.
+
+Antes de dar de alta clientes: «Probar conexión», abrir desde el panel,
+abrir desde la app con un contrato de prueba, bloquear y comprobar que
+deniega, y revisar en el registro el `device_response` de cada intento.

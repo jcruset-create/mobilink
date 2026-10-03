@@ -67,6 +67,9 @@ async function limpiar() {
   await db.query(`DELETE FROM self_storage_payments WHERE empresa_id = $1`, [EMPRESA]);
   await db.query(`DELETE FROM self_storage_invoices WHERE empresa_id = $1`, [EMPRESA]);
   await db.query(`ALTER TABLE self_storage_invoices ENABLE TRIGGER self_storage_invoices_guard`);
+  await db.query(`ALTER TABLE self_storage_access_events DISABLE TRIGGER self_storage_access_events_guard`);
+  await db.query(`DELETE FROM self_storage_access_events WHERE empresa_id = $1`, [EMPRESA]);
+  await db.query(`ALTER TABLE self_storage_access_events ENABLE TRIGGER self_storage_access_events_guard`);
   for (const t of ["self_storage_contract_members", "self_storage_contracts", "self_storage_reservations", "self_storage_customer_phones", "self_storage_customers", "self_storage_units", "self_storage_zones", "self_storage_centers"]) {
     await db.query(`DELETE FROM ${t} WHERE empresa_id = $1`, [EMPRESA]);
   }
@@ -156,6 +159,14 @@ describe.skipIf(!RUN)("Self Storage · RLS entre clientes", () => {
       ids.kAna,
       ids.kBea,
     ]);
+    // Fase 3: un evento de acceso de cada una.
+    for (const [cli, k, nombre] of [[ids.ana, ids.kAna, "Ana"], [ids.bea, ids.kBea, "Bea"]]) {
+      await db.query(
+        `INSERT INTO self_storage_access_events (empresa_id, center_id, contract_id, customer_id, actor_type, actor_name, method, decision, reason, execution_status)
+         VALUES ($1,$2,$3,$4,'customer',$5,'app','denied','DOOR_NOT_ALLOWED','not_attempted')`,
+        [EMPRESA, ids.centro, k, cli, nombre]
+      );
+    }
   }, 60_000);
 
   afterAll(async () => {
@@ -185,6 +196,18 @@ describe.skipIf(!RUN)("Self Storage · RLS entre clientes", () => {
     }
     expect(await codigoError(como("authenticated", ANA, `UPDATE self_storage_invoices SET status = 'paid', paid_at = now() WHERE id = $1`, [ids.fAna]))).toBe("42501");
     expect(await codigoError(como("anon", null, `SELECT 1 FROM self_storage_invoices`))).toBe("42501");
+  });
+
+  it("⚑ accesos (fase 3): cada cliente sólo sus eventos; dispositivos, puertas y sincronizaciones cerrados", async () => {
+    expect((await como("authenticated", ANA, `SELECT actor_name FROM self_storage_access_events`)).map((r) => r.actor_name)).toEqual(["Ana"]);
+    expect((await como("authenticated", BEA, `SELECT actor_name FROM self_storage_access_events`)).map((r) => r.actor_name)).toEqual(["Bea"]);
+    expect(await como("authenticated", ANA, `SELECT * FROM self_storage_access_events WHERE customer_id = $1`, [ids.bea])).toEqual([]);
+    expect(await como("authenticated", EMPLEADO, `SELECT 1 FROM self_storage_access_events`)).toEqual([]);
+    for (const t of ["self_storage_devices", "self_storage_device_outputs", "self_storage_doors", "self_storage_device_syncs", "self_storage_temporary_access_doors"]) {
+      expect(await como("authenticated", ANA, `SELECT 1 FROM ${t}`), t).toEqual([]);
+    }
+    expect(await codigoError(como("authenticated", ANA, `INSERT INTO self_storage_access_events (empresa_id, actor_type, method, decision, reason, execution_status) VALUES ($1,'customer','app','granted','GRANTED','succeeded')`, [EMPRESA]))).toBe("42501");
+    expect(await codigoError(como("anon", null, `SELECT 1 FROM self_storage_access_events`))).toBe("42501");
   });
 
   it("Ana no alcanza lo de Bea ni pidiéndolo por id", async () => {

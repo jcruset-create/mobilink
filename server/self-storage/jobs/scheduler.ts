@@ -18,7 +18,7 @@ import { facturarPeriodosManuales } from "../modules/facturas/service.ts";
 import { ejecutarImpagos, marcarVencidas } from "../modules/impagos/service.ts";
 import { enviarPendientes } from "../modules/notificaciones/service.ts";
 
-export const TRABAJOS = ["facturacion", "vencimientos", "impagos", "notificaciones", "stripe_reintentos"] as const;
+export const TRABAJOS = ["facturacion", "vencimientos", "impagos", "notificaciones", "stripe_reintentos", "accesos"] as const;
 export type Trabajo = (typeof TRABAJOS)[number];
 
 const CERROJOS: Record<Trabajo, number> = {
@@ -27,6 +27,7 @@ const CERROJOS: Record<Trabajo, number> = {
   impagos: 727_002_003,
   notificaciones: 727_002_004,
   stripe_reintentos: 727_002_005,
+  accesos: 727_002_006,
 };
 
 async function cuerpo(t: Trabajo): Promise<unknown> {
@@ -39,6 +40,10 @@ async function cuerpo(t: Trabajo): Promise<unknown> {
       return ejecutarImpagos();
     case "notificaciones":
       return enviarPendientes();
+    case "accesos": {
+      const { trabajoAccesos } = await import("../modules/accesos/sincronizacion.ts");
+      return trabajoAccesos();
+    }
     case "stripe_reintentos": {
       const { reintentarFallidos } = await import("../integrations/stripe/webhook.ts");
       return { reprocesados: await reintentarFallidos() };
@@ -67,7 +72,8 @@ export function startSelfStorageJobs(intervaloMs = 5 * 60_000): void {
   const vuelta = async () => {
     // En este orden: lo que se factura hoy, lo que vence, el impago que avanza
     // y, al final, los avisos que todo lo anterior haya dejado en la bandeja.
-    for (const t of ["facturacion", "vencimientos", "impagos", "stripe_reintentos", "notificaciones"] as Trabajo[]) {
+    // `accesos` después de `impagos`: una suspensión de hoy llega al dispositivo en la misma vuelta.
+    for (const t of ["facturacion", "vencimientos", "impagos", "accesos", "stripe_reintentos", "notificaciones"] as Trabajo[]) {
       try {
         await ejecutarTrabajo(t);
       } catch (e) {

@@ -159,3 +159,97 @@ export const COLOR_PLANO: Record<UnitStatus, { fill: string; stroke: string; nom
   maintenance: { fill: "#9ca3af", stroke: "#4b5563", nombre: "gris" },
   blocked: { fill: "#9ca3af", stroke: "#4b5563", nombre: "gris" },
 };
+
+// ── Fase 3: accesos físicos ──────────────────────────────────────────────────
+
+export const DOOR_TYPES = ["main", "zone", "internal", "other"] as const;
+export type DoorType = (typeof DOOR_TYPES)[number];
+export const ETIQUETA_DOOR_TYPE: Record<DoorType, string> = {
+  main: "Principal",
+  zone: "De zona",
+  internal: "Interior",
+  other: "Otra",
+};
+
+/** Cómo se llega al dispositivo. Sólo lo usa el adapter; el dominio no lo mira. */
+export const CONNECTION_TYPES = ["mock", "direct_http", "vpn_http", "rms"] as const;
+export type ConnectionType = (typeof CONNECTION_TYPES)[number];
+export const ETIQUETA_CONNECTION_TYPE: Record<ConnectionType, string> = {
+  mock: "Simulador",
+  direct_http: "API RutOS directa (HTTPS)",
+  vpn_http: "API RutOS por VPN",
+  rms: "Teltonika RMS (preparado)",
+};
+
+export const DEVICE_STATUSES = ["unknown", "online", "offline"] as const;
+export type DeviceStatus = (typeof DEVICE_STATUSES)[number];
+
+export const ACCESS_METHODS = ["app", "phone", "admin", "temporary_link"] as const;
+export type AccessMethod = (typeof ACCESS_METHODS)[number];
+export const ETIQUETA_ACCESS_METHOD: Record<AccessMethod, string> = {
+  app: "App",
+  phone: "Llamada",
+  admin: "Administración",
+  temporary_link: "Enlace temporal",
+};
+
+/** Motivo de la decisión de `evaluateAccess`. GRANTED es el único que abre. */
+export const ACCESS_REASONS = [
+  "GRANTED",
+  "DOOR_DISABLED",
+  "METHOD_NOT_ALLOWED",
+  "PERSON_NOT_FOUND",
+  "CUSTOMER_BLOCKED",
+  "CUSTOMER_NOT_ACTIVE",
+  "MEMBER_NOT_ACTIVE",
+  "CONTRACT_NOT_ACTIVE",
+  "CONTRACT_TERMINATED",
+  "PAYMENT_BLOCK",
+  "SECURITY_BLOCK",
+  "INCIDENT_BLOCK",
+  "MANUAL_BLOCK",
+  "DOOR_NOT_ALLOWED",
+  "PERMISSION_EXPIRED",
+  "OUTSIDE_SCHEDULE",
+  "TEMPORARY_ACCESS_NOT_STARTED",
+  "TEMPORARY_ACCESS_EXPIRED",
+  "TEMPORARY_ACCESS_EXHAUSTED",
+  "TEMPORARY_ACCESS_REVOKED",
+  "DEVICE_NOT_CONFIGURED",
+  "DEVICE_DISABLED",
+  "DEVICE_OFFLINE",
+  "RATE_LIMITED",
+] as const;
+export type AccessReason = (typeof ACCESS_REASONS)[number];
+export const ETIQUETA_ACCESS_REASON: Record<AccessReason, string> = {
+  GRANTED: "Permitido",
+  DOOR_DISABLED: "Puerta deshabilitada",
+  METHOD_NOT_ALLOWED: "Método no permitido en esta puerta",
+  PERSON_NOT_FOUND: "Persona no reconocida",
+  CUSTOMER_BLOCKED: "Cliente bloqueado",
+  CUSTOMER_NOT_ACTIVE: "Cliente no activo",
+  MEMBER_NOT_ACTIVE: "Persona autorizada no activa",
+  CONTRACT_NOT_ACTIVE: "Contrato no activo",
+  CONTRACT_TERMINATED: "Contrato finalizado",
+  PAYMENT_BLOCK: "Bloqueo por impago",
+  SECURITY_BLOCK: "Bloqueo por seguridad",
+  INCIDENT_BLOCK: "Bloqueo por incidencia",
+  MANUAL_BLOCK: "Bloqueo manual",
+  DOOR_NOT_ALLOWED: "Puerta no autorizada",
+  PERMISSION_EXPIRED: "Permiso fuera de fechas",
+  OUTSIDE_SCHEDULE: "Fuera de horario",
+  TEMPORARY_ACCESS_NOT_STARTED: "Acceso temporal aún no vigente",
+  TEMPORARY_ACCESS_EXPIRED: "Acceso temporal caducado",
+  TEMPORARY_ACCESS_EXHAUSTED: "Acceso temporal ya usado",
+  TEMPORARY_ACCESS_REVOKED: "Acceso temporal revocado",
+  DEVICE_NOT_CONFIGURED: "Puerta sin dispositivo",
+  DEVICE_DISABLED: "Dispositivo deshabilitado",
+  DEVICE_OFFLINE: "Dispositivo sin conexión",
+  RATE_LIMITED: "Demasiados intentos",
+};
+
+export const EXECUTION_STATUSES = ["not_attempted", "pending", "succeeded", "failed", "timeout"] as const;
+export type ExecutionStatus = (typeof EXECUTION_STATUSES)[number];
+
+export const SYNC_STATUSES = ["pending", "synced", "failed"] as const;
+export type SyncStatus = (typeof SYNC_STATUSES)[number];

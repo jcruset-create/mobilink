@@ -51,6 +51,18 @@ export const PERMISOS = [
   "ss.billing.admin",
   /** Configuración del módulo (emisor, series, plazos, condiciones). */
   "ss.settings.manage",
+  /** Fase 3 · ver puertas y dispositivos con su estado (sin datos de clientes). */
+  "ss.doors.view",
+  /** Fase 3 · «Probar conexión» de un dispositivo. */
+  "ss.devices.test",
+  /** Fase 3 · eventos de acceso, permisos, personas autorizadas y temporales (con datos de clientes). */
+  "ss.access.view",
+  /** Fase 3 · abrir una puerta desde el panel (apertura administrativa, auditada). */
+  "ss.access.open",
+  /** Fase 3 · personas autorizadas, permisos manuales y accesos temporales. */
+  "ss.access.manage",
+  /** Fase 3 · alta y configuración de dispositivos, salidas y puertas; sincronizar. */
+  "ss.devices.manage",
 ] as const;
 
 export type Permiso = (typeof PERMISOS)[number];
@@ -62,7 +74,7 @@ export type Permiso = (typeof PERMISOS)[number];
  * · superadmin  — el superadministrador de Mobilink (`es_superadmin`).
  */
 const POR_ROL: Record<StaffRole, readonly Permiso[]> = {
-  maintenance: ["ss.view", "ss.units.status"],
+  maintenance: ["ss.view", "ss.units.status", "ss.doors.view", "ss.devices.test"],
   employee: [
     "ss.view",
     "ss.customers.view",
@@ -72,6 +84,11 @@ const POR_ROL: Record<StaffRole, readonly Permiso[]> = {
     "ss.contracts.manage",
     "ss.billing.view",
     "ss.billing.manage",
+    "ss.doors.view",
+    "ss.devices.test",
+    "ss.access.view",
+    "ss.access.open",
+    "ss.access.manage",
   ],
   admin: PERMISOS,
   superadmin: PERMISOS,

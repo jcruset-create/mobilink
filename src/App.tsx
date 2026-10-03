@@ -105,6 +105,7 @@ const CentralApp = lazy(() => import("./modules/central/CentralApp"));
 const RecepcionesApp = lazy(() => import("./modules/recepciones/RecepcionesApp"));
 const SelfStorageApp = lazy(() => import("./modules/self-storage/SelfStorageApp"));
 const SelfStoragePortal = lazy(() => import("./modules/self-storage/portal/PortalApp"));
+const SelfStorageEnlace = lazy(() => import("./modules/self-storage/portal/PortalApp").then((m) => ({ default: m.AbrirConEnlace })));
 const OrManualesApp = lazy(() => import("./modules/or-manuales/OrManualesApp"));
 import AccesoPage from "./pages/AccesoPage";
 import InicioPage from "./pages/InicioPage";
@@ -419,6 +420,8 @@ export default function App() {
       <Route path="/self-storage/*" element={<SelfStorageApp />} />
       {/* Portal de los CLIENTES de trasteros (no son usuarios del panel) */}
       <Route path="/trasteros/portal/*" element={<SelfStoragePortal />} />
+      {/* Enlace temporal de un invitado: abre puertas sin cuenta (el token es la credencial) */}
+      <Route path="/trasteros/abrir/:token" element={<SelfStorageEnlace />} />
 
       {/* Mobilink OR Manuales */}
       <Route path="/or-manuales/*" element={<OrManualesApp />} />

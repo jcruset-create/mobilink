@@ -27,6 +27,7 @@ const NOMBRE_TRABAJO: Record<Trabajo, string> = {
   impagos: "Avanzar impagos (avisos y suspensión)",
   notificaciones: "Enviar notificaciones pendientes",
   stripe_reintentos: "Reintentar eventos de Stripe fallidos",
+  accesos: "Dispositivos: latido y sincronizar teléfonos",
 };
 
 export default function Configuracion() {
@@ -39,6 +40,7 @@ export default function Configuracion() {
   const [impago, setImpago] = useState({ firstNoticeDays: "", secondNoticeDays: "", suspendDays: "" });
   const [sepa, setSepa] = useState<FirstSepaPolicy>("wait_for_success");
   const [iva, setIva] = useState("");
+  const [limite, setLimite] = useState("");
   const [terminos, setTerminos] = useState({ version: "", texto: "" });
 
   const cargar = useCallback(async () => {
@@ -53,6 +55,7 @@ export default function Configuracion() {
       setImpago({ firstNoticeDays: String(p.firstNoticeDays), secondNoticeDays: String(p.secondNoticeDays), suspendDays: String(p.suspendDays) });
       setSepa(r["billing.first_sepa_payment_access_policy"].value);
       setIva(r.default_vat_rate.value.toFixed(2).replace(".", ","));
+      setLimite(String(r["access.rate_limit_per_minute"].value));
       setTerminos({ version: r["contracts.terms_version"].value, texto: r["contracts.terms_text"].value });
       setError(null);
     } catch (e) {
@@ -202,6 +205,15 @@ export default function Configuracion() {
               className={btnPrimary}
               onClick={() => void guardar({ "contracts.terms_version": terminos.version, "contracts.terms_text": terminos.texto }, "Condiciones")}
             >
+              Guardar
+            </button>
+          </Bloque>
+
+          <Bloque titulo="Aperturas de puerta" ayuda="Intentos de apertura por persona y minuto (app, enlace temporal y panel). Al pasarse, se rechazan y quedan registrados.">
+            <div className="max-w-[12rem]">
+              <TextField label="Intentos por minuto" value={limite} onChange={setLimite} />
+            </div>
+            <button className={btnPrimary} onClick={() => void guardar({ "access.rate_limit_per_minute": n(limite) }, "Aperturas")}>
               Guardar
             </button>
           </Bloque>

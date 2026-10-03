@@ -92,6 +92,11 @@ services:
         sync: false
       - key: SELF_STORAGE_STRIPE_SECRET_KEY
         sync: false
+      # Self Storage · puertas: una variable POR EQUIPO con el JSON
+      # {"username","password","ca"} del usuario de API del RUT241. El nombre
+      # (p. ej. SS_RUT_REUS_1) se escribe en el dispositivo desde el panel; el
+      # valor sólo vive aquí. Se añaden a mano en el dashboard al instalar cada
+      # equipo (ver docs/self-storage/ARQUITECTURA.md §18).
       # Integration Hub — Business Central (valores en el dashboard, nunca en el repo)
       - key: IH_SECRET__BUSINESS_CENTRAL__AAD_TENANT_ID
         sync: false

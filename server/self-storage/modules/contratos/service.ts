@@ -33,6 +33,7 @@ import { encolar } from "../notificaciones/service.ts";
 import { bloquear, levantar, reactivarSiProcede, suspenderSiActivo } from "../impagos/bloqueos.ts";
 import * as conceptos from "../conceptos/service.ts";
 import { activarContrato, exigirMotivo } from "./activacion.ts";
+import { cambioDeAccesoEnTx } from "../accesos/sincronizacion.ts";
 import { ETIQUETA_PAYMENT_METHOD, LIVE_CONTRACT_STATUSES, type BlockReason, type PaymentMethod } from "../../../../src/modules/self-storage/types/enums.ts";
 import type { contratoAlta, contratoCambio } from "../../schemas.ts";
 
@@ -544,6 +545,7 @@ export async function finalizar(actor: Actor, id: string, d: { endDate?: string 
     await c.query(`UPDATE self_storage_units SET status = 'available' WHERE id = $1`, [k.storage_unit_id]);
     await bloquear(c, actor, { empresaId: actor.empresaId, customerId: k.customer_id, contractId: id, reason: "terminated", source: "system", notes: motivo });
     await auditar(c, actor, { action: "contract.terminated", entityType: "contract", entityId: id, before: { status: k.status }, after: { status: nuevo, endDate: fin, reason: motivo } });
+    await cambioDeAccesoEnTx(c, actor.empresaId, { contractIds: [id] });
     if (k.stripe_subscription_id) t.cancelarSuscripcion = k.stripe_subscription_id;
     return obtener(actor.empresaId, id, c);
   });
@@ -577,6 +579,7 @@ export async function cancelar(actor: Actor, id: string, reason: string) {
       }
     }
     await auditar(c, actor, { action: "contract.cancelled", entityType: "contract", entityId: id, before: { status: k.status }, after: { status: nuevo, reason: motivo } });
+    await cambioDeAccesoEnTx(c, actor.empresaId, { contractIds: [id] });
     if (k.stripe_subscription_id) t.cancelarSuscripcion = k.stripe_subscription_id;
     return obtener(actor.empresaId, id, c);
   });

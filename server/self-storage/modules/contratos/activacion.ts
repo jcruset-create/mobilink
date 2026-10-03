@@ -17,6 +17,7 @@ import { ErrorSelfStorage, noExiste } from "../../errors.ts";
 import { transicion } from "../../domain/contractState.ts";
 import { validarCambioEstado } from "../../domain/unitStatus.ts";
 import { periodoDesde, sumarDias } from "../../domain/facturacion.ts";
+import { cambioDeAccesoEnTx } from "../accesos/sincronizacion.ts";
 
 export type MotivoActivacion = { tipo: "pago" } | { tipo: "sepa_en_proceso" } | { tipo: "excepcion"; motivo: string };
 
@@ -60,6 +61,8 @@ export async function activarContrato(c: Ejecutor, actor: Actor, contractId: str
     before: { status: k.status },
     after: { status: "active", by: por.tipo, reason: por.tipo === "excepcion" ? por.motivo : null },
   });
+  // Contrato activo → permisos de sus puertas y su teléfono a los dispositivos.
+  await cambioDeAccesoEnTx(c, k.empresa_id, { contractIds: [contractId] });
   return true;
 }
 

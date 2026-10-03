@@ -9,6 +9,9 @@
 
 import { z } from "zod";
 import {
+  ACCESS_METHODS,
+  CONNECTION_TYPES,
+  DOOR_TYPES,
   CONTRACT_STATUSES,
   CUSTOMER_STATUSES,
   CUSTOMER_TYPES,
@@ -355,3 +358,134 @@ export const filtroPagos = z.object({
 });
 
 export const ajusteCambio = z.strictObject({ value: z.unknown(), centerId: uuid.nullable().optional() });
+
+// ── Fase 3: accesos físicos ──────────────────────────────────────────────────
+
+const instante = z.iso.datetime({ offset: true });
+const telefonoTexto = z.string().trim().min(6).max(30);
+const jsonPlano = z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]));
+
+const camposSalida = {
+  outputNumber: z.number().int().min(1).max(64),
+  name: texto(80),
+  outputType: z.enum(["relay", "digital_output"]),
+  pulseDurationMs: z.number().int().min(100).max(30_000),
+  enabled: z.boolean(),
+};
+export const salidaAlta = z.strictObject({
+  ...camposSalida,
+  outputType: camposSalida.outputType.default("digital_output"),
+  pulseDurationMs: camposSalida.pulseDurationMs.default(1500),
+  enabled: z.boolean().default(true),
+});
+export const salidaCambio = z.strictObject(camposSalida).partial();
+
+const camposDispositivo = {
+  name: texto(120),
+  manufacturer: texto(60),
+  model: texto(60),
+  serial: textoOpcional(80),
+  imei: textoOpcional(30),
+  phoneNumber: telefonoTexto.nullable().optional(),
+  connectionType: z.enum(CONNECTION_TYPES),
+  endpoint: z.string().trim().regex(/^https?:\/\/[^\s@]+$/, "URL http(s)://host[:puerto]").max(300).nullable().optional(),
+  /** NOMBRE de la variable de entorno con las credenciales. Nunca la credencial. */
+  credentialsSecretName: z.string().trim().regex(/^[A-Z][A-Z0-9_]{2,80}$/, "nombre de variable de entorno en MAYÚSCULAS").nullable().optional(),
+  driverOptions: jsonPlano,
+  simulation: jsonPlano,
+  phoneAccessMode: z.enum(["none", "rut_whitelist"]),
+  enabled: z.boolean(),
+  notes: textoOpcional(1000),
+};
+export const dispositivoAlta = z.strictObject({
+  ...camposDispositivo,
+  centerId: uuid,
+  manufacturer: camposDispositivo.manufacturer.default("Teltonika"),
+  model: camposDispositivo.model.default("RUT241"),
+  connectionType: camposDispositivo.connectionType.default("mock"),
+  driverOptions: jsonPlano.optional(),
+  simulation: jsonPlano.optional(),
+  phoneAccessMode: camposDispositivo.phoneAccessMode.default("rut_whitelist"),
+  enabled: z.boolean().default(true),
+  outputs: z.array(z.strictObject({ ...camposSalida, outputType: camposSalida.outputType.default("digital_output"), pulseDurationMs: camposSalida.pulseDurationMs.default(1500), enabled: z.boolean().default(true) })).max(64).default([{ outputNumber: 1, name: "Salida 1", outputType: "digital_output", pulseDurationMs: 1500, enabled: true }]),
+});
+export const dispositivoCambio = z.strictObject(camposDispositivo).partial();
+
+const horario = z
+  .strictObject({
+    timezone: z.string().trim().max(60).optional(),
+    rules: z.array(z.strictObject({ days: z.array(z.number().int().min(1).max(7)).min(1).max(7), from: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/), to: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/) })).max(20),
+  })
+  .nullable();
+
+const camposPuerta = {
+  zoneId: uuid.nullable().optional(),
+  name: texto(120),
+  doorType: z.enum(DOOR_TYPES),
+  deviceOutputId: uuid.nullable().optional(),
+  enabled: z.boolean(),
+  allowApp: z.boolean(),
+  allowPhone: z.boolean(),
+  accessSchedule: horario.optional(),
+  sortOrder: z.number().int().min(0).max(10_000),
+};
+export const puertaAlta = z.strictObject({
+  ...camposPuerta,
+  centerId: uuid,
+  doorType: camposPuerta.doorType.default("main"),
+  enabled: z.boolean().default(true),
+  allowApp: z.boolean().default(true),
+  allowPhone: z.boolean().default(true),
+  sortOrder: camposPuerta.sortOrder.default(0),
+});
+export const puertaCambio = z.strictObject(camposPuerta).partial();
+
+export const aperturaAdmin = z.strictObject({ reason: textoOpcional(300) });
+export const aperturaPortal = z.strictObject({ doorId: uuid });
+export const aperturaEnlace = z.strictObject({ token: z.string().trim().min(20).max(100), doorId: uuid });
+
+const camposMiembro = {
+  fullName: texto(160),
+  phone: telefonoTexto.nullable().optional(),
+  email: z.email().nullable().optional(),
+  allowApp: z.boolean(),
+  allowPhone: z.boolean(),
+  notes: textoOpcional(500),
+};
+export const miembroAlta = z.strictObject({ ...camposMiembro, allowApp: z.boolean().default(false), allowPhone: z.boolean().default(false) });
+export const miembroCambio = z.strictObject({ ...camposMiembro, status: z.enum(["active", "suspended", "revoked"]) }).partial();
+
+export const permisoManual = z
+  .strictObject({ doorId: uuid, validFrom: instante.nullable().optional(), validUntil: instante.nullable().optional(), notes: textoOpcional(300) })
+  .refine((d) => !d.validFrom || !d.validUntil || d.validUntil > d.validFrom, { message: "la fecha de fin tiene que ser posterior al inicio", path: ["validUntil"] });
+
+export const temporalAlta = z
+  .strictObject({
+    centerId: uuid.nullable().optional(),
+    contractId: uuid.nullable().optional(),
+    customerId: uuid.nullable().optional(),
+    holderType: z.enum(["holder", "guest"]).default("guest"),
+    fullName: texto(160),
+    phone: telefonoTexto.nullable().optional(),
+    email: z.email().nullable().optional(),
+    startsAt: instante,
+    endsAt: instante,
+    /** null = sin límite dentro de las fechas. */
+    maxUses: z.number().int().min(1).max(1000).nullable().optional(),
+    doorIds: z.array(uuid).min(1).max(20),
+    withLink: z.boolean().default(false),
+    notes: textoOpcional(500),
+  })
+  .refine((d) => new Date(d.endsAt) > new Date(d.startsAt), { message: "el fin tiene que ser posterior al inicio", path: ["endsAt"] });
+
+export const filtroEventos = z.object({
+  doorId: uuid.optional(),
+  customerId: uuid.optional(),
+  contractId: uuid.optional(),
+  centerId: uuid.optional(),
+  decision: z.enum(["granted", "denied"]).optional(),
+  method: z.enum(ACCESS_METHODS).optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
