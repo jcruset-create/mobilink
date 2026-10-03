@@ -145,7 +145,11 @@ export async function ocupaciones(db: Ejecutor, empresaId: string, unitIds: stri
   const { rows } = await db.query(
     `SELECT c.storage_unit_id, c.id AS contract_id, c.contract_number, c.status AS contract_status,
             to_char(c.start_date, 'YYYY-MM-DD') AS start_date, to_char(c.end_date, 'YYYY-MM-DD') AS end_date,
-            cu.id AS customer_id, cu.customer_type, cu.first_name, cu.last_name, cu.company_name
+            cu.id AS customer_id, cu.customer_type, cu.first_name, cu.last_name, cu.company_name,
+            c.monthly_price::float8 AS contract_monthly_price, c.monthly_price_gross::float8 AS contract_monthly_price_gross,
+            CASE WHEN EXISTS (SELECT 1 FROM self_storage_dunning_cases d WHERE d.contract_id = c.id AND d.status = 'open') THEN 'overdue'
+                 WHEN EXISTS (SELECT 1 FROM self_storage_invoices i WHERE i.contract_id = c.id AND i.status IN ('pending','overdue')) THEN 'pending'
+                 ELSE 'up_to_date' END AS payment_status
        FROM self_storage_contracts c
        JOIN self_storage_customers cu ON cu.id = c.customer_id AND cu.empresa_id = c.empresa_id
       WHERE c.empresa_id = $1 AND c.storage_unit_id = ANY($2::uuid[]) AND c.status = ANY($3::self_storage_contract_status[])`,

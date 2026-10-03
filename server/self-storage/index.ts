@@ -18,13 +18,35 @@
  * portal/contratación online (4) llegan después: ver docs/self-storage/.
  */
 
-import type { Express } from "express";
+import express, { type Express } from "express";
 import { initSelfStorage } from "./schema.ts";
 import { createSelfStorageAdminRouter } from "./router.ts";
+import { createPortalRouter } from "./modules/portal/router.ts";
+import { procesarWebhook } from "./integrations/stripe/webhook.ts";
+import { ErrorSelfStorage } from "./errors.ts";
+import { startSelfStorageJobs, stopSelfStorageJobs } from "./jobs/scheduler.ts";
 
-export { initSelfStorage };
+export { initSelfStorage, startSelfStorageJobs, stopSelfStorageJobs };
+
+/**
+ * El webhook de Stripe necesita el cuerpo TAL CUAL llega para verificar la
+ * firma: se monta ANTES de `express.json()` (como /api/stripe/webhook).
+ */
+export function mountSelfStorageWebhooks(app: Express): void {
+  app.post("/api/self-storage/webhooks/stripe", express.raw({ type: "application/json", limit: "2mb" }), async (req, res) => {
+    try {
+      const r = await procesarWebhook(req.body as Buffer, req.get("stripe-signature") ?? undefined);
+      res.status(r.status).json(r.body);
+    } catch (e) {
+      if (e instanceof ErrorSelfStorage) return res.status(e.estado).json({ error: e.message, code: e.codigo });
+      console.error("[Self Storage] webhook:", e);
+      res.status(500).json({ error: "webhook_error" });
+    }
+  });
+}
 
 export function mountSelfStorage(app: Express): void {
   app.use("/api/self-storage/admin", createSelfStorageAdminRouter());
-  console.log("Módulo Self Storage: API montada en /api/self-storage/admin");
+  app.use("/api/self-storage/portal", createPortalRouter());
+  console.log("Módulo Self Storage: API montada en /api/self-storage/{admin,portal,webhooks}");
 }

@@ -9,7 +9,23 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import * as api from "../services/api";
-import type { Bootstrap, ContractStatus, CustomerStatus, CustomerType, UnitStatus } from "../types";
+import {
+  ETIQUETA_BLOCK_REASON,
+  ETIQUETA_INVOICE_STATUS,
+  ETIQUETA_ITEM_TYPE,
+  ETIQUETA_PAYMENT_METHOD,
+  ETIQUETA_PAYMENT_STATUS,
+  type BlockReason,
+  type Bootstrap,
+  type ContractStatus,
+  type CustomerStatus,
+  type CustomerType,
+  type InvoiceItemType,
+  type InvoiceStatus,
+  type PaymentMethod,
+  type PaymentStatus,
+  type UnitStatus,
+} from "../types";
 
 const CLAVE_CENTRO = "self-storage.centro";
 
@@ -27,6 +43,11 @@ type Estado = {
   etqCliente: (e: CustomerStatus) => string;
   etqTipoCliente: (t: CustomerType) => string;
   etqContrato: (e: ContractStatus) => string;
+  etqFactura: (e: InvoiceStatus) => string;
+  etqConcepto: (t: InvoiceItemType) => string;
+  etqMetodo: (m: PaymentMethod | null | undefined) => string;
+  etqPago: (e: PaymentStatus) => string;
+  etqBloqueo: (r: BlockReason) => string;
   refrescar: () => Promise<void>;
 };
 
@@ -90,6 +111,12 @@ export function SelfStorageProvider({ children }: { children: ReactNode }) {
       etqCliente: (e) => et?.customerStatus[e] ?? e,
       etqTipoCliente: (t) => et?.customerType[t] ?? t,
       etqContrato: (e) => et?.contractStatus[e] ?? e,
+      // Si el servidor aún no manda la etiqueta (despliegue a medias), la del vocabulario compartido.
+      etqFactura: (e) => et?.invoiceStatus?.[e] ?? ETIQUETA_INVOICE_STATUS[e] ?? e,
+      etqConcepto: (t) => et?.itemType?.[t] ?? ETIQUETA_ITEM_TYPE[t] ?? t,
+      etqMetodo: (m) => (m ? (et?.paymentMethod?.[m] ?? ETIQUETA_PAYMENT_METHOD[m] ?? m) : "—"),
+      etqPago: (e) => et?.paymentStatus?.[e] ?? ETIQUETA_PAYMENT_STATUS[e] ?? e,
+      etqBloqueo: (r) => et?.blockReason?.[r] ?? ETIQUETA_BLOCK_REASON[r] ?? r,
       refrescar,
     };
   }, [cargando, error, datos, centroId, fijarCentro, refrescar]);

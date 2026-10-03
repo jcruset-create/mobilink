@@ -63,6 +63,10 @@ async function codigoError(p: Promise<unknown>): Promise<string | null> {
 }
 
 async function limpiar() {
+  await db.query(`ALTER TABLE self_storage_invoices DISABLE TRIGGER self_storage_invoices_guard`);
+  await db.query(`DELETE FROM self_storage_payments WHERE empresa_id = $1`, [EMPRESA]);
+  await db.query(`DELETE FROM self_storage_invoices WHERE empresa_id = $1`, [EMPRESA]);
+  await db.query(`ALTER TABLE self_storage_invoices ENABLE TRIGGER self_storage_invoices_guard`);
   for (const t of ["self_storage_contract_members", "self_storage_contracts", "self_storage_reservations", "self_storage_customer_phones", "self_storage_customers", "self_storage_units", "self_storage_zones", "self_storage_centers"]) {
     await db.query(`DELETE FROM ${t} WHERE empresa_id = $1`, [EMPRESA]);
   }
@@ -121,12 +125,32 @@ describe.skipIf(!RUN)("Self Storage · RLS entre clientes", () => {
     ]);
     const contrato = (num: string, cli: string, u: string) =>
       q(
-        `INSERT INTO self_storage_contracts (empresa_id, center_id, contract_number, customer_id, storage_unit_id, start_date, monthly_price, tax_rate, billing_day, status, signed_at)
-         VALUES ($1,$2,$3,$4,$5,current_date,10,21,1,'active',now()) RETURNING id`,
+        `INSERT INTO self_storage_contracts (empresa_id, center_id, contract_number, customer_id, storage_unit_id, start_date, monthly_price, tax_rate, billing_day, status, signed_at, activated_at)
+         VALUES ($1,$2,$3,$4,$5,current_date,10,21,1,'active',now(),now()) RETURNING id`,
         [EMPRESA, ids.centro, num, cli, u]
       );
     ids.kAna = await contrato("RLS-ANA", ids.ana, ids.u1);
     ids.kBea = await contrato("RLS-BEA", ids.bea, ids.u2);
+    const factura = (cli: string, k: string, num: string, estado: string) =>
+      q(
+        `INSERT INTO self_storage_invoices (empresa_id, customer_id, contract_id, kind, collection_method, series, invoice_number, issue_date,
+           subtotal, tax, total, status, customer_name, customer_tax_id, issuer_name, issuer_tax_id)
+         VALUES ($1,$2,$3,'one_off','manual','F',$4,current_date,10,2.1,12.1,$5::self_storage_invoice_status,'X','11111111H','Emisor','B12345674') RETURNING id`,
+        [EMPRESA, cli, k, num, estado]
+      );
+    ids.fAna = await factura(ids.ana, ids.kAna, "RLS-F-1", "pending");
+    ids.fBea = await factura(ids.bea, ids.kBea, "RLS-F-2", "pending");
+    ids.fBorradorAna = await q(
+      `INSERT INTO self_storage_invoices (empresa_id, customer_id, contract_id, kind, collection_method) VALUES ($1,$2,$3,'one_off','manual') RETURNING id`,
+      [EMPRESA, ids.ana, ids.kAna]
+    );
+    for (const [cli, f] of [[ids.ana, ids.fAna], [ids.bea, ids.fBea]]) {
+      await db.query(
+        `INSERT INTO self_storage_payments (empresa_id, customer_id, invoice_id, amount, payment_method, status, paid_at, recorded_by)
+         VALUES ($1,$2,$3,12.1,'cash','succeeded',now(),$4)`,
+        [EMPRESA, cli, f, EMPLEADO]
+      );
+    }
     await db.query(`INSERT INTO self_storage_contract_members (empresa_id, contract_id, full_name) VALUES ($1,$2,'María (autorizada de Ana)'), ($1,$3,'Luis (autorizado de Bea)')`, [
       EMPRESA,
       ids.kAna,
@@ -147,6 +171,20 @@ describe.skipIf(!RUN)("Self Storage · RLS entre clientes", () => {
     expect((await como("authenticated", ANA, `SELECT full_name FROM self_storage_contract_members`)).map((r) => r.full_name)).toEqual(["María (autorizada de Ana)"]);
     expect((await como("authenticated", ANA, `SELECT phone_e164 FROM self_storage_customer_phones`)).map((r) => r.phone_e164)).toEqual(["+34611000001"]);
     expect(await como("authenticated", ANA, `SELECT id FROM self_storage_centers`)).toHaveLength(1);
+  });
+
+  it("facturas y pagos (fase 2): cada cliente los suyos, y nunca un borrador", async () => {
+    expect((await como("authenticated", ANA, `SELECT id FROM self_storage_invoices`)).map((r) => r.id)).toEqual([ids.fAna]);
+    expect((await como("authenticated", BEA, `SELECT id FROM self_storage_invoices`)).map((r) => r.id)).toEqual([ids.fBea]);
+    expect(await como("authenticated", ANA, `SELECT * FROM self_storage_invoices WHERE id = $1`, [ids.fBea])).toEqual([]);
+    expect(await como("authenticated", ANA, `SELECT * FROM self_storage_payments WHERE invoice_id = $1`, [ids.fBea])).toEqual([]);
+    expect(await como("authenticated", ANA, `SELECT id FROM self_storage_payments`)).toHaveLength(1);
+    expect(await como("authenticated", EMPLEADO, `SELECT id FROM self_storage_invoices`)).toEqual([]);
+    for (const t of ["self_storage_stripe_events", "self_storage_sequences", "self_storage_dunning_cases", "self_storage_notifications", "self_storage_billing_items"]) {
+      expect(await como("authenticated", ANA, `SELECT 1 FROM ${t}`), t).toEqual([]);
+    }
+    expect(await codigoError(como("authenticated", ANA, `UPDATE self_storage_invoices SET status = 'paid', paid_at = now() WHERE id = $1`, [ids.fAna]))).toBe("42501");
+    expect(await codigoError(como("anon", null, `SELECT 1 FROM self_storage_invoices`))).toBe("42501");
   });
 
   it("Ana no alcanza lo de Bea ni pidiéndolo por id", async () => {

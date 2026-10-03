@@ -53,7 +53,7 @@ import {
 } from "./therefore/index.ts";
 import { initCentral, mountCentral } from "./central/index.ts";
 import { initRecepciones, mountRecepciones, startRecepcionesBuzon } from "./recepciones/index.ts";
-import { initSelfStorage, mountSelfStorage } from "./self-storage/index.ts";
+import { initSelfStorage, mountSelfStorage, mountSelfStorageWebhooks, startSelfStorageJobs } from "./self-storage/index.ts";
 import { initOrManuales, mountOrManuales, startOrManualesWorker } from "./or-manuales/index.ts";
 import { initLicenses, mountLicenses, startLicenseWorker } from "./licenses/index.ts";
 import { pedirIA, transcribirAudio } from "./core/openaiService.ts";
@@ -189,6 +189,10 @@ const app = express();
  * cliente, porque a este servicio no se llega sin pasar por él.
  */
 app.set("trust proxy", 1);
+
+// Self Storage tiene su propio webhook de Stripe (otro secreto, otro endpoint);
+// también va antes de express.json() para poder verificar la firma.
+mountSelfStorageWebhooks(app);
 
 app.post(
   "/api/stripe/webhook",
@@ -21063,6 +21067,7 @@ initDb()
       startRecobrosNotifierChecker();
       startCaducidadRecordatoriosChecker(); // avisos WhatsApp/SMS de caducidad de tacógrafo
       startWebfleetSync(); // sincronización periódica de "vehículos en base"
+      startSelfStorageJobs(); // Self Storage: facturación manual, vencimientos, impagos, avisos
       startMantenimientoAvisos(); // avisos automáticos de revisiones (próximas/vencidas)
       startCheckpointMail(); // informe del arco CheckPoint por correo (apagado sin credenciales)
       startIntegrationWorker(); // reproceso de operaciones de integración RETRY_PENDING

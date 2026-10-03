@@ -11,11 +11,24 @@
 
 import { sessionHeaders } from "../../sessionHeaders";
 import type {
+  Ajustes,
   Bootstrap,
+  CasoImpago,
   Centro,
+  ClaveAjuste,
   Cliente,
+  CobrosCliente,
+  Concepto,
+  Contrato,
+  ContratoDetalle,
   Dashboard,
+  EntradaHistorial,
+  Factura,
+  FacturaDetalle,
   FichaCliente,
+  MetodoPago,
+  Pago,
+  Trabajo,
   Importacion,
   Plano,
   Telefono,
@@ -112,3 +125,85 @@ export const validarImportacion = (centerId: string, d: { fileName: string; cont
   pedir<Importacion>(`/centers/${centerId}/imports`, json(d));
 export const importacion = (id: string) => pedir<Importacion>(`/imports/${id}`);
 export const aplicarImportacion = (id: string) => pedir<Importacion>(`/imports/${id}/apply`, json({}));
+export const invitarAlPortal = (id: string) => pedir<{ invited: boolean; email: string }>(`/customers/${id}/portal-invite`, json({}));
+
+/**
+ * Abre un PDF protegido (contrato, factura) en una pestaña nueva. No vale un
+ * enlace normal: la descarga necesita la cabecera de sesión.
+ */
+export async function abrirPdf(ruta: string): Promise<void> {
+  // La pestaña se abre ANTES del await: si no, el navegador la toma por un
+  // popup no solicitado y la bloquea.
+  const ventana = window.open("", "_blank");
+  try {
+    const r = await fetch(`${BASE}${ruta}`, { headers: await sessionHeaders() });
+    if (!r.ok) {
+      let msg = `Error ${r.status}`;
+      try {
+        msg = ((await r.json()) as { error?: string }).error ?? msg;
+      } catch {
+        /* cuerpo no JSON */
+      }
+      throw new ApiError(msg, "PDF", r.status);
+    }
+    const url = URL.createObjectURL(await r.blob());
+    if (ventana) ventana.location.href = url;
+    else window.location.href = url;
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (e) {
+    ventana?.close();
+    throw e;
+  }
+}
+
+// ── Fase 2 · Contratos ──
+export type FiltroContratos = { status?: string; customerId?: string; unitId?: string; centerId?: string; q?: string };
+export const contratos = (f: FiltroContratos) => pedir<Contrato[]>(`/contracts${query(f)}`);
+export const contrato = (id: string) => pedir<ContratoDetalle>(`/contracts/${id}`);
+export const crearContrato = (d: Record<string, unknown>) => pedir<ContratoDetalle>("/contracts", json(d));
+export const editarContrato = (id: string, d: Record<string, unknown>) => pedir<ContratoDetalle>(`/contracts/${id}`, json(d, "PATCH"));
+export const historialContrato = (id: string) => pedir<EntradaHistorial[]>(`/contracts/${id}/history`);
+export const emitirContrato = (id: string) => pedir<ContratoDetalle>(`/contracts/${id}/issue`, json({}));
+export const firmarContrato = (id: string, d: { signerName: string; documentId?: string; accepted: true }) =>
+  pedir<ContratoDetalle>(`/contracts/${id}/sign`, json(d));
+export const checkoutContrato = (id: string) => pedir<{ url: string; sessionId: string }>(`/contracts/${id}/checkout`, json({}));
+export const activarContrato = (id: string, reason: string) => pedir<ContratoDetalle>(`/contracts/${id}/activate`, json({ reason }));
+export const suspenderContrato = (id: string, reason: "security" | "incident" | "manual", notes: string) =>
+  pedir<ContratoDetalle>(`/contracts/${id}/suspend`, json({ reason, notes }));
+export const levantarBloqueo = (id: string, blockId: string, reason: string) =>
+  pedir<ContratoDetalle>(`/contracts/${id}/blocks/${blockId}/lift`, json({ reason }));
+/** Finalizar y cancelar devuelven `warning` si Stripe no ha cancelado la suscripción. */
+export const finalizarContrato = (id: string, d: { endDate?: string | null; reason: string }) =>
+  pedir<ContratoDetalle & { warning: string | null }>(`/contracts/${id}/terminate`, json(d));
+export const cancelarContrato = (id: string, reason: string) => pedir<ContratoDetalle & { warning: string | null }>(`/contracts/${id}/cancel`, json({ reason }));
+export const anexoContrato = (id: string, text: string) => pedir<{ documentId: string; version: number; sha256: string }>(`/contracts/${id}/annexes`, json({ text }));
+export const pdfDocumento = (id: string, docId: string) => abrirPdf(`/contracts/${id}/documents/${docId}/pdf`);
+
+// ── Fase 2 · Facturas, pagos e impagos ──
+export type FiltroFacturas = { customerId?: string; contractId?: string; status?: string; q?: string; limit?: number; offset?: number };
+export const facturas = (f: FiltroFacturas) => pedir<{ total: number; items: Factura[] }>(`/invoices${query(f)}`);
+export const factura = (id: string) => pedir<FacturaDetalle>(`/invoices/${id}`);
+export const crearFactura = (d: Record<string, unknown>) => pedir<FacturaDetalle>("/invoices", json(d));
+export const emitirFactura = (id: string) => pedir<FacturaDetalle>(`/invoices/${id}/issue`, json({}));
+export const borrarFactura = (id: string) => pedir<void>(`/invoices/${id}`, { method: "DELETE" });
+export const rectificarFactura = (id: string, reason: string) => pedir<{ id: string; numero: string }>(`/invoices/${id}/rectify`, json({ reason }));
+export const enlacePago = (id: string) => pedir<{ url: string }>(`/invoices/${id}/pay-link`, json({}));
+export const pdfFactura = (id: string) => abrirPdf(`/invoices/${id}/pdf`);
+
+export const pagos = (f: { customerId?: string; contractId?: string; invoiceId?: string; status?: string }) => pedir<Pago[]>(`/payments${query(f)}`);
+export const registrarPago = (d: { invoiceId: string; paymentMethod: "bank_transfer" | "cash"; paidAt?: string; notes?: string }) =>
+  pedir<{ id: string }>("/payments/manual", json(d));
+export const cobrosCliente = (id: string) => pedir<CobrosCliente>(`/customers/${id}/billing`);
+export const metodosCliente = (id: string) => pedir<MetodoPago[]>(`/customers/${id}/payment-methods`);
+
+export const impagos = (status?: string) => pedir<CasoImpago[]>(`/dunning${query({ status })}`);
+
+// ── Fase 2 · Catálogo y configuración ──
+export const conceptos = () => pedir<Concepto[]>("/billing-items");
+export const crearConcepto = (d: Record<string, unknown>) => pedir<Concepto>("/billing-items", json(d));
+export const editarConcepto = (id: string, d: Record<string, unknown>) => pedir<Concepto>(`/billing-items/${id}`, json(d, "PATCH"));
+
+export const ajustes = (centerId?: string | null) => pedir<Ajustes>(`/settings${query({ centerId })}`);
+export const guardarAjuste = <K extends ClaveAjuste>(key: K, value: Ajustes[K]["value"], centerId?: string | null) =>
+  pedir<{ key: K; value: Ajustes[K]["value"] }>(`/settings/${encodeURIComponent(key)}`, json({ value, centerId: centerId ?? null }, "PUT"));
+export const ejecutarTrabajo = (name: Trabajo) => pedir<unknown>(`/jobs/${name}/run`, json({}));

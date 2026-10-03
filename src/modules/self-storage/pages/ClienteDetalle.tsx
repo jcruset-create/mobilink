@@ -1,13 +1,16 @@
 /**
  * Ficha del cliente: datos, teléfonos (incluidos los autorizados para abrir por
  * llamada en la fase 3), contratos (1 cliente → N contratos, también en centros
- * distintos) y bloqueo/desbloqueo con motivo.
+ * distintos), bloqueo/desbloqueo con motivo y —fase 2— deuda, facturas, pagos,
+ * método de pago guardado en Stripe e invitación al portal.
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import * as api from "../services/api";
-import type { FichaCliente } from "../types";
+import type { CobrosCliente, FichaCliente, MetodoPago } from "../types";
+import { TablaFacturas, FichaFactura } from "./Facturas";
+import { TablaPagos } from "./Pagos";
 import FormCliente from "../components/FormCliente";
 import {
   Aviso,
@@ -15,6 +18,7 @@ import {
   Cargando,
   CheckField,
   ChipCliente,
+  ChipContrato,
   Dato,
   EmptyRow,
   ErrorBox,
@@ -27,6 +31,8 @@ import {
   btnPrimary,
   btnSecondary,
   euros,
+  fecha,
+  msgError,
   tdCls,
   thCls,
 } from "../components/ui";
@@ -34,7 +40,13 @@ import { useSelfStorage } from "../contexts/SelfStorageContext";
 
 export default function ClienteDetalle() {
   const { id = "" } = useParams();
-  const { puede, etqTipoCliente, etqContrato } = useSelfStorage();
+  const { puede, etqTipoCliente } = useSelfStorage();
+  const navigate = useNavigate();
+  const [params, setParams] = useSearchParams();
+  const [cobros, setCobros] = useState<CobrosCliente | null>(null);
+  const [metodos, setMetodos] = useState<MetodoPago[] | null>(null);
+  const [aviso, setAviso] = useState<string | null>(null);
+  const verCobros = puede("ss.billing.view");
   const [c, setC] = useState<FichaCliente | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editar, setEditar] = useState(false);
@@ -50,7 +62,22 @@ export default function ClienteDetalle() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error");
     }
-  }, [id]);
+    if (verCobros) {
+      api.cobrosCliente(id).then(setCobros, (e) => setError(msgError(e)));
+      // Stripe puede no estar configurado: sin métodos no es un error de la ficha.
+      api.metodosCliente(id).then(setMetodos, () => setMetodos(null));
+    }
+  }, [id, verCobros]);
+
+  const invitar = async () => {
+    try {
+      const r = await api.invitarAlPortal(id);
+      setAviso(`Invitación al portal enviada a ${r.email}.`);
+      await cargar();
+    } catch (e) {
+      setError(msgError(e));
+    }
+  };
   useEffect(() => {
     void cargar();
   }, [cargar]);
@@ -110,13 +137,21 @@ export default function ClienteDetalle() {
         )}
       </Cabecera>
       {error && <ErrorBox>{error}</ErrorBox>}
+      {aviso && <Aviso tono="bien">{aviso}</Aviso>}
       {c.status === "blocked" && <Aviso tono="mal">Bloqueado: {c.statusReason}</Aviso>}
 
       <div className="grid grid-cols-1 gap-3 rounded-xl bg-slate-800 p-4 sm:grid-cols-2 lg:grid-cols-4">
         <Dato etiqueta="Teléfono">{c.phone}</Dato>
         <Dato etiqueta="Email">{c.email}</Dato>
         <Dato etiqueta="Dirección">{[c.address, c.postalCode, c.city, c.province, c.country].filter(Boolean).join(", ") || "—"}</Dato>
-        <Dato etiqueta="Portal del cliente">{c.hasPortalAccount ? "Con cuenta" : "Sin cuenta (fase 4)"}</Dato>
+        <Dato etiqueta="Portal del cliente">
+          {c.hasPortalAccount ? "Con cuenta" : "Sin cuenta"}
+          {gestiona && (
+            <button className={`${btnMini} ml-2`} onClick={() => void invitar()}>
+              {c.hasPortalAccount ? "Reenviar invitación" : "Invitar"}
+            </button>
+          )}
+        </Dato>
         {c.notes && (
           <div className="sm:col-span-2 lg:col-span-4">
             <Dato etiqueta="Notas internas">{c.notes}</Dato>
@@ -124,8 +159,27 @@ export default function ClienteDetalle() {
         )}
       </div>
 
+      {verCobros && cobros && (
+        <div className="grid grid-cols-3 gap-3 rounded-xl bg-slate-800 p-4">
+          <Dato etiqueta="Deuda pendiente">
+            <span className={cobros.debt.pendiente > 0 ? "font-bold text-amber-300" : ""}>{euros(cobros.debt.pendiente)}</span>
+          </Dato>
+          <Dato etiqueta="De ella, vencida">
+            <span className={cobros.debt.vencida > 0 ? "font-bold text-rose-300" : ""}>{euros(cobros.debt.vencida)}</span>
+          </Dato>
+          <Dato etiqueta="Facturas pendientes">{cobros.debt.facturas}</Dato>
+        </div>
+      )}
+
       <section className="space-y-2">
-        <h2 className="text-sm font-bold">Contratos</h2>
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-bold">Contratos</h2>
+          {puede("ss.contracts.manage") && c.status !== "blocked" && (
+            <Link to={`/self-storage/contratos?nuevo=1&customerId=${c.id}`} className={btnMini}>
+              Nuevo contrato
+            </Link>
+          )}
+        </div>
         <TableWrap>
           <thead>
             <tr>
@@ -139,21 +193,53 @@ export default function ClienteDetalle() {
             </tr>
           </thead>
           <tbody>
-            {c.contracts.length === 0 && <EmptyRow cols={7} text="Sin contratos. La contratación llega en la fase 2." />}
+            {c.contracts.length === 0 && <EmptyRow cols={7} text="Sin contratos." />}
             {c.contracts.map((k) => (
-              <tr key={k.id} className="border-t border-slate-700">
-                <td className={tdCls}>{k.contractNumber}</td>
+              <tr key={k.id} className="cursor-pointer border-t border-slate-700 hover:bg-slate-800/60" onClick={() => navigate(`/self-storage/contratos/${k.id}`)}>
+                <td className={`${tdCls} font-bold text-sky-300`}>{k.contractNumber}</td>
                 <td className={tdCls}>{k.centerName}</td>
                 <td className={tdCls}>{k.unitCode}</td>
-                <td className={tdCls}>{k.startDate}</td>
+                <td className={tdCls}>{fecha(k.startDate)}</td>
                 <td className={tdCls}>{euros(k.monthlyPrice)}</td>
                 <td className={tdCls}>{k.members}</td>
-                <td className={tdCls}>{etqContrato(k.status)}</td>
+                <td className={tdCls}>
+                  <ChipContrato estado={k.status} />
+                </td>
               </tr>
             ))}
           </tbody>
         </TableWrap>
       </section>
+
+      {verCobros && (
+        <>
+          <section className="space-y-2">
+            <h2 className="text-sm font-bold">Facturas</h2>
+            <TablaFacturas items={cobros?.invoices ?? null} sinCliente onAbrir={(fid) => setParams({ f: fid })} />
+          </section>
+          <section className="space-y-2">
+            <h2 className="text-sm font-bold">Pagos</h2>
+            <TablaPagos items={cobros?.payments ?? null} sinCliente onFactura={(fid) => setParams({ f: fid })} />
+          </section>
+          <section className="space-y-2">
+            <h2 className="text-sm font-bold">Método de pago (Stripe)</h2>
+            {metodos === null && <p className="text-[12px] text-slate-500">Sin datos de Stripe.</p>}
+            {metodos?.length === 0 && <p className="text-[12px] text-slate-500">Sin métodos guardados. El cliente puede añadirlo desde el portal.</p>}
+            {metodos && metodos.length > 0 && (
+              <ul className="space-y-1 text-sm">
+                {metodos.map((m) => (
+                  <li key={m.id} className="rounded-lg bg-slate-800 px-3 py-2">
+                    {m.type === "sepa_debit" ? "SEPA" : (m.brand ?? m.type)} ···· {m.last4 ?? "—"}
+                    {m.expMonth ? ` · caduca ${String(m.expMonth).padStart(2, "0")}/${m.expYear}` : ""}
+                    {m.isDefault && <span className="ml-2 text-[11px] text-emerald-300">predeterminado</span>}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        </>
+      )}
+      {params.get("f") && <FichaFactura id={params.get("f")!} onCerrar={() => setParams({})} onCambio={() => void cargar()} />}
 
       <section className="space-y-2">
         <h2 className="text-sm font-bold">Teléfonos</h2>

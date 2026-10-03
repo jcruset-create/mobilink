@@ -114,8 +114,9 @@ async function cliente(quien: Quien, taxId: string, extra: Record<string, unknow
 async function contratoVivo(empresaId: string, centerId: string, customerId: string, unitId: string, numero: string, status = "active") {
   const { rows } = await db.query(
     `INSERT INTO self_storage_contracts (empresa_id, center_id, contract_number, customer_id, storage_unit_id, start_date,
-       monthly_price, tax_rate, billing_day, status, signed_at)
-     VALUES ($1,$2,$3,$4,$5,current_date,49.59,21,1,$6,now()) RETURNING id`,
+       monthly_price, tax_rate, billing_day, status, signed_at, activated_at)
+     VALUES ($1,$2,$3,$4,$5,current_date,49.59,21,1,$6::self_storage_contract_status,now(),
+             CASE WHEN $6::text IN ('active','suspended') THEN now() END) RETURNING id`,
     [empresaId, centerId, numero, customerId, unitId, status]
   );
   return rows[0].id as string;
@@ -426,7 +427,7 @@ describe.skipIf(!RUN)("Self Storage · fase 1 contra PostgreSQL", () => {
         [EMPRESA_A, c.id, cl2.id, u.id]
       );
       expect(e?.constraint).toBe("self_storage_contracts_live_unit_uq");
-      await db.query(`UPDATE self_storage_contracts SET status = 'terminated', terminated_at = now() WHERE contract_number = 'C-1' AND empresa_id = $1`, [EMPRESA_A]);
+      await db.query(`UPDATE self_storage_contracts SET status = 'terminated', terminated_at = now(), activated_at = coalesce(activated_at, now()) WHERE contract_number = 'C-1' AND empresa_id = $1`, [EMPRESA_A]);
       await contratoVivo(EMPRESA_A, c.id, cl2.id, u.id, "C-2");
       // Un borrador no ocupa el trastero.
       await db.query(
@@ -751,7 +752,10 @@ describe.skipIf(!RUN)("Self Storage · fase 1 contra PostgreSQL", () => {
       await ok(api(`/units/${u2.id}/status`, adminA, { method: "POST", body: { status: "maintenance", reason: "x" } }));
       const d = await ok(api(`/dashboard?centerId=${c.id}`, mantA));
       expect(d.units).toMatchObject({ total: 4, available: 2, occupied: 1, maintenance: 1, rentable: 3, occupancyPct: 25, occupancyRentablePct: 33.33 });
+      // Mantenimiento no ve cobros; el administrador, sí (aunque sean cero).
       expect(d.billing.monthlyInvoiced).toBeNull();
+      const dAdmin = await ok(api(`/dashboard?centerId=${c.id}`, adminA));
+      expect(dAdmin.billing).toMatchObject({ visible: true, monthlyInvoiced: 0, pendingCollection: 0, overdue: 0, openDunning: 0 });
     });
   });
 

@@ -24,10 +24,89 @@ export const AJUSTES = {
     esquema: z.enum(["wait_for_success", "allow_while_processing"]),
     defecto: "wait_for_success" as "wait_for_success" | "allow_while_processing",
   },
+  /**
+   * Datos fiscales del EMISOR de las facturas y los contratos. Sin ellos no se
+   * emite nada: una factura sin NIF del emisor no es una factura.
+   */
+  "billing.issuer": {
+    esquema: z
+      .object({
+        name: z.string().trim().min(1).max(200),
+        taxId: z.string().trim().min(5).max(20),
+        address: z.string().trim().min(1).max(400),
+        email: z.string().trim().max(200).optional(),
+        phone: z.string().trim().max(40).optional(),
+      })
+      .nullable(),
+    defecto: null as null | { name: string; taxId: string; address: string; email?: string; phone?: string },
+  },
+  /** Series de numeración: facturas, rectificativas y contratos. */
+  "billing.invoice_series": { esquema: z.string().regex(/^[A-Z]{1,5}$/), defecto: "F" },
+  "billing.rectifying_series": { esquema: z.string().regex(/^[A-Z]{1,5}$/), defecto: "R" },
+  "contracts.series": { esquema: z.string().regex(/^[A-Z]{1,5}$/), defecto: "C" },
+  /** Días hasta el vencimiento de una factura de cobro manual (transferencia/efectivo). */
+  "billing.due_days": { esquema: z.number().int().min(0).max(120), defecto: 7 },
+  /** Plazos del impago, en días desde el fallo del cobro (día 0). */
+  "dunning.policy": {
+    esquema: z.object({
+      firstNoticeDays: z.number().int().min(0).max(365),
+      secondNoticeDays: z.number().int().min(0).max(365),
+      suspendDays: z.number().int().min(0).max(365),
+    }),
+    defecto: { firstNoticeDays: 3, secondNoticeDays: 7, suspendDays: 10 },
+  },
+  /** Condiciones generales que se imprimen en el contrato, con su versión. */
+  "contracts.terms_version": { esquema: z.string().trim().min(1).max(40), defecto: "v1" },
+  "contracts.terms_text": {
+    esquema: z.string().trim().min(1).max(50_000),
+    defecto: [
+      "1. Objeto. El arrendador cede al cliente el uso del trastero indicado para guardar bienes muebles de lícito comercio.",
+      "2. Duración. El contrato se renueva por meses salvo preaviso de cualquiera de las partes.",
+      "3. Precio y pago. La cuota mensual se factura por adelantado en el día de facturación indicado. El impago permite al arrendador suspender el acceso al trastero según los plazos comunicados al cliente.",
+      "4. Fianza. La fianza se devuelve al finalizar el contrato, una vez comprobado el estado del trastero y saldadas las deudas.",
+      "5. Uso. Queda prohibido almacenar materiales peligrosos, perecederos, ilegales o animales.",
+      "6. Acceso. El acceso se realiza con los medios facilitados por el arrendador y en el horario del centro.",
+      "Estas condiciones son un texto de ejemplo: sustitúyalas por las revisadas por su asesoría en Configuración.",
+    ].join("\n\n"),
+  },
 } as const;
 
 export type ClaveAjuste = keyof typeof AJUSTES;
 export type ValorAjuste<K extends ClaveAjuste> = z.infer<(typeof AJUSTES)[K]["esquema"]>;
+
+export function esClaveAjuste(k: string): k is ClaveAjuste {
+  return Object.prototype.hasOwnProperty.call(AJUSTES, k);
+}
+
+/** Todos los ajustes de la empresa (o del centro), con su valor efectivo. */
+export async function leerTodos(db: Ejecutor, empresaId: string, centerId: string | null) {
+  const out: Record<string, { value: unknown; isDefault: boolean }> = {};
+  for (const k of Object.keys(AJUSTES) as ClaveAjuste[]) {
+    const { rows } = await db.query(
+      `SELECT 1 FROM self_storage_settings WHERE empresa_id = $1 AND key = $2 AND (center_id = $3 OR center_id IS NULL) LIMIT 1`,
+      [empresaId, k, centerId]
+    );
+    out[k] = { value: await leerAjuste(db, empresaId, centerId, k), isDefault: rows.length === 0 };
+  }
+  return out;
+}
+
+/** Guarda un ajuste (validado). center_id NULL = valor de la empresa. */
+export async function guardarAjuste(db: Ejecutor, empresaId: string, centerId: string | null, clave: ClaveAjuste, valor: unknown, userId: string | null) {
+  const r = AJUSTES[clave].esquema.safeParse(valor);
+  if (!r.success) {
+    const { ErrorSelfStorage } = await import("../errors.ts");
+    throw new ErrorSelfStorage("AJUSTE_NO_VALIDO", `Valor no válido para «${clave}»: ${r.error.issues[0]?.message ?? ""}`, 422);
+  }
+  await db.query(
+    `INSERT INTO self_storage_settings (empresa_id, center_id, key, value, updated_by)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (empresa_id, COALESCE(center_id, '00000000-0000-0000-0000-000000000000'::uuid), key)
+     DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+    [empresaId, centerId, clave, JSON.stringify(r.data), userId]
+  );
+  return r.data;
+}
 
 export async function leerAjuste<K extends ClaveAjuste>(
   db: Ejecutor,

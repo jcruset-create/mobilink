@@ -8,7 +8,14 @@
 
 import type { Ejecutor } from "./db.ts";
 
-export type Actor = { empresaId: string; userId: string; nombre: string; ip?: string | null };
+export type Actor = {
+  empresaId: string;
+  userId: string;
+  nombre: string;
+  ip?: string | null;
+  /** Quién es: un empleado (por defecto si hay userId), un cliente del portal, el sistema o Stripe. */
+  tipo?: "staff" | "customer" | "system" | "stripe";
+};
 
 export type EntradaAuditoria = {
   action: string;
@@ -22,7 +29,7 @@ export async function auditar(c: Ejecutor, actor: Actor, e: EntradaAuditoria): P
   await c.query(
     `INSERT INTO self_storage_audit_logs
        (empresa_id, actor_type, actor_id, actor_name, action, entity_type, entity_id, before, after, ip)
-     VALUES ($1, 'staff', $2, $3, $4, $5, $6, $7, $8, $9)`,
+     VALUES ($1, $10, $2, $3, $4, $5, $6, $7, $8, $9)`,
     [
       actor.empresaId,
       actor.userId || null,
@@ -33,6 +40,7 @@ export async function auditar(c: Ejecutor, actor: Actor, e: EntradaAuditoria): P
       e.before === undefined ? null : JSON.stringify(e.before),
       e.after === undefined ? null : JSON.stringify(e.after),
       actor.ip ?? null,
+      actor.tipo ?? (actor.userId ? "staff" : "system"),
     ]
   );
 }

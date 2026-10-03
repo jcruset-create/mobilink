@@ -23,7 +23,15 @@ const MIGRACIONES = path.resolve(__dirname, "../../supabase/migrations/self_stor
 const PANEL = path.resolve(__dirname, "../../src/modules/self-storage");
 
 /** Infraestructura transversal permitida: identidad interna y permisos. */
-const TABLAS_PERMITIDAS = new Set(["app_usuario_modulos", "app_usuarios", "app_empresas", "pg_roles"]);
+const TABLAS_PERMITIDAS = new Set([
+  "app_usuario_modulos",
+  "app_usuarios",
+  "app_empresas",
+  // Catálogo del sistema de PostgreSQL (migraciones idempotentes).
+  "pg_roles",
+  "pg_enum",
+  "pg_type",
+]);
 
 /** Imports permitidos fuera del propio módulo. */
 const IMPORTS_PERMITIDOS = [/^\.\.\/db\.ts$/, /^\.\.\/core\/auth\.ts$/, /\/src\/modules\/self-storage\/types\/enums\.ts$/];

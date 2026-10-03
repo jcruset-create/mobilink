@@ -37,6 +37,20 @@ export const PERMISOS = [
   "ss.import",
   /** Consultar la auditoría. */
   "ss.audit.view",
+  /** Ver contratos y su historial. */
+  "ss.contracts.view",
+  /** Crear, editar en borrador, emitir, firmar en presencia, cobrar, suspender y cancelar. */
+  "ss.contracts.manage",
+  /** Lo sensible: activar sin cobro (excepción), finalizar, levantar bloqueos de seguridad. */
+  "ss.contracts.admin",
+  /** Ver facturas, pagos e impagos. */
+  "ss.billing.view",
+  /** Facturas manuales, registrar pagos en efectivo/transferencia. */
+  "ss.billing.manage",
+  /** Anular (rectificar) facturas, catálogo de conceptos. */
+  "ss.billing.admin",
+  /** Configuración del módulo (emisor, series, plazos, condiciones). */
+  "ss.settings.manage",
 ] as const;
 
 export type Permiso = (typeof PERMISOS)[number];
@@ -49,7 +63,16 @@ export type Permiso = (typeof PERMISOS)[number];
  */
 const POR_ROL: Record<StaffRole, readonly Permiso[]> = {
   maintenance: ["ss.view", "ss.units.status"],
-  employee: ["ss.view", "ss.customers.view", "ss.customers.manage", "ss.units.status"],
+  employee: [
+    "ss.view",
+    "ss.customers.view",
+    "ss.customers.manage",
+    "ss.units.status",
+    "ss.contracts.view",
+    "ss.contracts.manage",
+    "ss.billing.view",
+    "ss.billing.manage",
+  ],
   admin: PERMISOS,
   superadmin: PERMISOS,
 };

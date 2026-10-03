@@ -6,7 +6,8 @@
  * de dejar la pantalla en blanco.
  *
  * Fase 1: dashboard, plano, trasteros, clientes, centros/zonas, tipos e
- * importación. El resto de secciones aparece en el menú con su fase.
+ * importación. Fase 2: contratos, facturas, pagos, impagos, conceptos y
+ * configuración. El resto de secciones aparece en el menú con su fase.
  */
 
 import { Navigate, Route, Routes } from "react-router-dom";
@@ -20,6 +21,13 @@ import Plano from "./pages/Plano";
 import Clientes from "./pages/Clientes";
 import ClienteDetalle from "./pages/ClienteDetalle";
 import Importar from "./pages/Importar";
+import Contratos from "./pages/Contratos";
+import ContratoDetalle from "./pages/ContratoDetalle";
+import Facturas from "./pages/Facturas";
+import Pagos from "./pages/Pagos";
+import Impagos from "./pages/Impagos";
+import Conceptos from "./pages/Conceptos";
+import Configuracion from "./pages/Configuracion";
 
 function Contenido() {
   const { cargando, error, permisos, puede } = useSelfStorage();
@@ -51,6 +59,13 @@ function Contenido() {
         {puede("ss.customers.view") && <Route path="clientes" element={<Clientes />} />}
         {puede("ss.customers.view") && <Route path="clientes/:id" element={<ClienteDetalle />} />}
         {puede("ss.import") && <Route path="importar" element={<Importar />} />}
+        {puede("ss.contracts.view") && <Route path="contratos" element={<Contratos />} />}
+        {puede("ss.contracts.view") && <Route path="contratos/:id" element={<ContratoDetalle />} />}
+        {puede("ss.billing.view") && <Route path="facturas" element={<Facturas />} />}
+        {puede("ss.billing.view") && <Route path="pagos" element={<Pagos />} />}
+        {puede("ss.billing.view") && <Route path="impagos" element={<Impagos />} />}
+        {puede("ss.billing.view") && <Route path="conceptos" element={<Conceptos />} />}
+        {puede("ss.settings.manage") && <Route path="configuracion" element={<Configuracion />} />}
         <Route path="*" element={<Navigate to="/self-storage/dashboard" replace />} />
       </Route>
     </Routes>

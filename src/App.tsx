@@ -104,6 +104,7 @@ const ThereforeApp = lazy(() => import("./modules/therefore/ThereforeApp"));
 const CentralApp = lazy(() => import("./modules/central/CentralApp"));
 const RecepcionesApp = lazy(() => import("./modules/recepciones/RecepcionesApp"));
 const SelfStorageApp = lazy(() => import("./modules/self-storage/SelfStorageApp"));
+const SelfStoragePortal = lazy(() => import("./modules/self-storage/portal/PortalApp"));
 const OrManualesApp = lazy(() => import("./modules/or-manuales/OrManualesApp"));
 import AccesoPage from "./pages/AccesoPage";
 import InicioPage from "./pages/InicioPage";
@@ -416,6 +417,8 @@ export default function App() {
       <Route path="/recepciones/*" element={<RecepcionesApp />} />
       {/* Self Storage — alquiler de trasteros (dominio aislado, clientes propios) */}
       <Route path="/self-storage/*" element={<SelfStorageApp />} />
+      {/* Portal de los CLIENTES de trasteros (no son usuarios del panel) */}
+      <Route path="/trasteros/portal/*" element={<SelfStoragePortal />} />
 
       {/* Mobilink OR Manuales */}
       <Route path="/or-manuales/*" element={<OrManualesApp />} />
