@@ -414,7 +414,12 @@ export type ContextoCentro = {
   zonaPorDefecto: string | null;
   /** Un tipo que no existe: crearlo al aplicar (con aviso) en vez de dar error. */
   crearTiposQueFalten?: boolean;
+  /** El centro no tiene NINGUNA zona: los trasteros sin zona van a una «General» que se crea al aplicar. */
+  crearZonaGeneral?: boolean;
 };
+
+/** Marca de «la zona General que se creará al aplicar». */
+export const ZONA_GENERAL_NUEVA = "__zona_general__";
 
 const CAMPOS_COMPARADOS = [
   "name",
@@ -440,6 +445,7 @@ export function decidirAcciones(filas: FilaLeida[], ctx: ContextoCentro): FilaDe
     const p = f.parsed;
     const errors = [...f.errors];
     const existente = ctx.existentes.get(p.code) ?? null;
+    const warnings = [...f.warnings];
 
     let zone_id: string | null;
     if (p.zoneCode) {
@@ -447,12 +453,15 @@ export function decidirAcciones(filas: FilaLeida[], ctx: ContextoCentro): FilaDe
       if (!zone_id) errors.push(`La zona ${p.zoneCode} no existe en este centro. Créala antes de importar.`);
     } else {
       zone_id = existente?.zone_id ?? ctx.zonaPorDefecto;
+      if (!zone_id && ctx.crearZonaGeneral) {
+        zone_id = ZONA_GENERAL_NUEVA;
+        warnings.push("El centro no tiene zonas: se creará la zona «General» al importar.");
+      }
       if (!zone_id) errors.push("Sin zona: el fichero no trae columna «zona». Elige arriba la «Zona para los nuevos» y vuelve a validar (o añade una columna «zona»).");
     }
 
     let unit_type_id: string | null = existente?.unit_type_id ?? null;
     let tipoACrear: string | null = null;
-    const warnings = [...f.warnings];
     if (p.typeCode) {
       unit_type_id = ctx.tiposPorCodigo.get(p.typeCode) ?? null;
       if (!unit_type_id && ctx.crearTiposQueFalten) {

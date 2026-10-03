@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decidirAcciones, leerCsv, leerFilas, mapearCabeceras, resumen, type ContextoCentro, type TrasteroExistente } from "./importUnits.ts";
+import { decidirAcciones, leerCsv, leerFilas, mapearCabeceras, resumen, ZONA_GENERAL_NUEVA, type ContextoCentro, type TrasteroExistente } from "./importUnits.ts";
 
 /** Cabecera antigua de Reus: «IVA» era la CUOTA en euros (alias deprecado de cuota_iva). */
 const CABECERA = "Nº trastero;largo;ancho;alto;m²;m³;precio;IVA;PVP";
@@ -190,6 +190,21 @@ describe("IVA: la cuota del CSV es un importe, no un porcentaje", () => {
     expect(f.action).toBe("create");
     expect(f.tipoACrear).toBe("TAQUILLA");
     expect(f.warnings.join()).toMatch(/se creará/);
+  });
+});
+
+describe("zona", () => {
+  const NUEVO = "codigo,largo_cm,ancho_cm,alto_cm,precio_base,cuota_iva,pvp\nT1,100,100,100,20.66,4.34,25\n";
+  it("centro sin ninguna zona: se creará «General» (aviso, no error)", () => {
+    const [f] = decidirAcciones(leerFilas(NUEVO, OPC).filas, { ...ctxVacio(null), zonasPorCodigo: new Map(), crearZonaGeneral: true });
+    expect(f.action).toBe("create");
+    expect(f.valores?.zone_id).toBe(ZONA_GENERAL_NUEVA);
+    expect(f.warnings.join()).toMatch(/General/);
+  });
+  it("centro con varias zonas y ninguna elegida: error que dice dónde elegirla", () => {
+    const [f] = decidirAcciones(leerFilas(NUEVO, OPC).filas, ctxVacio(null));
+    expect(f.action).toBe("error");
+    expect(f.errors.join()).toMatch(/Zona para los nuevos/);
   });
 });
 
