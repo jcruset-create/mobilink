@@ -129,7 +129,12 @@ beforeAll(async () => {
   // Lo mínimo de la plataforma que usa el módulo (en producción ya existe).
   await db.query(`CREATE TABLE IF NOT EXISTS app_usuario_modulos (user_id UUID NOT NULL, modulo TEXT NOT NULL, rol TEXT NOT NULL, pantallas TEXT[], empresa_id UUID, centro_id UUID, UNIQUE (user_id, modulo))`);
   await db.query(`CREATE TABLE IF NOT EXISTS app_empresas (id uuid PRIMARY KEY, nombre text)`);
-  await db.query(`CREATE TABLE IF NOT EXISTS app_usuarios (id uuid PRIMARY KEY, username text NOT NULL, nombre text NOT NULL, activo boolean NOT NULL DEFAULT true, es_superadmin boolean NOT NULL DEFAULT false, empresa_id uuid)`);
+  // Con la MISMA forma que la de la plataforma (y que crean otras pruebas con
+  // IF NOT EXISTS): una versión recortada dejaría sin columnas a quien venga después.
+  await db.query(`CREATE TABLE IF NOT EXISTS app_usuarios (
+    id uuid PRIMARY KEY, username text NOT NULL, nombre text NOT NULL, email_recuperacion text, telefono text,
+    activo boolean NOT NULL DEFAULT true, es_superadmin boolean NOT NULL DEFAULT false, employee_id uuid, empresa_id uuid,
+    created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now())`);
   await db.query(`DO $$ BEGIN
     IF to_regprocedure('app_licencia_activa(uuid,text)') IS NULL THEN
       EXECUTE 'CREATE FUNCTION app_licencia_activa(p_empresa uuid, p_modulo text) RETURNS boolean LANGUAGE sql STABLE AS $f$ SELECT true $f$';
