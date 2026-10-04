@@ -30,6 +30,7 @@ import { routerFacturacion } from "./modules/facturas/router.ts";
 import { routerAccesos } from "./modules/accesos/router.ts";
 import { routerCallCenter } from "./modules/callcenter/router.ts";
 import { routerIncidencias } from "./modules/incidencias/router.ts";
+import { routerAsistente } from "./modules/asistente/router.ts";
 import {
   CONTRACT_STATUSES,
   CUSTOMER_STATUSES,
@@ -115,6 +116,7 @@ export function createSelfStorageAdminRouter(): Router {
   r.use(routerAccesos());
   r.use(routerIncidencias());
   r.use(routerCallCenter());
+  r.use(routerAsistente());
 
   r.get(
     "/audit",

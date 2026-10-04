@@ -33,6 +33,15 @@ const TABLAS_PERMITIDAS = new Set([
   "pg_type",
 ]);
 
+/**
+ * Única excepción con nombre: el adaptador de OpenAI del Asistente IA delega
+ * en la capa única de IA de Mobilink (decisión aprobada). Sólo ESE fichero y
+ * sólo ESE import; el dominio del asistente depende de `AIProvider`, no de OpenAI.
+ */
+const EXCEPCIONES_POR_FICHERO: Record<string, string> = {
+  "integrations/ai/openai.ts": "../core/openaiService.ts",
+};
+
 /** Imports permitidos fuera del propio módulo. */
 const IMPORTS_PERMITIDOS = [/^\.\.\/db\.ts$/, /^\.\.\/core\/auth\.ts$/, /\/src\/modules\/self-storage\/types\/enums\.ts$/];
 
@@ -105,6 +114,7 @@ describe("aislamiento del módulo Self Storage (código)", () => {
         if (absoluta.startsWith(RAIZ + path.sep)) continue; // dentro del módulo
         const relativaAlModulo = path.relative(RAIZ, absoluta).split(path.sep).join("/");
         if (IMPORTS_PERMITIDOS.some((re) => re.test(relativaAlModulo) || re.test(absoluta.split(path.sep).join("/")))) continue;
+        if (EXCEPCIONES_POR_FICHERO[path.relative(RAIZ, f).split(path.sep).join("/")] === relativaAlModulo) continue;
         malos.push(`${path.relative(RAIZ, f)} → ${ruta}`);
       }
     }

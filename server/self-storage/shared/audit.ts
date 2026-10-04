@@ -15,6 +15,8 @@ export type Actor = {
   ip?: string | null;
   /** Quién es: un empleado (por defecto si hay userId), un cliente del portal, el sistema o Stripe. */
   tipo?: "staff" | "customer" | "system" | "stripe";
+  /** Lo hace el Asistente IA (en la auditoría figura como «system» con su nombre). */
+  esIA?: boolean;
 };
 
 export type EntradaAuditoria = {

@@ -2,7 +2,8 @@
 
 Atención telefónica dentro de Self Storage. Mobilink es la fuente de verdad:
 el Call Center gestiona la **llamada** y su ciclo de vida, la atienda una
-persona, una IA o las dos. Funciona **sin** el Asistente IA.
+persona, una IA o las dos. Funciona **sin** el Asistente IA
+([AI_ASSISTANT.md](AI_ASSISTANT.md)).
 
 > «El Call Center informa y ayuda. La web vende.»
 

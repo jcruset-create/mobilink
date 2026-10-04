@@ -1416,3 +1416,12 @@ Ver `docs/CALL_CENTER.md`: llamadas (`self_storage_calls`), cronología
 única entidad de incidencias del módulo; la fase 4 la amplía). Migración
 `0010_call_center.sql`. Rol `call_center` y empresa activa del
 superadministrador (`auth/empresa.ts`).
+
+## 20. Asistente IA
+
+Ver `docs/AI_ASSISTANT.md`. Migración `0011_asistente_ia.sql`
+(`self_storage_ai_knowledge`, `self_storage_ai_sessions`,
+`self_storage_ai_messages`, `self_storage_ai_tool_calls`). Proveedores
+intercambiables en `integrations/ai`, `integrations/voice` e
+`integrations/telephony`; motor y herramientas en `modules/asistente`;
+enrutado de telefonía en `modules/callcenter/enrutado.ts`.

@@ -3,3 +3,6 @@
  * panel: ver components/Graficos.tsx). El color sigue a la entidad.
  */
 export const SERIE = { azul: "#3987e5", naranja: "#d95926", aqua: "#199e70" } as const;
+
+/** Colores de ESTADO (bien / aviso / mal): reservados, nunca para series; siempre con símbolo y etiqueta. */
+export const ESTADO = { bien: "#10b981", aviso: "#f59e0b", mal: "#f43f5e" } as const;

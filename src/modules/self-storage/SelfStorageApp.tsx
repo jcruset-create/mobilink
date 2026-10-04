@@ -40,6 +40,15 @@ import Catalogo from "./pages/callcenter/Catalogo";
 import ConfigCallCenter from "./pages/callcenter/ConfigCallCenter";
 import LogsCallCenter from "./pages/callcenter/Logs";
 import { inicioPara } from "./config/navigation";
+import AsistenteDashboard from "./pages/asistente/AsistenteDashboard";
+import SesionesIA from "./pages/asistente/Sesiones";
+import SesionIA from "./pages/asistente/Sesion";
+import ConocimientoIA from "./pages/asistente/Conocimiento";
+import ReglasIA from "./pages/asistente/Reglas";
+import HerramientasIA from "./pages/asistente/Herramientas";
+import ProveedoresIA from "./pages/asistente/Proveedores";
+import LogsIA from "./pages/asistente/LogsIA";
+import ConfigIA from "./pages/asistente/ConfigIA";
 
 function Contenido() {
   const { cargando, error, permisos, puede } = useSelfStorage();
@@ -89,6 +98,15 @@ function Contenido() {
         {puede("ss.callcenter.view") && <Route path="call-center/motivos" element={<Catalogo />} />}
         {puede("ss.settings.manage") && <Route path="call-center/configuracion" element={<ConfigCallCenter />} />}
         {puede("ss.callcenter.view") && <Route path="call-center/logs" element={<LogsCallCenter />} />}
+        {puede("ss.ai.view") && <Route path="asistente" element={<AsistenteDashboard />} />}
+        {puede("ss.ai.view") && <Route path="asistente/sesiones" element={<SesionesIA />} />}
+        {puede("ss.ai.view") && <Route path="asistente/sesiones/:id" element={<SesionIA />} />}
+        {puede("ss.ai.view") && <Route path="asistente/conocimiento" element={<ConocimientoIA />} />}
+        {puede("ss.ai.view") && <Route path="asistente/reglas" element={<ReglasIA />} />}
+        {puede("ss.ai.view") && <Route path="asistente/herramientas" element={<HerramientasIA />} />}
+        {puede("ss.ai.configure") && <Route path="asistente/proveedores" element={<ProveedoresIA />} />}
+        {puede("ss.ai.logs.view") && <Route path="asistente/logs" element={<LogsIA />} />}
+        {puede("ss.settings.manage") && <Route path="asistente/configuracion" element={<ConfigIA />} />}
         <Route path="*" element={<Navigate to={`/self-storage/${inicioPara(permisos)}`} replace />} />
       </Route>
     </Routes>

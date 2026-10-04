@@ -541,6 +541,19 @@ export type Ajustes = {
   "call_center.store_transcripts": { value: boolean; isDefault: boolean };
   "call_center.transcript_retention_days": { value: number; isDefault: boolean };
   "call_center.store_audio": { value: false; isDefault: boolean };
+  "ai_assistant.enabled": { value: boolean; isDefault: boolean };
+  "ai_assistant.mode": { value: "ai" | "human" | "hybrid"; isDefault: boolean };
+  "ai_assistant.provider": { value: string; isDefault: boolean };
+  "ai_assistant.fallback_provider": { value: string | null; isDefault: boolean };
+  "ai_assistant.voice_provider": { value: string | null; isDefault: boolean };
+  "ai_assistant.telephony_provider": { value: string | null; isDefault: boolean };
+  "ai_assistant.languages": { value: string[]; isDefault: boolean };
+  "ai_assistant.store_transcripts": { value: boolean; isDefault: boolean };
+  "ai_assistant.store_summary": { value: boolean; isDefault: boolean };
+  "ai_assistant.human_escalation": { value: boolean; isDefault: boolean };
+  "ai_assistant.extra_rules": { value: string[]; isDefault: boolean };
+  "ai_assistant.tools": { value: Record<string, { active: boolean; requiresConfirmation: boolean }>; isDefault: boolean };
+  "ai_assistant.max_turns": { value: number; isDefault: boolean };
 };
 export type ClaveAjuste = keyof Ajustes;
 
@@ -887,3 +900,113 @@ export type Incidencia = {
 };
 
 export type Pagina<T> = { total: number; items: T[] };
+
+// ── Asistente IA ────────────────────────────────────────────────────────────
+
+export type EstadoAsistente = { global: boolean; empresa: boolean; enabled: boolean; provider: string; providerAvailable: boolean; fallbackProvider: string | null; mode: "ai" | "human" | "hybrid" };
+
+export type EntradaConocimiento = {
+  id: string;
+  centerId: string | null;
+  category: string;
+  question: string;
+  answer: string;
+  language: string;
+  active: boolean;
+  priority: number;
+  seedKey: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type RiesgoHerramienta = "READ_ONLY" | "WRITE_SAFE" | "SENSITIVE";
+export type HerramientaIA = { nombre: string; descripcion: string; riesgo: RiesgoHerramienta; permiso: string | null; parametros: string; active: boolean; requiresConfirmation: boolean };
+
+export type ProveedoresIA = {
+  ai: { nombre: string; disponible: boolean; modelo: string }[];
+  voice: { nombre: string; disponible: boolean }[];
+  telephony: { nombre: string; conectado: boolean }[];
+  selected: { provider: string; fallbackProvider: string | null; voiceProvider: string | null; telephonyProvider: string | null };
+  available: { ai: string[]; voice: string[]; telephony: string[] };
+};
+
+export type SesionIA = {
+  id: string;
+  callId: string | null;
+  centerId: string | null;
+  centerName: string | null;
+  provider: string;
+  model: string | null;
+  language: string | null;
+  mode: "console" | "call";
+  status: "active" | "finished" | "escalated" | "error";
+  startedAt: string;
+  endedAt: string | null;
+  turns: number;
+  inputTokens: number;
+  outputTokens: number;
+  audioSeconds: number;
+  costEstimate: number | null;
+  summary: string | null;
+  error: string | null;
+  escalatedAt: string | null;
+  escalationReason: string | null;
+  flaggedForReview: boolean;
+  flagReason: string | null;
+  reviewStatus: "correct" | "partial" | "incorrect" | null;
+  reviewNotes: string | null;
+  reviewedAt: string | null;
+  reviewedByName: string | null;
+  createdBy: string | null;
+  createdByName: string | null;
+  callPhone: string | null;
+};
+
+export type LlamadaHerramienta = {
+  id: string;
+  sessionId?: string;
+  callId?: string | null;
+  tool: string;
+  risk: RiesgoHerramienta | "UNKNOWN";
+  outcome: "success" | "error" | "blocked";
+  params: unknown;
+  result: unknown;
+  error: string | null;
+  durationMs: number;
+  createdAt: string;
+  provider?: string;
+};
+
+export type SesionIADetalle = SesionIA & { messages: { id: string; role: "user" | "assistant" | "tool" | "system"; content: string; createdAt: string }[]; toolCalls: LlamadaHerramienta[] };
+
+export type TurnoIA = {
+  reply: string;
+  action: "responder" | "herramienta" | "escalar" | "finalizar" | "error";
+  language: string;
+  tools: { tool: string; outcome: "success" | "error" | "blocked"; error?: string }[];
+  session: SesionIADetalle;
+};
+
+export type DashboardIA = {
+  kpis: {
+    sessions: number;
+    finished: number;
+    escalated: number;
+    errors: number;
+    active: number;
+    avgDurationSeconds: number | null;
+    inputTokens: number;
+    outputTokens: number;
+    costEstimate: number | null;
+    flagged: number;
+    pendingReview: number;
+    reviewCorrect: number;
+    reviewPartial: number;
+    reviewIncorrect: number;
+    resolutionPct: number;
+    unresolvedQueries: number;
+  };
+  herramientas: { tool: string; calls: number; success: number; errors: number; blocked: number }[];
+  porIdioma: { code: string; sessions: number }[];
+  porProveedor: { provider: string; model: string; sessions: number }[];
+};

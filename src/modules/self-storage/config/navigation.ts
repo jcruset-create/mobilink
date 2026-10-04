@@ -8,6 +8,12 @@
 import {
   AlertTriangle,
   BadgeEuro,
+  Bot,
+  BookOpen,
+  MessagesSquare,
+  Plug,
+  ShieldCheck,
+  Wrench,
   Boxes,
   Building2,
   CreditCard,
@@ -58,6 +64,15 @@ export const NAV: NavItem[] = [
   { key: "cc-catalogo", path: "call-center/motivos", label: "Motivos y resultados", icon: ListChecks, permiso: "ss.callcenter.view", grupo: "Call Center" },
   { key: "cc-config", path: "call-center/configuracion", label: "Configuración", icon: SlidersHorizontal, permiso: "ss.settings.manage", grupo: "Call Center" },
   { key: "cc-logs", path: "call-center/logs", label: "Logs", icon: ScrollText, permiso: "ss.callcenter.view", grupo: "Call Center" },
+  // Asistente IA: capa opcional; apagarla no afecta al Call Center.
+  { key: "ia-dashboard", path: "asistente", label: "Dashboard IA", icon: Bot, permiso: "ss.ai.view", grupo: "Asistente IA" },
+  { key: "ia-sesiones", path: "asistente/sesiones", label: "Sesiones y consola", icon: MessagesSquare, permiso: "ss.ai.view", grupo: "Asistente IA" },
+  { key: "ia-conocimiento", path: "asistente/conocimiento", label: "Base de conocimiento", icon: BookOpen, permiso: "ss.ai.view", grupo: "Asistente IA" },
+  { key: "ia-reglas", path: "asistente/reglas", label: "Reglas", icon: ShieldCheck, permiso: "ss.ai.view", grupo: "Asistente IA" },
+  { key: "ia-herramientas", path: "asistente/herramientas", label: "Herramientas", icon: Wrench, permiso: "ss.ai.view", grupo: "Asistente IA" },
+  { key: "ia-proveedores", path: "asistente/proveedores", label: "Proveedores", icon: Plug, permiso: "ss.ai.configure", grupo: "Asistente IA" },
+  { key: "ia-logs", path: "asistente/logs", label: "Logs IA", icon: ScrollText, permiso: "ss.ai.logs.view", grupo: "Asistente IA" },
+  { key: "ia-config", path: "asistente/configuracion", label: "Configuración", icon: SlidersHorizontal, permiso: "ss.settings.manage", grupo: "Asistente IA" },
 ];
 
 export function navVisible(item: NavItem, permisos: readonly string[]): boolean {

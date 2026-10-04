@@ -89,7 +89,7 @@ export default function SelfStorageLayout() {
               <NavLink
                 key={i.key}
                 to={`/self-storage/${i.path}`}
-                end={i.path === "call-center"}
+                end={i.path === "call-center" || i.path === "asistente"}
                 onClick={() => setAbierto(false)}
                 className={({ isActive }) =>
                   `mb-1 flex items-center gap-2 rounded-lg px-3 py-2 text-[13px] ${isActive ? "bg-orange-600 text-white" : "text-slate-300 hover:bg-slate-800"}`

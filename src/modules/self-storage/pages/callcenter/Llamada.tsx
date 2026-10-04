@@ -249,6 +249,7 @@ type Dialogo = null | "incidencia" | "escalar" | "seguimiento";
 
 function LaLlamada({ id, estado }: { id: string; estado: EstadoCallCenter }) {
   const { puede, etqAtendida, etqSentido, etqPrioridad } = useSelfStorage();
+  const navegar = useNavigate();
   const [l, setL] = useState<LlamadaDetalle | null>(null);
   const [ident, setIdent] = useState<Identificacion | null>(null);
   const [centro, setCentro] = useState<InfoCentroCallCenter | null>(null);
@@ -325,6 +326,21 @@ function LaLlamada({ id, estado }: { id: string; estado: EstadoCallCenter }) {
       >
         <ChipLlamada estado={l.status} />
         <ChipPrioridad p={l.priority} />
+        {puede("ss.ai.view") && l.status !== "closed" && (
+          <button
+            className={btnSecondary}
+            disabled={ocupado}
+            title="Abre una sesión del Asistente IA sobre esta llamada (pasa a ser híbrida)"
+            onClick={() =>
+              void api.iniciarSesionIA({ callId: l.id }).then(
+                (s) => navegar(`/self-storage/asistente/sesiones/${s.id}`),
+                (e) => setError(msgError(e))
+              )
+            }
+          >
+            Asistir con IA
+          </button>
+        )}
         <Link className={btnSecondary} to="/self-storage/call-center/llamadas">
           Volver
         </Link>
@@ -617,6 +633,8 @@ const NOMBRE_EVENTO: Record<string, string> = {
   incident_created: "Incidencia creada",
   finished: "Terminada",
   closed: "Cerrada",
+  ai_session_started: "Asistente IA: sesión iniciada",
+  ai_session_finished: "Asistente IA: sesión terminada",
 };
 
 function NuevaIncidencia({ l, conResultado, onCerrar, onHecho }: { l: LlamadaDetalle; conResultado: boolean; onCerrar: () => void; onHecho: (conResultado: boolean) => void }) {

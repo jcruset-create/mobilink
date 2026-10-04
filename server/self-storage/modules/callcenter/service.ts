@@ -197,7 +197,7 @@ type FilaLlamada = {
 export async function evento(c: Ejecutor, actor: Actor, callId: string, tipo: string, data: Record<string, unknown> = {}): Promise<void> {
   await c.query(
     `INSERT INTO self_storage_call_events (empresa_id, call_id, actor_type, actor_id, actor_name, event_type, data) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-    [actor.empresaId, callId, actor.tipo === "system" ? "system" : "staff", actor.userId || null, actor.nombre || null, tipo, JSON.stringify(data)]
+    [actor.empresaId, callId, actor.esIA ? "ai" : actor.tipo === "system" ? "system" : "staff", actor.userId || null, actor.nombre || null, tipo, JSON.stringify(data)]
   );
 }
 
@@ -220,7 +220,8 @@ async function centroPorDefecto(c: Ejecutor, empresaId: string, pedido: string |
   return rows.length === 1 ? rows[0].id : null;
 }
 
-export async function crearLlamada(actor: Actor, d: z.infer<typeof llamadaAlta>) {
+/** `origen`: llamada que llega por un proveedor de telefonía (idempotente por su id). */
+export async function crearLlamada(actor: Actor, d: z.infer<typeof llamadaAlta>, origen?: { telephonyProvider: string; externalCallId: string }) {
   await asegurarCatalogo(actor.empresaId);
   const id = await enTx(async (c) => {
     const phone = telefonoONulo(d.phone);
@@ -232,8 +233,9 @@ export async function crearLlamada(actor: Actor, d: z.infer<typeof llamadaAlta>)
     const centerId = await centroPorDefecto(c, actor.empresaId, d.centerId);
     const { rows } = await c.query(
       `INSERT INTO self_storage_calls (empresa_id, center_id, customer_id, phone_e164, phone_raw, caller_name, direction, handled_by,
-                                       operator_user_id, language, reason_code, priority, notes, status, answered_at, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
+                                       operator_user_id, language, reason_code, priority, notes, status, answered_at, created_by,
+                                       telephony_provider, external_call_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id`,
       [
         actor.empresaId,
         centerId,
@@ -251,6 +253,8 @@ export async function crearLlamada(actor: Actor, d: z.infer<typeof llamadaAlta>)
         d.answered ? "in_progress" : "started",
         d.answered ? new Date() : null,
         actor.userId || null,
+        origen?.telephonyProvider ?? null,
+        origen?.externalCallId ?? null,
       ]
     );
     const id = rows[0].id as string;

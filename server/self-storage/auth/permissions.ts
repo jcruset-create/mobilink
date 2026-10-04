@@ -77,6 +77,18 @@ export const PERMISOS = [
   "ss.incidents.view",
   "ss.incidents.create",
   "ss.incidents.manage",
+  /** Asistente IA · ver su dashboard y sesiones y usar la consola de prueba. */
+  "ss.ai.view",
+  /** Asistente IA · configuración, proveedores y reglas. */
+  "ss.ai.configure",
+  /** Asistente IA · base de conocimiento. */
+  "ss.ai.knowledge.manage",
+  /** Asistente IA · activar herramientas y su confirmación. */
+  "ss.ai.tools.manage",
+  /** Asistente IA · logs de herramientas y errores. */
+  "ss.ai.logs.view",
+  /** Asistente IA · revisión de calidad de las sesiones. */
+  "ss.ai.review",
 ] as const;
 
 export type Permiso = (typeof PERMISOS)[number];
@@ -99,6 +111,7 @@ const POR_ROL: Record<StaffRole, readonly Permiso[]> = {
     "ss.callcenter.escalate",
     "ss.incidents.view",
     "ss.incidents.create",
+    "ss.ai.view",
   ],
   employee: [
     "ss.view",
@@ -121,6 +134,9 @@ const POR_ROL: Record<StaffRole, readonly Permiso[]> = {
     "ss.incidents.view",
     "ss.incidents.create",
     "ss.incidents.manage",
+    "ss.ai.view",
+    "ss.ai.logs.view",
+    "ss.ai.review",
   ],
   admin: PERMISOS,
   superadmin: PERMISOS,

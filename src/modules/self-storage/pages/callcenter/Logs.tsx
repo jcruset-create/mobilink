@@ -24,6 +24,8 @@ const TIPOS: [string, string][] = [
   ["incident_created", "Incidencia creada"],
   ["finished", "Terminada"],
   ["closed", "Cerrada"],
+  ["ai_session_started", "Asistente IA: sesión iniciada"],
+  ["ai_session_finished", "Asistente IA: sesión terminada"],
 ];
 
 function Contenido() {
@@ -37,7 +39,7 @@ function Contenido() {
     );
   }, [tipo]);
   const nombre = (t: string) => TIPOS.find(([k]) => k === t)?.[1] ?? t;
-  const actor = (t: string) => ({ staff: "Persona", ai: "IA", system: "Sistema", telephony: "Telefonía" })[t] ?? t;
+  const actor = (t: string) => ({ staff: "Persona", ai: "Asistente IA", system: "Sistema", telephony: "Telefonía" })[t] ?? t;
   return (
     <div className="space-y-3">
       <Cabecera titulo="Logs del Call Center" descripcion="Cronología de las llamadas. No se puede modificar ni borrar." />

@@ -14,6 +14,15 @@ import type {
   AccesosContrato,
   AccesoTemporal,
   DashboardCallCenter,
+  DashboardIA,
+  EntradaConocimiento,
+  EstadoAsistente,
+  HerramientaIA,
+  LlamadaHerramienta,
+  ProveedoresIA,
+  SesionIA,
+  SesionIADetalle,
+  TurnoIA,
   DisponibilidadCentro,
   EntradaCatalogo,
   EstadoCallCenter,
@@ -329,3 +338,24 @@ export const incidencias = (f: Partial<Record<"centerId" | "customerId" | "callI
   pedir<Pagina<Incidencia>>(`/incidents${query(f)}`);
 export const crearIncidencia = (d: Record<string, unknown>) => pedir<Incidencia>("/incidents", json(d));
 export const editarIncidencia = (id: string, d: Record<string, unknown>) => pedir<Incidencia>(`/incidents/${id}`, json(d, "PATCH"));
+
+// ── Asistente IA ──
+export const estadoAsistente = () => pedir<EstadoAsistente>("/ai-assistant/status");
+export const dashboardIA = (f: { from?: string; to?: string }) => pedir<DashboardIA>(`/ai-assistant/dashboard${query(f)}`);
+export const proveedoresIA = () => pedir<ProveedoresIA>("/ai-assistant/providers");
+export const reglasIA = () => pedir<{ mandatory: string[]; extra: string[] }>("/ai-assistant/rules");
+export const herramientasIA = () => pedir<HerramientaIA[]>("/ai-assistant/tools");
+export const editarHerramientaIA = (nombre: string, d: { active?: boolean; requiresConfirmation?: boolean }) => pedir<HerramientaIA>(`/ai-assistant/tools/${nombre}`, json(d, "PATCH"));
+export const conocimientoIA = (f: { language?: string; category?: string; centerId?: string; q?: string }) => pedir<EntradaConocimiento[]>(`/ai-assistant/knowledge${query(f)}`);
+export const crearConocimiento = (d: Record<string, unknown>) => pedir<EntradaConocimiento>("/ai-assistant/knowledge", json(d));
+export const editarConocimiento = (id: string, d: Record<string, unknown>) => pedir<EntradaConocimiento>(`/ai-assistant/knowledge/${id}`, json(d, "PATCH"));
+export const borrarConocimiento = (id: string) => pedir<{ ok: true }>(`/ai-assistant/knowledge/${id}`, { method: "DELETE" });
+export const cargarConocimientoInicial = (d: { pack: "tlc"; centerId?: string | null }) => pedir<{ pack: string; nuevas: number; total: number; yaExistian: number }>("/ai-assistant/knowledge/seed", json(d));
+export const sesionesIA = (f: Record<string, string | number | undefined>) => pedir<Pagina<SesionIA>>(`/ai-assistant/sessions${query(f)}`);
+export const sesionIA = (id: string) => pedir<SesionIADetalle>(`/ai-assistant/sessions/${id}`);
+export const iniciarSesionIA = (d: Record<string, unknown>) => pedir<SesionIADetalle>("/ai-assistant/sessions", json(d));
+export const mensajeIA = (id: string, text: string) => pedir<TurnoIA>(`/ai-assistant/sessions/${id}/message`, json({ text }));
+export const finalizarSesionIA = (id: string) => pedir<SesionIADetalle>(`/ai-assistant/sessions/${id}/finish`, json({}));
+export const escalarSesionIA = (id: string, reason: string) => pedir<SesionIADetalle>(`/ai-assistant/sessions/${id}/escalate`, json({ reason }));
+export const revisarSesionIA = (id: string, d: { reviewStatus: string; notes?: string | null }) => pedir<SesionIADetalle>(`/ai-assistant/sessions/${id}/review`, json(d));
+export const logsHerramientasIA = (f: { outcome?: string; tool?: string; sessionId?: string; limit?: number }) => pedir<LlamadaHerramienta[]>(`/ai-assistant/tool-calls${query(f)}`);

@@ -9,6 +9,7 @@
 
 import { z } from "zod";
 import type { Ejecutor } from "./db.ts";
+import { PROVEEDORES_IA, PROVEEDORES_TELEFONIA, PROVEEDORES_VOZ } from "../integrations/ai/nombres.ts";
 
 export const AJUSTES = {
   /**
@@ -85,6 +86,34 @@ export const AJUSTES = {
    * existe para que el «no» sea explícito y no se pueda encender sin querer.
    */
   "call_center.store_audio": { esquema: z.literal(false), defecto: false as const },
+  /**
+   * Asistente IA: activación FUNCIONAL por empresa (el interruptor global es
+   * SELF_STORAGE_AI_ASSISTANT_ENABLED). Apagarlo no afecta al Call Center.
+   */
+  "ai_assistant.enabled": { esquema: z.boolean(), defecto: false },
+  /** Cómo se atiende: sólo IA, sólo humano o IA con humano detrás (escalado). */
+  "ai_assistant.mode": { esquema: z.enum(["ai", "human", "hybrid"]), defecto: "hybrid" as "ai" | "human" | "hybrid" },
+  /** Proveedores. Nunca claves aquí: viven en variables de entorno. */
+  "ai_assistant.provider": { esquema: z.enum(PROVEEDORES_IA), defecto: "mock" as (typeof PROVEEDORES_IA)[number] },
+  "ai_assistant.fallback_provider": { esquema: z.enum(PROVEEDORES_IA).nullable(), defecto: null as (typeof PROVEEDORES_IA)[number] | null },
+  "ai_assistant.voice_provider": { esquema: z.enum(PROVEEDORES_VOZ).nullable(), defecto: null as (typeof PROVEEDORES_VOZ)[number] | null },
+  "ai_assistant.telephony_provider": { esquema: z.enum(PROVEEDORES_TELEFONIA).nullable(), defecto: null as (typeof PROVEEDORES_TELEFONIA)[number] | null },
+  /** Idiomas en los que atiende (sigue el de quien llama si está aquí). */
+  "ai_assistant.languages": { esquema: z.array(z.string().regex(/^[a-z]{2}$/)).min(1).max(10), defecto: ["es", "ca"] as string[] },
+  /** Guardar la conversación (por defecto NO) y el resumen (por defecto sí). */
+  "ai_assistant.store_transcripts": { esquema: z.boolean(), defecto: false },
+  "ai_assistant.store_summary": { esquema: z.boolean(), defecto: true },
+  /** Pasar a una persona cuando hace falta. Apagado, se remite a la web y se marca para revisión. */
+  "ai_assistant.human_escalation": { esquema: z.boolean(), defecto: true },
+  /** Reglas propias de la empresa (las obligatorias van en el código y no se pueden quitar). */
+  "ai_assistant.extra_rules": { esquema: z.array(z.string().trim().min(1).max(300)).max(30), defecto: [] as string[] },
+  /** Herramientas activadas y si piden confirmación. Por defecto sólo las de lectura. */
+  "ai_assistant.tools": {
+    esquema: z.record(z.string().regex(/^[a-z][a-z0-9_]{1,59}$/), z.object({ active: z.boolean(), requiresConfirmation: z.boolean() })),
+    defecto: {} as Record<string, { active: boolean; requiresConfirmation: boolean }>,
+  },
+  /** Límite de vueltas por sesión (coste acotado). */
+  "ai_assistant.max_turns": { esquema: z.number().int().min(1).max(100), defecto: 30 },
   /** Series de numeración: facturas, rectificativas y contratos. */
   "billing.invoice_series": { esquema: z.string().regex(/^[A-Z]{1,5}$/), defecto: "F" },
   "billing.rectifying_series": { esquema: z.string().regex(/^[A-Z]{1,5}$/), defecto: "R" },
