@@ -142,16 +142,15 @@ describe.skipIf(!RUN)("ámbito de caja por HTTP", () => {
     await initDb();
     await (await import("./schema.ts")).initCash();
 
-    // La tabla es de Supabase; en la base de pruebas se crea si falta.
+    // La tabla es de Supabase; en la base de pruebas se crea si falta, con la
+    // MISMA forma que la de la plataforma: una recortada dejaría sin columnas a
+    // la siguiente prueba que la cree con IF NOT EXISTS en la misma base.
     await db.query(`
       CREATE TABLE IF NOT EXISTS app_usuario_modulos (
-        user_id UUID NOT NULL,
-        modulo TEXT NOT NULL,
-        rol TEXT,
-        pantallas TEXT[],
-        centro_id UUID,
-        PRIMARY KEY (user_id, modulo)
-      );
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid NOT NULL, modulo text NOT NULL,
+        rol text, pantallas text[], empresa_id uuid, centro_id uuid, UNIQUE (user_id, modulo));
+      ALTER TABLE app_usuario_modulos ADD COLUMN IF NOT EXISTS centro_id uuid;
+      ALTER TABLE app_usuario_modulos ADD COLUMN IF NOT EXISTS empresa_id uuid;
     `);
     T1 = await taller(EMPRESA_A, "ambito-t1");
     T2 = await taller(EMPRESA_A, "ambito-t2");
