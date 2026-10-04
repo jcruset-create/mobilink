@@ -77,23 +77,30 @@ const enlace = ({ isActive }: { isActive: boolean }) =>
  * un lateral la lista se pinta una vez y se recorre; escribir diez enlaces a
  * mano es como se acaba teniendo uno con el icono cambiado.
  */
+/*
+ * `unTaller`: la pantalla se recorta al taller de quien la mira, así que la ve
+ * también quien está limitado a uno. Las demás son de toda la red y el
+ * servidor se las niega (`SOLO_TODA_LA_RED`): no se enseñan en el menú.
+ */
 const PANTALLAS = [
-  { to: "red", icon: Network, label: "Red de cajas" },
-  { to: "posicion", icon: Wallet, label: "Posición de efectivo" },
-  { to: "ingresos", icon: Landmark, label: "Ingresos" },
-  { to: "cambio", icon: Coins, label: "Cambio" },
-  { to: "jornadas", icon: CalendarDays, label: "Jornadas" },
-  { to: "prevision", icon: TrendingUp, label: "Previsión" },
-  { to: "informes", icon: FileDown, label: "Informes" },
-  { to: "estado", icon: Activity, label: "Estado" },
-  { to: "incidencias", icon: Bell, label: "Incidencias" },
-  { to: "organizacion", icon: Building2, label: "Organización" },
+  { to: "red", icon: Network, label: "Red de cajas", unTaller: true },
+  { to: "posicion", icon: Wallet, label: "Posición de efectivo", unTaller: true },
+  { to: "ingresos", icon: Landmark, label: "Ingresos", unTaller: true },
+  { to: "cambio", icon: Coins, label: "Cambio", unTaller: false },
+  { to: "jornadas", icon: CalendarDays, label: "Jornadas", unTaller: true },
+  { to: "prevision", icon: TrendingUp, label: "Previsión", unTaller: false },
+  { to: "informes", icon: FileDown, label: "Informes", unTaller: false },
+  { to: "estado", icon: Activity, label: "Estado", unTaller: false },
+  { to: "incidencias", icon: Bell, label: "Incidencias", unTaller: false },
+  { to: "organizacion", icon: Building2, label: "Organización", unTaller: false },
 ] as const;
 
 export default function CentralApp() {
   const navigate = useNavigate();
   const [usuario, setUsuario] = useState("");
   const [menu, setMenu] = useState(false);
+  /** Limitado a un taller en Central: solo las pantallas que se recortan. */
+  const [unTaller, setUnTaller] = useState(false);
 
   /*
    * Quién está mirando. A mejor esfuerzo: si la consulta falla, la cabecera se
@@ -113,6 +120,14 @@ export default function CentralApp() {
           .eq("id", id)
           .maybeSingle();
         if (activo && u) setUsuario(u.username || u.nombre || "");
+        // Su propia fila de acceso: la puede leer él (RLS: user_id = auth.uid()).
+        const { data: acceso } = await supabase
+          .from("app_usuario_modulos")
+          .select("centro_id")
+          .eq("user_id", id)
+          .eq("modulo", "central")
+          .maybeSingle();
+        if (activo && acceso?.centro_id) setUnTaller(true);
       } catch {
         /* sin nombre se vive igual */
       }
@@ -191,7 +206,7 @@ export default function CentralApp() {
           className={`${menu ? "block" : "hidden"} w-52 shrink-0 border-r border-slate-700 bg-slate-900 p-2 md:block`}
         >
           <nav className="flex flex-col gap-1">
-            {PANTALLAS.map((p) => {
+            {PANTALLAS.filter((p) => !unTaller || p.unTaller).map((p) => {
               const Icon = p.icon;
               return (
                 <NavLink

@@ -65,7 +65,11 @@ async function joinCentro(alias: string, columna: string) {
  * incidencia abierta, y ponerlo en el contador haría que el número no bajara
  * nunca y que nadie lo mirase.
  */
-export async function resumenRed(empresaId: string): Promise<ResumenRed> {
+/**
+ * Con `centroId`, solo las cajas que hoy están en ese taller: el resumen de un
+ * usuario limitado a un taller no puede contar el dinero de los demás.
+ */
+export async function resumenRed(empresaId: string, centroId: string | null = null): Promise<ResumenRed> {
   const { rows } = await pool.query(
     `SELECT
        -- La misma union que el listado, y por lo mismo: una caja que aun no ha
@@ -76,20 +80,27 @@ export async function resumenRed(empresaId: string): Promise<ResumenRed> {
            WHERE empresa_id = $1 AND activa
           UNION
           SELECT register_id FROM central_registers WHERE empresa_id = $1
-        ) u) AS cajas,
+        ) u
+         WHERE ($2::uuid IS NULL OR u.register_id IN
+                (SELECT id FROM cash_registers WHERE empresa_id = $1 AND centro_id = $2))) AS cajas,
        (SELECT COUNT(*)::int FROM central_sessions
-         WHERE empresa_id = $1 AND estado IN ('OPEN','REOPENED')) AS abiertas,
+         WHERE empresa_id = $1 AND estado IN ('OPEN','REOPENED')
+           AND ($2::uuid IS NULL OR register_id IN (SELECT id FROM cash_registers WHERE empresa_id = $1 AND centro_id = $2))) AS abiertas,
        (SELECT COUNT(*)::int FROM central_sessions
          WHERE empresa_id = $1 AND COALESCE(diferencia_centimos,0) <> 0
-           AND fecha >= CURRENT_DATE - 30) AS descuadres,
+           AND fecha >= CURRENT_DATE - 30
+           AND ($2::uuid IS NULL OR register_id IN (SELECT id FROM cash_registers WHERE empresa_id = $1 AND centro_id = $2))) AS descuadres,
        (SELECT COALESCE(SUM(ABS(diferencia_centimos)),0) FROM central_sessions
          WHERE empresa_id = $1 AND COALESCE(diferencia_centimos,0) <> 0
-           AND fecha >= CURRENT_DATE - 30) AS descuadre_centimos,
+           AND fecha >= CURRENT_DATE - 30
+           AND ($2::uuid IS NULL OR register_id IN (SELECT id FROM cash_registers WHERE empresa_id = $1 AND centro_id = $2))) AS descuadre_centimos,
        (SELECT COALESCE(SUM(cobros_centimos),0) FROM central_sessions
-         WHERE empresa_id = $1 AND fecha = CURRENT_DATE) AS cobrado_hoy,
+         WHERE empresa_id = $1 AND fecha = CURRENT_DATE
+           AND ($2::uuid IS NULL OR register_id IN (SELECT id FROM cash_registers WHERE empresa_id = $1 AND centro_id = $2))) AS cobrado_hoy,
        (SELECT COUNT(*)::int FROM central_events
-         WHERE empresa_id = $1 AND resultado = 'TARDIO') AS tardios`,
-    [empresaId]
+         WHERE empresa_id = $1 AND resultado = 'TARDIO'
+           AND ($2::uuid IS NULL OR register_id IN (SELECT id FROM cash_registers WHERE empresa_id = $1 AND centro_id = $2))) AS tardios`,
+    [empresaId, centroId]
   );
   const r = rows[0];
   return {
@@ -520,7 +531,11 @@ export async function posicionPorCaja(empresaId: string): Promise<PosicionCaja[]
 }
 
 /** Lo que está fuera ahora mismo, con quién y desde cuándo. */
-export async function transitosAbiertos(empresaId: string): Promise<TransitoAbierto[]> {
+/** Con `centroId`, solo los de las cajas que hoy están en ese taller. */
+export async function transitosAbiertos(
+  empresaId: string,
+  centroId: string | null = null
+): Promise<TransitoAbierto[]> {
   const centro = await joinCentro("ce", "t.centro_id");
   const { rows } = await pool.query(
     `SELECT t.clase, t.documento_id, t.numero, t.responsable, t.importe_centimos,
@@ -529,8 +544,9 @@ export async function transitosAbiertos(empresaId: string): Promise<TransitoAbie
        LEFT JOIN cash_registers c ON c.id = t.register_id
        ${centro.join}
       WHERE t.empresa_id = $1 AND t.estado = 'ABIERTO'
+        AND ($2::uuid IS NULL OR c.centro_id = $2)
       ORDER BY t.abierto_en_ms`,
-    [empresaId]
+    [empresaId, centroId]
   );
 
   const ahora = Date.now();
