@@ -231,6 +231,41 @@ la jornada de otra).
 Prueba: `server/cash/ambito.http.integration.test.ts`, por Express y con
 usuarios de otra empresa y de otro taller.
 
+### Usuarios y cajas: el taller y las cajas de cada uno
+
+Configuración → **Usuarios y cajas** (permiso `cash.access.manage`, solo
+admin) fija, por usuario, su **taller** (`app_usuario_modulos.centro_id`) y,
+dentro de él, sus **cajas** (`cash_usuario_cajas`). Servidor en
+`server/cash/asignaciones.ts`, rutas `GET /api/cash/access`,
+`PUT /api/cash/access/users/:userId` y `PUT /api/cash/access/enforce`.
+
+| Rol | Qué cajas ve y toca |
+|---|---|
+| Superadmin | Todas |
+| Admin, responsable | Todas las de su taller (o de la empresa, sin taller) |
+| Cajero, consulta | Solo las asignadas, que tienen que ser de su taller |
+
+- **Un taller por usuario.** Las cajas asignadas tienen que ser de ese taller
+  (`CAJA_DE_OTRO_TALLER`). Para que alguien cubra dos talleres, se le deja sin
+  taller y con las cajas de los dos.
+- **El límite por caja va detrás de un interruptor por empresa**
+  (`exigir_asignacion_caja` en `cash_settings`), apagado al desplegar. Con el
+  interruptor apagado, todo el mundo ve las cajas de su taller, como antes.
+  Encenderlo con cajeros o consulta sin ninguna caja se para
+  (`USUARIOS_SIN_CAJA`) salvo que se fuerce: si no, el lunes nadie podría
+  abrir su caja.
+- **Con el interruptor encendido**, la caja no asignada responde 403
+  `CAJA_NO_ASIGNADA`, en la puerta y en el servicio. Las listas se recortan a
+  las cajas asignadas: selector de caja, posición global (y su PDF y Excel),
+  histórico y traslados. Quien no tiene ninguna ve «No tienes ninguna caja
+  asignada».
+- **Un admin limitado a un taller** solo gestiona a la gente de su taller y
+  dentro de él. El interruptor, que es de toda la empresa, lo cambia un admin
+  sin taller.
+- **Sin caché:** quitarle una caja a alguien surte efecto en su siguiente
+  petición. Cada cambio de asignación queda en la auditoría
+  (`cash.access.assigned`), dentro de la misma transacción.
+
 ## 7 bis. Formas de cobro
 
 `cash_payment_methods`, por empresa. Cada fila activa es un botón en Cobros y

@@ -9,6 +9,8 @@
 
 import { sessionHeaders } from "../../sessionHeaders";
 import type {
+  Accesos,
+  AccesoUsuario,
   Ajustes,
   AperturaCartucho,
   Bootstrap,
@@ -164,6 +166,21 @@ export const asignarZonaACentro = (centroId: string, zonaId: string | null) =>
 // ── Configuración ──────────────────────────────────────────────────────────
 
 /** Cajas de la empresa, incluidas las dadas de baja. */
+/** Quién toca qué caja: usuarios, su taller y sus cajas. Solo admin. */
+export const accesos = () => pedir<Accesos>("/access");
+
+export const fijarAcceso = (userId: string, centroId: string | null, cajas: number[]) =>
+  pedir<{ usuario: AccesoUsuario }>(`/access/users/${userId}`, {
+    ...json({ centroId, cajas }),
+    method: "PUT",
+  });
+
+export const fijarExigirAsignacion = (exigir: boolean, forzar = false) =>
+  pedir<Omit<Accesos, "talleres" | "cajas" | "ambitoCentroId">>("/access/enforce", {
+    ...json({ exigir, forzar }),
+    method: "PUT",
+  });
+
 export const listarCajas = () =>
   pedir<{
     cajas: (Caja & { activa: boolean; jornadas: string; jornadaAbierta: number | null })[];

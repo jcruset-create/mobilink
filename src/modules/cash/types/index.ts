@@ -703,6 +703,31 @@ export type Zona = { id: string; nombre: string; activa: boolean; centros: numbe
 /** Taller. Se da de alta en Administración; aquí solo se consulta y se agrupa. */
 export type Centro = { id: string; nombre: string; zonaId: string | null; activo: boolean };
 
+/** Un usuario de Mobilink Cash con su taller y sus cajas (Configuración → Usuarios y cajas). */
+export type AccesoUsuario = {
+  userId: string;
+  nombre: string;
+  username: string;
+  activo: boolean;
+  rol: string | null;
+  /** Taller. `null` = toda la empresa. */
+  centroId: string | null;
+  cajas: number[];
+  /** Cajero o consulta: con la asignación obligatoria, solo ve sus cajas. */
+  limitadoPorCaja: boolean;
+};
+
+export type Accesos = {
+  exigirAsignacion: boolean;
+  usuarios: AccesoUsuario[];
+  /** Cajeros y consulta activos sin ninguna caja. */
+  sinCaja: number;
+  talleres: Centro[];
+  cajas: { id: number; nombre: string; centroId: string | null; activa: boolean }[];
+  /** Taller del admin que mira, si está limitado a uno. */
+  ambitoCentroId: string | null;
+};
+
 /** Cuenta bancaria de la empresa: a dónde se ingresa el efectivo. */
 export type CuentaBancariaConfig = {
   id: number;

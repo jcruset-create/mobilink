@@ -46,8 +46,13 @@ function fechaCorta(iso: string | null): string {
  * catálogo y cómo se llama lo que se enseña. Que salga de un solo sitio es lo
  * que garantiza que los dos ficheros digan las mismas cifras.
  */
-async function prepararInforme(empresaId: string, centroId: string | null, registerId: number | null) {
-  const datos = await posicionGlobal(empresaId, centroId);
+async function prepararInforme(
+  empresaId: string,
+  centroId: string | null,
+  registerId: number | null,
+  cajasPermitidas: readonly number[] | null
+) {
+  const datos = await posicionGlobal(empresaId, centroId, null, cajasPermitidas);
   const cajas: PosicionCaja[] =
     registerId == null ? datos.cajas : datos.cajas.filter((c) => c.registerId === registerId);
   if (cajas.length === 0) {
@@ -75,12 +80,14 @@ async function prepararInforme(empresaId: string, centroId: string | null, regis
 export async function informePosicion(
   empresaId: string,
   centroId: string | null,
-  registerId: number | null
+  registerId: number | null,
+  cajasPermitidas: readonly number[] | null = null
 ): Promise<{ pdf: Buffer; nombre: string }> {
   const { datos, cajas, p, denominaciones, subtitulo, base } = await prepararInforme(
     empresaId,
     centroId,
-    registerId
+    registerId,
+    cajasPermitidas
   );
   const imagenes = await imagenesDelCatalogo(denominaciones);
 
@@ -438,12 +445,14 @@ export async function informePosicion(
 export async function excelPosicion(
   empresaId: string,
   centroId: string | null,
-  registerId: number | null
+  registerId: number | null,
+  cajasPermitidas: readonly number[] | null = null
 ): Promise<{ xlsx: Buffer; nombre: string }> {
   const { datos, cajas, p, denominaciones, subtitulo, base } = await prepararInforme(
     empresaId,
     centroId,
-    registerId
+    registerId,
+    cajasPermitidas
   );
   const e = (c: number) => Math.round(c) / 100;
   const billetes = denominaciones.filter((d) => d.tipo === "BILLETE");

@@ -14,6 +14,7 @@
 
 import type { RequestHandler } from "express";
 import pool from "../db.ts";
+import { limiteDeCajas } from "./asignaciones.ts";
 
 export const PERMISOS = [
   "cash.view",
@@ -107,6 +108,12 @@ export const PERMISOS = [
    * lo que no tiene por Pagos sería abrir una puerta de atrás.
    */
   "cash.expense_claim.pay",
+  /**
+   * Decidir quién toca qué caja: el taller y las cajas de cada usuario, y si
+   * la empresa exige asignación. Solo admin: un responsable que pudiera darse
+   * cajas a sí mismo o quitárselas a otro se saltaría la regla que vigila.
+   */
+  "cash.access.manage",
 ] as const;
 
 export type Permiso = (typeof PERMISOS)[number];
@@ -229,6 +236,11 @@ declare module "express-serve-static-core" {
     cashPermisos?: readonly Permiso[];
     /** Taller al que está limitado el usuario. `null` = toda la empresa. */
     cashCentroId?: string | null;
+    /**
+     * Cajas a las que está limitado, dentro de su taller. `null` = todas las
+     * de su ámbito. Ver `asignaciones.ts`.
+     */
+    cashCajas?: number[] | null;
   }
 }
 
@@ -241,6 +253,7 @@ export const cargarPermisosCaja: RequestHandler = async (req, res, next) => {
     req.cashRol = rol;
     req.cashCentroId = centroId;
     req.cashPermisos = permisosDeRol(rol);
+    req.cashCajas = await limiteDeCajas(ctx.empresaId, ctx.userId, rol, ctx.esSuperadmin);
     next();
   } catch (e) {
     console.error("[Mobilink Cash] error cargando permisos:", e);
