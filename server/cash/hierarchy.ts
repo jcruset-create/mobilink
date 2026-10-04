@@ -419,13 +419,15 @@ const DUENO: Record<TipoRecurso, { sql: string; codigo: string; mensaje: string 
 /**
  * ¿Puede este usuario ver o tocar esto?
  *
- * Dos comprobaciones, siempre las dos:
+ * Tres comprobaciones:
  *
  * · **La empresa.** Lo de otra empresa responde «no existe» (404), no «no
  *   puedes» (403): los números son correlativos, y un 403 confirmaría que el
  *   número que alguien está probando existe.
  * · **El taller**, si el usuario está limitado a uno. Ver arriba: una caja sin
  *   taller queda fuera de cualquier ámbito.
+ * · **Sus cajas**, si es cajero o consulta y la empresa exige asignación
+ *   (`asignaciones.ts`): 403 `CAJA_NO_ASIGNADA`.
  *
  * Es la puerta de todo lo que se pide por número. Una ruta que lea o escriba
  * algo de una caja y no pase por aquí es un agujero: con la jornada 1234 de la
@@ -446,6 +448,14 @@ export async function exigirAcceso(
     throw new ErrorCaja(
       "CAJA_FUERA_DE_AMBITO",
       "Esta caja es de otro taller. Solo puedes operar las cajas del tuyo.",
+      403
+    );
+  }
+  // Y dentro del taller, sus cajas. AutoScan es del taller, no de una caja.
+  if (ctx.cajas && rows[0].register_id != null && !ctx.cajas.includes(Number(rows[0].register_id))) {
+    throw new ErrorCaja(
+      "CAJA_NO_ASIGNADA",
+      "No tienes esta caja asignada. Pídesela a tu responsable.",
       403
     );
   }

@@ -39,6 +39,11 @@ export type Contexto = {
    * Sale de `app_usuario_modulos.centro_id` (ver `permissions.ts`).
    */
   centroId?: string | null;
+  /**
+   * Cajas a las que está limitado dentro de su taller (cajero y consulta, si la
+   * empresa exige asignación). `null` o ausente = todas las de su ámbito.
+   */
+  cajas?: readonly number[] | null;
 };
 
 export type CajaConfig = {
@@ -77,7 +82,8 @@ export type CajaConfig = {
  */
 export async function listarCajas(
   empresaId: string,
-  centroId?: string | null
+  centroId?: string | null,
+  cajasPermitidas: readonly number[] | null = null
 ): Promise<CajaConfig[]> {
   const { rows } = await pool.query(
     `SELECT c.id, c.centro, c.centro_id, c.nombre, c.codigo, c.activa, c.fondo_objetivo_centimos,
@@ -89,8 +95,9 @@ export async function listarCajas(
        FROM cash_registers c
       WHERE c.empresa_id = $1
         AND ($2::uuid IS NULL OR c.centro_id = $2)
+        AND ($3::int[] IS NULL OR c.id = ANY($3::int[]))
       ORDER BY c.activa DESC, c.centro, c.nombre`,
-    [empresaId, centroId ?? null]
+    [empresaId, centroId ?? null, cajasPermitidas]
   );
   /* eslint-disable @typescript-eslint/no-explicit-any */
   return rows.map((r: any) => ({

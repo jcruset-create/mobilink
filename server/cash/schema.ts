@@ -2166,6 +2166,30 @@ export async function initCash(): Promise<void> {
     );
   `);
 
+  /*
+   * Cajas asignadas a cada usuario.
+   *
+   * El taller del usuario ya estaba en `app_usuario_modulos.centro_id`; esto
+   * es el escalón de debajo: dentro de su taller, qué cajas. Solo limita a los
+   * cajeros y a consulta, y solo en las empresas que lo han encendido
+   * (`exigir_asignacion_caja` en `cash_settings`): ver `asignaciones.ts`.
+   *
+   * Sin FK a `app_usuarios` porque es de Supabase y puede no estar en la base
+   * de pruebas del módulo; a la caja, sí.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_usuario_cajas (
+      empresa_id UUID NOT NULL,
+      user_id UUID NOT NULL,
+      register_id INTEGER NOT NULL REFERENCES cash_registers(id) ON DELETE CASCADE,
+      asignado_por UUID,
+      asignado_at_ms BIGINT NOT NULL,
+      PRIMARY KEY (user_id, register_id)
+    );
+    CREATE INDEX IF NOT EXISTS cash_usuario_cajas_empresa_idx
+      ON cash_usuario_cajas(empresa_id, user_id);
+  `);
+
   await asignarCodigosDeCaja();
   await renumerarDocumentos();
 

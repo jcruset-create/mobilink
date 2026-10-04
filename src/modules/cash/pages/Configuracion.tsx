@@ -51,6 +51,7 @@ import type {
   EquivalenciaErp,
 } from "../types";
 import * as api from "../services/api";
+import AccesoCajas from "../components/AccesoCajas";
 
 type CajaConfig = {
   id: number;
@@ -85,6 +86,7 @@ export default function Configuracion() {
         descripcion="Cajas físicas, secciones de negocio, formas de cobro y catálogo de denominaciones."
       />
       <Cajas />
+      {puede("cash.access.manage") && <AccesoCajas />}
       <Bancos />
       <CuentasBancarias />
       <CorreoCentral />

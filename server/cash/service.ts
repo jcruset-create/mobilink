@@ -102,6 +102,11 @@ export type Contexto = {
    * que es como funcionó el módulo hasta la fase 1 de MC Central.
    */
   centroId?: string | null;
+  /**
+   * Cajas a las que está limitado dentro de su taller (cajero y consulta, si la
+   * empresa exige asignación). `null` o ausente = todas las de su ámbito.
+   */
+  cajas?: readonly number[] | null;
 };
 
 
