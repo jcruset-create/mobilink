@@ -121,6 +121,20 @@ async function codigosEnUso(empresaId: string): Promise<Set<string>> {
   return new Set(rows.map((r: any) => r.codigo));
 }
 
+/**
+ * Quien está limitado a un taller solo da de alta y modifica cajas de ese
+ * taller. Sin límite, cualquiera de la empresa.
+ */
+function exigirMismoTaller(ctx: Contexto, centroId: string | null) {
+  if (ctx.centroId && centroId !== ctx.centroId) {
+    throw new ErrorCaja(
+      "CAJA_FUERA_DE_AMBITO",
+      "Esta caja es de otro taller. Solo puedes operar las cajas del tuyo.",
+      403
+    );
+  }
+}
+
 export async function crearCaja(
   ctx: Contexto,
   datos: { nombre: string; centro?: string; centroId?: string | null; codigo?: string }
@@ -142,7 +156,9 @@ export async function crearCaja(
    * `centro` es lo que leen los informes y la clave única del alta— y tienen
    * que decir lo mismo. Dejar que difieran es fabricar un informe que miente.
    */
-  const centroId = datos.centroId ?? null;
+  // Limitado a un taller: las cajas nuevas, en el suyo y solo en el suyo.
+  const centroId = datos.centroId ?? ctx.centroId ?? null;
+  exigirMismoTaller(ctx, centroId);
   const centro = centroId
     ? await nombreDeCentro(ctx.empresaId, centroId)
     : (datos.centro ?? "").trim();
@@ -227,6 +243,10 @@ export async function actualizarCaja(
     [id, ctx.empresaId]
   );
   if (actual.length === 0) throw new ErrorCaja("CAJA_NO_ENCONTRADA", "La caja no existe.", 404);
+  // La caja tiene que ser de tu taller, y no se puede sacar de él: moverla al
+  // tuyo sería quedarse con la caja de otro.
+  exigirMismoTaller(ctx, actual[0].centro_id ?? null);
+  if (cambios.centroId !== undefined) exigirMismoTaller(ctx, cambios.centroId);
 
   /*
    * El fondo fijo NO es identidad: se puede cambiar con la jornada abierta,

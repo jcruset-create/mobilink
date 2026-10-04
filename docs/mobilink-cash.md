@@ -201,6 +201,36 @@ Los cobros y pagos distinguen permiso ERP de permiso manual
 pedía el encargo: se puede dejar cobrar facturas de la ERP a quien no debe
 poder inventarse un cobro.
 
+### Ámbito: de quién es cada cosa
+
+Además del rol, cada usuario tiene un **ámbito**: su empresa y, si
+`app_usuario_modulos.centro_id` lo limita, un taller. Todo lo que se pide por
+número en la URL —`/registers/:id`, `/sessions/:id`, `/bank-deposits/:id`,
+`/operations/:id`, `/documents/:id`, `/change-orders/:id`, `/advances/:id`,
+`/bank-deposits/swap/:id`, `/autoscan/inbox/:id`, `/autoscan/devices/:id`—
+pasa por una puerta (`PUERTAS` en `server/cash/router.ts`) **antes** de llegar
+a su ruta. La puerta busca de qué caja (o, en AutoScan, de qué taller) es y
+llama a `exigirAcceso` (`server/cash/hierarchy.ts`):
+
+- De otra empresa: **404 «no existe»**, no 403. Los números son correlativos y
+  un 403 confirmaría que el que se está probando existe.
+- De otro taller, si el usuario está limitado a uno: **403
+  `CAJA_FUERA_DE_AMBITO`**.
+
+Está delante de todas y no repetida en cada ruta para que una ruta nueva quede
+protegida sin acordarse de nada. Se puso al auditar las rutas: seis lecturas
+de jornada (detalle, movimientos, stock, cambio, propuesta de cierre y jornada
+abierta de una caja) no comprobaban ni la empresa. Los ids que llegan en el
+cuerpo (`registerId` de ingresos, canjes y reposiciones; `operationId` de
+AutoScan y del escáner de facturas) se comprueban en su ruta con la misma
+función. Las altas y cambios de caja se quedan en el taller del usuario: no se
+puede mover la caja de otro taller al suyo. Y el dinero de un pedido de cambio
+o de una entrega vuelve a **su** caja (`OTRA_CAJA` si se intenta cerrar desde
+la jornada de otra).
+
+Prueba: `server/cash/ambito.http.integration.test.ts`, por Express y con
+usuarios de otra empresa y de otro taller.
+
 ## 7 bis. Formas de cobro
 
 `cash_payment_methods`, por empresa. Cada fila activa es un botón en Cobros y
