@@ -808,6 +808,32 @@ describe.runIf(RUN)("pago con vuelta", () => {
 });
 
 describe.runIf(RUN)("cambio al banco", () => {
+  it("el pedido se recibe en una jornada de su caja, no en la de otra", async () => {
+    const caja = await crearCaja("cambio-su-caja");
+    const otra = await crearCaja("cambio-otra-caja");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 5000, cantidad: 6 }],
+    });
+    const deLaOtra = await servicio.abrirJornada(ctx, { registerId: otra, fondoManual: [] });
+    const pedido = await tesoreria.crearPedido(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 20000,
+      solicitado: [{ valor: 100, cantidad: 200, cartuchos: 8 }],
+    });
+
+    // A la otra le entrarían 200 € que no salieron de ella, y a esta le faltarían.
+    await expect(
+      tesoreria.recibirPedido(ctx, pedido.id, {
+        sessionId: deLaOtra.sesion.id,
+        recibido: [{ valor: 100, cantidad: 200, cartuchos: 8 }],
+      })
+    ).rejects.toMatchObject({ codigo: "OTRA_CAJA" });
+    await expect(
+      tesoreria.cancelarPedido(ctx, pedido.id, deLaOtra.sesion.id, "prueba")
+    ).rejects.toMatchObject({ codigo: "OTRA_CAJA" });
+  });
+
   it("el dinero sale al pedirlo y entra al recibirlo, cruzando jornadas", async () => {
     const caja = await crearCaja("cambio-banco");
     const { sesion } = await servicio.abrirJornada(ctx, {
@@ -4456,6 +4482,38 @@ describe.runIf(RUN)("Ámbito por taller", () => {
     await expect(
       servicio.abrirJornada({ ...ctx, centroId: TALLER_A }, { registerId: huerfana, fondoManual: [] })
     ).rejects.toMatchObject({ codigo: "CAJA_FUERA_DE_AMBITO" });
+  });
+
+  it("cobrar con el número de una factura de otra empresa no la marca como cobrada", async () => {
+    const ajena = "00000000-0000-4000-a000-0000000000cb";
+    const ahora = Date.now();
+    const { rows } = await db.query(
+      `INSERT INTO cash_external_documents
+         (empresa_id, external_system, external_id, tipo, total_centimos, pendiente_centimos,
+          created_at_ms, updated_at_ms)
+       VALUES ($1, 'PRUEBA', $2, 'CUSTOMER_INVOICE', 5000, 5000, $3, $3) RETURNING id`,
+      [ajena, `ajena-${ahora}`, ahora]
+    );
+    const caja = await crearCaja("ambito-factura-ajena");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: [] });
+
+    await expect(
+      servicio.registrarCobro(ctx, {
+        sessionId: sesion.id,
+        importeCentimos: 5000,
+        formasPago: [{ forma: "CASH", importe: 5000 }],
+        efectivoRecibido: [{ valor: 5000, cantidad: 1 }],
+        concepto: "Factura ajena",
+        documentoId: rows[0].id,
+      })
+    ).rejects.toMatchObject({ codigo: "DOCUMENTO_NO_ENCONTRADO" });
+
+    const { rows: tras } = await db.query(
+      `SELECT pendiente_centimos, estado FROM cash_external_documents WHERE id = $1`,
+      [rows[0].id]
+    );
+    expect(Number(tras[0].pendiente_centimos)).toBe(5000);
+    expect(tras[0].estado).toBe("OPEN");
   });
 
   it("el listado de cajas se recorta al ámbito", async () => {

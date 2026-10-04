@@ -277,6 +277,15 @@ function contexto(req: Request): servicio.Contexto {
   };
 }
 
+/**
+ * La puerta de todo lo que se pide por número (caja, jornada, ingreso,
+ * documento…): de tu empresa y, si estás limitado a un taller, de tu taller.
+ * Ver `jerarquia.exigirAcceso`.
+ */
+function acceso(req: Request, recurso: jerarquia.Recurso): Promise<void> {
+  return jerarquia.exigirAcceso(pool, contexto(req), recurso);
+}
+
 /** Envuelve un handler async y traduce `ErrorCaja` a su código HTTP. */
 function ruta(fn: (req: Request, res: Response) => Promise<unknown>) {
   return async (req: Request, res: Response) => {
@@ -298,6 +307,48 @@ export function createCashRouter(): Router {
   const r = Router();
 
   r.use(authenticate, requireModule("cash"), cargarPermisosCaja);
+
+  /*
+   * La puerta del ámbito para todo lo que lleva un número en la URL.
+   *
+   * `/sessions/1234/…` es de una caja, y antes de llegar a la ruta se comprueba
+   * que esa caja sea de tu empresa y, si estás limitado a un taller, del tuyo.
+   * Va aquí, delante de todas las rutas, y no repetido en cada una: así una
+   * ruta nueva queda protegida sin acordarse de nada. Había lecturas de
+   * jornada que no comprobaban ni la empresa, y con cambiar el número de la
+   * URL se leía la caja de otro.
+   *
+   * Lo que no es un número (`/bank-deposits/swap`) pasa sin mirar: no es un
+   * recurso con dueño, y su ruta comprueba lo suyo.
+   */
+  const PUERTAS: [string, jerarquia.TipoRecurso][] = [
+    ["/registers/:id", "caja"],
+    ["/sessions/:id", "jornada"],
+    ["/bank-deposits/:id", "ingreso"],
+    ["/operations/:id", "operacion"],
+    ["/documents/:id", "documento"],
+    ["/change-orders/:id", "pedido"],
+    ["/advances/:id", "entrega"],
+    ["/bank-deposits/swap/:id", "canje"],
+    ["/autoscan/inbox/:id", "bandeja"],
+    ["/autoscan/devices/:id", "escaner"],
+  ];
+  for (const [camino, tipo] of PUERTAS) {
+    r.use(camino, async (req, res, next) => {
+      const id = String(req.params.id ?? "");
+      if (!/^\d{1,9}$/.test(id)) return next();
+      try {
+        await acceso(req, { [tipo]: Number(id) } as jerarquia.Recurso);
+        next();
+      } catch (e) {
+        if (e instanceof ErrorCaja) {
+          return res.status(e.estado).json({ error: e.message, code: e.codigo, detalle: e.detalle });
+        }
+        console.error("[Mobilink Cash] error comprobando el ámbito:", e);
+        res.status(500).json({ error: "Error interno de Mobilink Cash" });
+      }
+    });
+  }
 
   /**
    * Posición global: el efectivo de cada caja que ve el usuario, pieza a
@@ -527,7 +578,10 @@ export function createCashRouter(): Router {
       const registerId = req.query.registerId
         ? enteroPositivo(req.query.registerId, "registerId")
         : undefined;
-      res.json({ traslados: await traslados.listar(req.authCtx!.empresaId, registerId) });
+      if (registerId) await acceso(req, { caja: registerId });
+      res.json({
+        traslados: await traslados.listar(req.authCtx!.empresaId, registerId, req.cashCentroId ?? null),
+      });
     })
   );
 
@@ -1315,6 +1369,7 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.treasury.manage"),
     ruta(async (req, res) => {
       const b = req.body ?? {};
+      await acceso(req, { caja: enteroPositivo(b.registerId, "registerId") });
       res.status(201).json(
         await ingresos.registrarCanje(contexto(req), {
           registerId: enteroPositivo(b.registerId, "registerId"),
@@ -1384,6 +1439,7 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.treasury.manage"),
     ruta(async (req, res) => {
       const b = req.body ?? {};
+      await acceso(req, { caja: enteroPositivo(b.registerId, "registerId") });
       res.status(201).json(
         await ingresos.registrarReposicion(contexto(req), {
           registerId: enteroPositivo(b.registerId, "registerId"),
@@ -1402,6 +1458,7 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.treasury.manage"),
     ruta(async (req, res) => {
       const b = req.body ?? {};
+      await acceso(req, { caja: enteroPositivo(b.registerId, "registerId") });
       if (!Array.isArray(b.sessionIds)) {
         throw new ErrorCaja("ENTRADA_NO_VALIDA", "sessionIds tiene que ser una lista.", 400);
       }
@@ -2062,6 +2119,7 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.document.attach"),
     ruta(async (req, res) => {
       const b = req.body ?? {};
+      await acceso(req, { operacion: enteroPositivo(b.operationId, "operationId") });
       const { promover } = await import("./autoscan/promote.ts");
       res.status(201).json(
         await promover(contexto(req), {
@@ -2118,6 +2176,7 @@ export function createCashRouter(): Router {
         });
       }
 
+      if (b.sessionId) await acceso(req, { jornada: enteroPositivo(b.sessionId, "sessionId") });
       const propuesta = await escanearFactura({
         empresaId: req.authCtx!.empresaId,
         userId: req.authCtx!.userId ?? null,
@@ -2140,6 +2199,7 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.collection.create_manual"),
     ruta(async (req, res) => {
       const b = req.body ?? {};
+      await acceso(req, { operacion: enteroPositivo(b.operationId, "operationId") });
       await anotarConfirmacion(enteroPositivo(req.params.id, "id"), req.authCtx!.empresaId, {
         operationId: enteroPositivo(b.operationId, "operationId"),
         formaPagoFinal: typeof b.formaPagoFinal === "string" ? b.formaPagoFinal : "",
