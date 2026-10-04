@@ -522,14 +522,30 @@ export async function cancelar(
 }
 
 /** Traslados de una empresa. Los pendientes primero: son los que hay que mirar. */
-export async function listar(empresaId: string, registerId?: number): Promise<Traslado[]> {
+/**
+ * Los traslados de la empresa, o los de una caja. Con `centroId` (o
+ * `cajasPermitidas`), solo los que salen de una caja de ese taller (o de esas
+ * cajas) o llegan a una: un traslado es de las dos
+ * cajas, y cada una tiene que poder ver el que le toca.
+ */
+export async function listar(
+  empresaId: string,
+  registerId?: number,
+  centroId: string | null = null,
+  cajasPermitidas: readonly number[] | null = null
+): Promise<Traslado[]> {
   const { rows } = await pool.query(
-    `SELECT * FROM cash_transfers
-      WHERE empresa_id = $1
-        AND ($2::int IS NULL OR origen_register_id = $2 OR destino_register_id = $2)
-      ORDER BY (estado = 'EN_TRANSITO') DESC, creado_at_ms DESC
+    `SELECT * FROM cash_transfers t
+      WHERE t.empresa_id = $1
+        AND ($2::int IS NULL OR t.origen_register_id = $2 OR t.destino_register_id = $2)
+        AND ($3::uuid IS NULL OR EXISTS (
+              SELECT 1 FROM cash_registers r
+               WHERE r.id IN (t.origen_register_id, t.destino_register_id) AND r.centro_id = $3))
+        AND ($4::int[] IS NULL
+             OR t.origen_register_id = ANY($4::int[]) OR t.destino_register_id = ANY($4::int[]))
+      ORDER BY (t.estado = 'EN_TRANSITO') DESC, t.creado_at_ms DESC
       LIMIT 100`,
-    [empresaId, registerId ?? null]
+    [empresaId, registerId ?? null, centroId, cajasPermitidas]
   );
 
   const l = await lineas(pool, rows.map((r: any) => r.id));

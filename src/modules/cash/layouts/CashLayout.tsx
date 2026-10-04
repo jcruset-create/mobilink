@@ -17,7 +17,7 @@ import { NAV, navVisible } from "../config/navigation";
 import { euros } from "../utils/money";
 
 export default function CashLayout() {
-  const { cajas, cajaId, seleccionarCaja, jornada, permisos, rol, refrescar } = useCash();
+  const { cajas, cajaId, seleccionarCaja, jornada, permisos, rol, refrescar, puede } = useCash();
   const navigate = useNavigate();
   const location = useLocation();
   const [abierto, setAbierto] = useState(false);
@@ -148,7 +148,19 @@ export default function CashLayout() {
         </aside>
 
         <main className="min-w-0 flex-1 p-3">
-          <Outlet />
+          {/*
+            Sin ninguna caja que ver y sin poder crear una: un cajero al que
+            aún no le han asignado caja. Mejor decírselo que dejarle en
+            pantallas vacías que fallan al pulsar.
+          */}
+          {cajas.length === 0 && !puede("cash.configure") ? (
+            <div className="mx-auto mt-10 max-w-md rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-100">
+              <div className="mb-1 font-semibold">No tienes ninguna caja asignada</div>
+              Pídele a tu responsable que te asigne tu caja en Configuración → Usuarios y cajas.
+            </div>
+          ) : (
+            <Outlet />
+          )}
         </main>
       </div>
     </div>

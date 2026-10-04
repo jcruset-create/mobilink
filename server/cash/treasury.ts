@@ -312,6 +312,17 @@ export type EntradaPedido = {
   notas?: string;
 };
 
+/**
+ * El dinero vuelve a la caja de la que salió. Recibir el pedido de la caja 2
+ * en una jornada de la caja 1 descuadraría las dos: a una le sobra lo que a la
+ * otra le falta.
+ */
+function exigirMismaCaja(registerJornada: number, registerDelRecurso: number, que: string) {
+  if (Number(registerDelRecurso) !== Number(registerJornada)) {
+    throw new ErrorCaja("OTRA_CAJA", `${que} es de otra caja: hay que cerrarlo desde una jornada de esa caja.`, 409);
+  }
+}
+
 export async function crearPedido(ctx: Contexto, e: EntradaPedido): Promise<PedidoCambio> {
   if (!Number.isSafeInteger(e.importeCentimos) || e.importeCentimos <= 0) {
     throw new ErrorCaja("ENTRADA_NO_VALIDA", "El importe a cambiar tiene que ser mayor que cero.", 400);
@@ -467,6 +478,7 @@ export async function recibirPedido(
 
     const sesion = await bloquearSesionOperable(client, e.sessionId);
     await exigirJornadaPropia(client, ctx, sesion);
+    exigirMismaCaja(sesion.registerId, previo.register_id, "El pedido");
 
     const denominaciones = await cargarDenominaciones(client);
     const porCartucho = piezasPorCartuchoDe(denominaciones);
@@ -612,6 +624,7 @@ export async function cancelarPedido(
 
     const sesion = await bloquearSesionOperable(client, sessionId);
     await exigirJornadaPropia(client, ctx, sesion);
+    exigirMismaCaja(sesion.registerId, previas[0].register_id, "El pedido");
 
     const lineas = await lineasDePedido(client, [pedidoId]);
     /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -846,6 +859,7 @@ export async function liquidarEntrega(
 
     const sesion = await bloquearSesionOperable(client, e.sessionId);
     await exigirJornadaPropia(client, ctx, sesion);
+    exigirMismaCaja(sesion.registerId, previa.register_id, "La entrega");
 
     const entregado = Number(previa.importe_centimos);
     const gasto = e.gastoCentimos ?? 0;

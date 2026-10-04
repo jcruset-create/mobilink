@@ -201,6 +201,71 @@ Los cobros y pagos distinguen permiso ERP de permiso manual
 pedía el encargo: se puede dejar cobrar facturas de la ERP a quien no debe
 poder inventarse un cobro.
 
+### Ámbito: de quién es cada cosa
+
+Además del rol, cada usuario tiene un **ámbito**: su empresa y, si
+`app_usuario_modulos.centro_id` lo limita, un taller. Todo lo que se pide por
+número en la URL —`/registers/:id`, `/sessions/:id`, `/bank-deposits/:id`,
+`/operations/:id`, `/documents/:id`, `/change-orders/:id`, `/advances/:id`,
+`/bank-deposits/swap/:id`, `/autoscan/inbox/:id`, `/autoscan/devices/:id`—
+pasa por una puerta (`PUERTAS` en `server/cash/router.ts`) **antes** de llegar
+a su ruta. La puerta busca de qué caja (o, en AutoScan, de qué taller) es y
+llama a `exigirAcceso` (`server/cash/hierarchy.ts`):
+
+- De otra empresa: **404 «no existe»**, no 403. Los números son correlativos y
+  un 403 confirmaría que el que se está probando existe.
+- De otro taller, si el usuario está limitado a uno: **403
+  `CAJA_FUERA_DE_AMBITO`**.
+
+Está delante de todas y no repetida en cada ruta para que una ruta nueva quede
+protegida sin acordarse de nada. Se puso al auditar las rutas: seis lecturas
+de jornada (detalle, movimientos, stock, cambio, propuesta de cierre y jornada
+abierta de una caja) no comprobaban ni la empresa. Los ids que llegan en el
+cuerpo (`registerId` de ingresos, canjes y reposiciones; `operationId` de
+AutoScan y del escáner de facturas) se comprueban en su ruta con la misma
+función. Las altas y cambios de caja se quedan en el taller del usuario: no se
+puede mover la caja de otro taller al suyo. Y el dinero de un pedido de cambio
+o de una entrega vuelve a **su** caja (`OTRA_CAJA` si se intenta cerrar desde
+la jornada de otra).
+
+Prueba: `server/cash/ambito.http.integration.test.ts`, por Express y con
+usuarios de otra empresa y de otro taller.
+
+### Usuarios y cajas: el taller y las cajas de cada uno
+
+Configuración → **Usuarios y cajas** (permiso `cash.access.manage`, solo
+admin) fija, por usuario, su **taller** (`app_usuario_modulos.centro_id`) y,
+dentro de él, sus **cajas** (`cash_usuario_cajas`). Servidor en
+`server/cash/asignaciones.ts`, rutas `GET /api/cash/access`,
+`PUT /api/cash/access/users/:userId` y `PUT /api/cash/access/enforce`.
+
+| Rol | Qué cajas ve y toca |
+|---|---|
+| Superadmin | Todas |
+| Admin, responsable | Todas las de su taller (o de la empresa, sin taller) |
+| Cajero, consulta | Solo las asignadas, que tienen que ser de su taller |
+
+- **Un taller por usuario.** Las cajas asignadas tienen que ser de ese taller
+  (`CAJA_DE_OTRO_TALLER`). Para que alguien cubra dos talleres, se le deja sin
+  taller y con las cajas de los dos.
+- **El límite por caja va detrás de un interruptor por empresa**
+  (`exigir_asignacion_caja` en `cash_settings`), apagado al desplegar. Con el
+  interruptor apagado, todo el mundo ve las cajas de su taller, como antes.
+  Encenderlo con cajeros o consulta sin ninguna caja se para
+  (`USUARIOS_SIN_CAJA`) salvo que se fuerce: si no, el lunes nadie podría
+  abrir su caja.
+- **Con el interruptor encendido**, la caja no asignada responde 403
+  `CAJA_NO_ASIGNADA`, en la puerta y en el servicio. Las listas se recortan a
+  las cajas asignadas: selector de caja, posición global (y su PDF y Excel),
+  histórico y traslados. Quien no tiene ninguna ve «No tienes ninguna caja
+  asignada».
+- **Un admin limitado a un taller** solo gestiona a la gente de su taller y
+  dentro de él. El interruptor, que es de toda la empresa, lo cambia un admin
+  sin taller.
+- **Sin caché:** quitarle una caja a alguien surte efecto en su siguiente
+  petición. Cada cambio de asignación queda en la auditoría
+  (`cash.access.assigned`), dentro de la misma transacción.
+
 ## 7 bis. Formas de cobro
 
 `cash_payment_methods`, por empresa. Cada fila activa es un botón en Cobros y

@@ -102,6 +102,11 @@ export type Contexto = {
    * que es como funcionó el módulo hasta la fase 1 de MC Central.
    */
   centroId?: string | null;
+  /**
+   * Cajas a las que está limitado dentro de su taller (cajero y consulta, si la
+   * empresa exige asignación). `null` o ausente = todas las de su ámbito.
+   */
+  cajas?: readonly number[] | null;
 };
 
 
@@ -572,6 +577,18 @@ export async function registrarOperacion(
     const sesion = await bloquearSesionOperable(client, e.sessionId);
     await exigirJornadaPropia(client, ctx, sesion);
 
+    // La factura de la ERP que se cobra, de esta empresa. Sin esto, con el
+    // número de una factura ajena se marcaba como cobrada la de otro.
+    if (e.documentoId) {
+      const { rows } = await client.query(
+        `SELECT 1 FROM cash_external_documents WHERE id = $1 AND empresa_id = $2`,
+        [e.documentoId, ctx.empresaId]
+      );
+      if (rows.length === 0) {
+        throw new ErrorCaja("DOCUMENTO_NO_ENCONTRADO", "La factura no existe.", 404);
+      }
+    }
+
     // Stock leído con la jornada ya bloqueada: es el bueno hasta el COMMIT.
     const stock = await stockTeorico(client, e.sessionId);
     const denominaciones = await cargarDenominaciones(client);
@@ -926,8 +943,8 @@ export async function registrarOperacion(
                   WHEN pendiente_centimos - $2 <= 0 THEN 'PAID'
                   ELSE 'PARTIALLY_PAID' END,
                 updated_at_ms = $3
-          WHERE id = $1`,
-        [e.documentoId, e.importeCentimos, ahora]
+          WHERE id = $1 AND empresa_id = $4`,
+        [e.documentoId, e.importeCentimos, ahora, ctx.empresaId]
       );
     }
 

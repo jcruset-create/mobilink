@@ -298,9 +298,8 @@ export async function asignarCentroACaja(
 /**
  * ¿Puede este usuario operar esta caja?
  *
- * Con `centroId` a `null` —el caso de casi todo el mundo— no hay nada que
- * comprobar: su ámbito es la empresa entera, que es como funcionaba el módulo
- * antes de esta fase.
+ * Con `centroId` a `null` —el caso de casi todo el mundo— el ámbito es la
+ * empresa entera, y lo único que se comprueba es que la caja sea de la empresa.
  *
  * Con ámbito, se compara contra el taller de la caja. Y una caja **sin taller
  * asignado queda fuera** de cualquier ámbito: si el backfill no supo dónde está,
@@ -316,19 +315,147 @@ export async function exigirAmbitoCaja(
   ctx: Contexto,
   registerId: number
 ): Promise<void> {
-  if (!ctx.centroId) return;
+  await exigirAcceso(ejecutor, ctx, { caja: registerId });
+}
 
-  const { rows } = await ejecutor.query(
-    `SELECT centro_id FROM cash_registers WHERE id = $1 AND empresa_id = $2`,
-    [registerId, ctx.empresaId]
-  );
-  if (rows.length === 0) {
-    throw new ErrorCaja("CAJA_NO_ENCONTRADA", "La caja no existe.", 404);
+/**
+ * Lo que cuelga de una caja y se pide por su número: la caja misma, una
+ * jornada, un ingreso, una operación, un documento, un pedido de cambio, una
+ * entrega de dinero o un canje con el cajón. Y de AutoScan, que es de un
+ * taller y no de una caja, la bandeja y el escáner.
+ */
+export type TipoRecurso =
+  | "caja"
+  | "jornada"
+  | "ingreso"
+  | "operacion"
+  | "documento"
+  | "pedido"
+  | "entrega"
+  | "canje"
+  | "bandeja"
+  | "escaner";
+export type Recurso = { [K in TipoRecurso]: { [P in K]: number } }[TipoRecurso];
+
+/*
+ * De quién es cada cosa: su empresa y el taller de su caja, en una sola
+ * consulta. Los documentos cuelgan de una jornada o de un ingreso, nunca de
+ * los dos (`cash_opdoc_un_ancla`).
+ */
+const DUENO: Record<TipoRecurso, { sql: string; codigo: string; mensaje: string }> = {
+  caja: {
+    sql: `SELECT r.id AS register_id, r.empresa_id, r.centro_id
+            FROM cash_registers r WHERE r.id = $1`,
+    codigo: "CAJA_NO_ENCONTRADA",
+    mensaje: "La caja no existe.",
+  },
+  jornada: {
+    sql: `SELECT s.register_id, s.empresa_id, r.centro_id
+            FROM cash_sessions s JOIN cash_registers r ON r.id = s.register_id
+           WHERE s.id = $1`,
+    codigo: "JORNADA_NO_ENCONTRADA",
+    mensaje: "La jornada no existe.",
+  },
+  ingreso: {
+    sql: `SELECT b.register_id, b.empresa_id, r.centro_id
+            FROM cash_bank_deposits b JOIN cash_registers r ON r.id = b.register_id
+           WHERE b.id = $1`,
+    codigo: "INGRESO_NO_ENCONTRADO",
+    mensaje: "El ingreso no existe.",
+  },
+  operacion: {
+    sql: `SELECT s.register_id, o.empresa_id, r.centro_id
+            FROM cash_operations o
+            JOIN cash_sessions s ON s.id = o.session_id
+            JOIN cash_registers r ON r.id = s.register_id
+           WHERE o.id = $1`,
+    codigo: "OPERACION_NO_ENCONTRADA",
+    mensaje: "La operación no existe.",
+  },
+  documento: {
+    sql: `SELECT r.id AS register_id, d.empresa_id, r.centro_id
+            FROM cash_operation_documents d
+            LEFT JOIN cash_sessions s ON s.id = d.session_id
+            LEFT JOIN cash_bank_deposits b ON b.id = d.deposit_id
+            JOIN cash_registers r ON r.id = COALESCE(s.register_id, b.register_id)
+           WHERE d.id = $1`,
+    codigo: "DOCUMENTO_NO_ENCONTRADO",
+    mensaje: "El documento no existe.",
+  },
+  pedido: {
+    sql: `SELECT p.register_id, p.empresa_id, r.centro_id
+            FROM cash_change_orders p JOIN cash_registers r ON r.id = p.register_id
+           WHERE p.id = $1`,
+    codigo: "PEDIDO_NO_ENCONTRADO",
+    mensaje: "El pedido de cambio no existe.",
+  },
+  entrega: {
+    sql: `SELECT a.register_id, a.empresa_id, r.centro_id
+            FROM cash_advances a JOIN cash_registers r ON r.id = a.register_id
+           WHERE a.id = $1`,
+    codigo: "ENTREGA_NO_ENCONTRADA",
+    mensaje: "La entrega no existe.",
+  },
+  canje: {
+    sql: `SELECT c.register_id, c.empresa_id, r.centro_id
+            FROM cash_deposit_swaps c JOIN cash_registers r ON r.id = c.register_id
+           WHERE c.id = $1`,
+    codigo: "CANJE_NO_ENCONTRADO",
+    mensaje: "El canje no existe.",
+  },
+  /* AutoScan no es de una caja sino de un taller: la bandeja y el escáner. */
+  bandeja: {
+    sql: `SELECT empresa_id, centro_id FROM cash_autoscan_inbox WHERE id = $1`,
+    codigo: "DOCUMENTO_NO_ENCONTRADO",
+    mensaje: "Ese documento no existe.",
+  },
+  escaner: {
+    sql: `SELECT empresa_id, centro_id FROM cash_autoscan_devices WHERE id = $1`,
+    codigo: "DISPOSITIVO_NO_ENCONTRADO",
+    mensaje: "El escáner no existe.",
+  },
+};
+
+/**
+ * ¿Puede este usuario ver o tocar esto?
+ *
+ * Tres comprobaciones:
+ *
+ * · **La empresa.** Lo de otra empresa responde «no existe» (404), no «no
+ *   puedes» (403): los números son correlativos, y un 403 confirmaría que el
+ *   número que alguien está probando existe.
+ * · **El taller**, si el usuario está limitado a uno. Ver arriba: una caja sin
+ *   taller queda fuera de cualquier ámbito.
+ * · **Sus cajas**, si es cajero o consulta y la empresa exige asignación
+ *   (`asignaciones.ts`): 403 `CAJA_NO_ASIGNADA`.
+ *
+ * Es la puerta de todo lo que se pide por número. Una ruta que lea o escriba
+ * algo de una caja y no pase por aquí es un agujero: con la jornada 1234 de la
+ * URL cambiada por la 1235 se leería la caja de otro.
+ */
+export async function exigirAcceso(
+  ejecutor: { query: typeof pool.query },
+  ctx: Contexto,
+  recurso: Recurso
+): Promise<void> {
+  const [tipo, id] = Object.entries(recurso)[0] as [TipoRecurso, number];
+  const d = DUENO[tipo];
+  const { rows } = await ejecutor.query(d.sql, [id]);
+  if (rows.length === 0 || rows[0].empresa_id !== ctx.empresaId) {
+    throw new ErrorCaja(d.codigo, d.mensaje, 404);
   }
-  if (rows[0].centro_id !== ctx.centroId) {
+  if (ctx.centroId && rows[0].centro_id !== ctx.centroId) {
     throw new ErrorCaja(
       "CAJA_FUERA_DE_AMBITO",
       "Esta caja es de otro taller. Solo puedes operar las cajas del tuyo.",
+      403
+    );
+  }
+  // Y dentro del taller, sus cajas. AutoScan es del taller, no de una caja.
+  if (ctx.cajas && rows[0].register_id != null && !ctx.cajas.includes(Number(rows[0].register_id))) {
+    throw new ErrorCaja(
+      "CAJA_NO_ASIGNADA",
+      "No tienes esta caja asignada. Pídesela a tu responsable.",
       403
     );
   }

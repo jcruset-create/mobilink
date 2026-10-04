@@ -23,6 +23,7 @@ import * as reauth from "./reauth.ts";
 import * as migracion from "./migration.ts";
 import * as traslados from "./transfers.ts";
 import * as jerarquia from "./hierarchy.ts";
+import * as asignaciones from "./asignaciones.ts";
 import { estadoCola, procesarEventos, reintentarEventos } from "./events/worker.ts";
 import { miniaturaBoton, miniaturaFicha, miniaturaLogo } from "./images.ts";
 import { ErrorCaja, cargarDenominaciones, obtenerSesion, sesionAbierta, movimientosDeSesion } from "./repository.ts";
@@ -274,7 +275,18 @@ function contexto(req: Request): servicio.Contexto {
     // Ámbito de taller. Lo pone `cargarPermisosCaja` y `null` significa toda la
     // empresa, que es lo que tiene todo el mundo mientras nadie lo limite.
     centroId: req.cashCentroId ?? null,
+    // Cajas asignadas: lo pone también `cargarPermisosCaja`. `null` = todas.
+    cajas: req.cashCajas ?? null,
   };
+}
+
+/**
+ * La puerta de todo lo que se pide por número (caja, jornada, ingreso,
+ * documento…): de tu empresa y, si estás limitado a un taller, de tu taller.
+ * Ver `jerarquia.exigirAcceso`.
+ */
+function acceso(req: Request, recurso: jerarquia.Recurso): Promise<void> {
+  return jerarquia.exigirAcceso(pool, contexto(req), recurso);
 }
 
 /** Envuelve un handler async y traduce `ErrorCaja` a su código HTTP. */
@@ -299,6 +311,48 @@ export function createCashRouter(): Router {
 
   r.use(authenticate, requireModule("cash"), cargarPermisosCaja);
 
+  /*
+   * La puerta del ámbito para todo lo que lleva un número en la URL.
+   *
+   * `/sessions/1234/…` es de una caja, y antes de llegar a la ruta se comprueba
+   * que esa caja sea de tu empresa y, si estás limitado a un taller, del tuyo.
+   * Va aquí, delante de todas las rutas, y no repetido en cada una: así una
+   * ruta nueva queda protegida sin acordarse de nada. Había lecturas de
+   * jornada que no comprobaban ni la empresa, y con cambiar el número de la
+   * URL se leía la caja de otro.
+   *
+   * Lo que no es un número (`/bank-deposits/swap`) pasa sin mirar: no es un
+   * recurso con dueño, y su ruta comprueba lo suyo.
+   */
+  const PUERTAS: [string, jerarquia.TipoRecurso][] = [
+    ["/registers/:id", "caja"],
+    ["/sessions/:id", "jornada"],
+    ["/bank-deposits/:id", "ingreso"],
+    ["/operations/:id", "operacion"],
+    ["/documents/:id", "documento"],
+    ["/change-orders/:id", "pedido"],
+    ["/advances/:id", "entrega"],
+    ["/bank-deposits/swap/:id", "canje"],
+    ["/autoscan/inbox/:id", "bandeja"],
+    ["/autoscan/devices/:id", "escaner"],
+  ];
+  for (const [camino, tipo] of PUERTAS) {
+    r.use(camino, async (req, res, next) => {
+      const id = String(req.params.id ?? "");
+      if (!/^\d{1,9}$/.test(id)) return next();
+      try {
+        await acceso(req, { [tipo]: Number(id) } as jerarquia.Recurso);
+        next();
+      } catch (e) {
+        if (e instanceof ErrorCaja) {
+          return res.status(e.estado).json({ error: e.message, code: e.codigo, detalle: e.detalle });
+        }
+        console.error("[Mobilink Cash] error comprobando el ámbito:", e);
+        res.status(500).json({ error: "Error interno de Mobilink Cash" });
+      }
+    });
+  }
+
   /**
    * Posición global: el efectivo de cada caja que ve el usuario, pieza a
    * pieza, en el cajón y en la bolsa pendiente de ingresar. Solo lectura.
@@ -307,7 +361,9 @@ export function createCashRouter(): Router {
     "/posicion",
     exigirPermiso("cash.view"),
     ruta(async (req, res) => {
-      res.json(await posicionGlobal(req.authCtx!.empresaId, req.cashCentroId ?? null));
+      res.json(
+        await posicionGlobal(req.authCtx!.empresaId, req.cashCentroId ?? null, null, req.cashCajas ?? null)
+      );
     })
   );
 
@@ -327,7 +383,8 @@ export function createCashRouter(): Router {
       const { pdf, nombre } = await informePosicion(
         req.authCtx!.empresaId,
         req.cashCentroId ?? null,
-        caja
+        caja,
+        req.cashCajas ?? null
       );
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `inline; filename="${nombre}"`);
@@ -345,7 +402,12 @@ export function createCashRouter(): Router {
         typeof req.query.caja === "string" && req.query.caja !== "" && req.query.caja !== "todas"
           ? enteroPositivo(req.query.caja, "caja")
           : null;
-      const { xlsx, nombre } = await excelPosicion(req.authCtx!.empresaId, req.cashCentroId ?? null, caja);
+      const { xlsx, nombre } = await excelPosicion(
+        req.authCtx!.empresaId,
+        req.cashCentroId ?? null,
+        caja,
+        req.cashCajas ?? null
+      );
       res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
       res.setHeader("Content-Disposition", `attachment; filename="${nombre}"`);
       res.send(xlsx);
@@ -366,8 +428,9 @@ export function createCashRouter(): Router {
              FROM cash_registers
             WHERE empresa_id = $1 AND activa = true
               AND ($2::uuid IS NULL OR centro_id = $2)
+              AND ($3::int[] IS NULL OR id = ANY($3::int[]))
             ORDER BY centro, nombre`,
-          [empresaId, req.cashCentroId ?? null]
+          [empresaId, req.cashCentroId ?? null, req.cashCajas ?? null]
         ),
         estadoIntegracion(empresaId),
         config.ajustes(empresaId),
@@ -391,6 +454,66 @@ export function createCashRouter(): Router {
     })
   );
 
+  // ── Quién toca qué caja ──────────────────────────────────────────────────
+
+  /**
+   * Los usuarios con su taller y sus cajas, y si la empresa exige asignación.
+   * Con los talleres y las cajas, que es lo que hace falta para el formulario.
+   */
+  r.get(
+    "/access",
+    exigirPermiso("cash.access.manage"),
+    ruta(async (req, res) => {
+      const empresaId = req.authCtx!.empresaId;
+      const ambito = req.cashCentroId ?? null;
+      const [accesos, centros, cajas] = await Promise.all([
+        asignaciones.listarAccesos(empresaId, ambito),
+        jerarquia.listarCentros(empresaId),
+        config.listarCajas(empresaId, ambito),
+      ]);
+      res.json({
+        ...accesos,
+        talleres: centros.filter((c) => !ambito || c.id === ambito),
+        cajas: cajas.map((c) => ({ id: c.id, nombre: c.nombre, centroId: c.centroId, activa: c.activa })),
+        ambitoCentroId: ambito,
+      });
+    })
+  );
+
+  r.put(
+    "/access/users/:userId",
+    exigirPermiso("cash.access.manage"),
+    ruta(async (req, res) => {
+      const userId = String(req.params.userId);
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) {
+        throw new ErrorCaja("USUARIO_NO_ENCONTRADO", "Ese usuario no existe.", 404);
+      }
+      const b = req.body ?? {};
+      if (!Array.isArray(b.cajas)) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "cajas tiene que ser una lista.", 400);
+      }
+      res.json({
+        usuario: await asignaciones.fijarAcceso(contexto(req), userId, {
+          centroId: typeof b.centroId === "string" && b.centroId ? b.centroId : null,
+          cajas: b.cajas.map((v: unknown, i: number) => enteroPositivo(v, `cajas[${i}]`)),
+        }),
+      });
+    })
+  );
+
+  /** Enciende o apaga «cajeros y consulta, solo sus cajas». */
+  r.put(
+    "/access/enforce",
+    exigirPermiso("cash.access.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      if (typeof b.exigir !== "boolean") {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "exigir tiene que ser sí o no.", 400);
+      }
+      res.json(await asignaciones.fijarExigirAsignacion(contexto(req), b.exigir, b.forzar === true));
+    })
+  );
+
   // ── Cajas ────────────────────────────────────────────────────────────────
 
   r.get(
@@ -398,7 +521,7 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.configure"),
     ruta(async (req, res) => {
       res.json({
-        cajas: await config.listarCajas(req.authCtx!.empresaId, req.cashCentroId ?? null),
+        cajas: await config.listarCajas(req.authCtx!.empresaId, req.cashCentroId ?? null, req.cashCajas ?? null),
       });
     })
   );
@@ -527,7 +650,15 @@ export function createCashRouter(): Router {
       const registerId = req.query.registerId
         ? enteroPositivo(req.query.registerId, "registerId")
         : undefined;
-      res.json({ traslados: await traslados.listar(req.authCtx!.empresaId, registerId) });
+      if (registerId) await acceso(req, { caja: registerId });
+      res.json({
+        traslados: await traslados.listar(
+          req.authCtx!.empresaId,
+          registerId,
+          req.cashCentroId ?? null,
+          req.cashCajas ?? null
+        ),
+      });
     })
   );
 
@@ -1315,6 +1446,7 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.treasury.manage"),
     ruta(async (req, res) => {
       const b = req.body ?? {};
+      await acceso(req, { caja: enteroPositivo(b.registerId, "registerId") });
       res.status(201).json(
         await ingresos.registrarCanje(contexto(req), {
           registerId: enteroPositivo(b.registerId, "registerId"),
@@ -1384,6 +1516,7 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.treasury.manage"),
     ruta(async (req, res) => {
       const b = req.body ?? {};
+      await acceso(req, { caja: enteroPositivo(b.registerId, "registerId") });
       res.status(201).json(
         await ingresos.registrarReposicion(contexto(req), {
           registerId: enteroPositivo(b.registerId, "registerId"),
@@ -1402,6 +1535,7 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.treasury.manage"),
     ruta(async (req, res) => {
       const b = req.body ?? {};
+      await acceso(req, { caja: enteroPositivo(b.registerId, "registerId") });
       if (!Array.isArray(b.sessionIds)) {
         throw new ErrorCaja("ENTRADA_NO_VALIDA", "sessionIds tiene que ser una lista.", 400);
       }
@@ -2062,6 +2196,7 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.document.attach"),
     ruta(async (req, res) => {
       const b = req.body ?? {};
+      await acceso(req, { operacion: enteroPositivo(b.operationId, "operationId") });
       const { promover } = await import("./autoscan/promote.ts");
       res.status(201).json(
         await promover(contexto(req), {
@@ -2118,6 +2253,7 @@ export function createCashRouter(): Router {
         });
       }
 
+      if (b.sessionId) await acceso(req, { jornada: enteroPositivo(b.sessionId, "sessionId") });
       const propuesta = await escanearFactura({
         empresaId: req.authCtx!.empresaId,
         userId: req.authCtx!.userId ?? null,
@@ -2140,6 +2276,7 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.collection.create_manual"),
     ruta(async (req, res) => {
       const b = req.body ?? {};
+      await acceso(req, { operacion: enteroPositivo(b.operationId, "operationId") });
       await anotarConfirmacion(enteroPositivo(req.params.id, "id"), req.authCtx!.empresaId, {
         operationId: enteroPositivo(b.operationId, "operationId"),
         formaPagoFinal: typeof b.formaPagoFinal === "string" ? b.formaPagoFinal : "",
@@ -3107,6 +3244,11 @@ export function createCashRouter(): Router {
       if (req.cashCentroId) {
         params.push(req.cashCentroId);
         filtros.push(`c.centro_id = $${params.length}`);
+      }
+      // Y a sus cajas, si es cajero o consulta con asignación obligatoria.
+      if (req.cashCajas) {
+        params.push(req.cashCajas);
+        filtros.push(`s.register_id = ANY($${params.length}::int[])`);
       }
 
       if (typeof desde === "string" && desde) {
