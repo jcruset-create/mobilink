@@ -13,6 +13,7 @@
 
 import { Router, type Request, type Response } from "express";
 import { authenticate, requireModule } from "../core/auth.ts";
+import pool from "../db.ts";
 import { registrarAuditoria } from "../core/auditoria.ts";
 import { cargarPermisosCentral, exigirPermiso } from "./permissions.ts";
 import {
@@ -25,6 +26,7 @@ import {
   pendienteDeIngresar,
   posicionGlobal,
   posicionPorCaja,
+  type PosicionGlobal as PosicionRed,
   resumenRed,
   transitosAbiertos,
 } from "./queries.ts";
@@ -85,9 +87,58 @@ function fechaValida(v: unknown): string | null {
   return typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null;
 }
 
+/**
+ * El taller que se mira. Un usuario limitado a un taller ve el suyo y solo el
+ * suyo, lo pida o no: pedir otro es un 403, no un «te enseño el tuyo» que
+ * haría creer que el otro está vacío. Sin límite, el que pida (o toda la red).
+ */
+function tallerDe(req: Request, pedido: unknown): string | null {
+  const propio = req.centralCentroId ?? null;
+  const elegido = typeof pedido === "string" && pedido ? pedido : null;
+  if (!propio) return elegido;
+  if (elegido && elegido !== propio) {
+    throw new ErrorCaja("TALLER_FUERA_DE_AMBITO", "Solo puedes ver tu taller.", 403);
+  }
+  return propio;
+}
+
+/** Las cajas que hoy están en un taller, para recortar lo que viene por caja. */
+async function cajasDelTaller(empresaId: string, centroId: string): Promise<Set<number>> {
+  const { rows } = await pool.query(
+    `SELECT id FROM cash_registers WHERE empresa_id = $1 AND centro_id = $2`,
+    [empresaId, centroId]
+  );
+  return new Set(rows.map((x: { id: number }) => Number(x.id)));
+}
+
+/*
+ * Lo que puede ver quien está limitado a un taller: las pantallas que se
+ * recortan a su taller. Todo lo demás —reglas, avisos, previsión, extractos,
+ * configuración de la red…— es de toda la red y no se puede recortar, así que
+ * para él responde 403. Va en una lista de lo PERMITIDO y no de lo prohibido:
+ * una ruta nueva queda cerrada hasta que alguien la recorte y la añada.
+ */
+const PARA_UN_TALLER: RegExp[] = [
+  /^\/network$/,
+  /^\/position$/,
+  /^\/position\/breakdown$/,
+  /^\/deposits$/,
+  /^\/deposits\/\d+\/report\.pdf$/,
+  /^\/sessions$/,
+  /^\/reports\/sessions\.csv$/,
+];
+
 export function createCentralRouter(): Router {
   const r = Router();
   r.use(authenticate, requireModule("central"), cargarPermisosCentral);
+
+  r.use((req, res, next) => {
+    if (!req.centralCentroId || PARA_UN_TALLER.some((x) => x.test(req.path))) return next();
+    res.status(403).json({
+      error: "Esta vista es de toda la red, y tu usuario está limitado a un taller.",
+      code: "SOLO_TODA_LA_RED",
+    });
+  });
 
   /** Todo lo que necesita la pantalla de red, en una llamada. */
   r.get(
@@ -95,13 +146,21 @@ export function createCentralRouter(): Router {
     exigirPermiso("central.view"),
     ruta(async (req, res) => {
       const empresaId = req.authCtx!.empresaId;
+      const taller = tallerDe(req, null);
       const [resumen, cajas, zonas, centros] = await Promise.all([
-        resumenRed(empresaId),
-        cajasEnRed(empresaId),
+        resumenRed(empresaId, taller),
+        cajasEnRed(empresaId, taller),
         jerarquia.listarZonas(empresaId),
         jerarquia.listarCentros(empresaId),
       ]);
-      res.json({ resumen, cajas, zonas, centros, permisos: req.centralPermisos });
+      res.json({
+        resumen,
+        cajas,
+        zonas,
+        centros: taller ? centros.filter((c) => c.id === taller) : centros,
+        permisos: req.centralPermisos,
+        ambitoCentroId: taller,
+      });
     })
   );
 
@@ -122,11 +181,36 @@ export function createCentralRouter(): Router {
     exigirPermiso("central.view"),
     ruta(async (req, res) => {
       const empresaId = req.authCtx!.empresaId;
-      const [posicion, porCaja, transitos] = await Promise.all([
-        posicionGlobal(empresaId),
+      const taller = tallerDe(req, null);
+      if (!taller) {
+        const [posicion, porCaja, transitos] = await Promise.all([
+          posicionGlobal(empresaId),
+          posicionPorCaja(empresaId),
+          transitosAbiertos(empresaId),
+        ]);
+        res.json({ posicion, porCaja, transitos });
+        return;
+      }
+      // Limitado a un taller: sus cajas, y el total es la suma de sus cajas
+      // (la posición de una caja tiene los mismos campos que la de la red).
+      const [todas, transitos, suyas] = await Promise.all([
         posicionPorCaja(empresaId),
-        transitosAbiertos(empresaId),
+        transitosAbiertos(empresaId, taller),
+        cajasDelTaller(empresaId, taller),
       ]);
+      const porCaja = todas.filter((c) => suyas.has(c.registerId));
+      const suma = (k: keyof PosicionRed) => porCaja.reduce((a, c) => a + Number(c[k] ?? 0), 0);
+      const posicion: PosicionRed = {
+        enCajonesCentimos: suma("enCajonesCentimos"),
+        enTransitoCentimos: suma("enTransitoCentimos"),
+        enTransitoBancoCentimos: suma("enTransitoBancoCentimos"),
+        enTransitoPersonasCentimos: suma("enTransitoPersonasCentimos"),
+        transitosAbiertos: suma("transitosAbiertos"),
+        pendienteBancoCentimos: suma("pendienteBancoCentimos"),
+        repuestoCentimos: suma("repuestoCentimos"),
+        remanenteCentimos: suma("remanenteCentimos"),
+        totalCentimos: suma("totalCentimos"),
+      };
       res.json({ posicion, porCaja, transitos });
     })
   );
@@ -156,7 +240,7 @@ export function createCentralRouter(): Router {
     exigirPermiso("central.view"),
     ruta(async (req, res) => {
       const empresaId = req.authCtx!.empresaId;
-      const centroId = typeof req.query.centroId === "string" ? req.query.centroId : null;
+      const centroId = tallerDe(req, req.query.centroId);
       const registerId = Number(req.query.registerId);
       const [desglose, denominaciones] = await Promise.all([
         desgloseDeCajas(empresaId, centroId, Number.isInteger(registerId) ? registerId : null),
@@ -179,9 +263,10 @@ export function createCentralRouter(): Router {
     ruta(async (req, res) => {
       const empresaId = req.authCtx!.empresaId;
       const q = req.query;
-      const [ingresos, pendiente] = await Promise.all([
+      const taller = tallerDe(req, q.centroId);
+      const [ingresos, todoPendiente, suyas] = await Promise.all([
         ingresosEnRed(empresaId, {
-          centroId: typeof q.centroId === "string" ? q.centroId : null,
+          centroId: taller,
           registerId: typeof q.registerId === "string" ? Number(q.registerId) : null,
           // Solo se aceptan fechas con forma de fecha: lo demás se ignora en
           // vez de llegar a la consulta y reventar con un error de PostgreSQL.
@@ -189,7 +274,9 @@ export function createCentralRouter(): Router {
           hasta: fechaValida(q.hasta),
         }),
         pendienteDeIngresar(empresaId),
+        taller ? cajasDelTaller(empresaId, taller) : Promise.resolve(null),
       ]);
+      const pendiente = suyas ? todoPendiente.filter((p) => suyas.has(p.registerId)) : todoPendiente;
       res.json({ ingresos, pendiente });
     })
   );
@@ -224,7 +311,7 @@ export function createCentralRouter(): Router {
         jornadas: await jornadasEnRed(req.authCtx!.empresaId, {
           desde: typeof q.desde === "string" ? q.desde : undefined,
           hasta: typeof q.hasta === "string" ? q.hasta : undefined,
-          centroId: typeof q.centroId === "string" ? q.centroId : null,
+          centroId: tallerDe(req, q.centroId),
           soloDescuadres: q.descuadres === "1",
         }),
       });
@@ -732,6 +819,13 @@ export function createCentralRouter(): Router {
         res.status(400).json({ error: "Ese ingreso no existe." });
         return;
       }
+      // De la empresa y, si el usuario está limitado, de su taller. La misma
+      // puerta que usa la caja.
+      await jerarquia.exigirAcceso(
+        pool,
+        { empresaId: req.authCtx!.empresaId, userId: req.authCtx!.userId, centroId: req.centralCentroId ?? null },
+        { ingreso: id }
+      );
       const pdf = await informeIngreso(req.authCtx!.empresaId, id);
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `inline; filename="ingreso-${id}.pdf"`);
