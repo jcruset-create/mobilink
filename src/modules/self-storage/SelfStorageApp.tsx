@@ -7,8 +7,8 @@
  *
  * Fase 1: dashboard, plano, trasteros, clientes, centros/zonas, tipos e
  * importación. Fase 2: contratos, facturas, pagos, impagos, conceptos y
- * configuración. Fase 3: puertas (hardware) y accesos. El resto de secciones
- * aparece en el menú con su fase.
+ * configuración. Fase 3: puertas (hardware) y accesos. Call Center: llamadas,
+ * incidencias, operadores, catálogo, configuración y logs (sin IA).
  */
 
 import { Navigate, Route, Routes } from "react-router-dom";
@@ -31,6 +31,15 @@ import Conceptos from "./pages/Conceptos";
 import Configuracion from "./pages/Configuracion";
 import Puertas from "./pages/Puertas";
 import Accesos from "./pages/Accesos";
+import Incidencias from "./pages/Incidencias";
+import CallCenterDashboard from "./pages/callcenter/CallCenterDashboard";
+import Llamadas from "./pages/callcenter/Llamadas";
+import Llamada from "./pages/callcenter/Llamada";
+import Operadores from "./pages/callcenter/Operadores";
+import Catalogo from "./pages/callcenter/Catalogo";
+import ConfigCallCenter from "./pages/callcenter/ConfigCallCenter";
+import LogsCallCenter from "./pages/callcenter/Logs";
+import { inicioPara } from "./config/navigation";
 
 function Contenido() {
   const { cargando, error, permisos, puede } = useSelfStorage();
@@ -53,12 +62,12 @@ function Contenido() {
   return (
     <Routes>
       <Route element={<SelfStorageLayout />}>
-        <Route index element={<Navigate to="/self-storage/dashboard" replace />} />
-        <Route path="dashboard" element={<Dashboard />} />
-        <Route path="plano" element={<Plano />} />
-        <Route path="trasteros" element={<Trasteros />} />
-        <Route path="centros" element={<Centros />} />
-        <Route path="tipos" element={<Tipos />} />
+        <Route index element={<Navigate to={`/self-storage/${inicioPara(permisos)}`} replace />} />
+        {puede("ss.view") && <Route path="dashboard" element={<Dashboard />} />}
+        {puede("ss.view") && <Route path="plano" element={<Plano />} />}
+        {puede("ss.view") && <Route path="trasteros" element={<Trasteros />} />}
+        {puede("ss.view") && <Route path="centros" element={<Centros />} />}
+        {puede("ss.view") && <Route path="tipos" element={<Tipos />} />}
         {puede("ss.customers.view") && <Route path="clientes" element={<Clientes />} />}
         {puede("ss.customers.view") && <Route path="clientes/:id" element={<ClienteDetalle />} />}
         {puede("ss.import") && <Route path="importar" element={<Importar />} />}
@@ -71,7 +80,16 @@ function Contenido() {
         {puede("ss.doors.view") && <Route path="puertas" element={<Puertas />} />}
         {puede("ss.access.view") && <Route path="accesos" element={<Accesos />} />}
         {puede("ss.settings.manage") && <Route path="configuracion" element={<Configuracion />} />}
-        <Route path="*" element={<Navigate to="/self-storage/dashboard" replace />} />
+        {puede("ss.incidents.view") && <Route path="incidencias" element={<Incidencias />} />}
+        {puede("ss.callcenter.view") && <Route path="call-center" element={<CallCenterDashboard />} />}
+        {puede("ss.callcenter.view") && <Route path="call-center/llamadas" element={<Llamadas />} />}
+        {puede("ss.callcenter.create") && <Route path="call-center/llamada" element={<Llamada />} />}
+        {puede("ss.callcenter.view") && <Route path="call-center/llamada/:id" element={<Llamada />} />}
+        {puede("ss.callcenter.view") && <Route path="call-center/operadores" element={<Operadores />} />}
+        {puede("ss.callcenter.view") && <Route path="call-center/motivos" element={<Catalogo />} />}
+        {puede("ss.settings.manage") && <Route path="call-center/configuracion" element={<ConfigCallCenter />} />}
+        {puede("ss.callcenter.view") && <Route path="call-center/logs" element={<LogsCallCenter />} />}
+        <Route path="*" element={<Navigate to={`/self-storage/${inicioPara(permisos)}`} replace />} />
       </Route>
     </Routes>
   );

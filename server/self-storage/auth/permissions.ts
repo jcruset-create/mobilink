@@ -63,6 +63,20 @@ export const PERMISOS = [
   "ss.access.manage",
   /** Fase 3 · alta y configuración de dispositivos, salidas y puertas; sincronizar. */
   "ss.devices.manage",
+  /** Call Center · ver: dashboard, llamadas, ficha MÍNIMA de quien llama, centro, disponibilidad, logs. */
+  "ss.callcenter.view",
+  /** Call Center · registrar llamadas nuevas. */
+  "ss.callcenter.create",
+  /** Call Center · resultado, resumen, notas, seguimiento y cierre de una llamada. */
+  "ss.callcenter.edit",
+  /** Call Center · escalar una llamada a la empresa (TLC u otra). */
+  "ss.callcenter.escalate",
+  /** Call Center · catálogo de motivos y resultados. */
+  "ss.callcenter.configure",
+  /** Incidencias (única entidad del módulo) · ver, abrir y gestionar. */
+  "ss.incidents.view",
+  "ss.incidents.create",
+  "ss.incidents.manage",
 ] as const;
 
 export type Permiso = (typeof PERMISOS)[number];
@@ -70,11 +84,22 @@ export type Permiso = (typeof PERMISOS)[number];
 /**
  * · maintenance — el box y su estado; nada de clientes.
  * · employee    — mostrador: clientes y estados.
+ * · call_center — atención telefónica: llamadas, ficha mínima, incidencias y
+ *                 escalado. Nada de precios, contratos, pagos ni usuarios.
  * · admin       — todo lo del módulo.
  * · superadmin  — el superadministrador de Mobilink (`es_superadmin`).
  */
 const POR_ROL: Record<StaffRole, readonly Permiso[]> = {
-  maintenance: ["ss.view", "ss.units.status", "ss.doors.view", "ss.devices.test"],
+  maintenance: ["ss.view", "ss.units.status", "ss.doors.view", "ss.devices.test", "ss.incidents.view", "ss.incidents.manage"],
+  // Mínimo privilegio: ni `ss.view` (trasteros con precio) ni clientes completos.
+  call_center: [
+    "ss.callcenter.view",
+    "ss.callcenter.create",
+    "ss.callcenter.edit",
+    "ss.callcenter.escalate",
+    "ss.incidents.view",
+    "ss.incidents.create",
+  ],
   employee: [
     "ss.view",
     "ss.customers.view",
@@ -89,6 +114,13 @@ const POR_ROL: Record<StaffRole, readonly Permiso[]> = {
     "ss.access.view",
     "ss.access.open",
     "ss.access.manage",
+    "ss.callcenter.view",
+    "ss.callcenter.create",
+    "ss.callcenter.edit",
+    "ss.callcenter.escalate",
+    "ss.incidents.view",
+    "ss.incidents.create",
+    "ss.incidents.manage",
   ],
   admin: PERMISOS,
   superadmin: PERMISOS,
@@ -117,7 +149,7 @@ export async function rolDeSelfStorage(
   const rol = rows[0]?.rol ?? null;
   // Un rol que no es de este módulo (p. ej. un «superadmin» escrito a mano en
   // la fila) no da nada: el superadmin sale de app_usuarios, no de aquí.
-  return rol === "admin" || rol === "employee" || rol === "maintenance" ? rol : null;
+  return rol === "admin" || rol === "employee" || rol === "maintenance" || rol === "call_center" ? rol : null;
 }
 
 /** Carga rol y permisos en la petición. Va después de `authenticate`. */

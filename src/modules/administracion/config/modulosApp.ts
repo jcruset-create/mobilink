@@ -211,6 +211,7 @@ export const MODULOS_APP: ModuloApp[] = [
       { value: "admin", label: "Administrador" },
       { value: "employee", label: "Empleado (mostrador)" },
       { value: "maintenance", label: "Mantenimiento" },
+      { value: "call_center", label: "Call Center (atención telefónica)" },
     ],
     pantallas: [
       { key: "dashboard", label: "Dashboard" },

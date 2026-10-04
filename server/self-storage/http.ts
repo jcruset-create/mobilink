@@ -33,6 +33,9 @@ const MENSAJES_RESTRICCION: Record<string, { codigo: string; mensaje: string; es
   self_storage_reservations_active_unit_uq: { codigo: "TRASTERO_RESERVADO", mensaje: "El trastero ya tiene una reserva activa." },
   self_storage_contracts_live_unit_uq: { codigo: "TRASTERO_OCUPADO", mensaje: "El trastero ya tiene un contrato vivo." },
   self_storage_zones_center_fk: { codigo: "CENTRO_CON_ZONAS", mensaje: "El centro tiene zonas: no se puede borrar." },
+  self_storage_call_catalog_uq: { codigo: "CODIGO_DUPLICADO", mensaje: "Ya existe un motivo o resultado con ese código." },
+  self_storage_calls_external_uq: { codigo: "LLAMADA_DUPLICADA", mensaje: "Esa llamada del proveedor ya está registrada." },
+  self_storage_incidents_urgent_chk: { codigo: "INCIDENCIA_URGENTE", mensaje: "Las incidencias de acceso, seguridad y emergencia son siempre urgentes.", estado: 422 },
   self_storage_floor_plans_version_uq: { codigo: "PLANO_CONCURRENTE", mensaje: "Otra persona acaba de subir un plano. Vuelve a intentarlo." },
 };
 

@@ -14,6 +14,18 @@ import {
   ETIQUETA_ACCESS_REASON,
   ETIQUETA_CONNECTION_TYPE,
   ETIQUETA_DOOR_TYPE,
+  ETIQUETA_CALL_DIRECTION,
+  ETIQUETA_CALL_HANDLER,
+  ETIQUETA_CALL_STATUS,
+  ETIQUETA_INCIDENT_STATUS,
+  ETIQUETA_INCIDENT_TYPE,
+  ETIQUETA_PRIORITY,
+  type CallDirection,
+  type CallHandler,
+  type CallStatus,
+  type IncidentStatus,
+  type IncidentType,
+  type Priority,
   type AccessMethod,
   type AccessReason,
   type ConnectionType,
@@ -43,6 +55,10 @@ type Estado = {
   rol: Bootstrap["rol"];
   permisos: string[];
   usuario: Bootstrap["usuario"] | null;
+  empresa: { id: string; nombre: string } | null;
+  empresas: { id: string; nombre: string }[] | null;
+  /** Superadministrador: cambia de empresa y recarga todo el módulo. */
+  fijarEmpresa: (id: string) => void;
   centros: Bootstrap["centros"];
   centroId: string | null;
   fijarCentro: (id: string | null) => void;
@@ -60,6 +76,12 @@ type Estado = {
   etqMetodoAcceso: (m: AccessMethod) => string;
   etqTipoPuerta: (t: DoorType) => string;
   etqConexion: (t: ConnectionType) => string;
+  etqEstadoLlamada: (e: CallStatus) => string;
+  etqAtendida: (h: CallHandler) => string;
+  etqSentido: (d: CallDirection) => string;
+  etqPrioridad: (p: Priority) => string;
+  etqTipoIncidencia: (t: IncidentType) => string;
+  etqEstadoIncidencia: (e: IncidentStatus) => string;
   refrescar: () => Promise<void>;
 };
 
@@ -81,7 +103,16 @@ export function SelfStorageProvider({ children }: { children: ReactNode }) {
 
   const refrescar = useCallback(async () => {
     try {
-      setDatos(await api.bootstrap());
+      let b: Bootstrap;
+      try {
+        b = await api.bootstrap();
+      } catch (e) {
+        // La empresa elegida ya no vale (sin licencia, suspendida…): se vuelve a la propia.
+        if (!(e instanceof api.ApiError && e.status === 404 && api.empresaElegida())) throw e;
+        api.fijarEmpresa(null);
+        b = await api.bootstrap();
+      }
+      setDatos(b);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se ha podido cargar el módulo");
@@ -104,6 +135,12 @@ export function SelfStorageProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const fijarEmpresa = useCallback((id: string) => {
+    api.fijarEmpresa(id);
+    // Otra empresa: otros centros, otros clientes… se empieza de cero.
+    window.location.assign("/self-storage/dashboard");
+  }, []);
+
   const valor = useMemo<Estado>(() => {
     const centros = datos?.centros ?? [];
     // Un centro recordado que ya no existe (o de otra empresa) se ignora.
@@ -115,6 +152,9 @@ export function SelfStorageProvider({ children }: { children: ReactNode }) {
       rol: datos?.rol ?? null,
       permisos: datos?.permisos ?? [],
       usuario: datos?.usuario ?? null,
+      empresa: datos?.empresa ?? null,
+      empresas: datos?.empresas ?? null,
+      fijarEmpresa,
       centros,
       centroId: centroValido,
       fijarCentro,
@@ -133,9 +173,15 @@ export function SelfStorageProvider({ children }: { children: ReactNode }) {
       etqMetodoAcceso: (m) => et?.accessMethod?.[m] ?? ETIQUETA_ACCESS_METHOD[m] ?? m,
       etqTipoPuerta: (t) => et?.doorType?.[t] ?? ETIQUETA_DOOR_TYPE[t] ?? t,
       etqConexion: (t) => et?.connectionType?.[t] ?? ETIQUETA_CONNECTION_TYPE[t] ?? t,
+      etqEstadoLlamada: (e) => et?.callStatus?.[e] ?? ETIQUETA_CALL_STATUS[e] ?? e,
+      etqAtendida: (h) => et?.callHandler?.[h] ?? ETIQUETA_CALL_HANDLER[h] ?? h,
+      etqSentido: (d) => et?.callDirection?.[d] ?? ETIQUETA_CALL_DIRECTION[d] ?? d,
+      etqPrioridad: (p) => et?.priority?.[p] ?? ETIQUETA_PRIORITY[p] ?? p,
+      etqTipoIncidencia: (t) => et?.incidentType?.[t] ?? ETIQUETA_INCIDENT_TYPE[t] ?? t,
+      etqEstadoIncidencia: (e) => et?.incidentStatus?.[e] ?? ETIQUETA_INCIDENT_STATUS[e] ?? e,
       refrescar,
     };
-  }, [cargando, error, datos, centroId, fijarCentro, refrescar]);
+  }, [cargando, error, datos, centroId, fijarCentro, fijarEmpresa, refrescar]);
 
   return <Ctx.Provider value={valor}>{children}</Ctx.Provider>;
 }

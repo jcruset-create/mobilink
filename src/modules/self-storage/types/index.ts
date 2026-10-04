@@ -7,6 +7,12 @@
 import type {
   AccessMethod,
   AccessReason,
+  CallDirection,
+  CallHandler,
+  CallStatus,
+  IncidentStatus,
+  IncidentType,
+  Priority,
   BlockReason,
   ConnectionType,
   DoorType,
@@ -29,6 +35,10 @@ import type {
 export * from "./enums";
 
 export type Bootstrap = {
+  /** Empresa con la que se trabaja (la propia, o la elegida por el superadministrador). */
+  empresa?: { id: string; nombre: string };
+  /** Sólo para el superadministrador: empresas con Self Storage entre las que elegir. */
+  empresas?: { id: string; nombre: string }[] | null;
   rol: StaffRole | null;
   permisos: string[];
   usuario: { id: string; nombre: string };
@@ -52,6 +62,12 @@ export type Bootstrap = {
       accessMethod?: Record<AccessMethod, string>;
       doorType?: Record<DoorType, string>;
       connectionType?: Record<ConnectionType, string>;
+      callStatus?: Record<CallStatus, string>;
+      callHandler?: Record<CallHandler, string>;
+      callDirection?: Record<CallDirection, string>;
+      priority?: Record<Priority, string>;
+      incidentType?: Record<IncidentType, string>;
+      incidentStatus?: Record<IncidentStatus, string>;
     };
   };
 };
@@ -519,10 +535,16 @@ export type Ajustes = {
   "dunning.policy": { value: { firstNoticeDays: number; secondNoticeDays: number; suspendDays: number }; isDefault: boolean };
   "contracts.terms_version": { value: string; isDefault: boolean };
   "contracts.terms_text": { value: string; isDefault: boolean };
+  "call_center.enabled": { value: boolean; isDefault: boolean };
+  "call_center.default_center_id": { value: string | null; isDefault: boolean };
+  "call_center.links": { value: EnlacesCallCenter; isDefault: boolean };
+  "call_center.store_transcripts": { value: boolean; isDefault: boolean };
+  "call_center.transcript_retention_days": { value: number; isDefault: boolean };
+  "call_center.store_audio": { value: false; isDefault: boolean };
 };
 export type ClaveAjuste = keyof Ajustes;
 
-export const TRABAJOS = ["facturacion", "vencimientos", "impagos", "notificaciones", "stripe_reintentos", "accesos"] as const;
+export const TRABAJOS = ["facturacion", "vencimientos", "impagos", "notificaciones", "stripe_reintentos", "accesos", "llamadas_retencion"] as const;
 export type Trabajo = (typeof TRABAJOS)[number];
 
 // ── Fase 3: accesos físicos ─────────────────────────────────────────────────
@@ -678,3 +700,190 @@ export type AccesoTemporal = {
   /** Sólo en la respuesta de alta, una vez. */
   token?: string | null;
 };
+
+// ── Call Center ─────────────────────────────────────────────────────────────
+
+export type EnlacesCallCenter = { brandName: string | null; web: string | null; calculator: string | null; contracting: string | null; virtualVisit: string | null };
+
+export type EstadoCallCenter = { global: boolean; empresa: boolean; enabled: boolean; links: EnlacesCallCenter };
+
+export type EntradaCatalogo = {
+  id: string;
+  kind: "reason" | "result";
+  code: string;
+  label: string;
+  active: boolean;
+  sortOrder: number;
+  defaultPriority: Priority | null;
+  isSystem: boolean;
+};
+
+export type Llamada = {
+  id: string;
+  centerId: string | null;
+  centerName: string | null;
+  customerId: string | null;
+  customerName: string | null;
+  contractId: string | null;
+  contractNumber: string | null;
+  leadId: string | null;
+  phone: string | null;
+  phoneRaw: string | null;
+  callerName: string | null;
+  direction: CallDirection;
+  channel: "phone";
+  handledBy: CallHandler;
+  operatorUserId: string | null;
+  operatorName: string | null;
+  telephonyProvider: string | null;
+  externalCallId: string | null;
+  language: string | null;
+  startedAt: string;
+  answeredAt: string | null;
+  endedAt: string | null;
+  durationSeconds: number | null;
+  reasonCode: string | null;
+  reasonLabel: string | null;
+  resultCode: string | null;
+  resultLabel: string | null;
+  status: CallStatus;
+  priority: Priority;
+  requiresHuman: boolean;
+  summary: string | null;
+  notes: string | null;
+  escalatedAt: string | null;
+  escalationReason: string | null;
+  followUpAt: string | null;
+  followUpDoneAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type EventoLlamada = { id: string; occurredAt: string; actorType: string; actorName: string | null; eventType: string; data: Record<string, unknown> };
+
+export type LlamadaDetalle = Llamada & {
+  transcript: string | null;
+  events: EventoLlamada[];
+  incidents: { id: string; incidentType: IncidentType; priority: Priority; status: IncidentStatus; title: string; createdAt: string }[];
+};
+
+export type FichaMinima = {
+  customerId: string;
+  name: string;
+  status: CustomerStatus;
+  match: "customer" | "authorized_person";
+  matchedPersonName: string | null;
+  accessBlocked: boolean;
+  hasPendingPayments: boolean;
+  openIncidents: number;
+  contracts: { id: string; contractNumber: string; status: ContractStatus; unitCode: string; zoneName: string | null; centerId: string; centerName: string; startDate: string }[];
+};
+
+export type Identificacion = {
+  phone: string | null;
+  interested: boolean;
+  matches: FichaMinima[];
+  previousCalls: { id: string; startedAt: string; reasonCode: string | null; resultCode: string | null; status: CallStatus; summary: string | null }[];
+};
+
+export type InfoCentroCallCenter = {
+  id: string;
+  code: string;
+  name: string;
+  address: string | null;
+  postalCode: string | null;
+  city: string | null;
+  province: string | null;
+  phone: string | null;
+  email: string | null;
+  links: EnlacesCallCenter;
+};
+
+export type DisponibilidadCentro = {
+  centerId: string;
+  centerName: string;
+  checkedAt: string;
+  notice: string;
+  types: { unitTypeId: string; name: string; areaM2: number; volumeM3: number; available: boolean }[];
+};
+
+export type DashboardCallCenter = {
+  kpis: {
+    today: number;
+    week: number;
+    month: number;
+    total: number;
+    avgDurationSeconds: number | null;
+    incoming: number;
+    outgoing: number;
+    resolved: number;
+    escalated: number;
+    ai: number;
+    human: number;
+    hybrid: number;
+    existingCustomers: number;
+    newInterested: number;
+    visitRequests: number;
+    priceQueries: number;
+    sizeQueries: number;
+    sentToCalculator: number;
+    sentToContracting: number;
+    pendingFollowUps: number;
+    resolvedPct: number;
+    escalatedPct: number;
+    aiPct: number;
+    humanPct: number;
+    hybridPct: number;
+    incidentsOpen: number;
+    incidentsUrgent: number;
+    incidentsFromCalls: number;
+  };
+  series: {
+    porDia: { day: string; calls: number; avgDurationSeconds: number | null; resolved: number; escalated: number; human: number; ai: number; hybrid: number }[];
+    porMotivo: { code: string; label: string; calls: number }[];
+    porResultado: { code: string; label: string; calls: number }[];
+    porIdioma: { code: string; calls: number }[];
+    porCentro: { centerId: string | null; label: string; calls: number }[];
+  };
+};
+
+export type OperadorCallCenter = {
+  operatorUserId: string | null;
+  operatorName: string | null;
+  handledBy: CallHandler;
+  calls: number;
+  avgDurationSeconds: number | null;
+  escalated: number;
+  closed: number;
+  lastCallAt: string | null;
+};
+
+export type EventoCallCenter = EventoLlamada & { callId: string; phone: string | null; centerId: string | null; customerId: string | null };
+
+export type Incidencia = {
+  id: string;
+  centerId: string;
+  centerName: string;
+  customerId: string | null;
+  customerName: string | null;
+  contractId: string | null;
+  contractNumber: string | null;
+  callId: string | null;
+  incidentType: IncidentType;
+  priority: Priority;
+  status: IncidentStatus;
+  source: "panel" | "call" | "system" | "portal";
+  title: string;
+  description: string | null;
+  resolution: string | null;
+  openedBy: string | null;
+  openedByName: string | null;
+  assignedTo: string | null;
+  assignedToName: string | null;
+  createdAt: string;
+  updatedAt: string;
+  resolvedAt: string | null;
+  closedAt: string | null;
+};
+
+export type Pagina<T> = { total: number; items: T[] };
