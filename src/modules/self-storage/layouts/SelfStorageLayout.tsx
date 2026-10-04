@@ -13,7 +13,7 @@ import { useSelfStorage } from "../contexts/SelfStorageContext";
 import { ETIQUETA_ROLE } from "../types";
 
 export default function SelfStorageLayout() {
-  const { permisos, rol, centros, centroId, fijarCentro } = useSelfStorage();
+  const { permisos, rol, centros, centroId, fijarCentro, empresa, empresas, fijarEmpresa } = useSelfStorage();
   const [abierto, setAbierto] = useState(false);
   const items = NAV.filter((i) => navVisible(i, permisos));
 
@@ -28,6 +28,23 @@ export default function SelfStorageLayout() {
           <NavLink to="/self-storage/dashboard" className="text-sm font-black">
             Self Storage
           </NavLink>
+          {empresas && empresas.length > 0 && (
+            // Superadministrador: con qué empresa trabaja (lo valida el servidor).
+            <select
+              value={empresa?.id ?? ""}
+              onChange={(e) => e.target.value && e.target.value !== empresa?.id && fijarEmpresa(e.target.value)}
+              className="ml-1 max-w-[40vw] rounded-lg border border-orange-500/50 bg-slate-800 px-2 py-1 text-[12px] text-orange-200"
+              aria-label="Empresa"
+              title="Empresa con la que trabajas"
+            >
+              {empresa && !empresas.some((x) => x.id === empresa.id) && <option value={empresa.id}>{empresa.nombre || "Mi empresa"}</option>}
+              {empresas.map((x) => (
+                <option key={x.id} value={x.id}>
+                  {x.nombre}
+                </option>
+              ))}
+            </select>
+          )}
           {centros.length > 0 && (
             <select
               value={centroId ?? ""}

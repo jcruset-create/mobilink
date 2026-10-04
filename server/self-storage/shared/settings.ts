@@ -50,6 +50,41 @@ export const AJUSTES = {
   },
   /** Intentos de apertura por persona y minuto (app, enlace temporal, administración). */
   "access.rate_limit_per_minute": { esquema: z.number().int().min(1).max(120), defecto: 6 },
+  /**
+   * Call Center: activación FUNCIONAL por empresa. El interruptor global es
+   * la variable SELF_STORAGE_CALL_CENTER_ENABLED (apagarla lo para en todas).
+   */
+  "call_center.enabled": { esquema: z.boolean(), defecto: false },
+  /** Centro que se propone por defecto al registrar una llamada. */
+  "call_center.default_center_id": { esquema: z.uuid().nullable(), defecto: null as string | null },
+  /**
+   * Enlaces que el Call Center da a quien llama («la web vende»). Son de la
+   * empresa, no del código: ni TLC ni ninguna marca escrita a mano.
+   */
+  "call_center.links": {
+    esquema: z.object({
+      brandName: z.string().trim().max(120).nullable(),
+      web: z.url().nullable(),
+      calculator: z.url().nullable(),
+      contracting: z.url().nullable(),
+      virtualVisit: z.url().nullable(),
+    }),
+    defecto: { brandName: null, web: null, calculator: null, contracting: null, virtualVisit: null } as {
+      brandName: string | null;
+      web: string | null;
+      calculator: string | null;
+      contracting: string | null;
+      virtualVisit: string | null;
+    },
+  },
+  /** Guardar la transcripción de las llamadas (desactivado por defecto) y cuántos días. */
+  "call_center.store_transcripts": { esquema: z.boolean(), defecto: false },
+  "call_center.transcript_retention_days": { esquema: z.number().int().min(1).max(730), defecto: 90 },
+  /**
+   * Grabación de audio: NO disponible hasta conectar telefonía real. El ajuste
+   * existe para que el «no» sea explícito y no se pueda encender sin querer.
+   */
+  "call_center.store_audio": { esquema: z.literal(false), defecto: false as const },
   /** Series de numeración: facturas, rectificativas y contratos. */
   "billing.invoice_series": { esquema: z.string().regex(/^[A-Z]{1,5}$/), defecto: "F" },
   "billing.rectifying_series": { esquema: z.string().regex(/^[A-Z]{1,5}$/), defecto: "R" },

@@ -59,8 +59,34 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Empresa elegida por el superadministrador (sólo a él le hace caso el
+ * servidor, que además la valida). Para el resto no se manda nada.
+ */
+const CLAVE_EMPRESA = "self-storage.empresa";
+export function empresaElegida(): string | null {
+  try {
+    return localStorage.getItem(CLAVE_EMPRESA);
+  } catch {
+    return null;
+  }
+}
+export function fijarEmpresa(id: string | null): void {
+  try {
+    if (id) localStorage.setItem(CLAVE_EMPRESA, id);
+    else localStorage.removeItem(CLAVE_EMPRESA);
+  } catch {
+    /* sin almacenamiento: se trabaja en la empresa propia */
+  }
+}
+async function cabecerasSesion(extra?: Record<string, string>): Promise<Record<string, string>> {
+  const c = (await sessionHeaders(extra)) as Record<string, string>;
+  const empresa = empresaElegida();
+  return empresa ? { ...c, "X-SS-Empresa": empresa } : c;
+}
+
 async function pedir<T>(ruta: string, init?: RequestInit): Promise<T> {
-  const cabeceras = await sessionHeaders(init?.body ? { "Content-Type": "application/json" } : undefined);
+  const cabeceras = await cabecerasSesion(init?.body ? { "Content-Type": "application/json" } : undefined);
   let r: Response;
   try {
     r = await fetch(`${BASE}${ruta}`, { ...init, headers: { ...cabeceras, ...((init?.headers as Record<string, string>) ?? {}) } });
@@ -143,7 +169,7 @@ export async function abrirPdf(ruta: string): Promise<void> {
   // popup no solicitado y la bloquea.
   const ventana = window.open("", "_blank");
   try {
-    const r = await fetch(`${BASE}${ruta}`, { headers: await sessionHeaders() });
+    const r = await fetch(`${BASE}${ruta}`, { headers: await cabecerasSesion() });
     if (!r.ok) {
       let msg = `Error ${r.status}`;
       try {

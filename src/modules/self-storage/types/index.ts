@@ -29,6 +29,10 @@ import type {
 export * from "./enums";
 
 export type Bootstrap = {
+  /** Empresa con la que se trabaja (la propia, o la elegida por el superadministrador). */
+  empresa?: { id: string; nombre: string };
+  /** Sólo para el superadministrador: empresas con Self Storage entre las que elegir. */
+  empresas?: { id: string; nombre: string }[] | null;
   rol: StaffRole | null;
   permisos: string[];
   usuario: { id: string; nombre: string };

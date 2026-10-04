@@ -43,6 +43,10 @@ type Estado = {
   rol: Bootstrap["rol"];
   permisos: string[];
   usuario: Bootstrap["usuario"] | null;
+  empresa: { id: string; nombre: string } | null;
+  empresas: { id: string; nombre: string }[] | null;
+  /** Superadministrador: cambia de empresa y recarga todo el módulo. */
+  fijarEmpresa: (id: string) => void;
   centros: Bootstrap["centros"];
   centroId: string | null;
   fijarCentro: (id: string | null) => void;
@@ -81,7 +85,16 @@ export function SelfStorageProvider({ children }: { children: ReactNode }) {
 
   const refrescar = useCallback(async () => {
     try {
-      setDatos(await api.bootstrap());
+      let b: Bootstrap;
+      try {
+        b = await api.bootstrap();
+      } catch (e) {
+        // La empresa elegida ya no vale (sin licencia, suspendida…): se vuelve a la propia.
+        if (!(e instanceof api.ApiError && e.status === 404 && api.empresaElegida())) throw e;
+        api.fijarEmpresa(null);
+        b = await api.bootstrap();
+      }
+      setDatos(b);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se ha podido cargar el módulo");
@@ -104,6 +117,12 @@ export function SelfStorageProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const fijarEmpresa = useCallback((id: string) => {
+    api.fijarEmpresa(id);
+    // Otra empresa: otros centros, otros clientes… se empieza de cero.
+    window.location.assign("/self-storage/dashboard");
+  }, []);
+
   const valor = useMemo<Estado>(() => {
     const centros = datos?.centros ?? [];
     // Un centro recordado que ya no existe (o de otra empresa) se ignora.
@@ -115,6 +134,9 @@ export function SelfStorageProvider({ children }: { children: ReactNode }) {
       rol: datos?.rol ?? null,
       permisos: datos?.permisos ?? [],
       usuario: datos?.usuario ?? null,
+      empresa: datos?.empresa ?? null,
+      empresas: datos?.empresas ?? null,
+      fijarEmpresa,
       centros,
       centroId: centroValido,
       fijarCentro,
@@ -135,7 +157,7 @@ export function SelfStorageProvider({ children }: { children: ReactNode }) {
       etqConexion: (t) => et?.connectionType?.[t] ?? ETIQUETA_CONNECTION_TYPE[t] ?? t,
       refrescar,
     };
-  }, [cargando, error, datos, centroId, fijarCentro, refrescar]);
+  }, [cargando, error, datos, centroId, fijarCentro, fijarEmpresa, refrescar]);
 
   return <Ctx.Provider value={valor}>{children}</Ctx.Provider>;
 }
