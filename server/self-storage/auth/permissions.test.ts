@@ -12,6 +12,16 @@ describe("permisos de Self Storage", () => {
     expect(permisosDeRol("employee")).not.toContain("ss.import");
   });
 
+  it("call_center: atiende llamadas e incidencias con mínimo privilegio", () => {
+    const p = permisosDeRol("call_center");
+    expect(p).toEqual(expect.arrayContaining(["ss.callcenter.view", "ss.callcenter.create", "ss.callcenter.edit", "ss.callcenter.escalate", "ss.incidents.view", "ss.incidents.create"]));
+    for (const no of ["ss.view", "ss.customers.view", "ss.contracts.view", "ss.contracts.manage", "ss.billing.view", "ss.billing.manage", "ss.settings.manage", "ss.callcenter.configure", "ss.incidents.manage", "ss.audit.view"]) {
+      expect(p).not.toContain(no);
+    }
+    expect(permisosDeRol("employee")).toEqual(expect.arrayContaining(["ss.callcenter.create", "ss.incidents.manage"]));
+    expect(permisosDeRol("employee")).not.toContain("ss.callcenter.configure");
+  });
+
   it("admin y superadmin lo tienen todo; un rol desconocido, nada", () => {
     expect(permisosDeRol("admin")).toEqual(PERMISOS);
     expect(permisosDeRol("superadmin")).toEqual(PERMISOS);
@@ -23,6 +33,7 @@ describe("permisos de Self Storage", () => {
     expect(await rolDeSelfStorage(db(null), "u", true)).toBe("superadmin");
     expect(await rolDeSelfStorage(db("superadmin"), "u", false)).toBeNull();
     expect(await rolDeSelfStorage(db("employee"), "u", false)).toBe("employee");
+    expect(await rolDeSelfStorage(db("call_center"), "u", false)).toBe("call_center");
     expect(await rolDeSelfStorage(db(null), "u", false)).toBeNull();
   });
 });

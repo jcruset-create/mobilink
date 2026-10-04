@@ -10,6 +10,12 @@
 import { z } from "zod";
 import {
   ACCESS_METHODS,
+  CALL_DIRECTIONS,
+  CALL_HANDLERS,
+  CALL_STATUSES,
+  INCIDENT_STATUSES,
+  INCIDENT_TYPES,
+  PRIORITIES,
   CONNECTION_TYPES,
   DOOR_TYPES,
   CONTRACT_STATUSES,
@@ -489,3 +495,132 @@ export const filtroEventos = z.object({
   offset: z.coerce.number().int().min(0).default(0),
 });
 
+
+// ── Call Center ─────────────────────────────────────────────────────────────
+
+const codigoCatalogo = z.string().trim().regex(/^[a-z][a-z0-9_]{1,39}$/, "código: minúsculas, números y _");
+const idioma = z.string().trim().regex(/^[a-z]{2}$/, "idioma: código de dos letras (es, ca…)");
+
+/** Alta de una llamada. Quien llama no se convierte en cliente por llamar. */
+export const llamadaAlta = z.strictObject({
+  phone: telefonoTexto.nullable().optional(),
+  callerName: textoOpcional(160),
+  centerId: uuid.nullable().optional(),
+  direction: z.enum(CALL_DIRECTIONS).default("incoming"),
+  handledBy: z.enum(CALL_HANDLERS).default("human"),
+  language: idioma.nullable().optional(),
+  reasonCode: codigoCatalogo.nullable().optional(),
+  priority: z.enum(PRIORITIES).optional(),
+  notes: textoOpcional(4000),
+  /** La persona ya está hablando: la llamada empieza contestada. */
+  answered: z.boolean().default(true),
+});
+
+/** Cambios durante la llamada (no el resultado: ese tiene su propia acción). */
+export const llamadaCambio = z
+  .strictObject({
+    callerName: textoOpcional(160),
+    centerId: uuid.nullable(),
+    customerId: uuid.nullable(),
+    contractId: uuid.nullable(),
+    language: idioma.nullable(),
+    reasonCode: codigoCatalogo.nullable(),
+    priority: z.enum(PRIORITIES),
+    summary: textoOpcional(4000),
+    notes: textoOpcional(4000),
+    transcript: textoOpcional(100_000),
+  })
+  .partial();
+
+export const llamadaResultado = z.strictObject({
+  resultCode: codigoCatalogo,
+  summary: textoOpcional(4000),
+  notes: textoOpcional(4000),
+  /** Para resultados con seguimiento; por defecto, mañana. */
+  followUpAt: instante.nullable().optional(),
+});
+
+export const llamadaEscalado = z.strictObject({
+  reason: texto(500),
+  summary: textoOpcional(4000),
+  priority: z.enum(PRIORITIES).optional(),
+});
+
+export const llamadaSeguimiento = z.strictObject({
+  followUpAt: instante.nullable().optional(),
+  done: z.boolean().default(false),
+  notes: textoOpcional(2000),
+});
+
+export const filtroLlamadas = z.object({
+  from: z.iso.date().optional(),
+  to: z.iso.date().optional(),
+  centerId: uuid.optional(),
+  customerId: uuid.optional(),
+  phone: z.string().trim().max(30).optional(),
+  language: idioma.optional(),
+  reasonCode: codigoCatalogo.optional(),
+  resultCode: codigoCatalogo.optional(),
+  status: z.enum(CALL_STATUSES).optional(),
+  priority: z.enum(PRIORITIES).optional(),
+  handledBy: z.enum(CALL_HANDLERS).optional(),
+  direction: z.enum(CALL_DIRECTIONS).optional(),
+  operatorUserId: uuid.optional(),
+  telephonyProvider: z.string().trim().max(40).optional(),
+  pendingFollowUp: z.enum(["1", "true"]).optional(),
+  interested: z.enum(["1", "true"]).optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
+export const catalogoAlta = z.strictObject({
+  kind: z.enum(["reason", "result"]),
+  code: codigoCatalogo,
+  label: texto(80),
+  defaultPriority: z.enum(PRIORITIES).nullable().optional(),
+  sortOrder: z.number().int().min(0).max(10_000).optional(),
+});
+export const catalogoCambio = z
+  .strictObject({
+    label: texto(80),
+    active: z.boolean(),
+    defaultPriority: z.enum(PRIORITIES).nullable(),
+    sortOrder: z.number().int().min(0).max(10_000),
+  })
+  .partial();
+
+// ── Incidencias ─────────────────────────────────────────────────────────────
+
+export const incidenciaAlta = z.strictObject({
+  centerId: uuid,
+  customerId: uuid.nullable().optional(),
+  contractId: uuid.nullable().optional(),
+  callId: uuid.nullable().optional(),
+  incidentType: z.enum(INCIDENT_TYPES),
+  /** Las de acceso, seguridad y emergencia se fuerzan a urgente. */
+  priority: z.enum(PRIORITIES).optional(),
+  title: texto(200),
+  description: textoOpcional(4000),
+});
+
+export const incidenciaCambio = z
+  .strictObject({
+    status: z.enum(INCIDENT_STATUSES),
+    priority: z.enum(PRIORITIES),
+    resolution: textoOpcional(4000),
+    description: textoOpcional(4000),
+    assignedTo: uuid.nullable(),
+  })
+  .partial();
+
+export const filtroIncidencias = z.object({
+  centerId: uuid.optional(),
+  customerId: uuid.optional(),
+  callId: uuid.optional(),
+  status: z.enum(INCIDENT_STATUSES).optional(),
+  open: z.enum(["1", "true"]).optional(),
+  priority: z.enum(PRIORITIES).optional(),
+  incidentType: z.enum(INCIDENT_TYPES).optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+  offset: z.coerce.number().int().min(0).default(0),
+});

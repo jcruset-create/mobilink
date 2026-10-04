@@ -7,12 +7,15 @@
  * en `app_usuarios`, así que `authenticate` ya lo rechaza aquí: el portal del
  * cliente tendrá su propio prefijo y su propia guarda (fase 4).
  *
- * La empresa sale SIEMPRE de la sesión (`req.authCtx`), nunca del cuerpo.
+ * La empresa sale SIEMPRE de la sesión (`req.authCtx`), nunca del cuerpo. El
+ * superadministrador puede elegir con qué empresa trabaja (`auth/empresa.ts`):
+ * lo valida el servidor y sólo a él.
  */
 
 import { Router } from "express";
 import { authenticate, requireModule } from "../core/auth.ts";
 import { cargarPermisos, exigirPermiso, MODULO } from "./auth/permissions.ts";
+import { empresaActiva, empresasConSelfStorage, nombreEmpresa } from "./auth/empresa.ts";
 import { actorDe, esUuid, ruta } from "./http.ts";
 import { pool } from "./shared/db.ts";
 import { listarCentros } from "./modules/centros/service.ts";
@@ -25,6 +28,8 @@ import { routerDashboard } from "./modules/dashboard/router.ts";
 import { routerContratos } from "./modules/contratos/router.ts";
 import { routerFacturacion } from "./modules/facturas/router.ts";
 import { routerAccesos } from "./modules/accesos/router.ts";
+import { routerCallCenter } from "./modules/callcenter/router.ts";
+import { routerIncidencias } from "./modules/incidencias/router.ts";
 import {
   CONTRACT_STATUSES,
   CUSTOMER_STATUSES,
@@ -42,18 +47,27 @@ import {
   ETIQUETA_ACCESS_METHOD,
   ETIQUETA_DOOR_TYPE,
   ETIQUETA_CONNECTION_TYPE,
+  ETIQUETA_CALL_STATUS,
+  ETIQUETA_CALL_HANDLER,
+  ETIQUETA_CALL_DIRECTION,
+  ETIQUETA_PRIORITY,
+  ETIQUETA_INCIDENT_TYPE,
+  ETIQUETA_INCIDENT_STATUS,
   UNIT_STATUSES,
 } from "../../src/modules/self-storage/types/enums.ts";
 
 export function createSelfStorageAdminRouter(): Router {
   const r = Router();
-  r.use(authenticate, requireModule(MODULO), cargarPermisos(pool));
+  r.use(authenticate, empresaActiva(pool), requireModule(MODULO), cargarPermisos(pool));
 
   r.get(
     "/bootstrap",
     ruta(async (req, res) => {
       const actor = actorDe(req);
       res.json({
+        empresa: { id: actor.empresaId, nombre: (await nombreEmpresa(pool, actor.empresaId)) ?? "" },
+        // Sólo el superadministrador elige empresa; al resto no se le enseña la lista.
+        empresas: req.authCtx?.esSuperadmin ? await empresasConSelfStorage(pool) : null,
         rol: req.ssRol ?? null,
         permisos: req.ssPermisos ?? [],
         usuario: { id: actor.userId, nombre: actor.nombre },
@@ -78,6 +92,12 @@ export function createSelfStorageAdminRouter(): Router {
             accessMethod: ETIQUETA_ACCESS_METHOD,
             doorType: ETIQUETA_DOOR_TYPE,
             connectionType: ETIQUETA_CONNECTION_TYPE,
+            callStatus: ETIQUETA_CALL_STATUS,
+            callHandler: ETIQUETA_CALL_HANDLER,
+            callDirection: ETIQUETA_CALL_DIRECTION,
+            priority: ETIQUETA_PRIORITY,
+            incidentType: ETIQUETA_INCIDENT_TYPE,
+            incidentStatus: ETIQUETA_INCIDENT_STATUS,
           },
         },
       });
@@ -93,6 +113,8 @@ export function createSelfStorageAdminRouter(): Router {
   r.use(routerContratos());
   r.use(routerFacturacion());
   r.use(routerAccesos());
+  r.use(routerIncidencias());
+  r.use(routerCallCenter());
 
   r.get(
     "/audit",

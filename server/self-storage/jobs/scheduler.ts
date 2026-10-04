@@ -18,7 +18,7 @@ import { facturarPeriodosManuales } from "../modules/facturas/service.ts";
 import { ejecutarImpagos, marcarVencidas } from "../modules/impagos/service.ts";
 import { enviarPendientes } from "../modules/notificaciones/service.ts";
 
-export const TRABAJOS = ["facturacion", "vencimientos", "impagos", "notificaciones", "stripe_reintentos", "accesos"] as const;
+export const TRABAJOS = ["facturacion", "vencimientos", "impagos", "notificaciones", "stripe_reintentos", "accesos", "llamadas_retencion"] as const;
 export type Trabajo = (typeof TRABAJOS)[number];
 
 const CERROJOS: Record<Trabajo, number> = {
@@ -28,6 +28,7 @@ const CERROJOS: Record<Trabajo, number> = {
   notificaciones: 727_002_004,
   stripe_reintentos: 727_002_005,
   accesos: 727_002_006,
+  llamadas_retencion: 727_002_007,
 };
 
 async function cuerpo(t: Trabajo): Promise<unknown> {
@@ -43,6 +44,10 @@ async function cuerpo(t: Trabajo): Promise<unknown> {
     case "accesos": {
       const { trabajoAccesos } = await import("../modules/accesos/sincronizacion.ts");
       return trabajoAccesos();
+    }
+    case "llamadas_retencion": {
+      const { purgarTranscripciones } = await import("../modules/callcenter/retencion.ts");
+      return purgarTranscripciones();
     }
     case "stripe_reintentos": {
       const { reintentarFallidos } = await import("../integrations/stripe/webhook.ts");
@@ -73,7 +78,7 @@ export function startSelfStorageJobs(intervaloMs = 5 * 60_000): void {
     // En este orden: lo que se factura hoy, lo que vence, el impago que avanza
     // y, al final, los avisos que todo lo anterior haya dejado en la bandeja.
     // `accesos` después de `impagos`: una suspensión de hoy llega al dispositivo en la misma vuelta.
-    for (const t of ["facturacion", "vencimientos", "impagos", "accesos", "stripe_reintentos", "notificaciones"] as Trabajo[]) {
+    for (const t of ["facturacion", "vencimientos", "impagos", "accesos", "stripe_reintentos", "notificaciones", "llamadas_retencion"] as Trabajo[]) {
       try {
         await ejecutarTrabajo(t);
       } catch (e) {

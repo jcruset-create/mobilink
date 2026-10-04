@@ -108,7 +108,7 @@ export const IMPORT_STATUSES = ["validated", "applied", "failed"] as const;
 export type ImportStatus = (typeof IMPORT_STATUSES)[number];
 
 /** Roles internos del módulo (los guarda `app_usuario_modulos.rol`). */
-export const STAFF_ROLES = ["superadmin", "admin", "employee", "maintenance"] as const;
+export const STAFF_ROLES = ["superadmin", "admin", "employee", "maintenance", "call_center"] as const;
 export type StaffRole = (typeof STAFF_ROLES)[number];
 
 export const ETIQUETA_UNIT_STATUS: Record<UnitStatus, string> = {
@@ -145,6 +145,7 @@ export const ETIQUETA_ROLE: Record<StaffRole, string> = {
   admin: "Administrador",
   employee: "Empleado",
   maintenance: "Mantenimiento",
+  call_center: "Call Center",
 };
 
 /**
@@ -253,3 +254,73 @@ export type ExecutionStatus = (typeof EXECUTION_STATUSES)[number];
 
 export const SYNC_STATUSES = ["pending", "synced", "failed"] as const;
 export type SyncStatus = (typeof SYNC_STATUSES)[number];
+
+// ── Call Center ─────────────────────────────────────────────────────────────
+
+export const CALL_DIRECTIONS = ["incoming", "outgoing"] as const;
+export type CallDirection = (typeof CALL_DIRECTIONS)[number];
+export const ETIQUETA_CALL_DIRECTION: Record<CallDirection, string> = { incoming: "Entrante", outgoing: "Saliente" };
+
+/** Quién atiende: una persona, la IA o las dos (la IA con un humano detrás). */
+export const CALL_HANDLERS = ["human", "ai", "hybrid"] as const;
+export type CallHandler = (typeof CALL_HANDLERS)[number];
+export const ETIQUETA_CALL_HANDLER: Record<CallHandler, string> = { human: "Humano", ai: "IA", hybrid: "Híbrido" };
+
+export const CALL_STATUSES = ["started", "in_progress", "finished", "escalated", "follow_up", "closed"] as const;
+export type CallStatus = (typeof CALL_STATUSES)[number];
+export const ETIQUETA_CALL_STATUS: Record<CallStatus, string> = {
+  started: "Iniciada",
+  in_progress: "En curso",
+  finished: "Finalizada",
+  escalated: "Escalada",
+  follow_up: "Pendiente de seguimiento",
+  closed: "Cerrada",
+};
+
+export const PRIORITIES = ["normal", "high", "urgent"] as const;
+export type Priority = (typeof PRIORITIES)[number];
+export const ETIQUETA_PRIORITY: Record<Priority, string> = { normal: "Normal", high: "Alta", urgent: "Urgente" };
+
+/** Idiomas preparados. Se guarda el código ISO de dos letras. */
+export const CALL_LANGUAGES = ["es", "ca"] as const;
+export const ETIQUETA_LANGUAGE: Record<string, string> = { es: "Castellano", ca: "Català", en: "English", fr: "Français" };
+
+export const INCIDENT_TYPES = [
+  "no_access",
+  "security",
+  "unauthorized_access",
+  "emergency",
+  "facility_failure",
+  "billing",
+  "documentation",
+  "complaint",
+  "cancellation",
+  "administrative",
+  "other",
+] as const;
+export type IncidentType = (typeof INCIDENT_TYPES)[number];
+/** Siempre urgentes (lo exige también la base: `self_storage_incidents_urgent_chk`). */
+export const URGENT_INCIDENT_TYPES: readonly IncidentType[] = ["no_access", "security", "unauthorized_access", "emergency", "facility_failure"];
+export const ETIQUETA_INCIDENT_TYPE: Record<IncidentType, string> = {
+  no_access: "No puede acceder",
+  security: "Problema de seguridad",
+  unauthorized_access: "Acceso no autorizado",
+  emergency: "Emergencia",
+  facility_failure: "Fallo grave de instalaciones",
+  billing: "Facturación",
+  documentation: "Documentación",
+  complaint: "Reclamación",
+  cancellation: "Baja",
+  administrative: "Consulta administrativa",
+  other: "Otra",
+};
+
+export const INCIDENT_STATUSES = ["open", "in_progress", "resolved", "closed", "cancelled"] as const;
+export type IncidentStatus = (typeof INCIDENT_STATUSES)[number];
+export const ETIQUETA_INCIDENT_STATUS: Record<IncidentStatus, string> = {
+  open: "Abierta",
+  in_progress: "En curso",
+  resolved: "Resuelta",
+  closed: "Cerrada",
+  cancelled: "Anulada",
+};
