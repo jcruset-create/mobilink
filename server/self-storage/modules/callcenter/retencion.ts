@@ -11,7 +11,7 @@
 import { pool } from "../../shared/db.ts";
 import { leerAjuste } from "../../shared/settings.ts";
 
-export async function purgarTranscripciones(): Promise<{ empresas: number; borradas: number }> {
+export async function purgarTranscripciones(): Promise<{ empresas: number; borradas: number; mensajesIA: number }> {
   const { rows: empresas } = await pool.query(`SELECT DISTINCT empresa_id FROM self_storage_calls WHERE transcript IS NOT NULL`);
   let borradas = 0;
   for (const { empresa_id: empresaId } of empresas) {
@@ -24,5 +24,27 @@ export async function purgarTranscripciones(): Promise<{ empresas: number; borra
     );
     borradas += rowCount ?? 0;
   }
-  return { empresas: empresas.length, borradas };
+  return { empresas: empresas.length, borradas, mensajesIA: await purgarMensajesIA() };
+}
+
+/**
+ * Conversaciones del Asistente IA: si la empresa no las guarda, no sobreviven a
+ * la sesión (de las activas no se toca nada); si las guarda, se borran pasados
+ * los mismos días de retención que las transcripciones.
+ */
+export async function purgarMensajesIA(): Promise<number> {
+  const { rows: empresas } = await pool.query(`SELECT DISTINCT empresa_id FROM self_storage_ai_messages`);
+  let borrados = 0;
+  for (const { empresa_id: empresaId } of empresas) {
+    const guardar = await leerAjuste(pool, empresaId, null, "ai_assistant.store_transcripts");
+    const dias = await leerAjuste(pool, empresaId, null, "call_center.transcript_retention_days");
+    const { rowCount } = await pool.query(
+      `DELETE FROM self_storage_ai_messages m USING self_storage_ai_sessions s
+        WHERE m.session_id = s.id AND m.empresa_id = $1 AND s.status <> 'active'
+          AND ($2::boolean = false OR m.created_at < now() - make_interval(days => $3))`,
+      [empresaId, guardar, dias]
+    );
+    borrados += rowCount ?? 0;
+  }
+  return borrados;
 }

@@ -624,3 +624,54 @@ export const filtroIncidencias = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(100),
   offset: z.coerce.number().int().min(0).default(0),
 });
+
+// ── Asistente IA ────────────────────────────────────────────────────────────
+
+const idiomaIA = z.string().trim().regex(/^[a-z]{2}$/, "idioma: código de dos letras (es, ca…)");
+const categoriaIA = z.string().trim().regex(/^[a-z][a-z0-9_]{1,39}$/, "categoría: minúsculas, números y _");
+
+export const conocimientoAlta = z.strictObject({
+  centerId: uuid.nullable().optional(),
+  category: categoriaIA,
+  question: texto(500),
+  answer: texto(4000),
+  language: idiomaIA.default("es"),
+  active: z.boolean().default(true),
+  priority: z.number().int().min(0).max(100).default(0),
+});
+export const conocimientoCambio = z
+  .strictObject({
+    centerId: uuid.nullable(),
+    category: categoriaIA,
+    question: texto(500),
+    answer: texto(4000),
+    language: idiomaIA,
+    active: z.boolean(),
+    priority: z.number().int().min(0).max(100),
+  })
+  .partial();
+export const conocimientoInicial = z.strictObject({ pack: z.enum(["tlc"]), centerId: uuid.nullable().optional() });
+
+/** Empezar una sesión: sobre una llamada existente, creando una (simulada) o sin llamada (consola). */
+export const sesionAlta = z.strictObject({
+  callId: uuid.nullable().optional(),
+  centerId: uuid.nullable().optional(),
+  language: idiomaIA.nullable().optional(),
+  simulateCall: z.strictObject({ phone: telefonoTexto.nullable().optional(), callerName: textoOpcional(160) }).nullable().optional(),
+});
+export const sesionMensaje = z.strictObject({ text: texto(2000) });
+export const sesionEscalado = z.strictObject({ reason: texto(500) });
+export const sesionRevision = z.strictObject({ reviewStatus: z.enum(["correct", "partial", "incorrect"]), notes: textoOpcional(2000) });
+export const herramientaCambio = z.strictObject({ active: z.boolean(), requiresConfirmation: z.boolean() }).partial();
+export const filtroSesiones = z.object({
+  from: z.iso.date().optional(),
+  to: z.iso.date().optional(),
+  status: z.enum(["active", "finished", "escalated", "error"]).optional(),
+  provider: z.string().trim().max(40).optional(),
+  language: idiomaIA.optional(),
+  flagged: z.enum(["1", "true"]).optional(),
+  reviewStatus: z.enum(["correct", "partial", "incorrect", "pending"]).optional(),
+  callId: uuid.optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+  offset: z.coerce.number().int().min(0).default(0),
+});
