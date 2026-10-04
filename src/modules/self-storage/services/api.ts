@@ -13,6 +13,18 @@ import { sessionHeaders } from "../../sessionHeaders";
 import type {
   AccesosContrato,
   AccesoTemporal,
+  DashboardCallCenter,
+  DisponibilidadCentro,
+  EntradaCatalogo,
+  EstadoCallCenter,
+  EventoCallCenter,
+  Identificacion,
+  Incidencia,
+  InfoCentroCallCenter,
+  Llamada,
+  LlamadaDetalle,
+  OperadorCallCenter,
+  Pagina,
   Dispositivo,
   EventoAcceso,
   MiembroContrato,
@@ -270,3 +282,50 @@ export const revocarPermiso = (contractId: string, permId: string) => pedir<Acce
 export const temporales = (f: { contractId?: string; centerId?: string; active?: string }) => pedir<AccesoTemporal[]>(`/temporary-accesses${query(f)}`);
 export const crearTemporal = (d: Record<string, unknown>) => pedir<AccesoTemporal>("/temporary-accesses", json(d));
 export const revocarTemporal = (id: string) => pedir<{ id: string }>(`/temporary-accesses/${id}/revoke`, json({}));
+
+// ── Call Center ─────────────────────────────────────────────────────────────
+
+export type FiltroLlamadas = Partial<Record<
+  | "from" | "to" | "centerId" | "customerId" | "phone" | "language" | "reasonCode" | "resultCode" | "status" | "priority"
+  | "handledBy" | "direction" | "operatorUserId" | "telephonyProvider" | "pendingFollowUp" | "interested" | "limit" | "offset",
+  string | number
+>>;
+
+export const estadoCallCenter = () => pedir<EstadoCallCenter>("/call-center/status");
+export const catalogoLlamadas = () => pedir<EntradaCatalogo[]>("/call-center/catalog");
+export const crearEntradaCatalogo = (d: Record<string, unknown>) => pedir<EntradaCatalogo>("/call-center/catalog", json(d));
+export const editarEntradaCatalogo = (id: string, d: Record<string, unknown>) => pedir<EntradaCatalogo>(`/call-center/catalog/${id}`, json(d, "PATCH"));
+export const dashboardCallCenter = (f: { from?: string; to?: string; centerId?: string | null }) => pedir<DashboardCallCenter>(`/call-center/dashboard${query(f)}`);
+export const operadoresCallCenter = (f: { from?: string; to?: string }) => pedir<OperadorCallCenter[]>(`/call-center/operators${query(f)}`);
+export const identificarTelefono = (phone: string) => pedir<Identificacion>(`/call-center/customer-by-phone${query({ phone })}`);
+export const infoCentroCallCenter = (centerId?: string | null) => pedir<InfoCentroCallCenter>(`/call-center/center-info${query({ centerId })}`);
+export const disponibilidadCentro = (centerId: string) => pedir<DisponibilidadCentro>(`/call-center/availability${query({ centerId })}`);
+export const eventosCallCenter = (f: { callId?: string; eventType?: string; limit?: number }) => pedir<EventoCallCenter[]>(`/call-center/events${query(f)}`);
+export const llamadas = (f: FiltroLlamadas) => pedir<Pagina<Llamada>>(`/call-center/calls${query(f)}`);
+export const llamada = (id: string) => pedir<LlamadaDetalle>(`/call-center/calls/${id}`);
+export const crearLlamada = (d: Record<string, unknown>) => pedir<LlamadaDetalle>("/call-center/calls", json(d));
+export const editarLlamada = (id: string, d: Record<string, unknown>) => pedir<LlamadaDetalle>(`/call-center/calls/${id}`, json(d, "PATCH"));
+export const resultadoLlamada = (id: string, d: Record<string, unknown>) => pedir<LlamadaDetalle>(`/call-center/calls/${id}/result`, json(d));
+export const escalarLlamada = (id: string, d: Record<string, unknown>) => pedir<LlamadaDetalle>(`/call-center/calls/${id}/escalate`, json(d));
+export const seguimientoLlamada = (id: string, d: Record<string, unknown>) => pedir<LlamadaDetalle>(`/call-center/calls/${id}/follow-up`, json(d));
+export const finalizarLlamada = (id: string) => pedir<LlamadaDetalle>(`/call-center/calls/${id}/finish`, json({}));
+export const cerrarLlamada = (id: string) => pedir<LlamadaDetalle>(`/call-center/calls/${id}/close`, json({}));
+export const incidenciaDesdeLlamada = (id: string, d: Record<string, unknown>) => pedir<Incidencia>(`/call-center/calls/${id}/incident`, json(d));
+
+/** CSV de llamadas con los filtros de la lista (descarga con la sesión). */
+export async function exportarLlamadas(f: FiltroLlamadas): Promise<void> {
+  const r = await fetch(`${BASE}/call-center/calls/export${query(f)}`, { headers: await cabecerasSesion() });
+  if (!r.ok) throw new ApiError(`Error ${r.status}`, "EXPORTAR", r.status);
+  const url = URL.createObjectURL(await r.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `llamadas-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+// ── Incidencias ──
+export const incidencias = (f: Partial<Record<"centerId" | "customerId" | "callId" | "status" | "open" | "priority" | "incidentType" | "limit" | "offset", string | number>>) =>
+  pedir<Pagina<Incidencia>>(`/incidents${query(f)}`);
+export const crearIncidencia = (d: Record<string, unknown>) => pedir<Incidencia>("/incidents", json(d));
+export const editarIncidencia = (id: string, d: Record<string, unknown>) => pedir<Incidencia>(`/incidents/${id}`, json(d, "PATCH"));

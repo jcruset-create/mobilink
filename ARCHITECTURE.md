@@ -582,3 +582,10 @@ Decisiones fijadas con pruebas:
   guarda el dispositivo. Registro de aperturas append-only, límite de
   frecuencia y sin «abierto» sin confirmación del equipo. Detalle en
   `docs/self-storage/ARQUITECTURA.md` §18.
+- **Call Center (atención telefónica) dentro de Self Storage.** Gestiona la
+  llamada y su ciclo de vida, la atienda una persona, una IA o las dos; no sabe
+  de proveedores de telefonía ni de IA. Interruptor global por entorno
+  (`SELF_STORAGE_CALL_CENTER_ENABLED`) y activación por empresa. Incidencias:
+  `self_storage_incidents`, la única entidad de incidencias del módulo. Rol
+  `call_center` con mínimo privilegio. El superadministrador elige empresa
+  (`X-SS-Empresa`, validada en el servidor). Detalle en `docs/CALL_CENTER.md`.

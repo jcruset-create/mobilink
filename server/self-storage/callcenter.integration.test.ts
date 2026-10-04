@@ -67,7 +67,7 @@ function api(ruta: string, q: Quien, init?: { method?: string; body?: unknown; e
     body: init?.body != null ? JSON.stringify(init.body) : undefined,
   }).then(async (r) => {
     const text = await r.text();
-    let body: any = {};
+    let body: any;
     try {
       body = text ? JSON.parse(text) : {};
     } catch {

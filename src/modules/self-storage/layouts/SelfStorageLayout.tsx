@@ -20,12 +20,12 @@ export default function SelfStorageLayout() {
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100">
       <header className="sticky top-0 z-30 flex flex-wrap items-center justify-between gap-2 border-b border-slate-700 bg-slate-900/95 px-3 py-2 backdrop-blur print:hidden">
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <button className="rounded-lg p-1.5 hover:bg-slate-800 md:hidden" onClick={() => setAbierto((v) => !v)} aria-label="Abrir el menú">
             <Menu className="h-5 w-5" />
           </button>
           <Container className="h-5 w-5 shrink-0 text-orange-400" />
-          <NavLink to="/self-storage/dashboard" className="text-sm font-black">
+          <NavLink to="/self-storage" className="text-sm font-black">
             Self Storage
           </NavLink>
           {empresas && empresas.length > 0 && (
@@ -69,7 +69,12 @@ export default function SelfStorageLayout() {
 
       <div className="flex">
         <nav className={`${abierto ? "block" : "hidden"} w-56 shrink-0 border-r border-slate-800 bg-slate-900 p-2 md:block print:hidden`}>
-          {items.map((i) =>
+          {items.map((i, n) => [
+            i.grupo && i.grupo !== items[n - 1]?.grupo ? (
+              <div key={`g-${i.grupo}`} className="mb-1 mt-3 px-3 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                {i.grupo}
+              </div>
+            ) : null,
             i.fase ? (
               <div
                 key={i.key}
@@ -84,6 +89,7 @@ export default function SelfStorageLayout() {
               <NavLink
                 key={i.key}
                 to={`/self-storage/${i.path}`}
+                end={i.path === "call-center"}
                 onClick={() => setAbierto(false)}
                 className={({ isActive }) =>
                   `mb-1 flex items-center gap-2 rounded-lg px-3 py-2 text-[13px] ${isActive ? "bg-orange-600 text-white" : "text-slate-300 hover:bg-slate-800"}`
@@ -92,8 +98,8 @@ export default function SelfStorageLayout() {
                 <i.icon className="h-4 w-4" />
                 <span className="flex-1">{i.label}</span>
               </NavLink>
-            )
-          )}
+            ),
+          ])}
         </nav>
         <main className="min-w-0 flex-1 p-3 md:p-5">
           <Outlet />

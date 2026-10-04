@@ -14,6 +14,18 @@ import {
   ETIQUETA_ACCESS_REASON,
   ETIQUETA_CONNECTION_TYPE,
   ETIQUETA_DOOR_TYPE,
+  ETIQUETA_CALL_DIRECTION,
+  ETIQUETA_CALL_HANDLER,
+  ETIQUETA_CALL_STATUS,
+  ETIQUETA_INCIDENT_STATUS,
+  ETIQUETA_INCIDENT_TYPE,
+  ETIQUETA_PRIORITY,
+  type CallDirection,
+  type CallHandler,
+  type CallStatus,
+  type IncidentStatus,
+  type IncidentType,
+  type Priority,
   type AccessMethod,
   type AccessReason,
   type ConnectionType,
@@ -64,6 +76,12 @@ type Estado = {
   etqMetodoAcceso: (m: AccessMethod) => string;
   etqTipoPuerta: (t: DoorType) => string;
   etqConexion: (t: ConnectionType) => string;
+  etqEstadoLlamada: (e: CallStatus) => string;
+  etqAtendida: (h: CallHandler) => string;
+  etqSentido: (d: CallDirection) => string;
+  etqPrioridad: (p: Priority) => string;
+  etqTipoIncidencia: (t: IncidentType) => string;
+  etqEstadoIncidencia: (e: IncidentStatus) => string;
   refrescar: () => Promise<void>;
 };
 
@@ -155,6 +173,12 @@ export function SelfStorageProvider({ children }: { children: ReactNode }) {
       etqMetodoAcceso: (m) => et?.accessMethod?.[m] ?? ETIQUETA_ACCESS_METHOD[m] ?? m,
       etqTipoPuerta: (t) => et?.doorType?.[t] ?? ETIQUETA_DOOR_TYPE[t] ?? t,
       etqConexion: (t) => et?.connectionType?.[t] ?? ETIQUETA_CONNECTION_TYPE[t] ?? t,
+      etqEstadoLlamada: (e) => et?.callStatus?.[e] ?? ETIQUETA_CALL_STATUS[e] ?? e,
+      etqAtendida: (h) => et?.callHandler?.[h] ?? ETIQUETA_CALL_HANDLER[h] ?? h,
+      etqSentido: (d) => et?.callDirection?.[d] ?? ETIQUETA_CALL_DIRECTION[d] ?? d,
+      etqPrioridad: (p) => et?.priority?.[p] ?? ETIQUETA_PRIORITY[p] ?? p,
+      etqTipoIncidencia: (t) => et?.incidentType?.[t] ?? ETIQUETA_INCIDENT_TYPE[t] ?? t,
+      etqEstadoIncidencia: (e) => et?.incidentStatus?.[e] ?? ETIQUETA_INCIDENT_STATUS[e] ?? e,
       refrescar,
     };
   }, [cargando, error, datos, centroId, fijarCentro, fijarEmpresa, refrescar]);

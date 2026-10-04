@@ -1407,3 +1407,12 @@ En Render:
 Antes de dar de alta clientes: «Probar conexión», abrir desde el panel,
 abrir desde la app con un contrato de prueba, bloquear y comprobar que
 deniega, y revisar en el registro el `device_response` de cada intento.
+
+## 19. Call Center e incidencias
+
+Ver `docs/CALL_CENTER.md`: llamadas (`self_storage_calls`), cronología
+(`self_storage_call_events`), catálogo de motivos y resultados
+(`self_storage_call_catalog`) e incidencias (`self_storage_incidents`, la
+única entidad de incidencias del módulo; la fase 4 la amplía). Migración
+`0010_call_center.sql`. Rol `call_center` y empresa activa del
+superadministrador (`auth/empresa.ts`).

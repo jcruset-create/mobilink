@@ -28,6 +28,7 @@ const NOMBRE_TRABAJO: Record<Trabajo, string> = {
   notificaciones: "Enviar notificaciones pendientes",
   stripe_reintentos: "Reintentar eventos de Stripe fallidos",
   accesos: "Dispositivos: latido y sincronizar teléfonos",
+  llamadas_retencion: "Call Center: borrar transcripciones caducadas",
 };
 
 export default function Configuracion() {
