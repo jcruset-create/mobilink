@@ -308,7 +308,7 @@ export async function mensaje(staff: Actor, permisos: readonly string[], session
       decision = { ...decision, accion: "escalar", motivo_escalado: "Demasiadas consultas en un turno" };
       break;
     }
-    let parametros: unknown = {};
+    let parametros: unknown;
     try {
       parametros = JSON.parse(decision.parametros_json || "{}");
     } catch {

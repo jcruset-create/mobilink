@@ -589,3 +589,10 @@ Decisiones fijadas con pruebas:
   `self_storage_incidents`, la única entidad de incidencias del módulo. Rol
   `call_center` con mínimo privilegio. El superadministrador elige empresa
   (`X-SS-Empresa`, validada en el servidor). Detalle en `docs/CALL_CENTER.md`.
+- **Asistente IA, capa opcional sobre el Call Center.** El dominio depende de
+  `AIProvider` (OpenAI delega en `core/openaiService.ts`, la capa única; hay
+  un simulado sin coste); voz y telefonía, interfaces con simulados. Datos
+  dinámicos sólo por herramientas de Mobilink (READ_ONLY / WRITE_SAFE
+  activables / SENSITIVE bloqueadas), registradas y saneadas. Interruptor
+  global `SELF_STORAGE_AI_ASSISTANT_ENABLED` y activación por empresa.
+  Detalle en `docs/AI_ASSISTANT.md`.

@@ -69,7 +69,9 @@ export function decidirSimulado(mensajes: MensajeIA[]): DecisionIA {
   const resumen = `Consulta: ${usuario.slice(0, 160)}`;
 
   if (ultimo?.rol === "tool") {
-    let r: { herramienta?: string; estado?: string; resultado?: any; error?: string } = {};
+    // Resultado de una herramienta tal como lo devuelve el motor (forma libre por herramienta).
+    type Res = { items?: { answer?: unknown }[]; types?: { name: string; available: boolean }[]; web?: string; address?: string; city?: string; links?: { web?: string } };
+    let r: { herramienta?: string; estado?: string; resultado?: Res; error?: string } = {};
     try {
       r = JSON.parse(ultimo.texto);
     } catch {
