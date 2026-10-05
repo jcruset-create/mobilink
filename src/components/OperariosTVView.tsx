@@ -2,6 +2,7 @@
 import { apiFetch } from "../modules/apiFetch";
 import { useEffect, useState } from "react";
 import { formatoEntradaParte, resumenTarjeta } from "../modules/tarjetaTrabajo";
+import { horaDeRecepcion, type RecepcionVehiculo } from "../modules/recepcionVehiculo";
 
 type AreaKey = "camion" | "movil" | "tacografo" | "turismo" | "mecanica";
 
@@ -90,6 +91,22 @@ type Props = {
   canGoBack?: boolean;
   onLogout?: () => void;
   onSetWorkshopPin?: (techName: string) => void;
+  /**
+   * Lo que todavía no es trabajo pero ya se ve venir: vehículos recibidos con
+   * la APK sin validar, y citas de hoy que aún no han llegado. En Operativo 2
+   * se actúa sobre ellos; aquí solo se enseñan, que es una pantalla de TV.
+   */
+  recepcionesPendientes?: RecepcionVehiculo[];
+  agendados?: CitaAgendadaParaTV[];
+};
+
+export type CitaAgendadaParaTV = {
+  id: number;
+  startTime?: string | null;
+  plate?: string | null;
+  templateLabel?: string | null;
+  area?: string | null;
+  customerName?: string | null;
 };
 
 type MaintenanceTaskType = "en_taller" | "fuera_taller";
@@ -618,6 +635,8 @@ export default function OperariosTVView({
   canGoBack = true,
   onLogout,
   onSetWorkshopPin,
+  recepcionesPendientes = [],
+  agendados = [],
 }: Props) {
   const [nowTick, setNowTick] = useState(Date.now());
   const [maintenanceApiLoaded, setMaintenanceApiLoaded] = useState(false);
@@ -1448,6 +1467,68 @@ export default function OperariosTVView({
         </section>
 
         <div className="space-y-4">
+
+          <section className="rounded-3xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-lg font-black text-amber-900">Pendientes de recepción</h2>
+              <span className="rounded-full bg-amber-100 px-3 py-1 text-sm font-bold text-amber-700">
+                {recepcionesPendientes.length}
+              </span>
+            </div>
+            {recepcionesPendientes.length === 0 ? (
+              <div className="rounded-2xl bg-white/60 p-4 text-center text-sm text-amber-700">
+                Los vehículos recibidos con la APK aparecen aquí.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {recepcionesPendientes.map((r) => (
+                  <div key={r.id} className="rounded-2xl border border-amber-200 bg-white p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xl font-black text-slate-950">{r.matricula}</span>
+                      <span className="text-xs font-bold text-amber-700">{horaDeRecepcion(r.creadaAtMs)}</span>
+                    </div>
+                    <div className="text-xs font-semibold text-amber-900">
+                      {r.operacionLabel || "sin operación"}
+                      {r.clienteNombre ? ` · ${r.clienteNombre}` : ""}
+                    </div>
+                    {r.operarioNombre && (
+                      <div className="mt-1 text-[11px] text-slate-500">Recibido por {r.operarioNombre}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section className="rounded-3xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-lg font-black text-emerald-900">Llegadas / agendados</h2>
+              <span className="rounded-full bg-emerald-100 px-3 py-1 text-sm font-bold text-emerald-700">
+                {agendados.length}
+              </span>
+            </div>
+            {agendados.length === 0 ? (
+              <div className="rounded-2xl bg-white/60 p-4 text-center text-sm text-emerald-700">
+                Las citas de hoy aparecen aquí.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {agendados.map((c) => (
+                  <div key={c.id} className="rounded-2xl border border-emerald-200 bg-white p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xl font-black text-slate-950">{c.plate || c.templateLabel || c.area || "—"}</span>
+                      <span className="text-xs font-bold text-emerald-700">{c.startTime ?? ""}</span>
+                    </div>
+                    {(c.customerName || (c.plate && c.templateLabel)) && (
+                      <div className="text-xs font-semibold text-emerald-900">
+                        {[c.plate ? c.templateLabel : null, c.customerName].filter(Boolean).join(" · ")}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
 
           <section className="rounded-3xl border border-violet-200 bg-violet-50 p-4 shadow-sm">
             <div className="mb-3 flex items-center justify-between">
