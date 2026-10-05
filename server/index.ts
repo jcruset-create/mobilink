@@ -70,6 +70,7 @@ import { cotejarPlano, generarPosiciones } from "./tyrecontrol/posicionesDesdeCo
 import { initConnect, mountConnect, startConnectWorker } from "./connect/index.ts";
 import { createDispatchRouter, initDispatch, startDispatchWorker } from "./dispatch/index.ts";
 import { createRecepcionVehiculosRouter } from "./recepcionVehiculos/router.ts";
+import { decidirConCuentaExistente, type DuenoDeCuenta } from "./core/altaUsuario.ts";
 import { initEventLog } from "./eventlog/schema.ts";
 import { registrarEvento as registrarEventoAsistencia, timelineDe } from "./eventlog/servicio.ts";
 import { initDocumentos } from "./documentos/schema.ts";
@@ -20205,6 +20206,23 @@ async function puedeGestionarUsuario(
   return null;
 }
 
+/**
+ * La cuenta de Auth con ese email, o null. `listUsers` no filtra por email:
+ * se recorre paginado, con tope, como en los últimos accesos de TyreControl.
+ */
+async function buscarCuentaAuthPorEmail(email: string): Promise<{ id: string } | null> {
+  const objetivo = email.toLowerCase();
+  for (let page = 1; page <= 40; page++) {
+    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 1000 });
+    if (error) return null;
+    const lote = (data?.users ?? []) as Array<{ id: string; email?: string | null }>;
+    const hit = lote.find((u) => String(u.email ?? "").toLowerCase() === objetivo);
+    if (hit) return { id: hit.id };
+    if (lote.length < 1000) break;
+  }
+  return null;
+}
+
 function emailSintetico(username: string): string {
   return `${username.trim().toLowerCase().replace(/[^a-z0-9._-]/g, "")}@usuarios.sea`;
 }
@@ -20222,15 +20240,55 @@ app.post("/api/administracion/usuarios/crear-auth", async (req, res) => {
     if (username.length < 2) return res.status(400).json({ success: false, message: "Usuario demasiado corto" });
     if (password.length < 6) return res.status(400).json({ success: false, message: "Contraseña interna demasiado corta" });
 
+    const email = emailSintetico(username);
     const { data, error } = await supabase.auth.admin.createUser({
-      email: emailSintetico(username),
+      email,
       password,
       email_confirm: true,
       user_metadata: { username, nombre },
     });
     if (error) {
-      const msg = /already/i.test(error.message) ? "Ya existe un usuario con ese nombre" : error.message;
-      return res.status(400).json({ success: false, message: msg });
+      if (!/already/i.test(error.message)) {
+        return res.status(400).json({ success: false, message: error.message });
+      }
+
+      /*
+       * Auth es global y la lista del administrador es la de su empresa: «ya
+       * existe» con un nombre que no sale en la lista pasa, y pasaba sin
+       * remedio. Se busca la cuenta y se decide (ver core/altaUsuario.ts).
+       */
+      const existente = await buscarCuentaAuthPorEmail(email);
+      if (!existente) {
+        return res.status(400).json({ success: false, message: "Ya existe un usuario con ese nombre" });
+      }
+
+      const ficha = await db.query(`SELECT empresa_id FROM app_usuarios WHERE id = $1`, [existente.id]);
+      const tc = await db.query(`SELECT 1 FROM tc_usuarios WHERE id = $1`, [existente.id]);
+      const dueno: DuenoDeCuenta = ficha.rows.length
+        ? { tipo: "ficha", empresaId: ficha.rows[0].empresa_id ?? null }
+        : tc.rows.length
+          ? { tipo: "tyrecontrol" }
+          : { tipo: "ninguno" };
+
+      const decision = decidirConCuentaExistente(
+        dueno,
+        { empresaId: admin.empresaId ?? null, esSuperadmin: admin.esSuperadmin },
+        username
+      );
+      if (decision.accion === "rechazar") {
+        return res.status(400).json({ success: false, message: decision.mensaje });
+      }
+
+      // Huérfana: se reutiliza con la contraseña nueva y el alta sigue.
+      const { error: errorReuso } = await supabase.auth.admin.updateUserById(existente.id, {
+        password,
+        user_metadata: { username, nombre },
+      });
+      if (errorReuso) {
+        return res.status(400).json({ success: false, message: errorReuso.message });
+      }
+      console.log(`[usuarios] cuenta huérfana reutilizada para «${username}»`);
+      return res.json({ success: true, userId: existente.id, reutilizada: true });
     }
     return res.json({ success: true, userId: data.user?.id });
   } catch (e: any) {
