@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 
 import { allocateJobPure } from "../assignment";
+import { plantillasParaArea } from "../plantillasPorArea";
 import { buildTechLoadStats, buildTechStats } from "../workshopReports";
 import {
   API_BASE,
@@ -426,7 +427,14 @@ export default function RecepcionesPage() {
                         Área
                         <select
                           value={actual.area ?? ""}
-                          onChange={(e) => void editar("area", e.target.value)}
+                          onChange={(e) => {
+                            const area = e.target.value;
+                            void editar("area", area);
+                            // Una operación de otra área no puede quedarse
+                            // elegida detrás de un desplegable que ya no la enseña.
+                            const elegida = plantillasDelTaller.find((p) => p.key === actual.plantillaKey);
+                            if (elegida && area && elegida.area !== area) void editar("plantillaKey", "");
+                          }}
                           className="mt-1 w-full rounded border border-slate-600 bg-slate-900 px-2 py-1 text-sm text-slate-100"
                         >
                           <option value="">— elegir —</option>
@@ -445,7 +453,7 @@ export default function RecepcionesPage() {
                           className="mt-1 w-full rounded border border-slate-600 bg-slate-900 px-2 py-1 text-sm text-slate-100"
                         >
                           <option value="">— elegir —</option>
-                          {plantillasDelTaller.map((p) => (
+                          {plantillasParaArea(plantillasDelTaller, actual.area, actual.plantillaKey).map((p) => (
                             <option key={p.key} value={p.key}>
                               {p.label}
                             </option>
