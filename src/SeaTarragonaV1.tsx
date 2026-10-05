@@ -151,6 +151,7 @@ import {
   saveTechToBackend,
   patchTechRoadsideCapable,
   deleteTechFromBackend,
+  updateJobInBackend,
 } from "./modules/workshopApi";
 import {
   buildOperationReport,
@@ -2821,14 +2822,28 @@ function updateValidationPlate(jobId: number, nextPlate: string) {
   if (!plate || plate === job.plate) return;
 
   const updatedJob: Job = { ...job, plate };
+  const anterior = job.plate;
 
-  setJobs((prev) =>
-    prev.map((item) => (item.id === jobId ? updatedJob : item))
-  );
-
-  saveJobToBackend(updatedJob);
-
-  appendLog(`Matrícula corregida en validación: ${job.plate} → ${plate}.`);
+  /*
+   * Por PUT y no por `saveJobToBackend` (POST): el POST rechaza con 409 todo
+   * cambio de matrícula sobre un id existente. Se espera la respuesta y, si
+   * falla, se deja la de antes: una matrícula que solo cambió en pantalla es
+   * peor que no cambiarla, porque al autorizar se manda y tumba también la
+   * autorización.
+   */
+  void (async () => {
+    try {
+      await updateJobInBackend(updatedJob);
+      setJobs((prev) =>
+        prev.map((item) => (item.id === jobId ? updatedJob : item))
+      );
+      appendLog(`Matrícula corregida en validación: ${anterior} → ${plate}.`);
+    } catch (error) {
+      console.error("Error corrigiendo matrícula:", error);
+      alert(`No se pudo corregir la matrícula.\n\n${String((error as Error)?.message ?? error)}`);
+      appendLog(`Error al corregir la matrícula ${anterior} → ${plate}.`);
+    }
+  })();
 }
 
 function updateValidationResponsible(jobId: number, responsibleName: string) {

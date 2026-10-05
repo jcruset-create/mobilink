@@ -115,6 +115,34 @@ export async function saveJobToBackend(job: Job) {
   }
 }
 
+/**
+ * Guarda un trabajo por `PUT /api/jobs/:id`, no por `POST /api/jobs`.
+ *
+ * La diferencia importa para UNA cosa: la matrícula. El POST rechaza con 409
+ * cualquier cambio de matrícula sobre un id que ya existe, porque es el guarda
+ * contra colisiones de id (dos trabajos distintos pisándose). Corregir una
+ * matrícula mal tecleada es exactamente eso para el guarda, y se rechazaba sin
+ * que la pantalla dijera nada: la matrícula volvía sola, y al autorizar se
+ * mandaba la local, distinta de la guardada, y el 409 tumbaba también la
+ * autorización.
+ */
+export async function updateJobInBackend(job: Job) {
+  const response = await fetchWithTimeout(`${API_BASE}/api/jobs/${job.id}`, {
+    method: "PUT",
+    headers: getAdminHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(applyJobV2PayloadFields(job, job)),
+  });
+
+  if (!response.ok) {
+    const errorData = await readApiError(response);
+    throw new Error(
+      errorData?.error || `No se pudo guardar el trabajo ${job.plate}. Código ${response.status}.`
+    );
+  }
+
+  return response.json().catch(() => null);
+}
+
 export async function saveTechToBackend(tech: Tech) {
   try {
     const normalizedStatus = normalizeTechStatus(tech.status);
