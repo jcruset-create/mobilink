@@ -60,6 +60,7 @@
     "server/citasWhatsapp/**/*.ts",
     "server/satisfaction/**/*.ts",
     "server/cierre/**/*.ts",
+    "server/core/altaUsuario.ts",
     "server/core/auditoria.ts",
     "server/core/idDeTrabajo.ts",
     "server/core/jsonAjeno.ts",
