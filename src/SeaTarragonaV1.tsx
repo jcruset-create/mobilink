@@ -9,6 +9,8 @@ import React, {
 import AgendaView from "./components/AgendaView";
 import QuickTemplateEditor from "./components/QuickTemplateEditor";
 import Operativo2View from "./components/Operativo2View";
+import { useRecepcionesPendientes } from "./modules/useRecepcionesPendientes";
+import { idsDeCitasYaRecibidas } from "./modules/recepcionVehiculo";
 import { esTecnicoDePrueba } from "./modules/tecnicosDePrueba";
 import SelectorFurgoneta from "./components/SelectorFurgoneta";
 import UsersScreen from "./components/UsersScreen";
@@ -619,6 +621,10 @@ const visibleJobs = useMemo(
   () => jobs.filter((job) => belongsToWorkshop(job, selectedWorkshopId)),
   [jobs, selectedWorkshopId]
 );
+
+// Para la pantalla de técnicos: lo recibido con la APK y las citas que faltan
+// por llegar, igual que lo ve Operativo 2.
+const { recepciones: recepcionesPendientesTV } = useRecepcionesPendientes(selectedWorkshopId);
 
 const agenda = useScheduledJobs({
   selectedWorkshopId,
@@ -4554,6 +4560,11 @@ if (view === "operarios" && canView("operarios")) {
     <OperariosTVView
       jobs={jobsForScreens}
       techs={visibleTechs}
+      recepcionesPendientes={recepcionesPendientesTV}
+      agendados={(() => {
+        const recibidas = idsDeCitasYaRecibidas(recepcionesPendientesTV);
+        return (agenda.dueScheduledJobs ?? []).filter((s) => !recibidas.has(Number(s.id)));
+      })()}
       roadsideAssistances={roadside.roadsideAssistances}
       finishJob={finishJob}
       moveJobToStandBy={pauseJob}
