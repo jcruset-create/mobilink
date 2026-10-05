@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
+import { citaYaEnTaller } from "./citaYaEnTaller";
 import type { ScheduledJob } from "../components/AgendaView";
 import type {
   AllocationResult,
@@ -118,6 +119,9 @@ export function useScheduledJobs({
       .filter((job) => job.jobId == null)
       .filter((job) => job.secondJobId == null)
       .filter((job) => job.arrivedAtMs == null)
+      // El vehículo ya está dentro con un trabajo abierto, aunque haya entrado
+      // por otra puerta que la cita. Ver citaYaEnTaller.ts.
+      .filter((job) => !citaYaEnTaller(job, visibleJobs))
       .filter((job) => job.date === today)
       .filter((job) => {
         const startMs = new Date(`${job.date}T${job.startTime}`).getTime();
@@ -132,7 +136,7 @@ export function useScheduledJobs({
 
         return aMs - bMs;
       });
-  }, [visibleScheduledJobs]);
+  }, [visibleScheduledJobs, visibleJobs]);
 
   const arrivedPendingValidationScheduledJobs = useMemo(() => {
     return visibleScheduledJobs
