@@ -2,6 +2,7 @@
 import { apiFetch } from "../modules/apiFetch";
 import { useEffect, useState } from "react";
 import { formatoEntradaParte, resumenTarjeta } from "../modules/tarjetaTrabajo";
+import { claseDeSituacion, situacionDeTecnico } from "../modules/colorEstadoTecnico";
 import { horaDeRecepcion, type RecepcionVehiculo } from "../modules/recepcionVehiculo";
 
 type AreaKey = "camion" | "movil" | "tacografo" | "turismo" | "mecanica";
@@ -265,22 +266,10 @@ function getTechStatusLabel(status: string) {
   return (status || "-").toUpperCase();
 }
 
-function getTechCardClass(status: string) {
-  const normalized = normalizeTechStatus(status);
-
-  if (normalized === "disponible" || normalized === "supervisor") {
-    return "border-green-300 bg-green-200 text-green-950";
-  }
-
-  if (normalized === "refuerzo") {
-    return "border-yellow-300 bg-yellow-200 text-yellow-950";
-  }
-
-  if (normalized === "ocupado") {
-    return "border-red-300 bg-red-200 text-red-950";
-  }
-
-  return "border-slate-300 bg-slate-200 text-slate-800";
+// El color vive en colorEstadoTecnico.ts, con tests: ahí está el porqué de
+// que el libre sea gris y no verde.
+function getTechCardClass(status: string, extra: Parameters<typeof situacionDeTecnico>[1] = {}) {
+  return claseDeSituacion(situacionDeTecnico(normalizeTechStatus(status), extra));
 }
 
 function getLinkedPhaseLabel(job: JobForOperarios) {
@@ -1705,17 +1694,12 @@ export default function OperariosTVView({
               return (
                 <div
                   key={tech.name}
-                  className={`rounded-2xl border p-3 ${
-                    activeRoadsideAssistance
-                      ? "border-blue-300 bg-blue-200 text-blue-950"
-                      : pendingOutsideMaintenanceTask
-                      ? "border-red-300 bg-red-200 text-red-950"
-                      : pendingWorkshopMaintenanceTask
-                      ? "border-emerald-300 bg-emerald-200 text-emerald-950"
-                      : isReservedForValidation
-                      ? "border-violet-300 bg-violet-200 text-violet-950"
-                      : getTechCardClass(tech.status)
-                  }`}
+                  className={`rounded-2xl border p-3 ${getTechCardClass(tech.status, {
+                    enAsistencia: Boolean(activeRoadsideAssistance),
+                    mantenimientoFuera: Boolean(pendingOutsideMaintenanceTask),
+                    mantenimientoEnTaller: Boolean(pendingWorkshopMaintenanceTask),
+                    reservadoParaValidar: Boolean(isReservedForValidation),
+                  })}`}
                 >
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex min-w-0 items-center gap-3">
