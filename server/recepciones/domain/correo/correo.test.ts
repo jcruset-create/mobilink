@@ -819,3 +819,62 @@ describe("partirFilasSeguidas", () => {
     expect(partirFilasSeguidas("").filas).toEqual([]);
   });
 });
+
+/**
+ * El albarán real B /2028546987, del 05/10/2026, que se quedó en revisión con
+ * «el pedido 5744808 no existe y el albarán no trae líneas legibles».
+ *
+ * Son DOS filas pegadas en un renglón y detrás un hueco. Como el bloque es una
+ * sola línea, antes se daba por buena la lectura de `filaDeTabla`, que casa de
+ * punta a punta con el ÚLTIMO importe y mete la segunda fila dentro de la
+ * descripción de la primera. Esa descripción llevaba «NFU», el filtro de
+ * conceptos la tiraba, y el albarán se quedaba sin una sola línea.
+ */
+const ALBARAN_DOS_FILAS_PEGADAS = `Estimado COMERCIAL SEA, S.A.,
+tu pedido 5744808 ha sido emitido por nuestro centro logístico y la
+entrega se realizará a través de TRANSAHER.
+
+El pedido será entregado a:
+COMERCIAL SEA, S.A.
+PI RIU CLAR C/COURE 27,
+43006 TARRAGONA
+TARRAGONA ESPAÑA
+
+El contenido del pedido es:
+
+Cantidad
+Descripción
+Importe
+4.00 315/80X22.5 SAILUN DELIV.D156L 255.78 4.00 S.I.Gestión de NFU Cat.D2T 12.18
+
+Pulsar enlace para ver albarán adjunto.
+[https://ws.gruposoledad.com/b2b?serviceName=descargarAlbaran&message=execute]
+
+Un saludo,
+
+Grupo Soledad
+`;
+
+describe("albarán con dos filas pegadas y nada detrás", () => {
+  const r = parsearCorreo("Emisión de Albarán B /2028546987 con fecha 05/10/2026.", ALBARAN_DOS_FILAS_PEGADAS);
+
+  it("la lectura de una sola fila era la trampa: se traga la segunda", () => {
+    const leida = filaDeTabla("4.00 315/80X22.5 SAILUN DELIV.D156L 255.78 4.00 S.I.Gestión de NFU Cat.D2T 12.18");
+    expect(leida!.descripcion).toContain("255.78");
+    // Y con «NFU» dentro, el filtro de conceptos la tiraba entera.
+    expect(esConcepto(leida!)).toBe(true);
+  });
+
+  it("partidas, cada fila vuelve a su sitio", () => {
+    expect(recomponerFilas(ALBARAN_DOS_FILAS_PEGADAS.split("\n"))).toContain("4.00 315/80X22.5 SAILUN DELIV.D156L 255.78");
+    expect(recomponerFilas(ALBARAN_DOS_FILAS_PEGADAS.split("\n"))).toContain("4.00 S.I.Gestión de NFU Cat.D2T 12.18");
+  });
+
+  it("y el albarán trae su mercancía, sin el NFU", () => {
+    expect(r.tipo).toBe("ALBARAN");
+    expect(r.albaran!.numeroPedido).toBe("5744808");
+    expect(r.albaran!.lineas.map((l) => [l.cantidad, l.descripcion, l.precioCentimos])).toEqual([
+      [4, "315/80X22.5 SAILUN DELIV.D156L", 25578],
+    ]);
+  });
+});

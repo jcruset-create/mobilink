@@ -360,16 +360,27 @@ export function recomponerFilas(lineas: string[]): string[] {
     if (EMPIEZA_POR_CANTIDAD.test(l)) {
       // ¿La tabla viene corrida, con varias filas en el mismo párrafo? Se
       // mira el bloque entero: hasta el primer hueco o la primera etiqueta.
+      //
+      // Se intenta SIEMPRE, aunque el bloque sea una sola línea y `filaDeTabla`
+      // sepa leerla. Porque sabe leerla mal: en «4.00 315/80X22.5 SAILUN
+      // DELIV.D156L 255.78 4.00 S.I.Gestión de NFU Cat.D2T 12.18» —dos filas
+      // pegadas y nada detrás hasta el hueco— la forma de fila casa de punta a
+      // punta tomando el ÚLTIMO importe, y se traga la segunda fila dentro de
+      // la descripción de la primera. El resultado era un artículo con «NFU»
+      // en la descripción, que el filtro de conceptos tiraba: el albarán se
+      // quedaba sin una sola línea y su pedido sin deducir.
+      //
+      // Partir no se puede confundir con eso: `partirFilasSeguidas` exige dos
+      // filas limpias y que entre una y otra no sobre texto, así que una fila
+      // de verdad nunca sale partida en dos.
       let hasta = i;
       while (hasta + 1 < lineas.length && lineas[hasta + 1] && !etiquetaDe(lineas[hasta + 1])) hasta += 1;
-      if (hasta > i || !filaDeTabla(l)) {
-        const { filas, resto } = partirFilasSeguidas(lineas.slice(i, hasta + 1).join(" "));
-        if (filas.length >= FILAS_PARA_PARTIR) {
-          salida.push(...filas);
-          if (resto) salida.push(resto);
-          i = hasta + 1;
-          continue;
-        }
+      const { filas, resto } = partirFilasSeguidas(lineas.slice(i, hasta + 1).join(" "));
+      if (filas.length >= FILAS_PARA_PARTIR) {
+        salida.push(...filas);
+        if (resto) salida.push(resto);
+        i = hasta + 1;
+        continue;
       }
     }
     if (!filaDeTabla(l) && EMPIEZA_POR_CANTIDAD.test(l)) {
