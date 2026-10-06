@@ -158,6 +158,32 @@ export default function Correo() {
         </div>
       </div>
 
+      {/* El atasco de la bandeja. Cada mejora del lector —la tabla que llega
+          corrida, las líneas sacadas del PDF adjunto— sólo se aplica a lo que
+          entra DESPUÉS: lo que ya está en revisión se quedó con el lector de
+          entonces. Así que se repasa la cola entera de una vez. Repetirlo no
+          rompe nada: lo que ya entró sale DUPLICADO. */}
+      {puedeOperar && (estado?.enRevision ?? 0) > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-amber-700/60 p-3 text-[12px] text-slate-400">
+          <span>
+            Hay <b className="text-amber-300">{estado!.enRevision}</b> correo(s) en revisión. Muchos fallaron con un lector que ya se ha mejorado:
+          </span>
+          <button
+            className={btnMini}
+            disabled={ocupado}
+            onClick={() =>
+              void ejecutar(async () => {
+                const r = await api.reprocesarPendientes();
+                return `${r.mirados} correo(s) repasado(s): ${r.arreglados} resuelto(s), ${r.mirados - r.arreglados} siguen en revisión.`;
+              })
+            }
+          >
+            Reprocesar los pendientes
+          </button>
+          <span className="text-slate-500">Vuelve a leer cada uno con el lector de hoy, y busca su PDF en el buzón si no lo tiene guardado.</span>
+        </div>
+      )}
+
       {/* Los albaranes que entraron antes de que el módulo supiera leer las
           observaciones del PDF se quedaron sin ellas. Volver a adjuntar el
           papel no vale —el original no se sobrescribe—, así que se releen. */}

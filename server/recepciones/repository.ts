@@ -2200,6 +2200,17 @@ export async function listarCorreos(
   return rows.map(aCorreo);
 }
 
+/** Los correos que se quedaron a medias y una persona tiene que mirar. */
+export async function correosEnRevision(empresaId: string, ejecutor?: Ejecutor): Promise<Correo[]> {
+  const { rows } = await db(ejecutor).query(
+    `${SELECT_CORREO}
+      WHERE c.empresa_id = $1 AND c.resultado IN ('PENDIENTE_REVISION','ERROR')
+      ORDER BY c.created_at`,
+    [empresaId]
+  );
+  return rows.map(aCorreo);
+}
+
 /** Los correos de albarán que esperan a que exista este pedido. */
 export async function correosDeAlbaranEnEspera(empresaId: string, numeroPedidoNormalizado: string, ejecutor?: Ejecutor): Promise<Correo[]> {
   const { rows } = await db(ejecutor).query(

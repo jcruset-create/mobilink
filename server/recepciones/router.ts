@@ -62,6 +62,22 @@ function contextoDe(req: Request): servicio.Contexto {
   return { empresaId: ctx.empresaId, userId: ctx.userId, userNombre: ctx.nombre, ip: req.ip };
 }
 
+/**
+ * Vuelve a pasar un correo por la ingesta.
+ *
+ * Si el correo no tiene su adjunto guardado —los que entraron antes de que se
+ * guardaran no lo tienen—, se va a buscar el original al buzón. Sin esto,
+ * «Reprocesar» vuelve a mirar un cuerpo vacío en los correos que traen los
+ * datos en el PDF, y no hay forma de arreglarlos desde el panel. No lanza por
+ * el buzón: si no está, se reprocesa con lo que haya.
+ */
+async function reprocesarCorreo(empresaId: string, correoId: string): Promise<ingesta.ResultadoIngesta> {
+  const correo = await repo.correoPorId(empresaId, correoId);
+  const guardados = correo ? await repo.adjuntosDeCorreo(empresaId, correoId) : [];
+  const delBuzon = correo && guardados.length === 0 ? await buzon.adjuntosDelOriginal(empresaId, correo.messageId) : [];
+  return ingesta.reprocesar({ empresaId }, correoId, delBuzon);
+}
+
 function texto(v: unknown): string {
   return typeof v === "string" ? v.trim() : "";
 }
@@ -597,22 +613,57 @@ export function createRecepcionesRouter(): Router {
     })
   );
 
+  /**
+   * Vuelve a pasar TODOS los correos en revisión por la ingesta.
+   *
+   * La bandeja se llena de correos que fallaron con el lector de entonces, y
+   * cada mejora del lector —la tabla que llega corrida, las líneas sacadas del
+   * PDF adjunto— no se aplica a lo que ya está dentro: `reprocesar` sólo corre
+   * a mano o cuando llega el pedido que faltaba. Así que después de cada
+   * mejora hay que poder repasar el atasco de una vez, en vez de pinchar once
+   * botones.
+   *
+   * Es seguro repetirlo: un correo que ya entró sale DUPLICADO, y uno que
+   * sigue sin entenderse se queda igual que estaba.
+   */
+  r.post(
+    "/correo/reprocesar-pendientes",
+    exigirPermiso("recepciones.correo.importar"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const pendientes = await repo.correosEnRevision(ctx.empresaId);
+      const resultados: ingesta.ResultadoIngesta[] = [];
+      for (const c of pendientes) {
+        try {
+          resultados.push(await reprocesarCorreo(ctx.empresaId, c.id));
+        } catch (e) {
+          resultados.push({
+            correoId: c.id,
+            resultado: "ERROR",
+            motivo: e instanceof Error ? e.message : String(e),
+            tipo: c.tipo,
+            pedidoId: null,
+            pedidoNumero: null,
+            albaranId: null,
+            albaranNumero: null,
+            avisos: [],
+          });
+        }
+      }
+      const arreglados = resultados.filter((x) => x.resultado === "PROCESADO" || x.resultado === "DUPLICADO").length;
+      const detalle = { mirados: resultados.length, arreglados, resultados };
+      void registrarAuditoria({ empresaId: ctx.empresaId, userId: ctx.userId, accion: "recepciones.correo.reprocesar_pendientes", entidad: "rcp_correos", detalle, ip: req.ip });
+      res.json(detalle);
+    })
+  );
+
   /** Vuelve a pasar un correo por la ingesta (tras crear el pedido a mano, por ejemplo). */
   r.post(
     "/correo/:id/reprocesar",
     exigirPermiso("recepciones.correo.importar"),
     ruta(async (req, res) => {
       const ctx = contextoDe(req);
-      const correoId = String(req.params.id);
-      // Si el correo no tiene su adjunto guardado —los que entraron antes de
-      // que se guardaran no lo tienen—, se va a buscar el original al buzón.
-      // Sin esto, «Reprocesar» vuelve a mirar un cuerpo vacío en los correos
-      // que traen los datos en el PDF, y no hay forma de arreglarlos desde
-      // aquí. No lanza: si el buzón no está, se reprocesa con lo que haya.
-      const correo = await repo.correoPorId(ctx.empresaId, correoId);
-      const guardados = correo ? await repo.adjuntosDeCorreo(ctx.empresaId, correoId) : [];
-      const delBuzon = correo && guardados.length === 0 ? await buzon.adjuntosDelOriginal(ctx.empresaId, correo.messageId) : [];
-      const r = await ingesta.reprocesar({ empresaId: ctx.empresaId }, correoId, delBuzon);
+      const r = await reprocesarCorreo(ctx.empresaId, String(req.params.id));
       void registrarAuditoria({ empresaId: ctx.empresaId, userId: ctx.userId, accion: "recepciones.correo.reprocesar", entidad: "rcp_correos", entidadId: r.correoId, detalle: r, ip: req.ip });
       res.json(r);
     })

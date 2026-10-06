@@ -52,8 +52,8 @@
 
 import { createHash } from "node:crypto";
 import { asumirExpedicionCompleta } from "./config.ts";
-import { descripcionNormalizada } from "./domain/articulos.ts";
 import { pendienteDeExpedir } from "./domain/cantidades.ts";
+import { lineasDelAlbaran } from "./domain/lineasDelAlbaran.ts";
 import { muestraDelContenido, normalizar, parsearCorreo, remitenteReenviado, type AlbaranLeido, type CorreoParseado, type LineaLeida } from "./domain/correo/index.ts";
 import { entregaInsaDelPdf } from "./documentos/entregaInsa.ts";
 import { lineasDelPdf } from "./documentos/lineas.ts";
@@ -550,7 +550,7 @@ export async function reprocesar(ctx: { empresaId: string }, correoId: string, a
         const mercancia = a.lineas.filter((l) => l.descripcion && l.cantidad && l.cantidad > 0);
         if (mercancia.length === 0) {
           return terminar(
-            { resultado: "PENDIENTE_REVISION", motivo: `El pedido ${a.numeroPedido} no existe y el albarán no trae líneas legibles con las que deducirlo.`, avisos: leido.avisos },
+            { resultado: "PENDIENTE_REVISION", motivo: `El pedido ${a.numeroPedido} no existe y el albarán no trae líneas legibles con las que deducirlo.${colaDelMotivo(correo.texto)}`, avisos: leido.avisos },
             baseA
           );
         }
@@ -661,45 +661,6 @@ export async function reprocesar(ctx: { empresaId: string }, correoId: string, a
 }
 
 /* ── Ayudantes ───────────────────────────────────────────────────────────── */
-
-/**
- * Qué líneas lleva el albarán, en este orden de preferencia:
- *   1. las líneas que detalla el correo, casadas con las del pedido por la
- *      descripción normalizada (las que no casan entran como fuera de pedido);
- *   2. una «cantidad expedida» total, si el pedido tiene una sola línea;
- *   3. todo lo pendiente de expedir del pedido, si la configuración lo asume.
- * Nunca más de lo pendiente en una línea: el resto lo rechazaría el servicio.
- */
-export function lineasDelAlbaran(
-  a: { lineas: { cantidad: number | null; descripcion: string | null; referencia: string | null }[]; cantidadExpedida: number | null },
-  lineasPedido: repo.PedidoLinea[],
-  asumirCompleta: boolean
-): servicio.LineaAlbaranEntrante[] {
-  const pendiente = (l: repo.PedidoLinea) => pendienteDeExpedir(l.cantidadPedida, l.cantidadExpedida);
-  const conPendiente = lineasPedido.filter((l) => pendiente(l) > 0);
-
-  const detalladas = a.lineas.filter((l) => l.cantidad && l.cantidad > 0);
-  if (detalladas.length > 0) {
-    const usadas = new Set<string>();
-    return detalladas.map((l) => {
-      const clave = l.descripcion ? descripcionNormalizada(l.descripcion) : "";
-      const lp = lineasPedido.find((x) => !usadas.has(x.id) && clave && descripcionNormalizada(x.descripcionProveedor) === clave);
-      if (lp) usadas.add(lp.id);
-      const cantidad = lp ? Math.min(l.cantidad!, pendiente(lp)) : l.cantidad!;
-      return { pedidoLineaId: lp?.id ?? null, descripcionProveedor: l.descripcion ?? lp?.descripcionProveedor ?? "", referenciaProveedor: l.referencia, cantidadExpedida: cantidad };
-    }).filter((l) => l.cantidadExpedida > 0 && l.descripcionProveedor);
-  }
-
-  if (a.cantidadExpedida && a.cantidadExpedida > 0 && conPendiente.length === 1) {
-    const lp = conPendiente[0];
-    return [{ pedidoLineaId: lp.id, cantidadExpedida: Math.min(a.cantidadExpedida, pendiente(lp)) }];
-  }
-
-  if (asumirCompleta) {
-    return conPendiente.map((lp) => ({ pedidoLineaId: lp.id, cantidadExpedida: pendiente(lp) }));
-  }
-  return [];
-}
 
 /** El centro de `app_centros` cuyo nombre coincide con la localidad del destino. */
 async function centroDe(empresaId: string, localidad: string | null): Promise<repo.Centro | null> {
