@@ -215,6 +215,13 @@ export const subirAlbaranDelCorreo = (id: string, archivo: File) => {
 
 export const reprocesarCorreo = (id: string) =>
   pedir<{ correoId: string; resultado: string; motivo: string | null; pedidoId: string | null; albaranId: string | null }>(`/correo/${id}/reprocesar`, json({}));
+
+/** Repasa de una vez toda la cola de correos en revisión. */
+export const reprocesarPendientes = () =>
+  pedir<{ mirados: number; arreglados: number; resultados: { correoId: string; resultado: string; motivo: string | null }[] }>(
+    "/correo/reprocesar-pendientes",
+    json({})
+  );
 export const descargarOriginal = (albaranId: string, enlace?: string) =>
   pedir<{ documento: FichaAlbaran["documentos"][number] }>(`/albaranes/${albaranId}/original/descargar`, json({ enlace }));
 
