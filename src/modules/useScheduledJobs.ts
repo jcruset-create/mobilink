@@ -242,13 +242,17 @@ export function useScheduledJobs({
     saveVersion: number
   ): Promise<boolean> {
     try {
+      // 30 s y no los 8 por defecto: el servidor hace una consulta y un upsert
+      // POR CITA, y con doscientas citas en la agenda los 8 s se agotaban antes
+      // de que terminara. El navegador cortaba, esto devolvía false, y el
+      // trabajo quedaba creado con la cita sin marcar como llegada.
       const response = await fetchWithTimeout(`${API_BASE}/api/scheduled-jobs`, {
         method: "PUT",
         headers: getAdminHeaders({
           "Content-Type": "application/json",
         }),
         body: JSON.stringify(items),
-      });
+      }, 30_000);
 
       if (!response.ok) {
         const text = await response.text();
@@ -902,10 +906,25 @@ export function useScheduledJobs({
       // persista en backend aunque el usuario recargue la página enseguida.
       scheduledJobsDirtyRef.current = true;
       scheduledJobsSaveVersionRef.current += 1;
-      const agendaGuardada = await saveScheduledJobsToBackend(
-        updatedScheduledJobs,
+      /*
+       * Solo la cita que cambia, no la agenda entera. El PUT es un upsert por
+       * elemento, así que una sola cita basta; mandar las doscientas era lo
+       * que agotaba el tiempo y dejaba el trabajo creado con la cita sin
+       * marcar. Y si falla igualmente, un segundo intento antes de avisar: un
+       * corte de red de un segundo no tiene por qué acabar en un aviso.
+       */
+      const soloEsta = updatedScheduledJobs.filter((s) => s.id === currentScheduled.id);
+      let agendaGuardada = await saveScheduledJobsToBackend(
+        soloEsta,
         scheduledJobsSaveVersionRef.current
       );
+      if (!agendaGuardada) {
+        await new Promise((r) => setTimeout(r, 1500));
+        agendaGuardada = await saveScheduledJobsToBackend(
+          soloEsta,
+          scheduledJobsSaveVersionRef.current
+        );
+      }
 
       // Si esto falla, el trabajo existe pero la cita sigue "programada" en el
       // servidor: al recargar volvería a aparecer en LLEGADAS. Mejor avisar que
