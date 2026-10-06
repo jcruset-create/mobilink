@@ -2,6 +2,7 @@
 import { apiFetch } from "../modules/apiFetch";
 import { useEffect, useState } from "react";
 import { formatoEntradaParte, resumenTarjeta } from "../modules/tarjetaTrabajo";
+import PuntoEnCola from "./PuntoEnCola";
 import { claseDeSituacion, situacionDeTecnico } from "../modules/colorEstadoTecnico";
 import { horaDeRecepcion, type RecepcionVehiculo } from "../modules/recepcionVehiculo";
 
@@ -374,10 +375,13 @@ function SmallJobCard({
   job,
   techs,
   getOperationLabel,
+  enCola = false,
 }: {
   job: JobForOperarios;
   techs: TechForOperarios[];
   getOperationLabel: (job: OperationLabelJob) => string;
+  /** En la cola lleva el punto rojo que late: alguien está esperando. */
+  enCola?: boolean;
 }) {
   const assignedNames = job.assignedNames || [];
   const linkedPhaseLabel = getLinkedPhaseLabel(job);
@@ -385,6 +389,7 @@ function SmallJobCard({
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-3">
       <div className="mb-1 flex items-center gap-2">
+        {enCola && <PuntoEnCola />}
         <span
           className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${getAreaClass(
             job.area
@@ -1677,6 +1682,7 @@ export default function OperariosTVView({
                     job={job}
                     techs={techs}
                     getOperationLabel={getOperationLabel}
+                    enCola
                   />
                 ))}
               </div>

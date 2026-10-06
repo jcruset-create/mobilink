@@ -1,6 +1,7 @@
 import { useState, type Dispatch, type SetStateAction } from "react";
 import AgendaView from "./AgendaView";
 import SelectorFurgoneta from "./SelectorFurgoneta";
+import PuntoEnCola from "./PuntoEnCola";
 import { esTecnicoDePrueba } from "../modules/tecnicosDePrueba";
 import { AREA_META } from "../modules/workshopConstants";
 import { API_BASE, deleteScheduledJobFromBackend, fetchWithTimeout } from "../modules/workshopApi";
@@ -779,7 +780,7 @@ export default function Operativo2View({
               <div className="mt-1 space-y-1 text-[11px] text-slate-700 dark:text-slate-300">
                 {waitingJobs.length === 0 ? <span className="text-slate-500">Vacía</span> : waitingJobs.slice(0, 8).map((j) => (
                   <div key={j.id} className="rounded bg-slate-100 dark:bg-slate-900 p-1.5">
-                    <div>{j.plate} <span className="text-slate-500">· {getOperationLabel(j)}</span></div>
+                    <div><PuntoEnCola />{j.plate} <span className="text-slate-500">· {getOperationLabel(j)}</span></div>
                     <div className="mt-1 flex gap-1">
                       <select
                         defaultValue=""
