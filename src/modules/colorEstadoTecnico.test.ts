@@ -17,12 +17,14 @@ describe("situacionDeTecnico", () => {
     expect(claseDeSituacion(situacionDeTecnico("vacaciones"))).toContain("bg-orange-200");
     expect(claseDeSituacion(situacionDeTecnico("permiso"))).toContain("bg-orange-200");
   });
-  it("otro taller y asistencias fuera son azul", () => {
+  it("otro taller y mantenimiento fuera son azul", () => {
     expect(claseDeSituacion(situacionDeTecnico("otro_taller"))).toContain("bg-blue-200");
-    expect(claseDeSituacion(situacionDeTecnico("disponible", { enAsistencia: true }))).toContain("bg-blue-200");
     expect(claseDeSituacion(situacionDeTecnico("disponible", { mantenimientoFuera: true }))).toContain("bg-blue-200");
   });
-  it("lo de fuera manda sobre el estado guardado", () => {
-    expect(situacionDeTecnico("ocupado", { enAsistencia: true })).toBe("fuera");
+  it("una asistencia en carretera es trabajar: verde", () => {
+    expect(claseDeSituacion(situacionDeTecnico("disponible", { enAsistencia: true }))).toContain("bg-green-200");
+  });
+  it("un trabajo activo manda sobre una ficha que diga «disponible»", () => {
+    expect(situacionDeTecnico("disponible", { trabajando: true })).toBe("trabajando");
   });
 });
