@@ -72,6 +72,16 @@ services:
         sync: false
       - key: TWILIO_JOB_FINISHED_CONTENT_SID
         sync: false
+      # Recepciones · los dos avisos de WhatsApp. Cada uno es el Content SID de
+      # su plantilla aprobada en Twilio; el texto que hay que dar de alta se
+      # copia de la pantalla Recepciones → Avisos, que lo sirve desde el mismo
+      # código que compone el mensaje. Sin el SID el aviso sale en texto plano,
+      # que WhatsApp sólo deja pasar si el destinatario escribió primero.
+      - key: RECEPCIONES_WHATSAPP_CONTENT_SID
+        sync: false
+      # El que avisa a recepción de que ha entrado un albarán SIN su PDF.
+      - key: RECEPCIONES_WHATSAPP_SID_FALTA_ALBARAN
+        sync: false
       # Bucket de evidencias (fotos y firmas de asistencias, tambien las de Lite)
       - key: SUPABASE_ROADSIDE_BUCKET
         value: roadside
