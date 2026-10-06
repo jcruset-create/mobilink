@@ -7,7 +7,7 @@ import { API_BASE, deleteScheduledJobFromBackend, fetchWithTimeout } from "../mo
 import { getAdminHeaders } from "../modules/adminHeaders";
 import { formatMinutes } from "../modules/time";
 import { getOperationLabel, getWorkedMinutes } from "../modules/jobHelpers";
-import { canAssignTechManuallyToJob, canSelectTechManuallyForJob } from "../modules/assignment";
+import { canAssignTechManuallyToJob, canSelectTechManuallyForJob, motivoNoAsignable } from "../modules/assignment";
 import { isHardBlockedTechStatus } from "../modules/techStatus";
 import { isManualUnavailableStatus } from "../modules/techSync";
 import { tecnicosNoDisponibles } from "../modules/tecnicosNoDisponibles";
@@ -794,6 +794,20 @@ export default function Operativo2View({
                       </select>
                       <button type="button" onClick={() => deleteWaitingJob(j.id)} className="shrink-0 rounded border border-rose-400/40 bg-rose-400/10 px-1.5 py-0.5 text-[10px] font-bold text-rose-700 dark:text-rose-300">Eliminar</button>
                     </div>
+                    {(() => {
+                      // Si nadie sale en «Asignar…», decir por qué: un desplegable
+                      // vacío con tres técnicos libres en pantalla parece un fallo.
+                      const candidatos = visibleTechs.filter((t) => !isTestTech(t.name) && !roadsideBusyTechNames.has(t.name) && !t.blocked && !isHardBlockedTechStatus(t.status) && !isManualUnavailableStatus(t.status) && !isTechBlockedByOutsideMaintenance(t.name));
+                      if (candidatos.some((t) => canAssignTechManuallyToJob(t, j, jobs, quickTemplates, "responsable"))) return null;
+                      const motivos = candidatos
+                        .map((t) => ({ n: t.name, m: motivoNoAsignable(t, j, jobs, quickTemplates, "responsable") }))
+                        .filter((x) => x.m);
+                      return (
+                        <div className="mt-1 rounded border border-amber-400/40 bg-amber-400/10 px-1.5 py-1 text-[10px] text-amber-800 dark:text-amber-200">
+                          Nadie se puede asignar: {motivos.length === 0 ? "no hay técnicos en este taller." : motivos.map((x) => `${x.n} (${x.m})`).join(" · ")}
+                        </div>
+                      );
+                    })()}
                   </div>
                 ))}
               </div>

@@ -1187,6 +1187,11 @@ export default function OperariosTVView({
   }
 
   const activeJobs = jobs.filter((job) => job.status === "activo");
+  // Las asistencias en carretera que alguien está haciendo ahora mismo. Son
+  // trabajo igual que lo del foso, y salen en la misma columna.
+  const asistenciasEnCurso = roadsideAssistances.filter(
+    (a) => a.assignedTechName && ROADSIDE_STATUS_LABELS[a.status] != null
+  );
   const validationJobs = jobs.filter((job) => job.status === "validacion");
   const standByJobs = jobs.filter((job) => job.status === "parado");
   const waitingJobs = jobs.filter((job) => job.status === "espera");
@@ -1256,17 +1261,47 @@ export default function OperariosTVView({
             <h2 className="text-xl font-black">Trabajos asignados</h2>
 
             <span className="rounded-full bg-slate-100 px-3 py-1 text-sm font-bold text-slate-600">
-              {activeJobs.length + pendingAssignedMaintenanceTasks.length}
+              {activeJobs.length + asistenciasEnCurso.length + pendingAssignedMaintenanceTasks.length}
             </span>
           </div>
 
           {activeJobs.length === 0 &&
+          asistenciasEnCurso.length === 0 &&
           pendingAssignedMaintenanceTasks.length === 0 ? (
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
               No hay trabajos activos ni tareas de mantenimiento asignadas.
             </div>
           ) : (
             <div className="grid gap-3 2xl:grid-cols-2">
+              {asistenciasEnCurso.map((a) => {
+                const tech = techs.find((t) => t.name === a.assignedTechName);
+                return (
+                  <div
+                    key={`asist-${a.id}`}
+                    className="rounded-3xl border border-emerald-200 bg-emerald-50 p-4"
+                  >
+                    <div className="mb-3 flex flex-wrap gap-3">
+                      <div className="flex items-center gap-3 rounded-2xl bg-white px-3 py-2 shadow-sm">
+                        <TechAvatar tech={tech} size="large" />
+                        <div className="text-2xl font-black">{a.assignedTechName}</div>
+                      </div>
+                    </div>
+                    <div className="mb-1 flex items-center gap-2">
+                      <span className="rounded-full bg-emerald-200 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-900">
+                        Asistencia carretera
+                      </span>
+                      <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-emerald-800">
+                        {ROADSIDE_STATUS_LABELS[a.status] ?? a.status}
+                        {a.etaMinutos != null ? ` · ETA ${a.etaMinutos} min` : ""}
+                      </span>
+                    </div>
+                    <div className="text-3xl font-black text-slate-950">{a.plate || "—"}</div>
+                    {a.customerName && (
+                      <div className="text-sm font-semibold text-emerald-900">{a.customerName}</div>
+                    )}
+                  </div>
+                );
+              })}
               {activeJobs.slice(0, 6).map((job) => {
                 const assignedNames = job.assignedNames || [];
                 const workedMinutes = getLiveWorkedMinutes(job, nowTick);
@@ -1657,18 +1692,26 @@ export default function OperariosTVView({
 
           <div className="space-y-2">
             {techs.map((tech) => {
+              // Por `currentJobId` y, si la ficha no lo lleva, por los trabajos
+              // activos que lo tienen asignado: la ficha puede decir
+              // «disponible» con un camión en el foso, y la pantalla tiene que
+              // decir lo que pasa, no lo que dice la ficha.
               const currentJob =
-                tech.currentJobId != null
+                (tech.currentJobId != null
                   ? jobs.find((job) => job.id === tech.currentJobId)
-                  : null;
+                  : null) ??
+                activeJobs.find((job) => (job.assignedNames || []).includes(tech.name)) ??
+                null;
 
               const activeRoadsideAssistance =
-                tech.currentRoadsideAssistanceId != null
+                (tech.currentRoadsideAssistanceId != null
                   ? roadsideAssistances.find(
                       (assistance) =>
                         assistance.id === tech.currentRoadsideAssistanceId
                     )
-                  : null;
+                  : null) ??
+                asistenciasEnCurso.find((a) => a.assignedTechName === tech.name) ??
+                null;
 
               const validationProposal = jobs.find(
                 (job) =>
@@ -1699,6 +1742,7 @@ export default function OperariosTVView({
                     mantenimientoFuera: Boolean(pendingOutsideMaintenanceTask),
                     mantenimientoEnTaller: Boolean(pendingWorkshopMaintenanceTask),
                     reservadoParaValidar: Boolean(isReservedForValidation),
+                    trabajando: Boolean(currentJob),
                   })}`}
                 >
                   <div className="flex items-center justify-between gap-2">
@@ -1749,6 +1793,8 @@ export default function OperariosTVView({
                           ? "MANT. TALLER"
                           : isReservedForValidation
                           ? "RESERVADO"
+                          : currentJob
+                          ? "OCUPADO"
                           : getTechStatusLabel(tech.status)}
                       </span>
                       {onSetWorkshopPin && (

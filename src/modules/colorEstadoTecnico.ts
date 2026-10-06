@@ -5,7 +5,8 @@
  * alguien puede coger trabajo. Por eso el libre es GRIS, no verde —verde
  * parecía «todo bien» y en realidad es «no está haciendo nada»— y el que
  * trabaja es verde. Rojo es baja, naranja vacaciones o permiso, azul está en
- * otro taller o en una asistencia fuera.
+ * otro taller o en un mantenimiento fuera; una asistencia en carretera es
+ * trabajar, y va en verde.
  */
 export type SituacionTecnico =
   | "libre"
@@ -23,10 +24,15 @@ export function situacionDeTecnico(
     mantenimientoFuera?: boolean;
     mantenimientoEnTaller?: boolean;
     reservadoParaValidar?: boolean;
+    /** Tiene un trabajo activo aunque su ficha diga «disponible». */
+    trabajando?: boolean;
   } = {}
 ): SituacionTecnico {
-  if (extra.enAsistencia || extra.mantenimientoFuera) return "fuera";
-  if (extra.mantenimientoEnTaller) return "trabajando";
+  // Una asistencia en carretera es TRABAJAR, no «estar fuera»: el técnico
+  // está en ello igual que el que tiene un camión en el foso. Azul queda para
+  // quien está en otro taller o en un mantenimiento fuera.
+  if (extra.enAsistencia || extra.mantenimientoEnTaller || extra.trabajando) return "trabajando";
+  if (extra.mantenimientoFuera) return "fuera";
   if (extra.reservadoParaValidar) return "reservado";
 
   switch (estadoNormalizado) {

@@ -129,6 +129,51 @@ export function canAssignTechManuallyToJob(
   return false;
 }
 
+/**
+ * Por qué NO se puede asignar este técnico a este trabajo, en una frase.
+ *
+ * `canAssignTechManuallyToJob` dice sí o no; esto dice por qué no. Hace
+ * falta porque el desplegable «Asignar…» de la cola se quedaba vacío sin
+ * explicación: con tres técnicos libres en pantalla y un trabajo de Móvil,
+ * nadie entendía por qué no salía ninguno. La respuesta era «no tienen
+ * competencia en Móvil» o «la plantilla solo permite a Fulano», y eso hay que
+ * decirlo donde se mira.
+ *
+ * Devuelve `null` si sí se puede.
+ */
+export function motivoNoAsignable(
+  tech: Tech,
+  job: Job,
+  jobs: Job[],
+  quickTemplates: QuickTemplate[],
+  role: AssignmentRole
+): string | null {
+  if (isHardBlockedTechStatus(tech.status)) return "bloqueado";
+  if (isTechUnavailableForAssignment(tech)) return "no disponible";
+
+  const targetKey = getCompetencyTargetKey(job, quickTemplates);
+  if (!tech.competencies[targetKey]?.[role]) {
+    const etiqueta = AREA_META[targetKey as AreaKey]?.label ?? targetKey;
+    return `sin competencia en ${etiqueta}`;
+  }
+
+  const templateConfig = getQuickTemplateForJob(job, quickTemplates);
+  if (
+    templateConfig &&
+    templateConfig.allowedTechs.length > 0 &&
+    !templateConfig.allowedTechs.includes(tech.name)
+  ) {
+    return `la plantilla solo permite a ${templateConfig.allowedTechs.join(", ")}`;
+  }
+
+  if (tech.currentJobId == null) {
+    if (tech.status === "disponible" || tech.status === "supervisor") return null;
+    return `estado «${tech.status}»`;
+  }
+  if (role === "responsable" && canExtractSupportFromJob(tech, jobs)) return null;
+  return "ocupado";
+}
+
 export function canSelectTechManuallyForJob(
   tech: Tech,
   job: Job,
