@@ -819,3 +819,97 @@ describe("partirFilasSeguidas", () => {
     expect(partirFilasSeguidas("").filas).toEqual([]);
   });
 });
+
+/**
+ * El albarán real B /2028546987, del 05/10/2026, que se quedó en revisión con
+ * «el pedido 5744808 no existe y el albarán no trae líneas legibles».
+ *
+ * Son DOS filas pegadas en un renglón y detrás un hueco. Como el bloque es una
+ * sola línea, antes se daba por buena la lectura de `filaDeTabla`, que casa de
+ * punta a punta con el ÚLTIMO importe y mete la segunda fila dentro de la
+ * descripción de la primera. Esa descripción llevaba «NFU», el filtro de
+ * conceptos la tiraba, y el albarán se quedaba sin una sola línea.
+ */
+const ALBARAN_DOS_FILAS_PEGADAS = `Estimado COMERCIAL SEA, S.A.,
+tu pedido 5744808 ha sido emitido por nuestro centro logístico y la
+entrega se realizará a través de TRANSAHER.
+
+El pedido será entregado a:
+COMERCIAL SEA, S.A.
+PI RIU CLAR C/COURE 27,
+43006 TARRAGONA
+TARRAGONA ESPAÑA
+
+El contenido del pedido es:
+
+Cantidad
+Descripción
+Importe
+4.00 315/80X22.5 SAILUN DELIV.D156L 255.78 4.00 S.I.Gestión de NFU Cat.D2T 12.18
+
+Pulsar enlace para ver albarán adjunto.
+[https://ws.gruposoledad.com/b2b?serviceName=descargarAlbaran&message=execute]
+
+Un saludo,
+
+Grupo Soledad
+`;
+
+describe("albarán con dos filas pegadas y nada detrás", () => {
+  const r = parsearCorreo("Emisión de Albarán B /2028546987 con fecha 05/10/2026.", ALBARAN_DOS_FILAS_PEGADAS);
+
+  it("la lectura de una sola fila era la trampa: se traga la segunda", () => {
+    const leida = filaDeTabla("4.00 315/80X22.5 SAILUN DELIV.D156L 255.78 4.00 S.I.Gestión de NFU Cat.D2T 12.18");
+    expect(leida!.descripcion).toContain("255.78");
+    // Y con «NFU» dentro, el filtro de conceptos la tiraba entera.
+    expect(esConcepto(leida!)).toBe(true);
+  });
+
+  it("partidas, cada fila vuelve a su sitio", () => {
+    expect(recomponerFilas(ALBARAN_DOS_FILAS_PEGADAS.split("\n"))).toContain("4.00 315/80X22.5 SAILUN DELIV.D156L 255.78");
+    expect(recomponerFilas(ALBARAN_DOS_FILAS_PEGADAS.split("\n"))).toContain("4.00 S.I.Gestión de NFU Cat.D2T 12.18");
+  });
+
+  it("y el albarán trae su mercancía, sin el NFU", () => {
+    expect(r.tipo).toBe("ALBARAN");
+    expect(r.albaran!.numeroPedido).toBe("5744808");
+    expect(r.albaran!.lineas.map((l) => [l.cantidad, l.descripcion, l.precioCentimos])).toEqual([
+      [4, "315/80X22.5 SAILUN DELIV.D156L", 25578],
+    ]);
+  });
+});
+
+/**
+ * Los siete albaranes que estaban atascados en la bandeja el 06/10/2026,
+ * copiados del motivo que los dejó en revisión. Todos la misma forma: el
+ * artículo y su gestión de NFU pegados en un renglón.
+ *
+ * Están los siete y no uno de muestra a propósito: lo que los partía mal no
+ * era el artículo sino la cantidad de maneras de escribirlo —«12X22.5»,
+ * «GYEAR.EFFIG.PERF.82V», «RO.CT8 110T108», «BLURESP.93WXL»—, y es ahí donde
+ * una forma de fila se tuerce.
+ */
+const PEGADAS_REALES = [
+  "2.00 12X22.5 HANKOOK DM09 152K148 394.57 2.00 S.I.Gestión de NFU Cat.D2T 12.18",
+  "2.00 185/55X15 GYEAR.EFFIG.PERF.82V 42.12 2.00 S.I.Gestión de NFU Cat.N2 1.80",
+  "8.00 385/65X22.5 MICH.XTE3 160J 463.00 8.00 S.I.Gestión de NFU Cat.N4 12.29",
+  "10.00 195/75X16 NEXEN RO.CT8 110T108 58.96 10.00 S.I.Gestión de NFU Cat.CT 1.80",
+  "1.00 205/50X17 DUNLOP BLURESP.93WXL 73.63 1.00 S.I.Gestión de NFU Cat.N2 1.80",
+  "4.00 315/80X22.5 SAILUN DELIV.D156L 255.78 4.00 S.I.Gestión de NFU Cat.D2T 12.18",
+  "2.00 385/65X22.5 SAILUN SFR1 160K 270.12 2.00 S.I.Gestión de NFU Cat.D2T 12.18",
+];
+
+describe("los albaranes que se quedaron en la bandeja", () => {
+  for (const pegada of PEGADAS_REALES) {
+    it(`parte «${pegada.slice(0, 40)}…» en sus dos filas`, () => {
+      const { filas, resto } = partirFilasSeguidas(pegada);
+      expect(filas).toHaveLength(2);
+      expect(resto).toBe("");
+      expect(filas[1]).toContain("NFU");
+      // Y por el camino de verdad: dentro del cuerpo, con el hueco detrás que
+      // es justo lo que impedía intentar la partición.
+      const cuerpo = ["El contenido del pedido es:", "", "Cantidad", "Descripción", "Importe", pegada, "", "Pulsar enlace para ver albarán adjunto."];
+      expect(recomponerFilas(cuerpo)).toContain(filas[0]);
+    });
+  }
+});
