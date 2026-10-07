@@ -136,7 +136,7 @@ export default function PlanningAusenciasPage() {
 
   function celdaClase(c: CeldaDia, i: number) {
     const d = dias[i];
-    const base = ["h-8 w-[13px] min-w-[13px] border-b border-slate-700"];
+    const base = ["h-8 w-[16px] min-w-[16px] border-b border-slate-700"];
     if (d.dia === 1) base.push("border-l border-l-slate-600");
     if (c.estado) {
       base.push(COLOR[c.estado]);
@@ -219,7 +219,7 @@ export default function PlanningAusenciasPage() {
                     key={d.fecha}
                     title={d.motivo ?? undefined}
                     className={[
-                      "h-3.5 w-[13px] min-w-[13px] font-mono text-[9px] font-semibold",
+                      "h-3.5 w-[16px] min-w-[16px] font-mono text-[9px] font-semibold",
                       d.dia === 1 ? "border-l border-l-slate-600" : "",
                       d.cerrado ? "bg-slate-500/30 text-slate-300" : d.finde ? "bg-slate-500/10 text-slate-500" : "text-slate-400",
                     ].join(" ")}
@@ -235,13 +235,13 @@ export default function PlanningAusenciasPage() {
                     data-hoy={d.hoy ? "1" : undefined}
                     title={d.motivo ?? undefined}
                     className={[
-                      "h-4 w-[13px] min-w-[13px] border-b border-slate-700 font-mono text-[9px] font-medium text-slate-500",
+                      "h-4 w-[16px] min-w-[16px] border-b border-slate-700 font-mono text-[9px] font-medium text-slate-500",
                       d.dia === 1 ? "border-l border-l-slate-600" : "",
                       d.cerrado ? "bg-slate-500/30 text-slate-200" : d.finde ? "bg-slate-500/10" : "",
                       d.hoy ? "shadow-[inset_0_-3px_0_#22c55e]" : "",
                     ].join(" ")}
                   >
-                    {d.dia % 2 ? d.dia : ""}
+                    {d.dia}
                   </th>
                 ))}
               </tr>
