@@ -11,6 +11,7 @@ import PlanningAusenciasPage from "./PlanningAusenciasPage";
 import PartesTrabajoPage from "./PartesTrabajoPage";
 import RecepcionesPage from "./RecepcionesPage";
 import { supabase } from "../administracion/services/supabase";
+import { useEsAdministrador } from "../esAdministrador";
 import VersionDesplegada from "../../components/VersionDesplegada";
 
 /** Clave del módulo en app_licencias / app_usuario_modulos. */
@@ -117,48 +118,6 @@ function SinLicencia() {
  *
  * Devuelve null mientras carga, true/false una vez resuelto.
  */
-/**
- * Administrador del panel. Se apoya en el rol guardado en el login del panel
- * (`sea-role`), que es el mismo que gobierna las herramientas de admin dentro
- * de Operativo, y en el superadmin de plataforma.
- */
-function useEsAdmin() {
-  const [esAdmin, setEsAdmin] = useState(
-    () => localStorage.getItem("sea-role") === "admin"
-  );
-
-  useEffect(() => {
-    let activo = true;
-
-    (async () => {
-      if (localStorage.getItem("sea-role") === "admin") {
-        if (activo) setEsAdmin(true);
-        return;
-      }
-
-      try {
-        const { data } = await supabase.auth.getSession();
-        const user = data.session?.user;
-        if (!user) return;
-
-        const { data: u } = await supabase
-          .from("app_usuarios")
-          .select("es_superadmin")
-          .eq("id", user.id)
-          .maybeSingle();
-
-        if (activo && u?.es_superadmin) setEsAdmin(true);
-      } catch {
-        // Sin tablas SaaS: se queda con lo que diga el rol del panel.
-      }
-    })();
-
-    return () => { activo = false; };
-  }, []);
-
-  return esAdmin;
-}
-
 function useAccesoWorkplanner() {
   const [permitido, setPermitido] = useState<boolean | null>(null);
 
@@ -218,7 +177,7 @@ function useAccesoWorkplanner() {
 export default function WorkPlannerApp() {
   const navigate = useNavigate();
   const permitido = useAccesoWorkplanner();
-  const esAdmin = useEsAdmin();
+  const esAdmin = useEsAdministrador();
   /*
    * Commit que está corriendo en el servidor. Se pregunta una vez al abrir:
    * es lo que permite responder «¿está desplegado el arreglo?» sin depender

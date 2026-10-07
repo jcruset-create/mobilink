@@ -9,6 +9,7 @@ import React, {
 import AgendaView from "./components/AgendaView";
 import QuickTemplateEditor from "./components/QuickTemplateEditor";
 import Operativo2View from "./components/Operativo2View";
+import { useEsAdministrador } from "./modules/esAdministrador";
 import { useRecepcionesPendientes } from "./modules/useRecepcionesPendientes";
 import { idsDeCitasYaRecibidas } from "./modules/recepcionVehiculo";
 import { esTecnicoDePrueba } from "./modules/tecnicosDePrueba";
@@ -322,6 +323,10 @@ const [loginPassword, setLoginPassword] = useState("");
 const [loginError, setLoginError] = useState("");
 const [loginLoading, setLoginLoading] = useState(false);
 const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
+// Programar el estado de un técnico es cosa de administradores: misma regla
+// que decide quién ve Personal y Ausencias.
+const esAdministrador = useEsAdministrador();
+
 const [userRole, setUserRole] = useState<UserRole | null>(() => {
   const stored = localStorage.getItem("sea-role");
 
@@ -4765,6 +4770,7 @@ if (view === "entradas2" && canView("entradas2")) {
 }
 const operativo2Element = (
   <Operativo2View
+    puedeEditarEstadoTecnico={esAdministrador}
     userName={userName}
     setView={setView}
     canView={canView}
@@ -4835,6 +4841,7 @@ const operativo2Element = (
 if (view === "agenda" && canView("agenda")) {
   return (
     <AgendaView
+  puedeEditarEstadoTecnico={esAdministrador}
   scheduledJobs={agenda.scheduledJobs}
   setScheduledJobs={agenda.setScheduledJobsAndSave}
   quickTemplates={visibleQuickTemplates}
@@ -4858,6 +4865,7 @@ if (view === "agenda2" && (canView("agenda2") || canView("agenda"))) {
   return (
     <AgendaView
   dark
+  puedeEditarEstadoTecnico={esAdministrador}
   scheduledJobs={agenda.scheduledJobs}
   setScheduledJobs={agenda.setScheduledJobsAndSave}
   quickTemplates={visibleQuickTemplates}
