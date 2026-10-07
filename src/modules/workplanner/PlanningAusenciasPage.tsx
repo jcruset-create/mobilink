@@ -28,6 +28,9 @@ import {
 
 const MESES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
 
+/** Inicial del día de la semana, de lunes a domingo (X para no repetir la M). */
+const DIAS_SEMANA = ["L", "M", "X", "J", "V", "S", "D"];
+
 /** A partir de cuántos técnicos fuera el día se pinta en rojo. */
 const UMBRAL_ROJO = 3;
 
@@ -203,9 +206,26 @@ export default function PlanningAusenciasPage() {
           <table className="border-separate border-spacing-0 text-[11px]">
             <thead>
               <tr>
-                <th rowSpan={2} className="sticky left-0 z-20 min-w-[170px] border-b border-r-2 border-slate-600 bg-slate-800 px-2 text-left text-xs font-semibold">Técnico</th>
+                <th rowSpan={3} className="sticky left-0 z-20 min-w-[170px] border-b border-r-2 border-slate-600 bg-slate-800 px-2 text-left text-xs font-semibold">Técnico</th>
                 {MESES.map((m, i) => (
                   <th key={m} colSpan={colsPorMes[i]} className="border-b border-l-2 border-slate-600 px-1.5 pb-0.5 pt-1.5 text-left text-[11px] font-bold uppercase tracking-wide text-slate-300">{m}</th>
+                ))}
+              </tr>
+              {/* Inicial del día de la semana encima del número: sin esto hay que
+                  contar columnas para saber si un rango cae en laborables. */}
+              <tr>
+                {dias.map((d) => (
+                  <th
+                    key={d.fecha}
+                    title={d.motivo ?? undefined}
+                    className={[
+                      "h-3.5 w-[13px] min-w-[13px] font-mono text-[9px] font-semibold",
+                      d.dia === 1 ? "border-l border-l-slate-600" : "",
+                      d.cerrado ? "bg-slate-500/30 text-slate-300" : d.finde ? "bg-slate-500/10 text-slate-500" : "text-slate-400",
+                    ].join(" ")}
+                  >
+                    {DIAS_SEMANA[d.semana]}
+                  </th>
                 ))}
               </tr>
               <tr>

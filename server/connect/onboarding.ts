@@ -22,6 +22,7 @@
 import db from "../db.ts";
 import { cargarTarifario } from "./pricing/tarifario.ts";
 import { plantilla } from "./pricing/plantillas/index.ts";
+import { randomUUID } from "node:crypto";
 
 export class ErrorPuestaEnMarcha extends Error {
   constructor(readonly codigo: string, mensaje: string, readonly estado = 400) {
@@ -48,6 +49,19 @@ export interface NuevoCentro {
  * unificada, igual que todos. Si el correo ya existe en otra central no se
  * toca —sería robarle el usuario a la otra— y se avisa.
  */
+/**
+ * El identificador público de una central.
+ *
+ * Antes era `cc-${now}-${now % 100000}`: las dos mitades salían del MISMO
+ * reloj, así que la segunda no añadía nada y dos centrales creadas en el mismo
+ * milisegundo recibían el mismo uuid. La columna es UNIQUE, de modo que la
+ * segunda petición reventaba con un 500 sin explicación. No es teórico: pasaba
+ * en la CI cada vez que una prueba creaba dos centrales seguidas.
+ */
+function uuidDeCentro(now: number): string {
+  return `cc-${now}-${randomUUID().slice(0, 8)}`;
+}
+
 export async function crearCentro(n: NuevoCentro): Promise<{
   controlCenterId: number; adminCreado: boolean; aviso: string | null;
 }> {
@@ -64,7 +78,7 @@ export async function crearCentro(n: NuevoCentro): Promise<{
   const cc = await db.query(
     `INSERT INTO connect_control_centers (uuid, name, settings, "createdAtMs", "updatedAtMs")
      VALUES ($1,$2,$3,$4,$4) RETURNING id`,
-    [`cc-${now}-${Math.floor(now % 100000)}`, nombre,
+    [uuidDeCentro(now), nombre,
      JSON.stringify({ pais: n.pais ?? "ES", zonaHoraria: n.zonaHoraria ?? "Europe/Madrid",
                       moneda: n.moneda ?? "EUR" }), now],
   );
