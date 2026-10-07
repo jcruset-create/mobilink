@@ -278,6 +278,16 @@ type Props = {
 
   /** Aplica el "chrome" oscuro estilo Operativo 2 (usado por la pestaña Agenda 2). */
   dark?: boolean;
+
+  /**
+   * Programar el estado de un técnico (vacaciones, baja…) es cosa de
+   * administradores y superadministradores. Para el resto, la pestaña no
+   * aparece y las barras de «Todo el día» de estado no se pueden abrir.
+   *
+   * Por defecto NO se puede: si algún sitio se olvida de pasarlo, se queda
+   * fuera quien no debería entrar, en vez de al revés.
+   */
+  puedeEditarEstadoTecnico?: boolean;
 };
 
 const SLOT_MINUTES = 15;
@@ -665,6 +675,7 @@ export default function AgendaView({
   embeddedModalOnly = false,
   onClose,
   dark = false,
+  puedeEditarEstadoTecnico = false,
 }: Props) {
   /*
    * Vehículos recibidos en el patio y sin validar. Se piden aquí, igual que en
@@ -1039,6 +1050,12 @@ function openDateReminderModal() {
 // Abre el mismo modal en modo edición al pulsar sobre la barra de "Todo el día"
 // (por ejemplo "ANDRÉS · BAJA"), con los datos del recordatorio ya cargados.
 function openEditDateReminder(reminder: DateReminder) {
+  /*
+   * Esconder la pestaña no basta: a la barra de «DAVID · BAJA» se llega con un
+   * clic desde la propia agenda, y abriría el editor del estado igual.
+   */
+  if (reminder.kind === "tech_status" && !puedeEditarEstadoTecnico) return;
+
   setEditingReminderId(reminder.id);
 
   setReminderDraft({
@@ -2861,11 +2878,14 @@ appendLog(
       <p className="mt-1 text-sm text-slate-500">
         {editingReminderId != null
           ? "Cambia el técnico, el estado, las fechas o las observaciones y guarda."
-          : "Crea un recordatorio normal de agenda o programa el estado de un técnico durante un rango de fechas."}
+          : puedeEditarEstadoTecnico
+            ? "Crea un recordatorio normal de agenda o programa el estado de un técnico durante un rango de fechas."
+            : "Crea un recordatorio de agenda para un rango de fechas."}
       </p>
 
       <div className="mt-5 space-y-4">
-        <div className="grid gap-2 md:grid-cols-2">
+        {/* Sin permiso no hay nada que elegir: solo el recordatorio normal. */}
+        <div className={`grid gap-2 md:grid-cols-2 ${puedeEditarEstadoTecnico ? "" : "hidden"}`}>
           <button
             type="button"
             onClick={() =>
@@ -2909,7 +2929,7 @@ appendLog(
           </button>
         </div>
 
-        {reminderDraft.kind === "tech_status" ? (
+        {reminderDraft.kind === "tech_status" && puedeEditarEstadoTecnico ? (
           <>
             <div className="grid gap-3 md:grid-cols-2">
               <div>

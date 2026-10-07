@@ -90,6 +90,8 @@ export type Operativo2ViewProps = {
   reactivatePausedJob: (jobId: number) => Promise<void> | void;
   updateValidationResponsible: (jobId: number, responsibleName: string) => void;
   updateValidationPlate: (jobId: number, plate: string) => void;
+  /** Programar estados de técnico: solo administradores. Se pasa a la agenda. */
+  puedeEditarEstadoTecnico?: boolean;
   addValidationExtraSupport: (jobId: number, supportName: string) => void;
   removeValidationSupportByName: (jobId: number, nameToRemove: string) => void;
   authorizeProposedJob: (jobId: number) => Promise<void> | void;
@@ -222,6 +224,7 @@ export default function Operativo2View({
   reactivatePausedJob,
   updateValidationResponsible,
   updateValidationPlate,
+  puedeEditarEstadoTecnico = false,
   addValidationExtraSupport,
   removeValidationSupportByName,
   authorizeProposedJob,
@@ -858,6 +861,7 @@ export default function Operativo2View({
       {op2CitaOpen && (
         <AgendaView
           embeddedModalOnly
+          puedeEditarEstadoTecnico={puedeEditarEstadoTecnico}
           onClose={() => setOp2CitaOpen(false)}
           scheduledJobs={agenda.scheduledJobs}
           setScheduledJobs={agenda.setScheduledJobsAndSave}

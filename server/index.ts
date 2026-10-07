@@ -13193,7 +13193,13 @@ app.delete("/api/agenda-date-reminders/:id", requireSupervisorRole, async (req, 
   }
 });
 
-app.put("/api/scheduled-tech-statuses", requireSupervisorRole, async (req, res) => {
+/*
+ * Programar el estado de un técnico (vacaciones, baja, otro taller) es cosa de
+ * administradores: decide quién puede coger trabajo y alimenta el cuadro de
+ * vacaciones. Un supervisor ya no escribe aquí —antes sí—, y el superadmin de
+ * plataforma entra porque `getRoleFromRequestAsync` lo resuelve como "admin".
+ */
+app.put("/api/scheduled-tech-statuses", requireAdminRole, async (req, res) => {
   try {
     const items = Array.isArray(req.body) ? req.body : [];
 
@@ -13273,7 +13279,7 @@ app.put("/api/scheduled-tech-statuses", requireSupervisorRole, async (req, res) 
 });
 
 /** Borrado por elemento del estado programado de un técnico. */
-app.delete("/api/scheduled-tech-statuses/:id", requireSupervisorRole, async (req, res) => {
+app.delete("/api/scheduled-tech-statuses/:id", requireAdminRole, async (req, res) => {
   try {
     const id = String(req.params.id || "").trim();
     if (!id) return res.status(400).json({ error: "ID de estado no válido" });
