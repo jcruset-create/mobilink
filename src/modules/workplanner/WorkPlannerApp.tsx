@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import { Routes, Route, Navigate, NavLink, useNavigate } from "react-router-dom";
-import { Home, LogOut, CalendarClock, ClipboardList, CalendarDays, BarChart3, Settings, ShieldAlert, CalendarCheck, Network, TrendingUp, UserCheck, FileInput, MonitorSmartphone, ListChecks, CalendarX, Users, FileScan, CarFront } from "lucide-react";
+import { Home, LogOut, CalendarClock, ClipboardList, CalendarDays, BarChart3, Settings, ShieldAlert, CalendarCheck, Network, TrendingUp, UserCheck, FileInput, MonitorSmartphone, ListChecks, CalendarX,
+  CalendarRange, Users, FileScan, CarFront } from "lucide-react";
 import logoMobilink from "../../assets/logo-mobilink.png";
 import SeaTarragonaV1 from "../../SeaTarragonaV1";
 import PedidosErpPage from "./PedidosErpPage";
 import PlantillasChecklistPage from "./PlantillasChecklistPage";
 import AusenciasTecnicosPage from "./AusenciasTecnicosPage";
+import PlanningAusenciasPage from "./PlanningAusenciasPage";
 import PartesTrabajoPage from "./PartesTrabajoPage";
 import RecepcionesPage from "./RecepcionesPage";
 import { supabase } from "../administracion/services/supabase";
@@ -31,6 +33,8 @@ const SECCIONES = [
   { key: "plantillas", label: "Plantillas", icon: ListChecks, proximamente: false },
   // Cupos y ausencias del personal: solo para administradores.
   { key: "ausencias", label: "Ausencias", icon: CalendarX, proximamente: false, soloAdmin: true },
+  // El año entero de un vistazo: todos los técnicos, día a día. Solo lectura.
+  { key: "planning", label: "Planning anual", icon: CalendarRange, proximamente: false, soloAdmin: true },
   { key: "estadisticas", label: "Análisis y estadísticas", icon: BarChart3, proximamente: true },
   { key: "configuracion", label: "Configuración", icon: Settings, proximamente: true },
 ] as const;
@@ -365,6 +369,16 @@ export default function WorkPlannerApp() {
             element={
               esAdmin ? (
                 <AusenciasTecnicosPage />
+              ) : (
+                <Navigate to="/workplanner/operativo2" replace />
+              )
+            }
+          />
+          <Route
+            path="planning"
+            element={
+              esAdmin ? (
+                <PlanningAusenciasPage />
               ) : (
                 <Navigate to="/workplanner/operativo2" replace />
               )

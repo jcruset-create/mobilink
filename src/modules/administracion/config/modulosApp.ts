@@ -342,6 +342,7 @@ export const MODULOS_APP: ModuloApp[] = [
       { key: "plantillas", label: "Plantillas de checklist" },
       { key: "personal", label: "Personal (fichas y bajas)" },
       { key: "ausencias", label: "Ausencias y vacaciones" },
+      { key: "planning", label: "Planning anual de ausencias" },
       { key: "estadisticas", label: "Análisis y estadísticas" },
       { key: "configuracion", label: "Configuración" },
     ],
