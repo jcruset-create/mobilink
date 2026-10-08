@@ -191,6 +191,12 @@ function TarjetaConector({
   const [configText, setConfigText] = useState(JSON.stringify(row?.config ?? {}, null, 2));
   const [guardando, setGuardando] = useState(false);
   const [probando, setProbando] = useState(false);
+  // Sonda de combustible (solo telemática). Solo lee: ver fuelProbe.ts.
+  const [sondeando, setSondeando] = useState(false);
+  const [sonda, setSonda] = useState<null | {
+    vehiculosEnLaCuenta: number; vehiculosMirados: number; fallos: string[];
+    ficha: TramoSonda; actual: TramoSonda; historico: TramoSonda;
+  }>(null);
   const [mensaje, setMensaje] = useState<{ ok: boolean; texto: string } | null>(null);
 
   useEffect(() => {
@@ -234,6 +240,21 @@ function TarjetaConector({
       setMensaje({ ok: false, texto: e.message });
     } finally {
       setProbando(false);
+    }
+  };
+
+  const sondaCombustible = async () => {
+    setSondeando(true);
+    setSonda(null);
+    setMensaje(null);
+    try {
+      setSonda(await api(
+        `/api/v1/admin/telematics/${connectorKey}/fuel-probe?tenantId=${encodeURIComponent(tenantId)}&vehiculos=10`,
+        { method: "POST", body: "{}" }));
+    } catch (e: any) {
+      setMensaje({ ok: false, texto: e.message });
+    } finally {
+      setSondeando(false);
     }
   };
 
@@ -282,12 +303,55 @@ function TarjetaConector({
         >
           {probando ? "Probando…" : "Probar conexión"}
         </button>
+        {meta.kind === "telematics" && (
+          <button
+            onClick={sondaCombustible}
+            disabled={sondeando}
+            title="Solo lee: mira si la cuenta da litros de verdad. No guarda nada."
+            className="rounded-lg border border-amber-700 px-3 py-1.5 text-xs font-bold text-amber-200 hover:bg-amber-900/40 disabled:opacity-50"
+          >
+            {sondeando ? "Sondeando…" : "Sonda de combustible"}
+          </button>
+        )}
         {mensaje && (
           <span className={`text-[11px] ${mensaje.ok ? "text-emerald-300" : "text-rose-300"}`}>{mensaje.texto}</span>
         )}
       </div>
+      {sonda && (
+        <div className="mt-3 space-y-2 rounded-lg bg-slate-900 p-3 text-[11px] text-slate-300">
+          <div>
+            Vehículos en la cuenta: <b>{sonda.vehiculosEnLaCuenta}</b> · mirados: <b>{sonda.vehiculosMirados}</b>
+          </div>
+          {([["Ficha del vehículo", sonda.ficha], ["Lectura actual", sonda.actual], ["Histórico 24 h", sonda.historico]] as const)
+            .map(([titulo, t]) => (
+              <div key={titulo}>
+                <div className="font-bold text-slate-200">{titulo} · {t.lecturas} lecturas</div>
+                <div className="text-amber-200">{t.veredicto}</div>
+                {t.campos.length > 0 && (
+                  <ul className="ml-4 list-disc text-slate-400">
+                    {t.campos.map((c) => (
+                      <li key={c.campo}>
+                        <code>{c.campo}</code>: {c.conValor}/{c.apariciones} con valor
+                        {c.min != null && ` · ${c.min} … ${c.max}`}
+                        {c.noNumericas > 0 && ` · ${c.noNumericas} sin número`}
+                        {c.ejemplos.length > 0 && ` · ej.: ${c.ejemplos.join(", ")}`}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ))}
+          {sonda.fallos.length > 0 && <div className="text-rose-300">Fallos: {sonda.fallos.join(" · ")}</div>}
+        </div>
+      )}
     </div>
   );
+}
+
+interface TramoSonda {
+  lecturas: number; veredicto: string;
+  campos: { campo: string; apariciones: number; conValor: number; noNumericas: number;
+            min: number | null; max: number | null; ejemplos: (number | string)[] }[];
 }
 
 function PestanaConectores({ tenantId }: { tenantId: string }) {

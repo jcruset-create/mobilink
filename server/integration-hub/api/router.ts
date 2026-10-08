@@ -37,6 +37,7 @@ import {
 } from "../connectors/ConnectorRegistry.ts";
 import { IntegrationError } from "../domain/errors.ts";
 import { nextCorrelationId } from "../infrastructure/repositories.ts";
+import { inventarioCombustible, veredictoCombustible } from "../application/services/fuelProbe.ts";
 import {
   listOperations,
   getOperation,
@@ -403,6 +404,63 @@ export function createIntegrationHubRouter(): Router {
         return res.json({ key, accountKey: accountKey ?? "default", ...result });
       }
       return res.status(400).json({ error: "unsupported_connector", key });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // Sonda de combustible: ¿da litros de verdad esta cuenta de telemática?
+  //
+  // SOLO LEE. Pide la flota entera (una llamada) y el histórico de las últimas
+  // 24 h de unos pocos vehículos, y devuelve el inventario de campos de
+  // combustible con números agregados. Ni matrículas, ni identificadores, ni la
+  // respuesta cruda: eso no sale del servidor. Ver fuelProbe.ts.
+  router.post("/admin/telematics/:key/fuel-probe", async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const tenantId = tenantOf(req);
+      if (!tenantId) return res.status(400).json({ error: "missing_tenant" });
+      const key = req.params.key;
+      if (!knownTelematicsConnectorKeys().includes(key)) {
+        return res.status(400).json({ error: "unsupported_connector", key });
+      }
+      const accountKey = typeof req.query.accountKey === "string" ? req.query.accountKey : undefined;
+      const muestra = Math.min(Math.max(Number(req.query.vehiculos) || 5, 1), 15);
+      const connector = await buildTelematicsConnector(tenantId, key, accountKey);
+      const ctx = { tenantId, correlationId: await nextCorrelationId() };
+
+      const fallos: string[] = [];
+      const vehiculos = await connector.listVehicles(ctx)
+        .catch((e: Error) => { fallos.push(`vehículos: ${e.message}`); return []; });
+
+      const hasta = new Date();
+      const desde = new Date(hasta.getTime() - 24 * 3_600_000);
+      const actuales: unknown[] = [];
+      const historico: unknown[] = [];
+      for (const v of vehiculos.slice(0, muestra)) {
+        const a = await connector.getCurrentTelemetry(ctx, v.providerVehicleId)
+          .catch((e: Error) => { fallos.push(`actual: ${e.message}`); return null; });
+        if (a) actuales.push(a.raw ?? {});
+        const l = await connector.getTelemetryHistory(ctx, v.providerVehicleId, { from: desde, to: hasta })
+          .catch((e: Error) => { fallos.push(`histórico: ${e.message}`); return []; });
+        historico.push(...l.map((x) => x.raw ?? {}));
+      }
+
+      // La ficha del vehículo (listVehicles) también entra: en Movertis es
+      // donde vienen los contadores y los sensores.
+      const deFicha = inventarioCombustible(vehiculos.map((x) => (x as { raw?: unknown }).raw ?? {}));
+      const deActual = inventarioCombustible(actuales);
+      const deHistorico = inventarioCombustible(historico);
+      return res.json({
+        key, accountKey: accountKey ?? "default",
+        vehiculosEnLaCuenta: vehiculos.length,
+        vehiculosMirados: Math.min(vehiculos.length, muestra),
+        ficha: { lecturas: vehiculos.length, veredicto: veredictoCombustible(deFicha, vehiculos.length), campos: deFicha },
+        actual: { lecturas: actuales.length, veredicto: veredictoCombustible(deActual, actuales.length), campos: deActual },
+        historico: { lecturas: historico.length, veredicto: veredictoCombustible(deHistorico, historico.length), campos: deHistorico },
+        // Mensajes de error del conector, sin credenciales: ya los sanea él.
+        fallos: [...new Set(fallos)].slice(0, 5),
+      });
     } catch (err) {
       sendError(res, err);
     }
