@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { getAdminHeaders } from "../../adminHeaders";
+import { listarEmpresas } from "../../tyrecontrol/services/data";
 
 /**
  * Panel de integraciones del Mobilink Integration Hub (§2.11).
@@ -1033,6 +1034,16 @@ export default function PanelIntegraciones() {
     localStorage.setItem(TENANT_STORAGE_KEY, tenantId);
   }, [tenantId]);
 
+  // El tenant del Hub es el id de la empresa. Antes había que pegar ese código
+  // a mano en una casilla de texto, y nadie sabe de memoria un UUID: se elige
+  // por nombre. Si la lista no carga, se sigue pudiendo usar el que hubiera.
+  const [empresas, setEmpresas] = useState<{ id: string; nombre: string }[]>([]);
+  useEffect(() => {
+    listarEmpresas()
+      .then((e) => setEmpresas(e.map((x) => ({ id: x.id, nombre: x.nombre }))))
+      .catch(() => setEmpresas([]));
+  }, []);
+
   const pestanas = useMemo(
     () => [
       { id: "conectores" as const, label: "🔌 Conectores" },
@@ -1055,12 +1066,18 @@ export default function PanelIntegraciones() {
             </span>
           </div>
           <label className="flex items-center gap-2 text-[11px] text-slate-400">
-            Tenant
-            <input
+            Empresa
+            <select
               value={tenantId}
               onChange={(e) => setTenantId(e.target.value)}
-              className="w-28 rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-200"
-            />
+              className="max-w-[14rem] rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-200"
+            >
+              <option value="default">Por defecto (credenciales generales)</option>
+              {empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}
+              {tenantId !== "default" && !empresas.some((e) => e.id === tenantId) && (
+                <option value={tenantId}>{tenantId}</option>
+              )}
+            </select>
           </label>
         </div>
       </header>
