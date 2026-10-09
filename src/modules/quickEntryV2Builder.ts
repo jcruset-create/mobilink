@@ -53,7 +53,7 @@ function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-function getTemplateUnitMinutes(template: QuickTemplate): number {
+export function getTemplateUnitMinutes(template: QuickTemplate): number {
   return (
     toPositiveNumber(template.unitMinutes) ??
     toPositiveNumber(template.standardMinutes) ??
@@ -61,11 +61,11 @@ function getTemplateUnitMinutes(template: QuickTemplate): number {
   );
 }
 
-function getTemplateUnitPrice(template: QuickTemplate): number {
+export function getTemplateUnitPrice(template: QuickTemplate): number {
   return toPositiveNumber(template.unitPrice) ?? 0;
 }
 
-function getTemplateTotalMinutes(template: QuickTemplate, quantity: number) {
+export function getTemplateTotalMinutes(template: QuickTemplate, quantity: number) {
   const unitMinutes = getTemplateUnitMinutes(template);
 
   if (template.usesQuantity) {
@@ -75,7 +75,7 @@ function getTemplateTotalMinutes(template: QuickTemplate, quantity: number) {
   return Math.round(toPositiveNumber(template.standardMinutes) ?? unitMinutes);
 }
 
-function getTemplateTotalPrice(template: QuickTemplate, quantity: number) {
+export function getTemplateTotalPrice(template: QuickTemplate, quantity: number) {
   const unitPrice = getTemplateUnitPrice(template);
 
   if (template.usesQuantity) {

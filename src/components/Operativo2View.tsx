@@ -7,7 +7,7 @@ import { AREA_META } from "../modules/workshopConstants";
 import { API_BASE, deleteScheduledJobFromBackend, fetchWithTimeout } from "../modules/workshopApi";
 import { getAdminHeaders } from "../modules/adminHeaders";
 import { formatMinutes } from "../modules/time";
-import { getOperationLabel, getWorkedMinutes } from "../modules/jobHelpers";
+import { getOperationLabel, getQuickTemplateForJob, getWorkedMinutes } from "../modules/jobHelpers";
 import { canAssignTechManuallyToJob, canSelectTechManuallyForJob, motivoNoAsignable } from "../modules/assignment";
 import { isHardBlockedTechStatus } from "../modules/techStatus";
 import { isManualUnavailableStatus } from "../modules/techSync";
@@ -90,6 +90,8 @@ export type Operativo2ViewProps = {
   reactivatePausedJob: (jobId: number) => Promise<void> | void;
   updateValidationResponsible: (jobId: number, responsibleName: string) => void;
   updateValidationPlate: (jobId: number, plate: string) => void;
+  /** Corrige la operación de una entrada pendiente de validar. */
+  updateValidationOperacion: (jobId: number, templateKey: string) => void;
   /** Programar estados de técnico: solo administradores. Se pasa a la agenda. */
   puedeEditarEstadoTecnico?: boolean;
   addValidationExtraSupport: (jobId: number, supportName: string) => void;
@@ -224,6 +226,7 @@ export default function Operativo2View({
   reactivatePausedJob,
   updateValidationResponsible,
   updateValidationPlate,
+  updateValidationOperacion,
   puedeEditarEstadoTecnico = false,
   addValidationExtraSupport,
   removeValidationSupportByName,
@@ -546,7 +549,23 @@ export default function Operativo2View({
                     urgente={Boolean(job.urgent)}
                     onCambiar={(plate) => updateValidationPlate(job.id, plate)}
                   />
-                  <span className="text-[11px] text-slate-600 dark:text-slate-400">{getOperationLabel(job)}</span>
+                  {/* La operación se escoge rápido y se falla: aquí se corrige
+                      sin rehacer la entrada. Ver updateValidationOperacion. */}
+                  <select
+                    value={getQuickTemplateForJob(job, quickTemplates)?.key ?? ""}
+                    onChange={(e) => { if (e.target.value) updateValidationOperacion(job.id, e.target.value); }}
+                    title="Corregir la operación"
+                    className="max-w-[230px] rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-1.5 py-1 text-[11px]"
+                  >
+                    {getQuickTemplateForJob(job, quickTemplates) == null && (
+                      <option value="">{getOperationLabel(job)}</option>
+                    )}
+                    {quickTemplates
+                      .filter((p) => !p.workshopId || p.workshopId === selectedWorkshopId)
+                      .map((p) => (
+                        <option key={p.key} value={p.key}>{p.label}</option>
+                      ))}
+                  </select>
                   <select
                     value=""
                     onChange={(e) => { if (e.target.value) updateValidationResponsible(job.id, e.target.value); }}
