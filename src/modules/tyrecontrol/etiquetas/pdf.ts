@@ -1,5 +1,5 @@
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
-import { ETIQUETA, bloquesDeEtiqueta, type Caja } from "./medidas";
+import { ETIQUETA, bloquesParaImprimir, type Caja } from "./medidas";
 
 /**
  * La tirada de etiquetas, en PDF y a tamaño exacto.
@@ -111,8 +111,8 @@ export async function construirPdfEtiquetas(
     const qr = await pdf.embedPng(e.qrPng);
     const serie = e.serie.trim();
 
-    for (const b of bloquesDeEtiqueta(Math.max(serie.length, 1))) {
-      const caja = aPuntos(b.numero, ETIQUETA.alto, ETIQUETA.ajusteImpresora);
+    for (const b of bloquesParaImprimir(Math.max(serie.length, 1))) {
+      const caja = aPuntos(b.numero);
       // Se parte del tamaño calculado y se encoge hasta que la fuente real
       // quepa. Nunca al revés: crecer se lo comería el borde.
       let tamano = b.numero.tamano * MM;
@@ -131,7 +131,18 @@ export async function construirPdfEtiquetas(
         color: rgb(0, 0, 0),
       });
 
-      const cajaQr = aPuntos(b.qr, ETIQUETA.alto, ETIQUETA.ajusteImpresora);
+      if (b.rotulo) {
+        const cr = aPuntos(b.rotulo);
+        const tr = b.rotulo.tamano * MM;
+        const ar = fuente.widthOfTextAtSize(b.rotulo.texto, tr);
+        pagina.drawText(b.rotulo.texto, {
+          x: cr.x + (cr.ancho - ar) / 2,
+          y: cr.y + (cr.alto - fuente.heightAtSize(tr)) / 2 + fuente.heightAtSize(tr) * 0.18,
+          size: tr, font: fuente, color: rgb(0, 0, 0),
+        });
+      }
+
+      const cajaQr = aPuntos(b.qr);
       pagina.drawImage(qr, {
         x: cajaQr.x, y: cajaQr.y, width: cajaQr.ancho, height: cajaQr.alto,
       });

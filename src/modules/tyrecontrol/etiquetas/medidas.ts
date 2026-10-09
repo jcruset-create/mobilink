@@ -69,6 +69,20 @@ export const ETIQUETA = {
   ajusteImpresora: { x: 0, y: 3.5 },
 
   /**
+   * Y, encima de lo anterior, los dos QR pequeños de los troquelados bajan
+   * 1 mm más (pedido tras imprimir la tanda del 09/10/2026 con el ajuste de
+   * 3,5 mm ya puesto). Solo el QR: el número de esas subetiquetas se queda.
+   */
+  ajusteQrTroquelados: { x: 0, y: 1.0 },
+
+  /**
+   * «Nº de serie:» encima del número grande de arriba, en el margen que queda
+   * sobre la zona superior. En las subetiquetas NO: ahí se pidió quitarlo, y
+   * no cabe sin encoger el número.
+   */
+  rotulo: { texto: "Nº de serie:", tamano: 3.5, alto: 4.5 },
+
+  /**
    * Margen que se deja al borde de cada caja.
    *
    * Un troquelado nunca cae exacto y una impresora tampoco: 1,5 mm es lo que
@@ -105,6 +119,8 @@ export interface BloqueEtiqueta {
   numero: Caja & { tamano: number; centrado: boolean };
   /** El QR, siempre cuadrado. */
   qr: Caja;
+  /** Texto pequeño encima del número. Solo en la zona de arriba. */
+  rotulo?: Caja & { texto: string; tamano: number };
 }
 
 /**
@@ -226,6 +242,35 @@ export function bloquesDeEtiqueta(digitos = 13): BloqueEtiqueta[] {
     componerColumna(ETIQUETA.zonaSuperior, digitos),
     ...ETIQUETA.huecos.map((c) => componerFila(c, digitos)),
   ];
+}
+
+/** Una caja movida. */
+const mover = <T extends Caja>(c: T, d: { x: number; y: number }): T => ({ ...c, x: c.x + d.x, y: c.y + d.y });
+
+/**
+ * Los bloques TAL COMO SE IMPRIMEN: con las correcciones de la impresora.
+ *
+ * `bloquesDeEtiqueta` es la geometría del fabricante y es la que se comprueba
+ * contra el troquelado; esto es lo que de verdad se manda a imprimir, y lo
+ * usan las dos vías (el navegador y el PDF) para que no puedan diferir. La
+ * `caja` de cada bloque NO se mueve: es el troquelado, que está donde está.
+ */
+export function bloquesParaImprimir(digitos = 13): BloqueEtiqueta[] {
+  const a = ETIQUETA.ajusteImpresora;
+  const q = ETIQUETA.ajusteQrTroquelados;
+  const r = ETIQUETA.rotulo;
+  return bloquesDeEtiqueta(digitos).map((b, i) => {
+    const numero = mover(b.numero, a);
+    return {
+      caja: b.caja,
+      numero,
+      // El bloque 0 es la zona de arriba; los demás, los troquelados.
+      qr: mover(mover(b.qr, a), i === 0 ? { x: 0, y: 0 } : q),
+      ...(i === 0 ? {
+        rotulo: { x: numero.x, y: numero.y - r.alto, ancho: numero.ancho, alto: r.alto, tamano: r.tamano, texto: r.texto },
+      } : {}),
+    };
+  });
 }
 
 /** ¿Está esta caja entera dentro de aquella? Con la tolerancia de la décima. */

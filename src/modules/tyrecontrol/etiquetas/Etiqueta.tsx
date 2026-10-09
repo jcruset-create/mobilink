@@ -1,11 +1,5 @@
 import QRCode from "react-qr-code";
-import { ETIQUETA, bloquesDeEtiqueta, type BloqueEtiqueta } from "./medidas";
-
-/**
- * Lo mismo que en el PDF: lo impreso se desplaza para compensar la impresora.
- * Las cajas de prueba (marco) NO, porque dibujan el troquelado, que no se mueve.
- */
-const AJ = ETIQUETA.ajusteImpresora;
+import { ETIQUETA, bloquesParaImprimir, type BloqueEtiqueta } from "./medidas";
 
 /**
  * Una etiqueta de neumático, dibujada en MILÍMETROS.
@@ -41,11 +35,28 @@ export const cargaQr = (serie: string): string => serie.trim();
 function Bloque({ b, serie }: { b: BloqueEtiqueta; serie: string }) {
   return (
     <>
+      {b.rotulo && (
+        <div
+          style={{
+            position: "absolute",
+            left: `${b.rotulo.x}mm`, top: `${b.rotulo.y}mm`,
+            width: `${b.rotulo.ancho}mm`, height: `${b.rotulo.alto}mm`,
+            fontFamily: "'Courier New', Courier, monospace",
+            fontWeight: 700,
+            fontSize: `${b.rotulo.tamano}mm`,
+            lineHeight: `${b.rotulo.alto}mm`,
+            textAlign: "center",
+            whiteSpace: "nowrap",
+            color: "#000",
+          }}
+        >
+          {b.rotulo.texto}
+        </div>
+      )}
       <div
         style={{
           position: "absolute",
-          // Con la corrección de la impresora: la geometría no se toca.
-          left: `${b.numero.x + AJ.x}mm`, top: `${b.numero.y + AJ.y}mm`,
+          left: `${b.numero.x}mm`, top: `${b.numero.y}mm`,
           width: `${b.numero.ancho}mm`, height: `${b.numero.alto}mm`,
           // Courier New a propósito, y no `monospace` a secas: el genérico lo
           // resuelve cada sistema con una fuente distinta —Consolas en
@@ -67,7 +78,7 @@ function Bloque({ b, serie }: { b: BloqueEtiqueta; serie: string }) {
       <div
         style={{
           position: "absolute",
-          left: `${b.qr.x + AJ.x}mm`, top: `${b.qr.y + AJ.y}mm`,
+          left: `${b.qr.x}mm`, top: `${b.qr.y}mm`,
           width: `${b.qr.ancho}mm`, height: `${b.qr.alto}mm`,
         }}
       >
@@ -95,7 +106,8 @@ function Bloque({ b, serie }: { b: BloqueEtiqueta; serie: string }) {
  * punto.
  */
 export function Etiqueta({ serie, marco = false }: { serie: string; marco?: boolean }) {
-  const bloques = bloquesDeEtiqueta(Math.max(serie.trim().length, 1));
+  // Con las correcciones de la impresora; el marco usa b.caja, que no se mueve.
+  const bloques = bloquesParaImprimir(Math.max(serie.trim().length, 1));
   return (
     <div
       className="etiqueta"
