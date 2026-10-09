@@ -29,6 +29,17 @@ describe("seriesDeCodigoDeBarras", () => {
     expect(await seriesDeCodigoDeBarras(await pegatina("1945863269", 270))).toEqual(["1945863269"]);
   });
 
+  it("una pegatina PEQUEÑA, boca abajo y torcida en una foto grande", async () => {
+    // El caso real que fallaba: la pegatina ocupa poco, está a ~195° y sobre
+    // caucho oscuro. A la foto entera no se le saca nada; hay que localizar
+    // la pegatina, recortarla, ampliarla y enderezarla.
+    const etiqueta = await sharp(await pegatina("2640486081")).resize({ width: 260 }).toBuffer();
+    const girada = await sharp(etiqueta).rotate(195, { background: "#2b2f36" }).toBuffer();
+    const foto = await sharp({ create: { width: 2400, height: 1600, channels: 3, background: "#2b2f36" } })
+      .composite([{ input: girada, left: 1100, top: 700 }]).jpeg({ quality: 85 }).toBuffer();
+    expect(await seriesDeCodigoDeBarras(new Uint8Array(foto))).toEqual(["2640486081"]);
+  });
+
   it("una foto sin código no se inventa nada", async () => {
     const lisa = await sharp({ create: { width: 400, height: 300, channels: 3, background: "#333" } }).jpeg().toBuffer();
     expect(await seriesDeCodigoDeBarras(new Uint8Array(lisa))).toEqual([]);

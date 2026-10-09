@@ -42,20 +42,103 @@ export function pareceNumeroDeSerie(texto: string): boolean {
   return /^[A-Z0-9]{6,20}$/i.test(texto.trim()) && /\d/.test(texto);
 }
 
+/** Lee los códigos de una imagen ya preparada y se queda con los que parecen un serie. */
+async function leer(png: Buffer): Promise<string[]> {
+  const leidos = await readBarcodes(new Uint8Array(png), {
+    tryHarder: true, tryRotate: true, tryInvert: false, maxNumberOfSymbols: 4,
+  });
+  return [...new Set(leidos.map((r) => r.text.trim()).filter(pareceNumeroDeSerie))];
+}
+
+/** Una caja en la imagen original. */
+interface Caja { left: number; top: number; width: number; height: number }
+
+/**
+ * Dónde puede estar la pegatina: las manchas más blancas de la foto.
+ *
+ * Una pegatina blanca sobre caucho negro es lo más brillante de la imagen. Se
+ * busca a baja resolución (400 px de ancho, unos milisegundos), se toman las
+ * tres manchas más grandes y se devuelve un recorte GENEROSO alrededor de cada
+ * una: la pegatina casi nunca sale como una sola mancha, porque las barras y
+ * las cifras la parten, y quedarse corto cortaría el código.
+ *
+ * Se descartan las manchas que tocan el borde: suelen ser cielo, suelo
+ * mojado o el reflejo de una ventana, no una pegatina en mitad del flanco.
+ */
+export async function zonasDePegatina(imagen: Uint8Array): Promise<Caja[]> {
+  const meta = await sharp(imagen).rotate().metadata();
+  // .rotate() sin argumento aplica la orientación EXIF; con 90/270 cambian
+  // ancho y alto.
+  const girada = (meta.orientation ?? 1) >= 5;
+  const W = (girada ? meta.height : meta.width) ?? 0;
+  const H = (girada ? meta.width : meta.height) ?? 0;
+  if (!W || !H) return [];
+  const w = 400, esc = W / w, h = Math.max(1, Math.round(H / esc));
+  const { data } = await sharp(imagen).rotate().resize(w, h).grayscale().raw()
+    .toBuffer({ resolveWithObject: true });
+
+  // Umbral relativo a la propia foto: el 3 % más brillante, y nunca por debajo
+  // de un gris claro (en una foto muy oscura, el 3 % más brillante es caucho).
+  const orden = Uint8Array.from(data).sort();
+  const umbral = Math.max(170, orden[Math.floor(orden.length * 0.97)]);
+
+  const visto = new Uint8Array(w * h);
+  const manchas: { x0: number; y0: number; x1: number; y1: number; n: number }[] = [];
+  for (let p = 0; p < w * h; p++) {
+    if (visto[p] || data[p] < umbral) continue;
+    let x0 = w, y0 = h, x1 = 0, y1 = 0, n = 0;
+    const cola = [p];
+    visto[p] = 1;
+    while (cola.length) {
+      const q = cola.pop() as number;
+      const x = q % w, y = (q - x) / w;
+      n++;
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      for (const r of [x > 0 ? q - 1 : -1, x < w - 1 ? q + 1 : -1, q - w, q + w]) {
+        if (r >= 0 && r < w * h && !visto[r] && data[r] >= umbral) { visto[r] = 1; cola.push(r); }
+      }
+    }
+    if (n >= 30 && x0 > 0 && y0 > 0 && x1 < w - 1 && y1 < h - 1) manchas.push({ x0, y0, x1, y1, n });
+  }
+
+  return manchas.sort((a, b) => b.n - a.n).slice(0, 3).map((c) => {
+    const cx = ((c.x0 + c.x1) / 2) * esc, cy = ((c.y0 + c.y1) / 2) * esc;
+    const lado = Math.max((c.x1 - c.x0) * esc * 3, (c.y1 - c.y0) * esc * 3, Math.min(W, H) * 0.35);
+    const left = Math.max(0, Math.round(cx - lado / 2)), top = Math.max(0, Math.round(cy - lado / 2));
+    return { left, top, width: Math.min(W - left, Math.round(lado)), height: Math.min(H - top, Math.round(lado)) };
+  });
+}
+
 /**
  * Los números de serie que hay en los códigos de barras de la foto.
+ *
+ * Dos pasadas, de barata a cara:
+ *
+ * 1. La foto entera. Basta cuando la pegatina ocupa buena parte de la imagen,
+ *    esté recta o girada a 90°, 180° o 270° (eso lo resuelve `tryRotate`).
+ * 2. Si no sale nada: se localiza la pegatina, se recorta, se amplía y se
+ *    prueba INCLINADA a ±15°, ±30° y ±45°. Es el caso real que fallaba: una
+ *    pegatina pequeña en una foto grande, boca abajo y algo torcida. El
+ *    decodificador tolera poca inclinación, y a tamaño real el código tenía
+ *    muy pocos píxeles por barra.
  *
  * Devuelve la lista SIN repetidos. Quien llama decide: uno solo es la
  * respuesta; varios distintos (dos gomas en la foto) no se elige a ojo.
  */
 export async function seriesDeCodigoDeBarras(imagen: Uint8Array): Promise<string[]> {
   await preparar();
-  // A PNG: el decodificador no entiende WebP ni HEIC, que es lo que mandan
-  // algunos móviles.
-  const png = await sharp(imagen).rotate().png().toBuffer();
-  const leidos = await readBarcodes(new Uint8Array(png), {
-    tryHarder: true, tryRotate: true, tryInvert: false, maxNumberOfSymbols: 4,
-  });
-  const series = leidos.map((r) => r.text.trim()).filter(pareceNumeroDeSerie);
-  return [...new Set(series)];
+  // A PNG y en gris: el decodificador no entiende WebP ni HEIC, que es lo que
+  // mandan algunos móviles.
+  const enteras = await leer(await sharp(imagen).rotate().grayscale().png().toBuffer());
+  if (enteras.length) return enteras;
+
+  for (const caja of await zonasDePegatina(imagen)) {
+    for (const grados of [0, -15, 15, -30, 30, -45, 45]) {
+      const png = await sharp(imagen).rotate().extract(caja).resize({ width: 1400 })
+        .rotate(grados, { background: "#fff" }).grayscale().png().toBuffer();
+      const series = await leer(png);
+      if (series.length) return series;
+    }
+  }
+  return [];
 }

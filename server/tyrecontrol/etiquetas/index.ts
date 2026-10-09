@@ -87,11 +87,11 @@ export function mountEtiquetas(app: Express, ...guards: RequestHandler[]): void 
       }
       let leido = await lector.leer(imagenUrl);
 
-      // Una pegatina girada 90° es justo la que el modelo más da por ilegible.
-      // Si no ha leído nada, se le enseña la foto enderezada en las dos
-      // direcciones antes de rendirse.
+      // Una pegatina girada —de lado o boca abajo— es justo la que el modelo
+      // más da por ilegible. Si no ha leído nada, se le enseña la foto
+      // enderezada en las tres direcciones antes de rendirse.
       if (!leido.numero_serie && bytes) {
-        for (const grados of [90, 270]) {
+        for (const grados of [90, 180, 270]) {
           const girada = await sharp(bytes).rotate(grados).jpeg({ quality: 90 }).toBuffer().catch(() => null);
           if (!girada) break;
           const otra = await lector.leer(`data:image/jpeg;base64,${girada.toString("base64")}`);
