@@ -97,7 +97,6 @@ type Props = {
   onGoWorkshopScreen?: () => void;
   canGoBack?: boolean;
   onLogout?: () => void;
-  onSetWorkshopPin?: (techName: string) => void;
   /**
    * Lo que todavía no es trabajo pero ya se ve venir: vehículos recibidos con
    * la APK sin validar, y citas de hoy que aún no han llegado. En Operativo 2
@@ -651,7 +650,6 @@ export default function OperariosTVView({
   onGoWorkshopScreen,
   canGoBack = true,
   onLogout,
-  onSetWorkshopPin,
   recepcionesPendientes = [],
   agendados = [],
 }: Props) {
@@ -1831,16 +1829,6 @@ export default function OperariosTVView({
                           ? "OCUPADO"
                           : getTechStatusLabel(tech.status)}
                       </span>
-                      {onSetWorkshopPin && (
-                        <button
-                          type="button"
-                          title="Establecer PIN taller"
-                          onClick={() => onSetWorkshopPin(tech.name)}
-                          className="rounded-full border border-white/60 bg-white/60 px-2 py-1 text-[10px] font-black hover:bg-white/80"
-                        >
-                          🔑 PIN
-                        </button>
-                      )}
                     </div>
                   </div>
                 </div>

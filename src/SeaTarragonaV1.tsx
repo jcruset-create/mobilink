@@ -4686,11 +4686,6 @@ if (view === "operarios" && canView("operarios")) {
         setView("operativo");
         if (!permitirLoginClasico) window.location.assign("/inicio");
       }}
-      onSetWorkshopPin={isSupervisor ? (techName) => {
-        setWorkshopPinModal({ techName });
-        setWorkshopPinInput("");
-        setWorkshopPinError("");
-      } : undefined}
     />
   );
 }
