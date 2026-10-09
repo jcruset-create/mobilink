@@ -503,12 +503,16 @@ export type ReposicionPendiente = {
 /** Un canje ya hecho que todavía espera a que se registre el ingreso. */
 export type CanjePreparado = {
   id: number;
+  /** Con el cajón, o un cambio dado a un cliente (el cajón no se movió). */
+  tipo?: "CAJON" | "CLIENTE";
   fecha: string;
   /** Entra y sale lo mismo: es UN importe, no dos. */
   valorCentimos: number;
   /** Cierres contra los que se hizo. El ingreso tiene que llevarlos todos. */
   sessionIds: number[];
+  /** Lo que salió de lo pendiente: al cajón, o al cliente como cambio. */
   entregado: LineaDenominacion[];
+  /** Lo que entró en lo pendiente: del cajón, o lo que dio el cliente. */
   recibido: LineaDenominacion[];
 };
 

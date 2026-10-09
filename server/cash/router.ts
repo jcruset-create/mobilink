@@ -1462,6 +1462,30 @@ export function createCashRouter(): Router {
   );
 
   /**
+   * Cambio a un cliente con piezas de lo pendiente de ingresar: el cliente da
+   * un billete y se le devuelve el cambio de la bolsa del banco. El cajón no
+   * se mueve, así que no hace falta jornada abierta.
+   */
+  r.post(
+    "/bank-deposits/customer-change",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      await acceso(req, { caja: enteroPositivo(b.registerId, "registerId") });
+      res.status(201).json(
+        await ingresos.registrarCambioCliente(contexto(req), {
+          registerId: enteroPositivo(b.registerId, "registerId"),
+          sessionIds: Array.isArray(b.sessionIds)
+            ? b.sessionIds.map((v: unknown) => enteroPositivo(v, "sessionIds"))
+            : [],
+          recibido: lineas(b.recibido, "recibido"),
+          entregado: lineas(b.entregado, "entregado"),
+        })
+      );
+    })
+  );
+
+  /**
    * Apunta en qué piezas está lo que quedó sin ingresar, cuando el ingreso no
    * lo guardó. Se cuenta una vez y ya sale desglosado.
    */

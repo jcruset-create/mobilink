@@ -504,6 +504,22 @@ Por debajo es el canje de siempre: `registrarCanje` contra todos los cierres
 pendientes, o sin ninguno si solo hay lo que quedó del último ingreso. Se
 deshace desde «Canjes preparados».
 
+**Dar cambio a un cliente** (1.96.6). Debajo, el mismo cambio pero con un
+cliente al otro lado: el cliente da un billete de 20 € y se le devuelve el
+cambio con piezas de lo pendiente. Al marcar lo que da, se propone devolverle
+**todas las monedas posibles** (`cambioParaCliente`), que es para lo que
+sirve: el banco no las admite y entra un billete que sí. El ejemplo real:
+pendiente 45,13 € (1 × 20, 1 × 10, 2 × 5 y 5,13 € en monedas); el cliente da
+20 € y se lleva 10 + 5 + 5 € en monedas; quedan 2 × 20, 1 × 5 y 0,13 €.
+
+El cajón no se toca, así que no hace falta jornada abierta ni hay operación
+en el libro mayor. Va en `cash_deposit_swaps` con `tipo = 'CLIENTE'` y
+`operation_id` NULL, y sus piezas en `cash_deposit_swap_lines` (`ENTRA` lo
+del cliente, `SALE` el cambio). Cuenta contra los mismos cierres que el
+canje, se lo lleva el mismo ingreso y se deshace igual desde «Cambios
+preparados» (deshacer solo lo deja de contar). Ruta
+`POST /api/cash/bank-deposits/customer-change`.
+
 ### Posición global
 
 Pantalla `/cash/posicion`, la primera del menú. Enseña todo el efectivo que

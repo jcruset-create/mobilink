@@ -55,7 +55,14 @@ import type {
 } from "../types";
 import * as api from "../services/api";
 import ContarRemanente from "../components/ContarRemanente";
-import { type Cantidades, cambioParaElCajon, cantidadesDe, lineasDe, valorDe } from "../utils/cambioConCajon";
+import {
+  type Cantidades,
+  cambioParaCliente,
+  cambioParaElCajon,
+  cantidadesDe,
+  lineasDe,
+  valorDe,
+} from "../utils/cambioConCajon";
 
 const fechaCorta = (iso: string) =>
   new Date(`${iso}T00:00:00`).toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit", year: "2-digit" });
@@ -1164,7 +1171,205 @@ function PendienteYCambio({
           )}
         </div>
       )}
+
+      {gestiona && pendiente.length > 0 && (
+        <CambioACliente
+          registerId={registerId}
+          sessionIds={clave.split(",").filter(Boolean).map(Number)}
+          pendiente={pendiente}
+          pendienteCentimos={pendienteCentimos}
+          sinDesglose={sinDesglose}
+          onCambiado={async () => {
+            await cargar();
+            await onCambiado();
+          }}
+        />
+      )}
     </section>
+  );
+}
+
+/**
+ * Dar cambio a un cliente con lo pendiente de ingresar.
+ *
+ * El cliente da un billete de 20 € y se le devuelve el cambio de la bolsa del
+ * banco: así salen las monedas que el banco no admite y entra un billete que
+ * sí. El cajón no se toca —por eso no hace falta tener la caja abierta— y lo
+ * pendiente sigue sumando lo mismo, en otras piezas.
+ *
+ * Al marcar lo que da el cliente se propone el cambio soltando todas las
+ * monedas posibles; se puede retocar con − y +.
+ */
+function CambioACliente({
+  registerId,
+  sessionIds,
+  pendiente,
+  pendienteCentimos,
+  sinDesglose,
+  onCambiado,
+}: {
+  registerId: number;
+  sessionIds: number[];
+  pendiente: LineaDenominacion[];
+  pendienteCentimos: number;
+  sinDesglose: number;
+  onCambiado: () => Promise<void>;
+}) {
+  const { denominaciones } = useCash();
+  const [delCliente, setDelCliente] = useState<Cantidades>({});
+  const [alCliente, setAlCliente] = useState<Cantidades>({});
+  const [aviso, setAviso] = useState("");
+  const [error, setError] = useState("");
+  const [hecho, setHecho] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+
+  const esBillete = useCallback(
+    (valor: number) => denominaciones.find((d) => d.valor === valor)?.tipo === "BILLETE",
+    [denominaciones]
+  );
+  // Lo que puede dar el cliente: cualquier pieza del catálogo, sin límite.
+  const catalogo = useMemo(
+    () =>
+      [...denominaciones]
+        .sort((a, b) => b.valor - a.valor)
+        .map((d) => ({ valor: d.valor, cantidad: Number.MAX_SAFE_INTEGER })),
+    [denominaciones]
+  );
+
+  function ponerDelCliente(c: Cantidades) {
+    setDelCliente(c);
+    setHecho("");
+    setError("");
+    const importe = valorDe(c);
+    if (importe === 0) {
+      setAlCliente({});
+      setAviso("");
+      return;
+    }
+    const propuesta = cambioParaCliente(
+      pendiente,
+      importe,
+      esBillete,
+      Object.entries(c)
+        .filter(([, n]) => n > 0)
+        .map(([v]) => Number(v))
+    );
+    setAlCliente(propuesta ?? {});
+    setAviso(
+      propuesta
+        ? ""
+        : `Con lo pendiente no se pueden devolver ${euros(importe)} justos. Elige las piezas a mano.`
+    );
+  }
+
+  const recibe = valorDe(delCliente);
+  const devuelve = valorDe(alCliente);
+  const cuadra = recibe > 0 && recibe === devuelve;
+
+  const despues = (() => {
+    const m = cantidadesDe(pendiente);
+    for (const [v, n] of Object.entries(alCliente)) m[Number(v)] = (m[Number(v)] ?? 0) - n;
+    for (const [v, n] of Object.entries(delCliente)) m[Number(v)] = (m[Number(v)] ?? 0) + n;
+    return lineasDe(m);
+  })();
+  const despuesBilletes = despues.filter((l) => esBillete(l.valor));
+  const despuesMonedas = despues.filter((l) => !esBillete(l.valor));
+
+  async function dar() {
+    setOcupado(true);
+    setError("");
+    try {
+      await api.cambioClienteIngreso({
+        registerId,
+        sessionIds,
+        recibido: lineasDe(delCliente),
+        entregado: lineasDe(alCliente),
+      });
+      setHecho(`Hecho: ${euros(recibe)} cambiados a un cliente.`);
+      setDelCliente({});
+      setAlCliente({});
+      await onCambiado();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido apuntar el cambio");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <div className="space-y-2 rounded-xl border border-emerald-700 bg-emerald-950/20 p-3">
+      <div>
+        <div className="text-[14px] font-bold text-slate-100">Dar cambio a un cliente</div>
+        <p className="max-w-2xl text-[12px] text-slate-400">
+          El cliente te da un billete y le devuelves el cambio con lo pendiente de ingresar: salen las
+          monedas que el banco no admite y entra su billete. El cajón no se toca y lo pendiente sigue
+          sumando lo mismo. Se puede deshacer mientras no se haga el ingreso.
+        </p>
+      </div>
+
+      <div className="grid gap-2 lg:grid-cols-2">
+        <ColumnaCambio
+          titulo="El cliente te da → a lo pendiente"
+          disponibles={catalogo}
+          elegidas={delCliente}
+          onChange={ponerDelCliente}
+          tono="text-emerald-300"
+          sinLimite
+        />
+        <ColumnaCambio
+          titulo="Le devuelves de lo pendiente"
+          disponibles={pendiente}
+          elegidas={alCliente}
+          onChange={(c) => {
+            setAlCliente(c);
+            setAviso("");
+          }}
+          tono="text-amber-300"
+        />
+      </div>
+
+      {aviso && <p className="text-[12px] text-amber-300">{aviso}</p>}
+      {error && <ErrorBox>{error}</ErrorBox>}
+      {hecho && <p className="text-[12px] text-emerald-300">{hecho}</p>}
+
+      <div
+        className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-[13px] ${
+          cuadra
+            ? "border-emerald-600 bg-emerald-950/60 text-emerald-200"
+            : "border-slate-600 bg-slate-900/60 text-slate-300"
+        }`}
+      >
+        <span>
+          {cuadra
+            ? `✓ Cuadra: el cliente da ${euros(recibe)} y se lleva ${euros(devuelve)}. Lo pendiente sigue siendo ${euros(pendienteCentimos)}.`
+            : recibe === 0
+              ? "Marca lo que te da el cliente."
+              : `No cuadra: el cliente da ${euros(recibe)} y le devuelves ${euros(devuelve)}.`}
+        </span>
+        <button
+          onClick={() => void dar()}
+          disabled={!cuadra || ocupado}
+          className="rounded-lg bg-emerald-600 px-4 py-2 text-[13px] font-bold text-white hover:bg-emerald-500 disabled:opacity-40"
+        >
+          {ocupado ? "Apuntando…" : "Dar el cambio"}
+        </button>
+      </div>
+      {cuadra && (
+        <p className="text-[12px] text-slate-400">
+          Después, lo pendiente queda en{" "}
+          <strong className="text-slate-200">
+            {despuesBilletes.length
+              ? despuesBilletes.map((l) => `${l.cantidad} × ${euros(l.valor)}`).join(", ")
+              : "ningún billete"}
+          </strong>{" "}
+          en billetes y{" "}
+          <strong className="text-slate-200">
+            {euros(despuesMonedas.reduce((a, l) => a + l.valor * l.cantidad, 0) + sinDesglose)}
+          </strong>{" "}
+          en monedas.
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -1175,12 +1380,15 @@ function ColumnaCambio({
   elegidas,
   onChange,
   tono,
+  sinLimite = false,
 }: {
   titulo: string;
   disponibles: readonly LineaDenominacion[];
   elegidas: Cantidades;
   onChange: (c: Cantidades) => void;
   tono: string;
+  /** Las piezas no se acaban (lo que da un cliente): sin «hay N». */
+  sinLimite?: boolean;
 }) {
   const { denominaciones } = useCash();
   const imagenDe = (valor: number) => denominaciones.find((d) => d.valor === valor)?.imagenUrl ?? null;
@@ -1205,7 +1413,7 @@ function ColumnaCambio({
               <span className="block h-6 w-10 flex-none" />
             )}
             <span className="min-w-[64px] text-[13px] font-bold tabular-nums text-slate-100">{euros(l.valor)}</span>
-            <span className="text-[11px] text-slate-500">hay {l.cantidad}</span>
+            {!sinLimite && <span className="text-[11px] text-slate-500">hay {l.cantidad}</span>}
             <span className="ml-auto flex items-center gap-1.5">
               <button
                 onClick={() => poner(l.valor, n - 1)}
@@ -1275,17 +1483,24 @@ function CanjesPreparados({
   return (
     <div className="rounded-lg border border-slate-600 bg-slate-800/60 p-3">
       <div className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
-        Canje preparado, pendiente de ingresar
+        Cambios preparados, pendientes de ingresar
       </div>
       {error && <div className="mt-1 text-[12px] text-rose-300">{error}</div>}
       <ul className="mt-1 space-y-1">
         {canjes.map((c) => (
           <li key={c.id} className="flex flex-wrap items-center gap-2 text-[12px] text-slate-300">
             <span className="tabular-nums text-slate-400">{fechaCorta(c.fecha)}</span>
-            <span>
-              <strong className="text-emerald-300">{euros(c.valorCentimos)}</strong> en monedas
-              cambiados por billetes
-            </span>
+            {c.tipo === "CLIENTE" ? (
+              <span>
+                <strong className="text-emerald-300">{euros(c.valorCentimos)}</strong> de cambio a un
+                cliente: entró {c.recibido.map((l) => `${l.cantidad} × ${euros(l.valor)}`).join(", ")}
+              </span>
+            ) : (
+              <span>
+                <strong className="text-emerald-300">{euros(c.valorCentimos)}</strong> en monedas
+                cambiados por billetes
+              </span>
+            )}
             <span className="text-[11px] text-slate-500">
               {c.sessionIds.length === 1
                 ? "de un cierre"
@@ -1305,8 +1520,8 @@ function CanjesPreparados({
         ))}
       </ul>
       <p className="mt-1 text-[11px] text-slate-500">
-        Deshacer no borra nada: asienta el canje al revés en la jornada de hoy, así que hace falta
-        tenerla abierta.
+        Deshacer no borra nada: el canje con el cajón se asienta al revés en la jornada de hoy (hace
+        falta tenerla abierta); el cambio a un cliente solo deja de contar.
       </p>
     </div>
   );
