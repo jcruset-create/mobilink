@@ -55,6 +55,33 @@ export function situacionDeTecnico(
   }
 }
 
+/**
+ * La cara que se pone en la redonda del técnico.
+ *
+ * La pantalla se mira desde lejos y de reojo: una cara se lee antes que una
+ * palabra, y antes que un color para quien no distingue bien el rojo del
+ * verde. Las tres primeras las eligió el taller; las otras acompañan para que
+ * ninguna redonda se quede a medias.
+ */
+export function emojiDeSituacion(s: SituacionTecnico): string {
+  switch (s) {
+    case "libre":
+      return "😀";
+    case "trabajando":
+      return "😅";
+    case "baja":
+      return "🥵";
+    case "ausente":
+      return "🌴";
+    case "fuera":
+      return "🚐";
+    case "reservado":
+      return "⏳";
+    default:
+      return "";
+  }
+}
+
 export function claseDeSituacion(s: SituacionTecnico): string {
   switch (s) {
     case "libre":

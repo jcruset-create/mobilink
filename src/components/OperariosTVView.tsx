@@ -3,7 +3,12 @@ import { apiFetch } from "../modules/apiFetch";
 import { useEffect, useState } from "react";
 import { formatoEntradaParte, resumenTarjeta } from "../modules/tarjetaTrabajo";
 import PuntoEnCola from "./PuntoEnCola";
-import { claseDeSituacion, situacionDeTecnico } from "../modules/colorEstadoTecnico";
+import {
+  claseDeSituacion,
+  emojiDeSituacion,
+  situacionDeTecnico,
+  type SituacionTecnico,
+} from "../modules/colorEstadoTecnico";
 import { horaDeRecepcion, type RecepcionVehiculo } from "../modules/recepcionVehiculo";
 
 type AreaKey = "camion" | "movil" | "tacografo" | "turismo" | "mecanica";
@@ -267,12 +272,6 @@ function getTechStatusLabel(status: string) {
   return (status || "-").toUpperCase();
 }
 
-// El color vive en colorEstadoTecnico.ts, con tests: ahí está el porqué de
-// que el libre sea gris y no verde.
-function getTechCardClass(status: string, extra: Parameters<typeof situacionDeTecnico>[1] = {}) {
-  return claseDeSituacion(situacionDeTecnico(normalizeTechStatus(status), extra));
-}
-
 function getLinkedPhaseLabel(job: JobForOperarios) {
   if (!job.linkedGroupId && !job.linkedOrder && !job.dependsOnJobId) {
     return "";
@@ -345,28 +344,52 @@ function getAssignedMaintenanceStatusClass(
 function TechAvatar({
   tech,
   size = "normal",
+  situacion,
 }: {
   tech?: TechForOperarios | null;
   size?: "normal" | "large";
+  /**
+   * Si se pasa, la redonda enseña la cara del estado en vez de las iniciales.
+   * Con foto no se sustituye: una cara que alguien reconoce vale más que un
+   * icono, y el estado va de chapita en la esquina.
+   */
+  situacion?: SituacionTecnico;
 }) {
   const imageUrl = getTechAvatarUrl(tech);
   const sizeClass = size === "large" ? "h-14 w-14 text-xl" : "h-9 w-9 text-sm";
+  const emoji = situacion ? emojiDeSituacion(situacion) : "";
 
   if (imageUrl) {
     return (
-      <img
-        src={imageUrl}
-        alt={tech?.name || "Técnico"}
-        className={`${sizeClass} rounded-full border border-white/70 object-cover shadow-sm`}
-      />
+      <span className="relative inline-flex shrink-0">
+        <img
+          src={imageUrl}
+          alt={tech?.name || "Técnico"}
+          className={`${sizeClass} rounded-full border border-white/70 object-cover shadow-sm`}
+        />
+        {emoji && (
+          <span
+            aria-hidden
+            className="absolute -bottom-1 -right-1 rounded-full bg-white/90 px-0.5 text-[11px] leading-none shadow-sm"
+          >
+            {emoji}
+          </span>
+        )}
+      </span>
     );
   }
 
   return (
     <div
-      className={`${sizeClass} flex items-center justify-center rounded-full border border-white/70 bg-white/70 font-bold shadow-sm`}
+      className={`${sizeClass} flex shrink-0 items-center justify-center rounded-full border border-white/70 bg-white/70 font-bold shadow-sm`}
     >
-      {getTechInitials(tech?.name || "?")}
+      {emoji ? (
+        <span className={size === "large" ? "text-2xl" : "text-lg"} aria-hidden>
+          {emoji}
+        </span>
+      ) : (
+        getTechInitials(tech?.name || "?")
+      )}
     </div>
   );
 }
@@ -1735,25 +1758,30 @@ export default function OperariosTVView({
                   (task) => task.techName === tech.name
                 );
 
+
               const pendingOutsideMaintenanceTask =
                 pendingOutsideMaintenanceTasks.find(
                   (task) => task.techName === tech.name
                 );
 
+              // Una sola lectura de la situación: la usan el color de la
+              // tarjeta y la cara de la redonda, y así no pueden discrepar.
+              const situacion = situacionDeTecnico(normalizeTechStatus(tech.status), {
+                enAsistencia: Boolean(activeRoadsideAssistance),
+                mantenimientoFuera: Boolean(pendingOutsideMaintenanceTask),
+                mantenimientoEnTaller: Boolean(pendingWorkshopMaintenanceTask),
+                reservadoParaValidar: Boolean(isReservedForValidation),
+                trabajando: Boolean(currentJob),
+              });
+
               return (
                 <div
                   key={tech.name}
-                  className={`rounded-2xl border p-3 ${getTechCardClass(tech.status, {
-                    enAsistencia: Boolean(activeRoadsideAssistance),
-                    mantenimientoFuera: Boolean(pendingOutsideMaintenanceTask),
-                    mantenimientoEnTaller: Boolean(pendingWorkshopMaintenanceTask),
-                    reservadoParaValidar: Boolean(isReservedForValidation),
-                    trabajando: Boolean(currentJob),
-                  })}`}
+                  className={`rounded-2xl border p-3 ${claseDeSituacion(situacion)}`}
                 >
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex min-w-0 items-center gap-3">
-                      <TechAvatar tech={tech} />
+                      <TechAvatar tech={tech} situacion={situacion} />
 
                       <div className="min-w-0">
                         <div className="truncate text-lg font-black">
