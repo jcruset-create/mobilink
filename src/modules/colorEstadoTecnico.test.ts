@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { claseDeSituacion, situacionDeTecnico } from "./colorEstadoTecnico";
+import { claseDeSituacion, emojiDeSituacion, situacionDeTecnico } from "./colorEstadoTecnico";
 
 describe("situacionDeTecnico", () => {
   it("libre es gris, no verde", () => {
@@ -26,5 +26,24 @@ describe("situacionDeTecnico", () => {
   });
   it("un trabajo activo manda sobre una ficha que diga «disponible»", () => {
     expect(situacionDeTecnico("disponible", { trabajando: true })).toBe("trabajando");
+  });
+});
+
+describe("emojiDeSituacion", () => {
+  it("las tres caras que pidió el taller", () => {
+    expect(emojiDeSituacion(situacionDeTecnico("disponible"))).toBe("😀");
+    expect(emojiDeSituacion(situacionDeTecnico("ocupado"))).toBe("😅");
+    expect(emojiDeSituacion(situacionDeTecnico("baja"))).toBe("🥵");
+  });
+
+  it("una asistencia en carretera es trabajar, también en la cara", () => {
+    expect(emojiDeSituacion(situacionDeTecnico("disponible", { enAsistencia: true }))).toBe("😅");
+  });
+
+  it("ninguna situación se queda sin cara", () => {
+    for (const estado of ["disponible", "ocupado", "baja", "vacaciones", "permiso", "otro_taller", "refuerzo", "supervisor"]) {
+      expect(emojiDeSituacion(situacionDeTecnico(estado)), estado).not.toBe("");
+    }
+    expect(emojiDeSituacion(situacionDeTecnico("disponible", { reservadoParaValidar: true }))).not.toBe("");
   });
 });
