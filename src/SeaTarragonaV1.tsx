@@ -10,6 +10,7 @@ import AgendaView from "./components/AgendaView";
 import QuickTemplateEditor from "./components/QuickTemplateEditor";
 import Operativo2View from "./components/Operativo2View";
 import { useEsAdministrador } from "./modules/esAdministrador";
+import { camposDeOperacion, propuestosQueSiguenValiendo } from "./modules/cambiarOperacion";
 import { useRecepcionesPendientes } from "./modules/useRecepcionesPendientes";
 import { idsDeCitasYaRecibidas } from "./modules/recepcionVehiculo";
 import { esTecnicoDePrueba } from "./modules/tecnicosDePrueba";
@@ -2857,6 +2858,71 @@ function updateValidationPlate(jobId: number, nextPlate: string) {
   })();
 }
 
+/**
+ * Corrige la operación de una entrada pendiente de validar.
+ *
+ * Se teclea rápido y se escoge la de al lado: una «Diagnosis KTS» que en
+ * realidad era una «Revisión Tacógrafo 3.0». Hasta ahora había que eliminar la
+ * entrada y rehacerla, perdiendo matrícula y propuesta.
+ *
+ * Cambia TODO lo que define la operación —área, plantilla, modo, minutos y
+ * precio—, no solo el rótulo, con los mismos ayudantes que usa la entrada
+ * rápida al crearla. Y si el técnico propuesto ya no tiene competencia para la
+ * operación nueva, se retira la propuesta en vez de dejarla inválida: el
+ * botón «Autorizar» no comprueba competencias.
+ */
+async function updateValidationOperacion(jobId: number, templateKey: string) {
+  const job = jobs.find((item) => item.id === jobId);
+  if (!job || job.status !== "validacion") return;
+
+  const plantilla = visibleQuickTemplates.find((p) => p.key === templateKey);
+  if (!plantilla) return;
+
+  const anterior = getOperationLabel(job);
+  const conOperacion = { ...job, ...camposDeOperacion(plantilla, job.quantity) } as Job;
+
+  const siguen = propuestosQueSiguenValiendo(
+    job.assignedNames ?? [],
+    (nombre, i) => {
+      const tech = techs.find((t) => t.name === nombre);
+      if (!tech) return false;
+      return canSelectTechManuallyForJob(
+        tech, conOperacion, jobs, quickTemplates, i === 0 ? "responsable" : "apoyo"
+      );
+    }
+  );
+
+  const perdidos = (job.assignedNames ?? []).filter((n) => !siguen.includes(n));
+  const updatedJob: Job = {
+    ...conOperacion,
+    assignedNames: siguen,
+    reason:
+      perdidos.length > 0
+        ? `Operación corregida a ${plantilla.label}. ${perdidos.join(" y ")} ya no tiene competencia para ella: vuelve a proponer técnico. Pendiente de validación manual antes de iniciar.`
+        : `Operación corregida a ${plantilla.label}. Pendiente de validación manual antes de iniciar.`,
+  };
+
+  try {
+    await updateJobInBackend(updatedJob);
+    setJobs((prev) => prev.map((item) => (item.id === jobId ? updatedJob : item)));
+    appendLog(
+      `Operación corregida en validación (${job.plate}): ${anterior} → ${plantilla.label}.` +
+        (perdidos.length > 0 ? ` Se retira a ${perdidos.join(" y ")} por competencia.` : "")
+    );
+    if (perdidos.length > 0) {
+      alert(
+        `Operación corregida a "${plantilla.label}".\n\n` +
+          `${perdidos.join(" y ")} no tiene competencia para esta operación, así que ` +
+          `se ha retirado la propuesta. Elige técnico otra vez antes de autorizar.`
+      );
+    }
+  } catch (error) {
+    console.error("Error corrigiendo la operación:", error);
+    alert(`No se pudo corregir la operación.\n\n${String((error as Error)?.message ?? error)}`);
+    appendLog(`Error al corregir la operación de ${job.plate}.`);
+  }
+}
+
 function updateValidationResponsible(jobId: number, responsibleName: string) {
   const job = jobs.find((item) => item.id === jobId);
   if (!job || job.status !== "validacion") return;
@@ -4813,6 +4879,7 @@ const operativo2Element = (
     reactivatePausedJob={reactivatePausedJob}
     updateValidationResponsible={updateValidationResponsible}
     updateValidationPlate={updateValidationPlate}
+    updateValidationOperacion={updateValidationOperacion}
     addValidationExtraSupport={addValidationExtraSupport}
     removeValidationSupportByName={removeValidationSupportByName}
     authorizeProposedJob={authorizeProposedJob}
