@@ -57,6 +57,10 @@ export interface Tarea {
   intervaloSegundos: number;
   /** Suelo del histórico: no se pregunta por nada anterior. `YYYY-MM-DD`. */
   desde: string | null;
+  /** Techo: nada posterior. Solo lo pone el relleno diario. `YYYY-MM-DD`. */
+  hasta: string | null;
+  /** Quién la lanzó: una persona desde el panel, o el proceso diario. */
+  origen: "manual" | "diario";
   /** De dónde salió ese suelo, para que el número no aparezca por magia. */
   notaHorizonte: string | null;
   estado: EstadoTarea;
@@ -179,6 +183,9 @@ export async function iniciarRellenoRevisiones(op: {
   intervaloSegundos?: number;
   /** Suelo a mano. Sin él, se le pregunta al proveedor. */
   desde?: string | null;
+  /** Techo a mano. Sin él, hasta hoy. */
+  hasta?: string | null;
+  origen?: "manual" | "diario";
 }): Promise<Tarea> {
   const previa = tareas.get(op.empresaId);
   if (previa && previa.estado === "en_curso") return publica(previa);
@@ -191,6 +198,8 @@ export async function iniciarRellenoRevisiones(op: {
   const t: TareaViva = {
     empresaId: op.empresaId,
     desde,
+    hasta: op.hasta ?? null,
+    origen: op.origen ?? "manual",
     notaHorizonte,
     intervaloSegundos: intervaloValido(op.intervaloSegundos),
     estado: "en_curso",
@@ -206,7 +215,7 @@ export async function iniciarRellenoRevisiones(op: {
 
   // Un recuento antes de contestar: quien pulsa el botón ve cuántas faltan y
   // cuánto va a tardar, en vez de un «vale» a ciegas.
-  const quedan = await cuantasSinKm(op.empresaId, desde);
+  const quedan = await cuantasSinKm(op.empresaId, desde, t.hasta);
   t.totalAlEmpezar = quedan;
   refrescarRestante(t, quedan);
   if (quedan === 0) {
@@ -273,7 +282,7 @@ async function siguientePendiente(t: TareaViva): Promise<RevisionPendiente | nul
   // Tope: con 1.247 revisiones son 25 páginas. 200 deja margen de sobra y evita
   // que un fallo raro convierta esto en una consulta infinita.
   for (let pagina = 0; pagina < 200; pagina++) {
-    const filas = await revisionesSinKm(t.empresaId, pagina * TAMANO_PAGINA, t.desde);
+    const filas = await revisionesSinKm(t.empresaId, pagina * TAMANO_PAGINA, t.desde, t.hasta);
     if (filas.length === 0) return null;
     const candidata = filas.find((r) => !agotada(r));
     if (candidata) return candidata;
@@ -443,6 +452,7 @@ export async function reanudarRellenoRevisiones(): Promise<number> {
       try { d = fila.detail ? JSON.parse(String(fila.detail)) : null; } catch { d = null; }
       await iniciarRellenoRevisiones({
         empresaId, intervaloSegundos: d?.intervaloSegundos, desde: d?.desde ?? null,
+        hasta: d?.hasta ?? null, origen: d?.origen === "diario" ? "diario" : "manual",
       });
       const viva = tareas.get(empresaId);
       if (viva) {

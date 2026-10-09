@@ -100,6 +100,7 @@ import { startConciliacionQuincenal } from "./tyrecontrol/conciliacion/worker.ts
 import { startPresenciaBases } from "./tyrecontrol/presencia/worker.ts";
 import { startRellenoKilometraje } from "./tyrecontrol/kilometrajeMensual/rellenoWorker.ts";
 import { startRellenoRevisiones } from "./tyrecontrol/kilometrajeRevisiones/worker.ts";
+import { startRellenoDiario } from "./tyrecontrol/kilometrajeRevisiones/diario.ts";
 import { initMapeoEmpresas } from "./tyrecontrol/empresas.ts";
 import { initTyreControlAssist } from "./tyrecontrol/schema.ts";
 import { cicloReparaciones } from "./tyrecontrol/outbox.ts";
@@ -21162,6 +21163,7 @@ initDb()
       // peticiones a gotas: sin esto, cada reinicio los pararía en silencio.
       startRellenoKilometraje();
       startRellenoRevisiones(); // kilometraje del histórico de revisiones
+      startRellenoDiario(); // y cada mañana, el de las revisiones de los últimos días
     });
   })
   .catch((error) => {
