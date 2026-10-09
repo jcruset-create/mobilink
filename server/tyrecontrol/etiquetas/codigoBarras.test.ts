@@ -40,6 +40,16 @@ describe("seriesDeCodigoDeBarras", () => {
     expect(await seriesDeCodigoDeBarras(new Uint8Array(foto))).toEqual(["2640486081"]);
   });
 
+  it("boca abajo y torcida unos 10°, como la foto original que se guardó", async () => {
+    // Con un recorte holgado y saltos de 15° no salía: la foto real se lee a
+    // -10°/-15° y solo con el recorte ajustado a la pegatina.
+    const etiqueta = await sharp(await pegatina("2640486081")).resize({ width: 330 }).toBuffer();
+    const girada = await sharp(etiqueta).rotate(190, { background: "#3a3f47" }).toBuffer();
+    const foto = await sharp({ create: { width: 2000, height: 1500, channels: 3, background: "#3a3f47" } })
+      .composite([{ input: girada, left: 800, top: 650 }]).jpeg({ quality: 80 }).toBuffer();
+    expect(await seriesDeCodigoDeBarras(new Uint8Array(foto))).toEqual(["2640486081"]);
+  });
+
   it("una foto sin código no se inventa nada", async () => {
     const lisa = await sharp({ create: { width: 400, height: 300, channels: 3, background: "#333" } }).jpeg().toBuffer();
     expect(await seriesDeCodigoDeBarras(new Uint8Array(lisa))).toEqual([]);
