@@ -24,6 +24,23 @@ describe("de nuestras cajas a las del PDF", () => {
     expect(aPuntos({ x: 0, y: ETIQUETA.alto - 10, ancho: 5, alto: 10 }).y).toBeCloseTo(0, 6);
   });
 
+  it("el ajuste de la impresora baja lo impreso sin tocar la geometría", () => {
+    const hueco = ETIQUETA.huecos[0];
+    const sin = aPuntos(hueco);
+    const con = aPuntos(hueco, ETIQUETA.alto, { x: 0, y: 3.5 });
+    // 3,5 mm más abajo = 3,5 mm MENOS de Y en el PDF, que mide desde abajo.
+    expect(sin.y - con.y).toBeCloseTo(3.5 * MM, 6);
+    expect(con.x).toBeCloseTo(sin.x, 6);
+  });
+
+  it("con el ajuste puesto, nada se sale de la página", () => {
+    for (const c of [...ETIQUETA.huecos, ETIQUETA.zonaSuperior]) {
+      const p = aPuntos(c, ETIQUETA.alto, ETIQUETA.ajusteImpresora);
+      expect(p.y).toBeGreaterThanOrEqual(0);
+      expect(p.y + p.alto).toBeLessThanOrEqual(ETIQUETA.alto * MM + 0.001);
+    }
+  });
+
   it("nada se sale de la página al convertir", () => {
     for (const c of [...ETIQUETA.huecos, ETIQUETA.zonaSuperior]) {
       const p = aPuntos(c);

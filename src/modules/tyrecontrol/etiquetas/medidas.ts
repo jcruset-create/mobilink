@@ -57,6 +57,18 @@ export const ETIQUETA = {
   zonaSuperior: { x: 7.5, y: 8.0, ancho: 75.0, alto: 56.0 } as Caja,
 
   /**
+   * Corrección de la IMPRESORA, en mm: cuánto hay que mover todo lo impreso
+   * para que caiga donde dice la geometría. Positivo en y = más abajo.
+   *
+   * Las cajas de arriba son las del PDF de fabricación y no se tocan: el
+   * troquelado está donde está. Lo que se desvía es la Zebra GK420t, que con
+   * estas etiquetas imprime 3,5 mm más arriba de lo que manda el PDF (medido
+   * con una tanda real impresa el 09/10/2026). Se corrige aquí, en un solo
+   * número, para no falsear la geometría ni tener que recalcular cada caja.
+   */
+  ajusteImpresora: { x: 0, y: 3.5 },
+
+  /**
    * Margen que se deja al borde de cada caja.
    *
    * Un troquelado nunca cae exacto y una impresora tampoco: 1,5 mm es lo que
