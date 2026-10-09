@@ -40,6 +40,8 @@ export async function revisionesSinKm(
   desplazamiento = 0,
   /** Suelo: nada anterior a esta fecha (`YYYY-MM-DD`). Ver `cuantasSinKm`. */
   desde?: string | null,
+  /** Techo: nada posterior a esta fecha (`YYYY-MM-DD`). Lo usa el relleno diario. */
+  hasta?: string | null,
 ): Promise<RevisionPendiente[]> {
   let q = supabase
     .from("revisiones_vehiculo")
@@ -47,6 +49,7 @@ export async function revisionesSinKm(
     .eq("empresa_id", empresaId)
     .is("km_vehiculo", null);
   if (desde) q = q.gte("fecha_revision", desde);
+  if (hasta) q = q.lte("fecha_revision", hasta);
   const { data, error } = await q
     .order("fecha_revision", { ascending: true })
     .order("id", { ascending: true })
@@ -66,13 +69,16 @@ export const TAMANO_PAGINA = PAGINA_PENDIENTES;
  * agosto de 2025. Preguntar por esos años no es lento: es imposible, y encima
  * caro —una revisión irrellenable gasta tres peticiones en vez de dos—.
  */
-export async function cuantasSinKm(empresaId: string, desde?: string | null): Promise<number> {
+export async function cuantasSinKm(
+  empresaId: string, desde?: string | null, hasta?: string | null,
+): Promise<number> {
   let q = supabase
     .from("revisiones_vehiculo")
     .select("id", { count: "exact", head: true })
     .eq("empresa_id", empresaId)
     .is("km_vehiculo", null);
   if (desde) q = q.gte("fecha_revision", desde);
+  if (hasta) q = q.lte("fecha_revision", hasta);
   const { count, error } = await q;
   if (error) throw new Error(`No se pudieron contar las revisiones: ${error.message}`);
   return count ?? 0;
