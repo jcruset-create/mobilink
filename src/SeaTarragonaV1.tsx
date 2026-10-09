@@ -2859,6 +2859,26 @@ function updateValidationPlate(jobId: number, nextPlate: string) {
 }
 
 /**
+ * Engancha un parte del ERP a una entrada pendiente de validar.
+ *
+ * Solo añade lo que el parte aporta —número, hora de entrada, material y
+ * tareas—; la operación, el área, la matrícula y el técnico propuesto se
+ * quedan como estaban. Ver `parteParaTrabajo.ts`.
+ */
+async function adjuntarParteAValidacion(jobId: number, cambios: Partial<Job>, resumen: string) {
+  const job = jobs.find((item) => item.id === jobId);
+  if (!job || job.status !== "validacion") return;
+
+  const updatedJob: Job = { ...job, ...cambios };
+
+  // Se espera al servidor antes de darlo por hecho: un parte que solo cambió
+  // en pantalla vuelve en cuanto alguien recarga, y nadie se entera.
+  await updateJobInBackend(updatedJob);
+  setJobs((prev) => prev.map((item) => (item.id === jobId ? updatedJob : item)));
+  appendLog(`Parte enganchado a ${job.plate}: ${resumen}.`);
+}
+
+/**
  * Corrige la operación de una entrada pendiente de validar.
  *
  * Se teclea rápido y se escoge la de al lado: una «Diagnosis KTS» que en
@@ -4880,6 +4900,7 @@ const operativo2Element = (
     updateValidationResponsible={updateValidationResponsible}
     updateValidationPlate={updateValidationPlate}
     updateValidationOperacion={updateValidationOperacion}
+    adjuntarParteAValidacion={adjuntarParteAValidacion}
     addValidationExtraSupport={addValidationExtraSupport}
     removeValidationSupportByName={removeValidationSupportByName}
     authorizeProposedJob={authorizeProposedJob}
