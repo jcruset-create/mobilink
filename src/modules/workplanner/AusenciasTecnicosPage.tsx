@@ -40,6 +40,17 @@ const MODOS: { valor: ModoVacaciones; etiqueta: string; ayuda: string }[] = [
   },
 ];
 
+/**
+ * El color de los números de una columna de estado.
+ *
+ * Una baja no es una ausencia más: no se planifica, no se negocia y es la que
+ * descuadra la semana. En rojo se encuentra sin leer la cabecera, que es para
+ * lo que se abre esta tabla. El resto se quedan en el color del texto.
+ */
+function claseDeColumnaEstado(estado: string): string {
+  return estado === "baja" ? "text-rose-400 font-semibold" : "";
+}
+
 function formatoFecha(fecha: string) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(fecha);
   return m ? `${m[3]}/${m[2]}/${m[1]}` : fecha;
@@ -441,7 +452,7 @@ export default function AusenciasTecnicosPage() {
                     <td className="px-3 py-2 text-right">—</td>
                     <td className="px-3 py-2 text-right">—</td>
                     {otrosEstados.map((e) => (
-                      <td key={e} className="px-3 py-2 text-right">
+                      <td key={e} className={`px-3 py-2 text-right ${claseDeColumnaEstado(e)}`}>
                         {totales.acumulado[e] ?? 0}
                       </td>
                     ))}
@@ -503,7 +514,7 @@ function FilaTecnico({
         </td>
         <td className="px-3 py-2 text-right tabular-nums text-slate-400">{cupo}</td>
         {otrosEstados.map((e) => (
-          <td key={e} className="px-3 py-2 text-right tabular-nums">
+          <td key={e} className={`px-3 py-2 text-right tabular-nums ${claseDeColumnaEstado(e)}`}>
             {porEstado[e] ?? 0}
           </td>
         ))}
