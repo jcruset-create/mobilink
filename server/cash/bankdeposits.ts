@@ -1167,6 +1167,29 @@ export async function composicionPendiente(
   }
 
   /*
+   * Los cambios a clientes, con los mismos filtros que el canje: no tienen
+   * operación (el cajón no se mueve), así que sus piezas vienen de sus
+   * líneas, que ya están vistas desde el montón: ENTRA suma y SALE resta.
+   */
+  const { rows: aClientes } = await client.query(
+    `SELECT l.valor_centimos AS valor, l.direccion, SUM(l.cantidad)::int AS n
+       FROM cash_deposit_swaps s
+       JOIN cash_deposit_swap_lines l ON l.swap_id = s.id
+      WHERE s.empresa_id = $1 AND s.register_id = $2 AND s.tipo = 'CLIENTE'
+        AND s.anulado_at_ms IS NULL
+        AND ($3::int IS NULL AND s.bank_deposit_id IS NULL
+             OR s.bank_deposit_id = $3::int)
+        AND ($3::int IS NOT NULL OR NOT EXISTS (
+              SELECT 1 FROM cash_deposit_swap_sessions cs
+               WHERE cs.swap_id = s.id AND NOT (cs.session_id = ANY($4::int[]))))
+      GROUP BY l.valor_centimos, l.direccion`,
+    [empresaId, registerId, canjesDe, [...sessionIds]]
+  );
+  for (const r of aClientes) {
+    acumular(Number(r.valor), r.direccion === "ENTRA" ? Number(r.n) : -Number(r.n));
+  }
+
+  /*
    * Y las reposiciones de fondo. Como el canje, mueven piezas en los dos
    * sentidos —sale del montón lo que repone el fondo y vuelve la vuelta— así
    * que la dirección se invierte igual: lo que ENTRA en el cajón sale del
@@ -1452,6 +1475,121 @@ export async function registrarCanje(
 }
 
 /**
+ * Cambio a un cliente con piezas de lo pendiente de ingresar.
+ *
+ * El cliente da, por ejemplo, un billete de 20 € y se le devuelve el cambio
+ * con lo que hay en la bolsa del banco: un billete de 10, uno de 5 y 5 € en
+ * monedas. La bolsa se queda el billete de 20 y suelta las monedas que el
+ * banco no admite. El importe pendiente no cambia, solo las piezas.
+ *
+ * El cajón no se toca, así que no hace falta jornada abierta ni hay operación
+ * en el libro mayor: lo que queda es la fila del canje con sus líneas. Cuenta
+ * contra los mismos cierres que el canje del cajón y se deshace igual desde
+ * la lista de cambios preparados, mientras no se haya hecho el ingreso.
+ */
+export async function registrarCambioCliente(
+  ctx: Contexto,
+  e: {
+    registerId: number;
+    sessionIds: number[];
+    /** Lo que da el cliente: entra en lo pendiente. */
+    recibido: LineaDenominacion[];
+    /** Lo que se le devuelve: sale de lo pendiente. */
+    entregado: LineaDenominacion[];
+  }
+): Promise<{ swapId: number; valorCentimos: Centimos }> {
+  const juntar = (lineas: readonly LineaDenominacion[]) => {
+    const m = new Map<Centimos, number>();
+    for (const l of lineas) {
+      if (!Number.isSafeInteger(l.cantidad) || l.cantidad < 0) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "Las cantidades tienen que ser números enteros.", 400);
+      }
+      if (l.cantidad > 0) m.set(l.valor, (m.get(l.valor) ?? 0) + l.cantidad);
+    }
+    return m;
+  };
+  const entra = juntar(e.recibido);
+  const sale = juntar(e.entregado);
+  const valorDeMapa = (m: Map<Centimos, number>) => [...m].reduce((a, [v, n]) => a + v * n, 0);
+  const valor = valorDeMapa(entra);
+
+  if (valor === 0 || valor !== valorDeMapa(sale)) {
+    throw new ErrorCaja(
+      "EFECTIVO_NO_CUADRA",
+      "Lo que da el cliente y lo que se le devuelve tienen que sumar lo mismo.",
+      400
+    );
+  }
+  const denominaciones = await cargarDenominaciones(pool, false);
+  const existe = new Set(denominaciones.map((d) => d.valor));
+  for (const v of [...entra.keys(), ...sale.keys()]) {
+    if (!existe.has(v)) {
+      throw new ErrorCaja("DENOMINACION_NO_ENCONTRADA", `No hay piezas de ${formatearEuros(v)} €.`, 400);
+    }
+  }
+
+  // Lo que se devuelve tiene que estar en la bolsa (o acabar de entrar en
+  // ella con lo que da el cliente, aunque eso sería devolverle lo suyo).
+  const monton = await composicionPendiente(ctx.empresaId, e.registerId, e.sessionIds);
+  const hay = new Map<Centimos, number>();
+  for (const l of [...monton.billetes, ...monton.monedas]) hay.set(l.valor, l.cantidad);
+  for (const [v, n] of sale) {
+    if ((hay.get(v) ?? 0) + (entra.get(v) ?? 0) < n) {
+      throw new ErrorCaja(
+        "STOCK_INSUFICIENTE",
+        `En lo pendiente de ingresar no hay ${n} piezas de ${formatearEuros(v)} €.`,
+        400
+      );
+    }
+  }
+
+  const swapId = await enTransaccion(async (client) => {
+    const { rows } = await client.query(
+      `INSERT INTO cash_deposit_swaps (empresa_id, register_id, operation_id, tipo, creado_por, created_at_ms)
+       VALUES ($1, $2, NULL, 'CLIENTE', $3, $4) RETURNING id`,
+      [ctx.empresaId, e.registerId, ctx.userId, Date.now()]
+    );
+    const id = rows[0].id as number;
+    for (const sessionId of e.sessionIds) {
+      await client.query(
+        `INSERT INTO cash_deposit_swap_sessions (swap_id, session_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+        [id, sessionId]
+      );
+    }
+    for (const [direccion, mapa] of [
+      ["ENTRA", entra],
+      ["SALE", sale],
+    ] as const) {
+      for (const [v, n] of mapa) {
+        await client.query(
+          `INSERT INTO cash_deposit_swap_lines (swap_id, direccion, valor_centimos, cantidad)
+           VALUES ($1, $2, $3, $4)`,
+          [id, direccion, v, n]
+        );
+      }
+    }
+    return id;
+  });
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.bank_deposit.customer_change",
+    entidad: "cash_deposit_swaps",
+    entidadId: String(swapId),
+    detalle: {
+      registerId: e.registerId,
+      recibido: [...entra].map(([v, n]) => ({ valor: v, cantidad: n })),
+      entregado: [...sale].map(([v, n]) => ({ valor: v, cantidad: n })),
+      valorCentimos: valor,
+    },
+    ip: ctx.ip,
+  });
+
+  return { swapId, valorCentimos: valor };
+}
+
+/**
  * Reenvía a MC Central los ingresos que ya existen en la caja.
  *
  * Central se alimenta solo de eventos, así que un ingreso creado —o completado
@@ -1662,14 +1800,18 @@ export async function reemitirIngresos(
 /** Un canje ya hecho que todavía espera a que se registre el ingreso. */
 export type CanjePreparado = {
   id: number;
+  /** Con el cajón, o un cambio dado a un cliente (sin cajón de por medio). */
+  tipo: "CAJON" | "CLIENTE";
   fecha: string;
   /** Valor del canje. Entra y sale lo mismo: es UN importe, no dos. */
   valorCentimos: Centimos;
   /** Cierres contra los que se hizo. El ingreso tiene que llevarlos todos. */
   sessionIds: number[];
-  /** Lo que se le dio al cajón: las monedas del montón más billetes de vuelta. */
+  /**
+   * Lo que salió de lo pendiente: al cajón, o al cliente como cambio.
+   */
   entregado: LineaDenominacion[];
-  /** Los billetes que salieron del cajón al montón. */
+  /** Lo que entró en lo pendiente: del cajón, o lo que dio el cliente. */
   recibido: LineaDenominacion[];
 };
 
@@ -1686,14 +1828,14 @@ export async function canjesPreparados(
   registerId: number
 ): Promise<CanjePreparado[]> {
   const { rows } = await pool.query(
-    `SELECT s.id, s.created_at_ms, s.operation_id,
+    `SELECT s.id, s.created_at_ms, s.operation_id, s.tipo,
             COALESCE(ARRAY_AGG(cs.session_id ORDER BY cs.session_id)
                      FILTER (WHERE cs.session_id IS NOT NULL), '{}') AS sesiones
        FROM cash_deposit_swaps s
        LEFT JOIN cash_deposit_swap_sessions cs ON cs.swap_id = s.id
       WHERE s.empresa_id = $1 AND s.register_id = $2
         AND s.bank_deposit_id IS NULL AND s.anulado_at_ms IS NULL
-      GROUP BY s.id, s.created_at_ms, s.operation_id
+      GROUP BY s.id, s.created_at_ms, s.operation_id, s.tipo
       ORDER BY s.created_at_ms, s.id`,
     [empresaId, registerId]
   );
@@ -1703,11 +1845,27 @@ export async function canjesPreparados(
   await enTransaccion(async (client) => {
     /* eslint-disable @typescript-eslint/no-explicit-any */
     for (const r of rows as any[]) {
-      const movs = await movimientosDeOperacion(client, r.operation_id);
-      const entregado = movs.filter((m) => m.direccion === "IN").flatMap((m) => m.lineas);
-      const recibido = movs.filter((m) => m.direccion === "OUT").flatMap((m) => m.lineas);
+      let entregado: LineaDenominacion[];
+      let recibido: LineaDenominacion[];
+      if (r.tipo === "CLIENTE") {
+        const { rows: lineas } = await client.query(
+          `SELECT direccion, valor_centimos, cantidad FROM cash_deposit_swap_lines WHERE swap_id = $1`,
+          [r.id]
+        );
+        const de = (d: string) =>
+          lineas
+            .filter((l: any) => l.direccion === d)
+            .map((l: any) => ({ valor: Number(l.valor_centimos), cantidad: Number(l.cantidad) }));
+        entregado = de("SALE");
+        recibido = de("ENTRA");
+      } else {
+        const movs = await movimientosDeOperacion(client, r.operation_id);
+        entregado = movs.filter((m) => m.direccion === "IN").flatMap((m) => m.lineas);
+        recibido = movs.filter((m) => m.direccion === "OUT").flatMap((m) => m.lineas);
+      }
       salida.push({
         id: r.id,
+        tipo: r.tipo === "CLIENTE" ? "CLIENTE" : "CAJON",
         fecha: new Date(Number(r.created_at_ms)).toISOString().slice(0, 10),
         valorCentimos: entregado.reduce((a, l) => a + l.valor * l.cantidad, 0),
         sessionIds: (r.sesiones as number[]).map(Number),
@@ -1735,9 +1893,9 @@ export async function canjesPreparados(
 export async function deshacerCanje(
   ctx: Contexto,
   swapId: number
-): Promise<{ operacionId: number; numero: string; valorCentimos: Centimos }> {
+): Promise<{ operacionId: number | null; numero: string | null; valorCentimos: Centimos }> {
   const { rows } = await pool.query(
-    `SELECT id, register_id, operation_id, bank_deposit_id, anulado_at_ms
+    `SELECT id, register_id, operation_id, bank_deposit_id, anulado_at_ms, tipo
        FROM cash_deposit_swaps WHERE id = $1 AND empresa_id = $2`,
     [swapId, ctx.empresaId]
   );
@@ -1756,6 +1914,35 @@ export async function deshacerCanje(
   }
 
   const registerId: number = rows[0].register_id;
+
+  /*
+   * Un cambio a un cliente no movió el cajón: deshacerlo es dejar de
+   * contarlo, que es corregir lo apuntado (el cliente ya se fue con su
+   * cambio). Sin operación que asentar ni jornada que hacer falta.
+   */
+  if (rows[0].tipo === "CLIENTE") {
+    const { rows: lineas } = await pool.query(
+      `SELECT COALESCE(SUM(valor_centimos * cantidad), 0)::bigint AS v
+         FROM cash_deposit_swap_lines WHERE swap_id = $1 AND direccion = 'ENTRA'`,
+      [swapId]
+    );
+    await pool.query(
+      `UPDATE cash_deposit_swaps SET anulado_at_ms = $2, anulado_por = $3
+        WHERE id = $1 AND anulado_at_ms IS NULL`,
+      [swapId, Date.now(), ctx.userId]
+    );
+    await registrarAuditoria({
+      empresaId: ctx.empresaId,
+      userId: ctx.userId,
+      accion: "cash.bank_deposit.customer_change_undo",
+      entidad: "cash_deposit_swaps",
+      entidadId: String(swapId),
+      detalle: { registerId },
+      ip: ctx.ip,
+    });
+    return { operacionId: null, numero: null, valorCentimos: Number(lineas[0].v) };
+  }
+
   const abierta = await sesionAbierta(registerId);
   if (!abierta) {
     throw new ErrorCaja(

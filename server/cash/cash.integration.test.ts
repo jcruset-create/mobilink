@@ -1159,6 +1159,107 @@ describe.runIf(RUN)("ingresos bancarios", () => {
     return sesion.id;
   }
 
+  it("cambio a un cliente desde lo pendiente: da 20 €, se lleva 10 + 5 + 5 € en monedas", async () => {
+    const caja = await crearCaja("ingresos-cliente");
+    // Lo pendiente de Tarragona el 09/10: 45,13 €.
+    const piezas = [
+      { valor: 2000, cantidad: 1 },
+      { valor: 1000, cantidad: 1 },
+      { valor: 500, cantidad: 2 },
+      { valor: 200, cantidad: 2 },
+      { valor: 50, cantidad: 1 },
+      { valor: 20, cantidad: 2 },
+      { valor: 5, cantidad: 2 },
+      { valor: 2, cantidad: 5 },
+      { valor: 1, cantidad: 3 },
+    ];
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: piezas });
+    const teorico = await servicio.stockDeJornada(sesion.id);
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: teorico.lineas });
+    await servicio.cerrarJornada(ctx, { sessionId: sesion.id, cambioFinal: [], permitirCajaVacia: true });
+
+    const valor = (l: { valor: number; cantidad: number }[]) => l.reduce((a, x) => a + x.valor * x.cantidad, 0);
+    const antes = await ingresos.composicionPendiente(EMPRESA, caja, [sesion.id]);
+    expect(valor(antes.billetes)).toBe(4000);
+    expect(valor(antes.monedas)).toBe(513);
+
+    const entregado = [
+      { valor: 1000, cantidad: 1 },
+      { valor: 500, cantidad: 1 },
+      { valor: 200, cantidad: 2 },
+      { valor: 50, cantidad: 1 },
+      { valor: 20, cantidad: 2 },
+      { valor: 5, cantidad: 2 },
+    ];
+    // Lo que no está en la bolsa, o lo que no suma lo mismo, no se apunta.
+    await expect(
+      ingresos.registrarCambioCliente(ctx, {
+        registerId: caja,
+        sessionIds: [sesion.id],
+        // Cinco billetes de 10 € para cambiar uno de 50: en la bolsa solo hay uno.
+        recibido: [{ valor: 5000, cantidad: 1 }],
+        entregado: [{ valor: 1000, cantidad: 5 }],
+      })
+    ).rejects.toMatchObject({ codigo: "STOCK_INSUFICIENTE" });
+    await expect(
+      ingresos.registrarCambioCliente(ctx, {
+        registerId: caja,
+        sessionIds: [sesion.id],
+        recibido: [{ valor: 2000, cantidad: 1 }],
+        entregado: [{ valor: 1000, cantidad: 1 }],
+      })
+    ).rejects.toMatchObject({ codigo: "EFECTIVO_NO_CUADRA" });
+
+    // Sin jornada abierta: el cajón no se toca.
+    const { swapId } = await ingresos.registrarCambioCliente(ctx, {
+      registerId: caja,
+      sessionIds: [sesion.id],
+      recibido: [{ valor: 2000, cantidad: 1 }],
+      entregado,
+    });
+
+    const despues = await ingresos.composicionPendiente(EMPRESA, caja, [sesion.id]);
+    expect(despues.billetes).toEqual([
+      { valor: 2000, cantidad: 2 },
+      { valor: 500, cantidad: 1 },
+    ]);
+    expect(despues.monedas).toEqual([
+      { valor: 2, cantidad: 5 },
+      { valor: 1, cantidad: 3 },
+    ]);
+    expect(despues.faltan).toEqual([]);
+
+    const preparados = await ingresos.canjesPreparados(EMPRESA, caja);
+    expect(preparados).toHaveLength(1);
+    expect(preparados[0]).toMatchObject({ id: swapId, tipo: "CLIENTE", valorCentimos: 2000 });
+    expect(preparados[0].recibido).toEqual([{ valor: 2000, cantidad: 1 }]);
+
+    // Deshacer: deja de contar, sin jornada ni operación.
+    const deshecho = await ingresos.deshacerCanje(ctx, swapId);
+    expect(deshecho.operacionId).toBeNull();
+    const otraVez = await ingresos.composicionPendiente(EMPRESA, caja, [sesion.id]);
+    expect(valor(otraVez.billetes)).toBe(4000);
+
+    // Y apuntado de nuevo, el ingreso se lo lleva: 45 € en billetes al banco.
+    await ingresos.registrarCambioCliente(ctx, {
+      registerId: caja,
+      sessionIds: [sesion.id],
+      recibido: [{ valor: 2000, cantidad: 1 }],
+      entregado,
+    });
+    const ingreso = await ingresos.crearIngreso(ctx, {
+      registerId: caja,
+      sessionIds: [sesion.id],
+      importeCentimos: 4500,
+    });
+    const delIngreso = await ingresos.composicionDeIngreso(EMPRESA, ingreso.id);
+    expect(delIngreso!.billetes).toEqual([
+      { valor: 2000, cantidad: 2 },
+      { valor: 500, cantidad: 1 },
+    ]);
+    expect(await ingresos.canjesPreparados(EMPRESA, caja)).toEqual([]);
+  });
+
   it("el criterio de aceptación del encargo, de punta a punta", async () => {
     const caja = await crearCaja("ingresos-criterio");
 

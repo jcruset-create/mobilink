@@ -993,8 +993,16 @@ export const actualizarReglaPago = (
 export const borrarReglaPago = (id: number) =>
   pedir<{ ok: true }>(`/payment-rules/${id}`, { method: "DELETE" });
 
+/** Cambio a un cliente con piezas de lo pendiente de ingresar. El cajón no se mueve. */
+export const cambioClienteIngreso = (datos: {
+  registerId: number;
+  sessionIds: number[];
+  recibido: LineaDenominacion[];
+  entregado: LineaDenominacion[];
+}) => pedir<{ swapId: number; valorCentimos: number }>("/bank-deposits/customer-change", json(datos));
+
 export const deshacerCanjeIngreso = (swapId: number) =>
-  pedir<{ operacionId: number; numero: string; valorCentimos: number }>(
+  pedir<{ operacionId: number | null; numero: string | null; valorCentimos: number }>(
     `/bank-deposits/swap/${swapId}/undo`,
     { method: "POST" }
   );

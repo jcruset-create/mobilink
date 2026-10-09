@@ -27,18 +27,19 @@ export const cantidadesDe = (lineas: readonly LineaDenominacion[]): Cantidades =
   return c;
 };
 
-/** Las piezas con las que se forma `objetivo`, o `null` si no hay forma exacta. */
-export function componer(disponibles: readonly LineaDenominacion[], objetivo: number): Cantidades | null {
-  if (objetivo <= 0 || objetivo > 10_000_000) return null;
+/**
+ * La tabla de la programación dinámica: para cada suma hasta `maximo`, con qué
+ * pieza se llega (-1 = no se llega, -2 = la suma 0). Ordenadas de mayor a
+ * menor, para que entre varias formas gane la de piezas grandes.
+ */
+function tabla(disponibles: readonly LineaDenominacion[], maximo: number) {
   const piezas = disponibles.filter((l) => l.cantidad > 0 && l.valor > 0).sort((a, b) => b.valor - a.valor);
-  if (piezas.length === 0) return null;
-
-  const via = new Int32Array(objetivo + 1).fill(-1);
+  const via = new Int32Array(maximo + 1).fill(-1);
   via[0] = -2;
   for (let i = 0; i < piezas.length; i++) {
     const v = piezas[i].valor;
-    const usadas = new Int32Array(objetivo + 1);
-    for (let s = v; s <= objetivo; s++) {
+    const usadas = new Int32Array(maximo + 1);
+    for (let s = v; s <= maximo; s++) {
       if (via[s] !== -1 || via[s - v] === -1) continue;
       const n = via[s - v] === i ? usadas[s - v] + 1 : 1;
       if (n > piezas[i].cantidad) continue;
@@ -46,7 +47,14 @@ export function componer(disponibles: readonly LineaDenominacion[], objetivo: nu
       usadas[s] = n;
     }
   }
-  if (via[objetivo] === -1) return null;
+  return { piezas, via };
+}
+
+/** Las piezas con las que se forma `objetivo`, o `null` si no hay forma exacta. */
+export function componer(disponibles: readonly LineaDenominacion[], objetivo: number): Cantidades | null {
+  if (objetivo <= 0 || objetivo > 10_000_000) return null;
+  const { piezas, via } = tabla(disponibles, objetivo);
+  if (piezas.length === 0 || via[objetivo] === -1) return null;
 
   const c: Cantidades = {};
   for (let s = objetivo; s > 0; ) {
@@ -55,6 +63,44 @@ export function componer(disponibles: readonly LineaDenominacion[], objetivo: nu
     s -= v;
   }
   return c;
+}
+
+/**
+ * El cambio para un cliente con piezas de lo pendiente de ingresar.
+ *
+ * El cliente da `importe` (un billete de 20 €, por ejemplo) y se le devuelve
+ * lo mismo con lo que hay en la bolsa del banco. Se busca soltar **todas las
+ * monedas que se pueda**, que es para lo que sirve: el banco no las admite, y
+ * cada euro en monedas que se va con el cliente es un euro más que se puede
+ * ingresar. El resto, con billetes más pequeños que lo que da el cliente (de
+ * nada sirve devolverle un billete como el suyo).
+ *
+ * Devuelve `null` si con lo pendiente no se puede dar ese cambio exacto.
+ */
+export function cambioParaCliente(
+  pendiente: readonly LineaDenominacion[],
+  importe: number,
+  esBillete: (valor: number) => boolean,
+  /** Lo que da el cliente: esas piezas no se le devuelven. */
+  excluir: readonly number[] = []
+): Cantidades | null {
+  if (importe <= 0 || importe > 10_000_000) return null;
+  const usables = pendiente.filter((l) => l.valor < importe && !excluir.includes(l.valor));
+  const monedas = usables.filter((l) => !esBillete(l.valor));
+  const billetes = usables.filter((l) => esBillete(l.valor));
+
+  const conMonedas = tabla(monedas, importe).via;
+  const conBilletes = tabla(billetes, importe).via;
+  // La mayor parte en monedas que deje un resto que se pueda dar en billetes.
+  for (let t = importe; t >= 0; t--) {
+    if (conMonedas[t] === -1 || conBilletes[importe - t] === -1) continue;
+    const c: Cantidades = {};
+    for (const parte of [componer(monedas, t), componer(billetes, importe - t)]) {
+      for (const [v, n] of Object.entries(parte ?? {})) c[Number(v)] = (c[Number(v)] ?? 0) + n;
+    }
+    return c;
+  }
+  return null;
 }
 
 /**

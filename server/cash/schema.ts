@@ -811,6 +811,43 @@ export async function initCash(): Promise<void> {
   `);
 
   /*
+   * Cambio a un cliente desde lo pendiente de ingresar.
+   *
+   * Un cliente da un billete de 20 € y se le devuelve el cambio con piezas de
+   * lo pendiente —sobre todo monedas, que el banco no admite—. Es un canje
+   * como el del cajón, pero con el cliente al otro lado: el cajón no se mueve,
+   * así que NO hay operación en el libro mayor (`operation_id` NULL) y las
+   * piezas se apuntan en `cash_deposit_swap_lines`, vistas desde lo
+   * pendiente: `ENTRA` lo que dio el cliente, `SALE` lo que se le devolvió.
+   *
+   * Va en la misma tabla que el canje a propósito: el ingreso que se lo lleva,
+   * los cierres contra los que cuenta y el «deshacer» son los mismos.
+   */
+  await pool.query(`
+    ALTER TABLE cash_deposit_swaps
+      ADD COLUMN IF NOT EXISTS tipo TEXT NOT NULL DEFAULT 'CAJON';
+    ALTER TABLE cash_deposit_swaps
+      ALTER COLUMN operation_id DROP NOT NULL;
+    ALTER TABLE cash_deposit_swaps
+      ADD COLUMN IF NOT EXISTS creado_por UUID;
+    ALTER TABLE cash_deposit_swaps
+      DROP CONSTRAINT IF EXISTS cash_deposit_swaps_tipo_chk;
+    ALTER TABLE cash_deposit_swaps
+      ADD CONSTRAINT cash_deposit_swaps_tipo_chk CHECK (
+        (tipo = 'CAJON' AND operation_id IS NOT NULL)
+        OR (tipo = 'CLIENTE' AND operation_id IS NULL)
+      );
+
+    CREATE TABLE IF NOT EXISTS cash_deposit_swap_lines (
+      swap_id INTEGER NOT NULL REFERENCES cash_deposit_swaps(id) ON DELETE CASCADE,
+      direccion TEXT NOT NULL CHECK (direccion IN ('ENTRA','SALE')),
+      valor_centimos INTEGER NOT NULL CHECK (valor_centimos > 0),
+      cantidad INTEGER NOT NULL CHECK (cantidad > 0),
+      PRIMARY KEY (swap_id, direccion, valor_centimos)
+    );
+  `);
+
+  /*
    * Contra qué cierres se hizo cada canje.
    *
    * Un canje cambia la COMPOSICIÓN del montón: salen monedas y entra un
