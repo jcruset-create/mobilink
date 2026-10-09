@@ -7,6 +7,7 @@ import {
   listarVehiculosPendientes, validarVehiculo, eliminarVehiculo,
 } from "../services/data";
 import EditorVehiculo from "../components/EditorVehiculo";
+import ModalBaseHabitual from "../components/ModalBaseHabitual";
 import type {
   Delegacion, Empresa, TipoVehiculo, Vehiculo,
   MedidaNeumatico,
@@ -54,6 +55,8 @@ export default function Vehiculos() {
   // Van arriba y no como una columna más: si no se ven, nadie los completa
   // nunca y la flota se llena de camiones sin marca ni modelo.
   const [pendientes, setPendientes] = useState<Vehiculo[]>([]);
+  // Poner la base de cada vehículo a partir de dónde ha dormido (histórico de presencia).
+  const [baseHabitual, setBaseHabitual] = useState(false);
   const [validando, setValidando] = useState<string | null>(null);
   const [msgPend, setMsgPend] = useState("");
 
@@ -344,6 +347,7 @@ export default function Vehiculos() {
         <h1 className="text-lg font-black">Vehículos</h1>
         <div className="flex flex-wrap items-center gap-2">
           <button onClick={() => navigate("/tyrecontrol/delegaciones")} className="rounded-lg border border-slate-600 px-3 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800" title="Las bases se definen en cada delegación">📍 Bases</button>
+          <button onClick={() => setBaseHabitual(true)} className="rounded-lg border border-slate-600 px-3 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800" title="Calcula la base de cada vehículo por las horas que ha pasado en cada una y la pone en su ficha">🏠 Base habitual</button>
           <button onClick={sincronizar} disabled={sincronizando} className="rounded-lg border border-sky-600 px-3 py-2 text-sm font-bold text-sky-300 hover:bg-sky-500/10 disabled:opacity-50">
             {sincronizando ? "Sincronizando…" : "↻ Sincronizar Webfleet"}
           </button>
@@ -692,6 +696,10 @@ export default function Vehiculos() {
         vez de un «¿seguro?» que nadie lee: de la lista de pendientes, todas
         las matrículas se parecen.
       */}
+      {baseHabitual && (
+        <ModalBaseHabitual empresas={empresas} empresaInicial={fEmpresa} onClose={() => setBaseHabitual(false)}
+          onAsignado={(m) => { setMsg(m); void cargar(); }} />
+      )}
       {aBorrar && (
         <Modal title="Eliminar vehículo" onClose={() => { setABorrar(null); setMotivoNoBorrado(null); }}
           footer={<div className="flex justify-end gap-2">

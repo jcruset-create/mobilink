@@ -3433,3 +3433,50 @@ export async function recorridoNeumatico(neumaticoId: string): Promise<Recorrido
   if (error) throw new Error(error.message);
   return data as unknown as RecorridoNeumatico;
 }
+
+// ── Base habitual por histórico de estancias ─────────────────────────────────
+// Dónde ha pasado más horas cada vehículo en los últimos N días, según el
+// barrido de presencia. `tc_base_habitual` solo calcula; `tc_asignar_base_
+// habitual` lo pone en la ficha (y por defecto SIMULA y solo rellena vacías).
+export interface BaseHabitual {
+  vehiculo_id: string;
+  matricula: string;
+  base_actual_id: string | null;
+  base_actual: string | null;
+  base_propuesta_id: string | null;
+  base_propuesta: string | null;
+  horas: number | null;
+  horas_en_bases: number | null;
+  cuota: number | null;
+  estancias: number | null;
+  segunda_id: string | null;
+  segunda: string | null;
+  horas_segunda: number | null;
+  decision: "clara" | "dudosa" | "sin_datos";
+}
+
+export interface ResultadoAsignarBase {
+  simulacion: boolean;
+  dias: number;
+  asignadas: number;
+  dudosas: number;
+  sin_datos: number;
+  respetadas: number;
+  cambios: { vehiculo_id: string; matricula: string; de: string | null; a: string; horas: number; cuota: number }[];
+}
+
+export async function calcularBaseHabitual(empresaId: string, dias = 30): Promise<BaseHabitual[]> {
+  const { data, error } = await supabase.rpc("tc_base_habitual", { p_empresa: empresaId, p_dias: dias });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as BaseHabitual[];
+}
+
+export async function asignarBaseHabitual(
+  empresaId: string, dias = 30, sobrescribir = false, simular = true,
+): Promise<ResultadoAsignarBase> {
+  const { data, error } = await supabase.rpc("tc_asignar_base_habitual", {
+    p_empresa: empresaId, p_dias: dias, p_sobrescribir: sobrescribir, p_simular: simular,
+  });
+  if (error) throw new Error(error.message);
+  return (data ?? {}) as ResultadoAsignarBase;
+}
