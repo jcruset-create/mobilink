@@ -1,7 +1,23 @@
 import { useEffect, useState } from "react";
 import { Routes, Route, Navigate, NavLink, useNavigate } from "react-router-dom";
-import { Home, LogOut, CalendarClock, ClipboardList, CalendarDays, BarChart3, Settings, ShieldAlert, CalendarCheck, Network, TrendingUp, UserCheck, FileInput, MonitorSmartphone, ListChecks, CalendarX,
-  CalendarRange, Users, FileScan, CarFront } from "lucide-react";
+import {
+  Home,
+  LogOut,
+  CalendarClock,
+  ClipboardList,
+  CalendarDays,
+  BarChart3,
+  Settings,
+  ShieldAlert,
+  FileInput,
+  MonitorSmartphone,
+  ListChecks,
+  CalendarX,
+  CalendarRange,
+  Users,
+  FileScan,
+  CarFront,
+} from "lucide-react";
 import logoMobilink from "../../assets/logo-mobilink.png";
 import SeaTarragonaV1 from "../../SeaTarragonaV1";
 import PedidosErpPage from "./PedidosErpPage";
@@ -39,36 +55,6 @@ const SECCIONES = [
   { key: "estadisticas", label: "Análisis y estadísticas", icon: BarChart3, proximamente: true },
   { key: "configuracion", label: "Configuración", icon: Settings, proximamente: true },
 ] as const;
-
-// Reclamo del módulo, reconstruido con iconos en vez de una imagen: fondo
-// transparente real y se adapta al alto y al color de la cabecera.
-const RECLAMO = [
-  { label: "Planifica", icon: CalendarCheck, color: "text-sky-400" },
-  { label: "Organiza", icon: Network, color: "text-emerald-400" },
-  { label: "Optimiza", icon: TrendingUp, color: "text-sky-400" },
-  { label: "Asigna", icon: UserCheck, color: "text-emerald-400" },
-] as const;
-
-function ReclamoWorkPlanner() {
-  return (
-    <div className="hidden shrink-0 items-center gap-2 xl:flex" aria-hidden>
-      {RECLAMO.map((r, i) => {
-        const Icon = r.icon;
-        return (
-          <div key={r.label} className="flex items-center gap-2">
-            {i > 0 && <span className="h-4 w-px bg-slate-700" />}
-            <span className="flex items-center gap-1.5">
-              <Icon className={`h-4 w-4 ${r.color}`} />
-              <span className="text-[11px] font-black uppercase italic tracking-wide text-slate-200">
-                {r.label}
-              </span>
-            </span>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
 
 function Proximamente({ titulo }: { titulo: string }) {
   return (
@@ -222,7 +208,6 @@ export default function WorkPlannerApp() {
             <span className="text-[13px] font-black">WorkPlanner</span>
             <VersionDesplegada />
           </div>
-          <ReclamoWorkPlanner />
           {permitido && (
             <nav className="flex items-center gap-1">
               {SECCIONES.filter((s) => !("soloAdmin" in s && s.soloAdmin) || esAdmin).map((s) => {
