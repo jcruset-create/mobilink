@@ -61,6 +61,14 @@ DÓNDE ESTÁ EL NÚMERO. Puede aparecer de dos maneras, y las dos valen:
 Si ves las dos cosas, manda la pegatina: es la que se ha puesto para
 identificar ESTA rueda.
 
+LA PEGATINA PUEDE ESTAR GIRADA. Es lo normal: la foto se hace de pie junto a
+la rueda y la pegatina sale de lado, a 90°, o boca abajo. Gira la imagen
+mentalmente y léela igual: un número de lado sigue siendo legible.
+
+EL NÚMERO SALE DOS VECES en la pegatina: uno pequeño junto al código de barras
+y otro GRANDE debajo. Son la misma cifra. Léelos los dos y compáralos; si
+coinciden, la confianza es alta. Suelen ser 10 cifras.
+
 QUÉ NO ES EL NÚMERO DE SERIE, por mucho que sea un número:
 
 - la medida (315/80R22.5, 295/80 R 22.5);
