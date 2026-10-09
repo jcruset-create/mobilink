@@ -101,12 +101,25 @@ export async function zonasDePegatina(imagen: Uint8Array): Promise<Caja[]> {
     if (n >= 30 && x0 > 0 && y0 > 0 && x1 < w - 1 && y1 < h - 1) manchas.push({ x0, y0, x1, y1, n });
   }
 
-  return manchas.sort((a, b) => b.n - a.n).slice(0, 3).map((c) => {
+  // Dos recortes por mancha, de ajustado a holgado. El AJUSTADO es el que
+  // lee las fotos de verdad: con la pegatina ocupando casi todo el recorte,
+  // al ampliarlo cada barra tiene píxeles de sobra. El holgado queda para
+  // cuando la mancha es solo un trozo de la pegatina (las barras y las cifras
+  // la parten) y hace falta margen para no cortar el código.
+  const cajas: Caja[] = [];
+  const recorte = (cx: number, cy: number, ancho: number, alto: number): Caja => {
+    const left = Math.max(0, Math.round(cx - ancho / 2)), top = Math.max(0, Math.round(cy - alto / 2));
+    return { left, top, width: Math.min(W - left, Math.round(ancho)), height: Math.min(H - top, Math.round(alto)) };
+  };
+  for (const c of manchas.sort((a, b) => b.n - a.n).slice(0, 3)) {
     const cx = ((c.x0 + c.x1) / 2) * esc, cy = ((c.y0 + c.y1) / 2) * esc;
-    const lado = Math.max((c.x1 - c.x0) * esc * 3, (c.y1 - c.y0) * esc * 3, Math.min(W, H) * 0.35);
-    const left = Math.max(0, Math.round(cx - lado / 2)), top = Math.max(0, Math.round(cy - lado / 2));
-    return { left, top, width: Math.min(W - left, Math.round(lado)), height: Math.min(H - top, Math.round(lado)) };
-  });
+    const bw = (c.x1 - c.x0 + 1) * esc, bh = (c.y1 - c.y0 + 1) * esc;
+    const minimo = Math.min(W, H) * 0.15;
+    cajas.push(recorte(cx, cy, Math.max(bw * 1.8, minimo), Math.max(bh * 2.2, minimo)));
+    const lado = Math.max(bw * 3, bh * 3, Math.min(W, H) * 0.35);
+    cajas.push(recorte(cx, cy, lado, lado));
+  }
+  return cajas;
 }
 
 /**
@@ -116,8 +129,8 @@ export async function zonasDePegatina(imagen: Uint8Array): Promise<Caja[]> {
  *
  * 1. La foto entera. Basta cuando la pegatina ocupa buena parte de la imagen,
  *    esté recta o girada a 90°, 180° o 270° (eso lo resuelve `tryRotate`).
- * 2. Si no sale nada: se localiza la pegatina, se recorta, se amplía y se
- *    prueba INCLINADA a ±15°, ±30° y ±45°. Es el caso real que fallaba: una
+ * 2. Si no sale nada: se localiza la pegatina, se recorta AJUSTADA a ella, se
+ *    amplía y se prueba INCLINADA de 5 en 5 grados y luego más abierta. Es el caso real que fallaba: una
  *    pegatina pequeña en una foto grande, boca abajo y algo torcida. El
  *    decodificador tolera poca inclinación, y a tamaño real el código tenía
  *    muy pocos píxeles por barra.
@@ -133,7 +146,9 @@ export async function seriesDeCodigoDeBarras(imagen: Uint8Array): Promise<string
   if (enteras.length) return enteras;
 
   for (const caja of await zonasDePegatina(imagen)) {
-    for (const grados of [0, -15, 15, -30, 30, -45, 45]) {
+    // De 5 en 5 al principio: la foto real se leía a -10° y a -15°, y no a 0°
+    // ni a -30°. El decodificador tolera muy poca inclinación.
+    for (const grados of [0, -5, 5, -10, 10, -15, 15, -25, 25, -40, 40]) {
       const png = await sharp(imagen).rotate().extract(caja).resize({ width: 1400 })
         .rotate(grados, { background: "#fff" }).grayscale().png().toBuffer();
       const series = await leer(png);
