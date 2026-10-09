@@ -2,6 +2,12 @@ import QRCode from "react-qr-code";
 import { ETIQUETA, bloquesDeEtiqueta, type BloqueEtiqueta } from "./medidas";
 
 /**
+ * Lo mismo que en el PDF: lo impreso se desplaza para compensar la impresora.
+ * Las cajas de prueba (marco) NO, porque dibujan el troquelado, que no se mueve.
+ */
+const AJ = ETIQUETA.ajusteImpresora;
+
+/**
  * Una etiqueta de neumático, dibujada en MILÍMETROS.
  *
  * Todo va en mm y nada en píxeles: esto se imprime y se pega en una goma, y un
@@ -38,7 +44,8 @@ function Bloque({ b, serie }: { b: BloqueEtiqueta; serie: string }) {
       <div
         style={{
           position: "absolute",
-          left: `${b.numero.x}mm`, top: `${b.numero.y}mm`,
+          // Con la corrección de la impresora: la geometría no se toca.
+          left: `${b.numero.x + AJ.x}mm`, top: `${b.numero.y + AJ.y}mm`,
           width: `${b.numero.ancho}mm`, height: `${b.numero.alto}mm`,
           // Courier New a propósito, y no `monospace` a secas: el genérico lo
           // resuelve cada sistema con una fuente distinta —Consolas en
@@ -60,7 +67,7 @@ function Bloque({ b, serie }: { b: BloqueEtiqueta; serie: string }) {
       <div
         style={{
           position: "absolute",
-          left: `${b.qr.x}mm`, top: `${b.qr.y}mm`,
+          left: `${b.qr.x + AJ.x}mm`, top: `${b.qr.y + AJ.y}mm`,
           width: `${b.qr.ancho}mm`, height: `${b.qr.alto}mm`,
         }}
       >

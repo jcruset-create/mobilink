@@ -33,11 +33,16 @@ const MM = 72 / 25.4;
  * Está aparte y exportada porque invertir la Y es el error clásico de generar
  * PDF, y sale a la primera o no sale: conviene poder probarlo.
  */
-export function aPuntos(caja: Caja, altoPagina = ETIQUETA.alto) {
+export function aPuntos(
+  caja: Caja,
+  altoPagina = ETIQUETA.alto,
+  ajuste: { x: number; y: number } = { x: 0, y: 0 },
+) {
   return {
-    x: caja.x * MM,
+    x: (caja.x + ajuste.x) * MM,
     // La Y del PDF mide desde abajo, y se refiere al borde INFERIOR de la caja.
-    y: (altoPagina - caja.y - caja.alto) * MM,
+    // Un ajuste positivo baja la caja, así que RESTA en el PDF.
+    y: (altoPagina - caja.y - ajuste.y - caja.alto) * MM,
     ancho: caja.ancho * MM,
     alto: caja.alto * MM,
   };
@@ -107,7 +112,7 @@ export async function construirPdfEtiquetas(
     const serie = e.serie.trim();
 
     for (const b of bloquesDeEtiqueta(Math.max(serie.length, 1))) {
-      const caja = aPuntos(b.numero);
+      const caja = aPuntos(b.numero, ETIQUETA.alto, ETIQUETA.ajusteImpresora);
       // Se parte del tamaño calculado y se encoge hasta que la fuente real
       // quepa. Nunca al revés: crecer se lo comería el borde.
       let tamano = b.numero.tamano * MM;
@@ -126,7 +131,7 @@ export async function construirPdfEtiquetas(
         color: rgb(0, 0, 0),
       });
 
-      const cajaQr = aPuntos(b.qr);
+      const cajaQr = aPuntos(b.qr, ETIQUETA.alto, ETIQUETA.ajusteImpresora);
       pagina.drawImage(qr, {
         x: cajaQr.x, y: cajaQr.y, width: cajaQr.ancho, height: cajaQr.alto,
       });
