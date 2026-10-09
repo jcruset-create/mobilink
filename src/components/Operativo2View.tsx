@@ -2,6 +2,7 @@ import { useState, type Dispatch, type SetStateAction } from "react";
 import AgendaView from "./AgendaView";
 import SelectorFurgoneta from "./SelectorFurgoneta";
 import PuntoEnCola from "./PuntoEnCola";
+import ParteDeTrabajoModal from "./ParteDeTrabajoModal";
 import { esTecnicoDePrueba } from "../modules/tecnicosDePrueba";
 import { AREA_META } from "../modules/workshopConstants";
 import { API_BASE, deleteScheduledJobFromBackend, fetchWithTimeout } from "../modules/workshopApi";
@@ -92,6 +93,8 @@ export type Operativo2ViewProps = {
   updateValidationPlate: (jobId: number, plate: string) => void;
   /** Corrige la operación de una entrada pendiente de validar. */
   updateValidationOperacion: (jobId: number, templateKey: string) => void;
+  /** Engancha un parte del ERP a una entrada pendiente de validar. */
+  adjuntarParteAValidacion: (jobId: number, cambios: Partial<Job>, resumen: string) => Promise<void>;
   /** Programar estados de técnico: solo administradores. Se pasa a la agenda. */
   puedeEditarEstadoTecnico?: boolean;
   addValidationExtraSupport: (jobId: number, supportName: string) => void;
@@ -227,6 +230,7 @@ export default function Operativo2View({
   updateValidationResponsible,
   updateValidationPlate,
   updateValidationOperacion,
+  adjuntarParteAValidacion,
   puedeEditarEstadoTecnico = false,
   addValidationExtraSupport,
   removeValidationSupportByName,
@@ -246,6 +250,8 @@ export default function Operativo2View({
   embebido,
 }: Operativo2ViewProps) {
   const [op2CitaOpen, setOp2CitaOpen] = useState(false);
+  /** Trabajo al que se le está enganchando un parte, o null. */
+  const [parteDe, setParteDe] = useState<Job | null>(null);
   /*
    * Tema de Operativo 2. Se guarda por navegador, no por usuario: es la
    * pantalla la que está en un sitio con mucha o poca luz, no la persona.
@@ -602,6 +608,9 @@ export default function Operativo2View({
                   <button type="button" disabled={assignedNames.length === 0 || (job.area === "movil" && !job.assignedVehicleId)} title={job.area === "movil" && !job.assignedVehicleId ? "Asigna una furgoneta antes de autorizar" : undefined} onClick={() => { void authorizeProposedJob(job.id); }} className="rounded bg-emerald-600 px-2 py-1 text-[11px] font-bold text-white disabled:opacity-40">✓ Autorizar</button>
                   <button type="button" onClick={() => sendValidationJobToQueue(job.id)} className="rounded border border-amber-400/40 bg-amber-400/10 px-2 py-1 text-[11px] text-amber-700 dark:text-amber-300">Cola</button>
                   <button type="button" onClick={() => { void rejectProposedJob(job.id); }} className="rounded border border-slate-400/60 dark:border-slate-500/40 bg-slate-200 dark:bg-slate-700 px-2 py-1 text-[11px] text-slate-800 dark:text-slate-200">Rechazar</button>
+                  <button type="button" onClick={() => setParteDe(job)} title={job.ptNumero ? `Parte ${job.ptNumero}` : "Enganchar el parte del ERP"} className={`rounded border px-2 py-1 text-[11px] font-bold ${job.ptNumero ? "border-sky-400/60 bg-sky-400/10 text-sky-700 dark:text-sky-300" : "border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200"}`}>
+                    {job.ptNumero ? `Parte ${job.ptNumero}` : "+ Parte"}
+                  </button>
                   <button type="button" onClick={() => { void deleteValidationJob(job.id); }} className="rounded bg-rose-600 px-2 py-1 text-[11px] font-bold text-white">Eliminar</button>
                   </div>
 
@@ -876,6 +885,16 @@ export default function Operativo2View({
           </div>
         </div>
       </div>
+
+      {parteDe && (
+        <ParteDeTrabajoModal
+          job={parteDe}
+          quickTemplates={quickTemplates}
+          workshopId={String(selectedWorkshopId)}
+          onCancelar={() => setParteDe(null)}
+          onGuardar={(cambios, resumen) => adjuntarParteAValidacion(parteDe.id, cambios, resumen)}
+        />
+      )}
 
       {op2CitaOpen && (
         <AgendaView
