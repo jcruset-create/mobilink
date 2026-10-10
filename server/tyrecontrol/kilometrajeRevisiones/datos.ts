@@ -9,6 +9,7 @@
  */
 
 import { supabase } from "../../supabase.ts";
+import { mesCerrado, ZONA_HORARIA_POR_DEFECTO } from "../../integration-hub/domain/meses.ts";
 
 /** Cuántas pendientes se traen de golpe para elegir la siguiente. */
 const PAGINA_PENDIENTES = 50;
@@ -117,6 +118,15 @@ export async function vecinasConKm(
  * mensual ya sincronizado. Es la cota independiente: otra consulta, otro día,
  * otra ventana.
  *
+ * Solo de un mes CERRADO. En el mes en curso, `final_odometer_km` no es el
+ * odómetro del día 31: es el que marcaba el autobús cuando pasó la última
+ * sincronización mensual, que puede ser de hace tres días. Usado como techo
+ * rechazaba lecturas buenas: el 10-10-2026 el relleno diario tiró 66 de las
+ * primeras 160 con «fuera del mes: fue de 809.524 a 809.910 km», para una
+ * revisión del día 7 que marcaba 809.980. El autobús simplemente había
+ * seguido rodando desde la sincronización. Del mes abierto, la cota que vale
+ * es la de HOY (`techoDe` en el worker), que sí es un techo de verdad.
+ *
  * El Hub se importa DENTRO por lo de siempre: `db.ts` lanza al importarse sin
  * `DATABASE_URL`, y TyreControl habla por Supabase.
  */
@@ -125,7 +135,9 @@ export async function cotasDelMes(
   vehiculoId: string,
   year: number,
   month: number,
+  ahora = new Date(),
 ): Promise<{ inicial: number; final: number } | null> {
+  if (!mesCerrado({ year, month }, ZONA_HORARIA_POR_DEFECTO, ahora)) return null;
   try {
     const { listMonthlyMileage } = await import("../../integration-hub/infrastructure/repositories.ts");
     const filas = await listMonthlyMileage({ tenantId: empresaId, mobilinkId: vehiculoId });
