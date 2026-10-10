@@ -3,7 +3,7 @@ import { Gauge, History, Hourglass } from "lucide-react";
 import {
   estadoKilometraje, estadoRelleno, estadoRevisiones, pararRelleno, pararRevisiones,
   rellenarKilometraje, rellenarRevisiones, sincronizarKilometraje,
-  type EstadoCuenta, type ResumenCuentaMensual, type TareaRelleno, type TareaRevisiones,
+  type EstadoCuenta, type ResumenCuentaMensual, type TareaRelleno, type TareaRevisiones, type RelojDiario,
 } from "../services/kilometrajeMensual";
 import type { CuentaTelematica } from "../services/conciliacion";
 
@@ -40,6 +40,9 @@ export default function SincronizacionKilometraje({ empresaId, cuenta }: { empre
   const [hastaRelleno, setHastaRelleno] = useState(mesAnteriorClave);
   // El otro relleno: el odómetro que marcaba cada autobús en cada revisión.
   const [revs, setRevs] = useState<TareaRevisiones | null>(null);
+  // El reloj que cada mañana lanza el relleno de los últimos días. Va aparte
+  // de la tarea: puede no haber tarea y sí una razón de por qué no la hay.
+  const [reloj, setReloj] = useState<RelojDiario | null>(null);
 
   async function cargarEstado() {
     if (!cuenta) return;
@@ -59,7 +62,8 @@ export default function SincronizacionKilometraje({ empresaId, cuenta }: { empre
 
   async function cargarRevs() {
     try {
-      setRevs((await estadoRevisiones(empresaId)).tarea);
+      const r = await estadoRevisiones(empresaId);
+      setRevs(r.tarea); setReloj(r.diario ?? null);
     } catch { /* que no se pierda el panel por no poder mirar el progreso */ }
   }
 
@@ -309,6 +313,31 @@ export default function SincronizacionKilometraje({ empresaId, cuenta }: { empre
               Primer descarte: {revs.muestraMotivos[0]}
             </span>
           )}
+        </div>
+      )}
+
+      {/* El reloj diario: si no hay kilómetros en las revisiones de ayer, aquí está el porqué. */}
+      {reloj && (
+        <div className="mt-2 rounded-lg border border-slate-700 bg-slate-900/40 px-3 py-2 text-slate-300">
+          <span className="font-bold text-slate-200">Relleno diario</span>
+          <span className="text-slate-400"> · cada día a las {String(reloj.horaLocal).padStart(2, "0")}:00, las revisiones de los últimos {reloj.diasAtras} días hasta ayer</span>
+          <div className="mt-1 grid gap-x-4 gap-y-1 sm:grid-cols-2 lg:grid-cols-3">
+            <span>
+              Último lanzamiento: <b>{reloj.ultimoLanzamientoMs ? new Date(reloj.ultimoLanzamientoMs).toLocaleString("es-ES") : "nunca"}</b>
+              {reloj.lanzadoHoy && <span className="text-emerald-300"> · hoy ya</span>}
+            </span>
+            {reloj.ventana && (
+              <span>Ventana: <b>{reloj.ventana.desde}</b> a <b>{reloj.ventana.hasta}</b>{reloj.pendientesAlLanzar != null && <> · {reloj.pendientesAlLanzar} sin km</>}</span>
+            )}
+            {reloj.ultimaVuelta && (
+              <span className={`sm:col-span-2 lg:col-span-3 ${reloj.ultimaVuelta.resultado === "ocupada" || reloj.ultimaVuelta.resultado === "error" ? "text-amber-300" : ""}`}>
+                Última vuelta del reloj ({new Date(reloj.ultimaVuelta.ms).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}):{" "}
+                <b>{{ lanzado: "lanzado", sin_pendientes: "nada que rellenar", al_dia: "ya lanzado hoy o aún no es la hora", ocupada: "esperando", error: "error" }[reloj.ultimaVuelta.resultado]}</b>
+                {reloj.ultimaVuelta.detalle && <> — {reloj.ultimaVuelta.detalle}</>}
+              </span>
+            )}
+            {!reloj.ultimaVuelta && <span className="text-slate-400">El reloj no ha mirado esta empresa desde el último arranque del servidor.</span>}
+          </div>
         </div>
       )}
 

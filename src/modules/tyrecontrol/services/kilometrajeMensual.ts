@@ -150,8 +150,19 @@ export interface TareaRevisiones {
 export const rellenarRevisiones = (b: { empresaId?: string; intervaloSegundos?: number; desde?: string }) =>
   pedir<{ tarea: TareaRevisiones }>("/revisiones", { method: "POST", body: JSON.stringify(b) });
 
+/** El reloj que lanza el relleno de las revisiones de los últimos días cada mañana. */
+export interface RelojDiario {
+  ultimoLanzamientoMs: number | null;
+  ventana: { desde: string; hasta: string } | null;
+  pendientesAlLanzar: number | null;
+  lanzadoHoy: boolean;
+  ultimaVuelta: { ms: number; resultado: "lanzado" | "sin_pendientes" | "al_dia" | "ocupada" | "error"; detalle?: string } | null;
+  horaLocal: number;
+  diasAtras: number;
+}
+
 export const estadoRevisiones = (empresaId?: string) =>
-  pedir<{ empresaId: string; tarea: TareaRevisiones | null }>(`/revisiones${empresaId ? `?empresa=${encodeURIComponent(empresaId)}` : ""}`);
+  pedir<{ empresaId: string; tarea: TareaRevisiones | null; diario?: RelojDiario | null }>(`/revisiones${empresaId ? `?empresa=${encodeURIComponent(empresaId)}` : ""}`);
 
 export const pararRevisiones = (b: { empresaId?: string }) =>
   pedir<{ tarea: TareaRevisiones }>("/revisiones/parar", { method: "POST", body: JSON.stringify(b) });
