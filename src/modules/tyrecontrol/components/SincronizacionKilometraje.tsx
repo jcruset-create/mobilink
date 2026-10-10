@@ -43,6 +43,10 @@ export default function SincronizacionKilometraje({ empresaId, cuenta }: { empre
   // El reloj que cada mañana lanza el relleno de los últimos días. Va aparte
   // de la tarea: puede no haber tarea y sí una razón de por qué no la hay.
   const [reloj, setReloj] = useState<RelojDiario | null>(null);
+  // Acotar el relleno a un tramo de fechas. Vacío = como siempre: desde donde
+  // llegue el histórico del proveedor hasta hoy.
+  const [desdeRevs, setDesdeRevs] = useState("");
+  const [hastaRevs, setHastaRevs] = useState("");
 
   async function cargarEstado() {
     if (!cuenta) return;
@@ -80,6 +84,13 @@ export default function SincronizacionKilometraje({ empresaId, cuenta }: { empre
   }, [revs?.estado, empresaId]);
 
   async function lanzarRevisiones() {
+    if (desdeRevs && hastaRevs && desdeRevs > hastaRevs) {
+      setError("El «desde» no puede ser posterior al «hasta»");
+      return;
+    }
+    const tramo = desdeRevs || hastaRevs
+      ? `\n\nSolo las revisiones ${desdeRevs ? `desde el ${desdeRevs}` : ""}${desdeRevs && hastaRevs ? " " : ""}${hastaRevs ? `hasta el ${hastaRevs}` : ""}.`
+      : "";
     if (!confirm(
       "Se buscará en la telemática el odómetro que marcaba cada autobús en el momento de cada " +
       "revisión que no tenga kilometraje, de UNA EN UNA y a una revisión cada 20 segundos.\n\n" +
@@ -87,11 +98,13 @@ export default function SincronizacionKilometraje({ empresaId, cuenta }: { empre
       "anterior: preguntar por años que no guarda no es lento, es imposible.\n\n" +
       "Un número solo se escribe si dos consultas distintas coinciden y encaja con las revisiones " +
       "vecinas y con el mes ya sincronizado. Nunca pisa un kilometraje puesto a mano.\n\n" +
-      "Son horas, sigue en el servidor y puedes pararlo. ¿Seguir?",
+      "Son horas, sigue en el servidor y puedes pararlo." + tramo + "\n\n¿Seguir?",
     )) return;
     setError("");
     try {
-      setRevs((await rellenarRevisiones({ empresaId })).tarea);
+      setRevs((await rellenarRevisiones({
+        empresaId, desde: desdeRevs || undefined, hasta: hastaRevs || undefined,
+      })).tarea);
     } catch (e: any) {
       setError(e?.message ?? "No se pudo arrancar el relleno de revisiones");
     }
@@ -271,6 +284,16 @@ export default function SincronizacionKilometraje({ empresaId, cuenta }: { empre
           <History className="h-4 w-4" /> Kilómetros del histórico de revisiones
         </div>
         <span className="text-slate-400">una revisión cada 20 s</span>
+        {revs?.estado !== "en_curso" && (
+          <label className="flex items-center gap-1 text-slate-400" title="Vacío: desde donde llegue el histórico del proveedor">
+            del
+            <input type="date" value={desdeRevs} onChange={(e) => setDesdeRevs(e.target.value)}
+              className="rounded border border-slate-600 bg-slate-900 px-2 py-1 text-slate-200" />
+            al
+            <input type="date" value={hastaRevs} onChange={(e) => setHastaRevs(e.target.value)}
+              className="rounded border border-slate-600 bg-slate-900 px-2 py-1 text-slate-200" />
+          </label>
+        )}
         {revs?.estado === "en_curso" ? (
           <button
             onClick={() => void detenerRevisiones()}
@@ -300,6 +323,11 @@ export default function SincronizacionKilometraje({ empresaId, cuenta }: { empre
           {revs.ultima && (
             <span className="sm:col-span-3 lg:col-span-4">
               Última: <b>{revs.ultima.fecha}</b> → {revs.ultima.resultado}
+            </span>
+          )}
+          {revs.hasta && (
+            <span className="text-slate-400 sm:col-span-3 lg:col-span-4">
+              Acotada: del <b>{revs.desde ?? "principio"}</b> al <b>{revs.hasta}</b>{revs.origen === "diario" && " · lanzada por el relleno diario"}
             </span>
           )}
           {revs.notaHorizonte && (

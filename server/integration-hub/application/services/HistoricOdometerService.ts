@@ -61,11 +61,15 @@ import { resolveTelematicsConnectors } from "../../connectors/ConnectorRegistry.
 /**
  * Cuánto pueden diferir dos ventanas y seguir considerándose de acuerdo, en km.
  *
- * Un kilómetro, que cubre el redondeo del proveedor y no se acerca ni de lejos
- * al tipo de discrepancia que se quiere cazar: la respuesta mentirosa medida
- * estaba 65.000 km por debajo.
+ * Empezó en un kilómetro, «que cubre el redondeo del proveedor». No lo cubre:
+ * medido en Plana el 10-10-2026, Movertis dio 1.101.289,04 km con la ventana
+ * de 7 días y 1.101.290,48 con la de 28 para el MISMO instante —1,44 km de
+ * diferencia— y el relleno del histórico rechazó 3.989 revisiones seguidas
+ * sin escribir ninguna. Lo que se quiere cazar es otra cosa: la respuesta
+ * mentirosa medida estaba 65.000 km por debajo. Cinco kilómetros sobre un
+ * odómetro de un millón siguen sin dejar pasar nada de eso.
  */
-export const TOLERANCIA_ACUERDO_KM = 1;
+export const TOLERANCIA_ACUERDO_KM = 5;
 
 /**
  * Margen para dar un día por cerrado. Seis horas, el mismo que `mesCerrado`:
