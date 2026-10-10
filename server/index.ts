@@ -3883,6 +3883,42 @@ async function tallerCanAccessJob(op: { name: string; esSupervisor: boolean }, j
 }
 
 // Listar fotos de un trabajo
+/**
+ * Los ficheros de un trabajo, para el panel.
+ *
+ * La ruta de al lado sirve lo mismo, pero solo a un operario con su PIN: la
+ * usa la APK. El histórico lo mira una persona desde el panel, y sin esto las
+ * fotos del patio existen en la base y no hay forma de verlas.
+ *
+ * Solo lee. El alta de ficheros sigue siendo cosa de la APK.
+ */
+app.get("/api/jobs/:id/files", exigirCredencial(requirePanelRole), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+
+    const result = await db.query(
+      `SELECT id, url, "fileName", "techName", "createdAtMs", tipo
+       FROM job_files WHERE "jobId" = $1 ORDER BY "createdAtMs" ASC`,
+      [id]
+    );
+
+    res.json(
+      result.rows.map((r: any) => ({
+        id: Number(r.id),
+        url: r.url,
+        fileName: r.fileName ?? null,
+        techName: r.techName ?? null,
+        createdAtMs: Number(r.createdAtMs) || null,
+        tipo: r.tipo ?? null,
+      }))
+    );
+  } catch (error) {
+    console.error("GET /api/jobs/:id/files error:", error);
+    res.status(500).json({ error: "Error cargando los ficheros del trabajo" });
+  }
+});
+
 app.get("/api/taller-operator/jobs/:id/files", requireTallerOperator, async (req, res) => {
   try {
     const { techName } = (req as any).roadsideOperator as { techName: string };
