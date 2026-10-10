@@ -858,6 +858,73 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
   });
 
   /*
+   * La columna «Efectivo» de la red dice lo mismo que la fila de esa caja en
+   * «Posición de efectivo».
+   *
+   * Son dos pantallas distintas enseñando el mismo dinero, y la de la red lo
+   * pide a la misma función que la otra en vez de recalcularlo. Esta prueba
+   * existe para que siga siendo así: el día que alguien copie la cuenta en la
+   * consulta de la red, las dos pantallas empezarán a decir cosas distintas y
+   * aquí saltará.
+   */
+  it("el efectivo de la red es el mismo que el de la posición por caja", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const { rows: creada } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
+         VALUES ($1,'efectivo-red',$2,$3,$3) RETURNING id`,
+        [EMPRESA, `efr-${String(process.hrtime.bigint()).slice(-9)}`, Date.now()]
+      );
+      const caja = creada[0].id;
+
+      // Dinero en los tres sitios a la vez: cajón, fuera con una persona y
+      // esperando al banco. Con uno solo, un error de reparto no se vería.
+      const { sesion } = await servicio.abrirJornada(ctx, {
+        registerId: caja,
+        fondoManual: [{ valor: 2000, cantidad: 5 }, { valor: 1000, cantidad: 5 }],
+      });
+      await servicio.registrarCobro(ctx, {
+        sessionId: sesion.id,
+        importeCentimos: 4000,
+        formasPago: [{ forma: "CASH", importe: 4000 }],
+        efectivoRecibido: [{ valor: 2000, cantidad: 2 }],
+      });
+      await tesoreria.entregarDinero(ctx, {
+        sessionId: sesion.id,
+        persona: "Nuria",
+        motivo: "Compra de material",
+        importeCentimos: 2000,
+        entregado: [{ valor: 2000, cantidad: 1 }],
+      });
+      await vaciar();
+
+      const enRed = (await queries.cajasEnRed(EMPRESA)).find((c) => c.registerId === caja)!;
+      const posicion = (await queries.posicionPorCaja(EMPRESA)).find(
+        (c) => c.registerId === caja
+      )!;
+      expect(enRed.efectivoCentimos).toBe(posicion.totalCentimos);
+      // Fondo 150 € (5×20 + 5×10) + 40 € cobrados = 190 €. Los 20 € que lleva
+      // Nuria salieron del cajón pero siguen siendo de la casa, así que el
+      // total no los pierde: están en tránsito, no fuera de la cuenta.
+      expect(enRed.efectivoCentimos).toBe(19000);
+
+      // Y una caja sin un solo evento sale con cero, no sin fila.
+      const { rows: virgen } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
+         VALUES ($1,'efectivo-red',$2,$3,$3) RETURNING id`,
+        [EMPRESA, `efr0-${String(process.hrtime.bigint()).slice(-9)}`, Date.now()]
+      );
+      const sinEventos = (await queries.cajasEnRed(EMPRESA)).find(
+        (c) => c.registerId === virgen[0].id
+      );
+      expect(sinEventos).toBeTruthy();
+      expect(sinEventos!.efectivoCentimos).toBe(0);
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
+  });
+
+  /*
    * Lo ingresado por una caja no crece al resincronizar.
    *
    * El caso real: Central decía que Tarragona había ingresado 6.230 € cuando

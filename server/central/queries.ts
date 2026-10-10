@@ -22,6 +22,13 @@ export type CajaEnRed = {
   ultimaFechaCerrada: string | null;
   /** Días desde el último cierre. Es el número que delata a la caja olvidada. */
   diasSinCerrar: number | null;
+  /**
+   * TODO el efectivo de esa caja: el del cajón, el que está fuera, el que
+   * espera al banco y el remanente. El mismo número que su fila en «Posición
+   * de efectivo», porque sale del mismo sitio.
+   */
+  efectivoCentimos: number;
+  /** Lo llevado al banco en toda su vida. Es un acumulado, no un saldo. */
   ingresadoCentimos: number;
 };
 
@@ -181,6 +188,21 @@ export async function cajasEnRed(empresaId: string, centroId?: string | null): P
     [empresaId, centroId ?? null]
   );
 
+  /*
+   * El efectivo de cada caja NO se recalcula aquí: se pide a `posicionPorCaja`,
+   * que es quien lo sabe hacer. Son cuatro sitios distintos donde puede estar
+   * el dinero y una resta que es fácil olvidar; una segunda copia de esa cuenta
+   * habría empezado a decir otra cosa que la pantalla de Posición el primer día
+   * que se tocara una de las dos, y entonces no serviría ninguna.
+   *
+   * Sin filtrar por taller aunque el listado sí lo filtre: se busca por id de
+   * caja, así que un superconjunto vale, y pasar el filtro obligaría a que las
+   * dos consultas lo entendieran igual.
+   */
+  const efectivo = new Map(
+    (await posicionPorCaja(empresaId)).map((c) => [c.registerId, c.totalCentimos])
+  );
+
   return rows.map((r: any) => ({
     registerId: r.register_id,
     centroId: r.centro_id ?? null,
@@ -194,6 +216,7 @@ export async function cajasEnRed(empresaId: string, centroId?: string | null): P
         ? r.ultima_fecha_cerrada.toISOString().slice(0, 10)
         : (r.ultima_fecha_cerrada ?? null),
     diasSinCerrar: r.dias_sin_cerrar == null ? null : Number(r.dias_sin_cerrar),
+    efectivoCentimos: efectivo.get(r.register_id) ?? 0,
     ingresadoCentimos: Number(r.ingresado_centimos),
   }));
 }

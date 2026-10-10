@@ -350,7 +350,7 @@ function Red() {
             <th className={thCls}>Caja</th>
             <th className={thCls}>Estado</th>
             <th className={thCls}>Último cierre</th>
-            <th className={`${thCls} text-right`}>Ingresado</th>
+            <th className={`${thCls} text-right`}>Efectivo</th>
           </tr>
         </thead>
         <tbody>
@@ -386,7 +386,15 @@ function Red() {
                   <span className="ml-2 text-amber-400">{c.diasSinCerrar} días</span>
                 )}
               </td>
-              <td className={`${tdCls} text-right tabular-nums`}>{euros(c.ingresadoCentimos)}</td>
+              {/*
+                * El efectivo que tiene la caja AHORA, no lo que llevó al banco
+                * en toda su vida: aquello era un acumulado histórico que no
+                * contesta la pregunta que trae a nadie a esta pantalla.
+                * Es el mismo número que su fila en «Posición de efectivo».
+                */}
+              <td className={`${tdCls} text-right tabular-nums`}>
+                {euros(c.efectivoCentimos)}
+              </td>
             </tr>
           ))}
         </tbody>
