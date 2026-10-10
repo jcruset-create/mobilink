@@ -131,6 +131,9 @@ export interface TareaRevisiones {
   intervaloSegundos: number;
   /** Suelo del histórico del proveedor: no se pregunta por nada anterior. */
   desde: string | null;
+  /** Techo a mano, o el de la ventana diaria. */
+  hasta?: string | null;
+  origen?: "manual" | "diario";
   notaHorizonte: string | null;
   estado: "en_curso" | "terminada" | "parada" | "abandonada";
   iniciadaMs: number;
@@ -147,7 +150,7 @@ export interface TareaRevisiones {
   nota?: string;
 }
 
-export const rellenarRevisiones = (b: { empresaId?: string; intervaloSegundos?: number; desde?: string }) =>
+export const rellenarRevisiones = (b: { empresaId?: string; intervaloSegundos?: number; desde?: string; hasta?: string }) =>
   pedir<{ tarea: TareaRevisiones }>("/revisiones", { method: "POST", body: JSON.stringify(b) });
 
 /** El reloj que lanza el relleno de las revisiones de los últimos días cada mañana. */

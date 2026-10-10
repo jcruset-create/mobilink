@@ -112,9 +112,14 @@ describe("deAcuerdo()", () => {
     expect(deAcuerdo(1266263.46, 1200870.91)).toBe(false);
   });
 
-  it("la tolerancia es de un kilómetro", () => {
-    expect(TOLERANCIA_ACUERDO_KM).toBe(1);
-    expect(deAcuerdo(1000, 1001.5)).toBe(false);
+  it("la diferencia real medida en Movertis (1,44 km entre ventanas) SÍ pasa", () => {
+    expect(deAcuerdo(1101289.04, 1101290.48)).toBe(true);
+  });
+
+  it("la tolerancia es de cinco kilómetros", () => {
+    expect(TOLERANCIA_ACUERDO_KM).toBe(5);
+    expect(deAcuerdo(1000, 1005)).toBe(true);
+    expect(deAcuerdo(1000, 1005.5)).toBe(false);
   });
 });
 

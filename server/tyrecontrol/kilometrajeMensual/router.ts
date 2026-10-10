@@ -280,7 +280,7 @@ export function createKilometrajeMensualRouter(): Router {
    * autobús en el momento de cada revisión. El método y sus trampas están en
    * `HistoricOdometerService.ts`; las cotas, en `kilometrajeRevisiones/`.
    *
-   * Cuerpo: { empresaId?, intervaloSegundos? }
+   * Cuerpo: { empresaId?, intervaloSegundos?, desde?, hasta? } (fechas `YYYY-MM-DD`)
    */
   router.post("/revisiones", async (req, res) => {
     try {
@@ -292,6 +292,9 @@ export function createKilometrajeMensualRouter(): Router {
         // Sin `desde`, la tarea le pregunta al proveedor hasta dónde llega su
         // histórico. Se acepta a mano para poder acotarla más aún.
         desde: typeof req.body?.desde === "string" ? req.body.desde : null,
+        // Y el techo, para acotar un tramo («del 1 al 15 de septiembre») en
+        // vez de tragarse el histórico entero cada vez.
+        hasta: typeof req.body?.hasta === "string" ? req.body.hasta : null,
       });
       res.json({ tarea });
     } catch (e) {
