@@ -126,3 +126,32 @@ describe("tickRellenoDiario", () => {
     expect(r.lanzadas).toEqual(["plana"]);
   });
 });
+
+describe("estadoRellenoDiario", () => {
+  it("dice que el reloj se quedó esperando por otro relleno, y por qué", async () => {
+    const { estadoRellenoDiario, olvidarVueltasDiario } = await import("./diario.ts");
+    olvidarVueltasDiario();
+    vi.mocked(listTenantsWithConnectors).mockResolvedValue(["plana"]);
+    vi.mocked(getSyncState).mockResolvedValue(null);
+    vi.mocked(estadoRellenoRevisiones).mockReturnValue({ estado: "en_curso", origen: "manual", escritas: 0, totalAlEmpezar: 3989 } as any);
+
+    await tickRellenoDiario(MANANA);
+    const e = await estadoRellenoDiario("plana", MANANA);
+    expect(e.lanzadoHoy).toBe(false);
+    expect(e.ultimoLanzamientoMs).toBeNull();
+    expect(e.ultimaVuelta?.resultado).toBe("ocupada");
+    expect(e.ultimaVuelta?.detalle).toContain("del histórico");
+    expect(e.ultimaVuelta?.detalle).toContain("3989");
+  });
+
+  it("lee de la base el último lanzamiento y su ventana", async () => {
+    const { estadoRellenoDiario } = await import("./diario.ts");
+    vi.mocked(getSyncState).mockResolvedValue({
+      last_sync_ms: MANANA.getTime(), detail: JSON.stringify({ desde: "2026-10-06", hasta: "2026-10-08", pendientes: 42 }),
+    } as any);
+    const e = await estadoRellenoDiario("plana", new Date(MANANA.getTime() + 3600_000));
+    expect(e.lanzadoHoy).toBe(true);
+    expect(e.ventana).toEqual({ desde: "2026-10-06", hasta: "2026-10-08" });
+    expect(e.pendientesAlLanzar).toBe(42);
+  });
+});

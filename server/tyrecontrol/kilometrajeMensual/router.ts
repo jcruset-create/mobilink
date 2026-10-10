@@ -303,7 +303,11 @@ export function createKilometrajeMensualRouter(): Router {
     try {
       const empresaId = empresaDe((req as Peticion).solicitante!, req.query.empresa);
       if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
-      res.json({ empresaId, tarea: estadoRellenoRevisiones(empresaId) });
+      // El reloj diario va aparte de la tarea: puede no haber tarea y sí
+      // haber una razón por la que no la hay (otro relleno en marcha).
+      const { estadoRellenoDiario } = await import("../kilometrajeRevisiones/diario.ts");
+      const diario = await estadoRellenoDiario(empresaId).catch(() => null);
+      res.json({ empresaId, tarea: estadoRellenoRevisiones(empresaId), diario });
     } catch (e) {
       fallo(res, e);
     }

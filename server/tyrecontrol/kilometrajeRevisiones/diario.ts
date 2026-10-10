@@ -110,6 +110,50 @@ export interface ResultadoDiario {
  * revisión. Si no había nada que rellenar también cuenta como hecho, que es
  * lo normal en una empresa sin CheckPoint.
  */
+/**
+ * Lo que pasó la última vez que el reloj miró a cada empresa, en memoria.
+ *
+ * El lanzamiento de hoy se guarda en `integration_sync_state`; esto es lo
+ * otro: que a las 07:00 se miró y había un relleno en marcha, o que falló.
+ * Sin ello, un panel que solo lee la base diría «todavía no se ha lanzado
+ * hoy» y no por qué, que es justo lo que se le pregunta.
+ */
+interface Vuelta { ms: number; resultado: "lanzado" | "sin_pendientes" | "al_dia" | "ocupada" | "error"; detalle?: string }
+const ultimaVuelta = new Map<string, Vuelta>();
+
+export interface EstadoDiario {
+  /** Cuándo se lanzó por última vez (ms), o null si nunca. */
+  ultimoLanzamientoMs: number | null;
+  /** La ventana y las pendientes de ese lanzamiento. */
+  ventana: { desde: string; hasta: string } | null;
+  pendientesAlLanzar: number | null;
+  /** ¿Ya se ha lanzado hoy (fecha local)? */
+  lanzadoHoy: boolean;
+  /** La última vez que el reloj miró esta empresa y qué decidió. */
+  ultimaVuelta: Vuelta | null;
+  /** A qué hora local se lanza. */
+  horaLocal: number;
+  diasAtras: number;
+}
+
+/** Para el panel: dónde está el reloj diario de una empresa. */
+export async function estadoRellenoDiario(empresaId: string, ahora = new Date()): Promise<EstadoDiario> {
+  const { getSyncState } = await import("../../integration-hub/infrastructure/repositories.ts");
+  const fila = await getSyncState(empresaId, ENTIDAD_DIARIO);
+  const ultimoMs = fila?.last_sync_ms != null ? Number(fila.last_sync_ms) : null;
+  let detalle: any = null;
+  try { detalle = fila?.detail ? JSON.parse(String(fila.detail)) : null; } catch { detalle = null; }
+  return {
+    ultimoLanzamientoMs: ultimoMs,
+    ventana: detalle?.desde && detalle?.hasta ? { desde: String(detalle.desde), hasta: String(detalle.hasta) } : null,
+    pendientesAlLanzar: typeof detalle?.pendientes === "number" ? detalle.pendientes : null,
+    lanzadoHoy: ultimoMs != null && fechaLocal(new Date(ultimoMs)) === fechaLocal(ahora),
+    ultimaVuelta: ultimaVuelta.get(empresaId) ?? null,
+    horaLocal: HORA_LOCAL,
+    diasAtras: DIAS_ATRAS,
+  };
+}
+
 export async function tickRellenoDiario(ahora = new Date()): Promise<ResultadoDiario> {
   const { listTenantsWithConnectors, getSyncState, upsertSyncState } = await import(
     "../../integration-hub/infrastructure/repositories.ts"
@@ -126,17 +170,32 @@ export async function tickRellenoDiario(ahora = new Date()): Promise<ResultadoDi
     try {
       const fila = await getSyncState(empresaId, ENTIDAD_DIARIO);
       const ultimoMs = fila?.last_sync_ms != null ? Number(fila.last_sync_ms) : null;
-      if (!tocaHoy(ultimoMs, ahora, zona)) { r.alDia += 1; continue; }
+      if (!tocaHoy(ultimoMs, ahora, zona)) {
+        r.alDia += 1;
+        ultimaVuelta.set(empresaId, { ms: ahora.getTime(), resultado: "al_dia" });
+        continue;
+      }
 
       // Un relleno en marcha —el del histórico, lanzado a mano— usa el mismo
       // cupo del proveedor. No se le pisa: se vuelve a mirar en 15 minutos.
       const viva = estadoRellenoRevisiones(empresaId);
-      if (viva && viva.estado === "en_curso") { r.ocupadas.push(empresaId); continue; }
+      if (viva && viva.estado === "en_curso") {
+        r.ocupadas.push(empresaId);
+        ultimaVuelta.set(empresaId, {
+          ms: ahora.getTime(), resultado: "ocupada",
+          detalle: `hay un relleno ${viva.origen === "diario" ? "diario" : "del histórico"} en marcha (${viva.escritas} escritas de ${viva.totalAlEmpezar}); se vuelve a mirar en 15 min`,
+        });
+        continue;
+      }
 
       const { desde, hasta } = ventanaDiaria(ahora, zona);
       const tarea = await iniciarRellenoRevisiones({ empresaId, desde, hasta, origen: "diario" });
       const vacia = tarea.estado === "terminada" && tarea.totalAlEmpezar === 0;
       (vacia ? r.vacias : r.lanzadas).push(empresaId);
+      ultimaVuelta.set(empresaId, {
+        ms: ahora.getTime(), resultado: vacia ? "sin_pendientes" : "lanzado",
+        detalle: `${desde} a ${hasta}: ${tarea.totalAlEmpezar} revisión(es) sin km`,
+      });
 
       await upsertSyncState({
         tenantId: empresaId,
@@ -149,6 +208,7 @@ export async function tickRellenoDiario(ahora = new Date()): Promise<ResultadoDi
       // Una empresa que falla no deja sin relleno a las demás. Y sin guardar
       // el lanzamiento, se reintenta en la siguiente vuelta.
       console.error("[km-revisiones-diario]", empresaId, e?.message ?? e);
+      ultimaVuelta.set(empresaId, { ms: ahora.getTime(), resultado: "error", detalle: String(e?.message ?? e) });
     }
   }
   return r;
@@ -175,4 +235,9 @@ export function startRellenoDiario(): void {
 export function stopRellenoDiario(): void {
   if (temporizador) clearInterval(temporizador);
   temporizador = null;
+}
+
+/** Solo para las pruebas. */
+export function olvidarVueltasDiario(): void {
+  ultimaVuelta.clear();
 }
