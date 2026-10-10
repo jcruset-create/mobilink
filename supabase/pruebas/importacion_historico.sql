@@ -55,11 +55,12 @@ create table tc_vehiculos (
   id uuid primary key default gen_random_uuid(), empresa_id uuid references tc_empresas(id),
   tipo_vehiculo_id uuid references tc_tipos_vehiculo(id), matricula text not null, km_actual numeric not null default 0,
   origen_km text default 'manual', activo boolean default true, unique (empresa_id, matricula));
-create table tc_neumaticos (id uuid primary key default gen_random_uuid(), empresa_id uuid, medida text, marca text, modelo text);
-create table tc_montajes_actuales (id uuid primary key default gen_random_uuid(), vehiculo_id uuid, posicion_id uuid, neumatico_id uuid);
+create table tc_neumaticos (id uuid primary key default gen_random_uuid(), empresa_id uuid, numero_interno text, medida text, marca text, modelo text);
+create table tc_montajes_actuales (id uuid primary key default gen_random_uuid(), empresa_id uuid, vehiculo_id uuid, posicion_id uuid, neumatico_id uuid);
 create table tc_historial_montajes (id uuid primary key default gen_random_uuid(), vehiculo_id uuid);
 create table movimientos_stock (id uuid primary key default gen_random_uuid(), cantidad int);
-create table revisiones_vehiculo (id uuid primary key default gen_random_uuid(), vehiculo_id uuid, fecha_revision date);
+create table revisiones_vehiculo (id uuid primary key default gen_random_uuid(), empresa_id uuid, vehiculo_id uuid, fecha_revision date);
+create table revisiones_neumaticos_detalle (id uuid primary key default gen_random_uuid(), revision_id uuid);
 
 create table tc_intervenciones (
   id uuid primary key default gen_random_uuid(),
@@ -108,14 +109,14 @@ create table tc_intervencion_servicios (
   servicio text not null references tc_cat_servicios(codigo),
   cantidad numeric not null check (cantidad > 0), observaciones text,
   created_at timestamptz not null default now(), unique (intervencion_id, servicio));
-create table tc_operacion_adjuntos (id uuid primary key default gen_random_uuid(), operacion_id uuid references operaciones_neumaticos(id) on delete cascade, url text);
+create table tc_operacion_adjuntos (id uuid primary key default gen_random_uuid(), operacion_id uuid references operaciones_neumaticos(id) on delete cascade, file_url text);
 create table tc_operacion_movimientos (id uuid primary key default gen_random_uuid(), operacion_id uuid references operaciones_neumaticos(id) on delete cascade);
 create table tc_operacion_estado_historial (id uuid primary key default gen_random_uuid(), operacion_id uuid references operaciones_neumaticos(id) on delete cascade);
 create table tc_operacion_auditoria (id uuid primary key default gen_random_uuid(), operacion_id uuid references operaciones_neumaticos(id) on delete set null);
 create table autorizaciones_operaciones (id uuid primary key default gen_random_uuid(), operacion_id uuid references operaciones_neumaticos(id) on delete set null);
 create table tc_reservas_neumatico (id uuid primary key default gen_random_uuid(), operacion_id uuid references operaciones_neumaticos(id) on delete set null);
 create table tc_partes_guiados (clave uuid primary key, intervencion_id uuid references tc_intervenciones(id) on delete cascade);
-create table tc_incidencias (id uuid primary key default gen_random_uuid(), operacion_id uuid references operaciones_neumaticos(id));
+create table tc_incidencia_problemas (id uuid primary key default gen_random_uuid(), operacion_id uuid references operaciones_neumaticos(id));
 create table tc_incidencia_operaciones (id uuid primary key default gen_random_uuid(), operacion_neumatico_id uuid references operaciones_neumaticos(id));
 
 create or replace function prueba(nombre text, obtenido anyelement, espera anyelement) returns void
@@ -144,10 +145,10 @@ insert into tc_vehiculos (id, empresa_id, tipo_vehiculo_id, matricula, km_actual
   ('00000000-0000-0000-0000-00000000000f','00000000-0000-0000-0000-0000000000e2','00000000-0000-0000-0000-00000000000a','1111AAA', 1);
 -- Un montaje actual y una goma de verdad, para comprobar que nadie los toca.
 insert into tc_neumaticos (id, empresa_id, medida) values ('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-0000000000e1','315/80R22.5');
-insert into tc_montajes_actuales (vehiculo_id, posicion_id, neumatico_id)
-  select '00000000-0000-0000-0000-00000000000c', id, '00000000-0000-0000-0000-000000000001' from tc_posiciones_vehiculo where codigo_posicion='E1_IZQ' and tipo_vehiculo_id='00000000-0000-0000-0000-00000000000a';
+insert into tc_montajes_actuales (empresa_id, vehiculo_id, posicion_id, neumatico_id)
+  select '00000000-0000-0000-0000-0000000000e1', '00000000-0000-0000-0000-00000000000c', id, '00000000-0000-0000-0000-000000000001' from tc_posiciones_vehiculo where codigo_posicion='E1_IZQ' and tipo_vehiculo_id='00000000-0000-0000-0000-00000000000a';
 insert into movimientos_stock (cantidad) values (10);
-insert into revisiones_vehiculo (vehiculo_id, fecha_revision) values ('00000000-0000-0000-0000-00000000000c', '2026-10-01');
+insert into revisiones_vehiculo (empresa_id, vehiculo_id, fecha_revision) values ('00000000-0000-0000-0000-0000000000e1', '00000000-0000-0000-0000-00000000000c', '2026-10-01');
 
 -- Fotografía de lo que NO debe cambiar.
 create or replace function foto() returns text language sql as $$
@@ -318,7 +319,7 @@ do $$ declare r jsonb; l uuid; v4905 uuid; v4310 uuid; op uuid; begin
   -- Cambios posteriores: anular una operación y colgar un adjunto a otra
   select id into op from operaciones_neumaticos where intervencion_id=v4905 order by origen_linea limit 1;
   update operaciones_neumaticos set status='anulada', is_anulada=true where id=op;
-  insert into tc_operacion_adjuntos (operacion_id, url) select id, 'foto.jpg' from operaciones_neumaticos where intervencion_id=v4905 and id<>op limit 1;
+  insert into tc_operacion_adjuntos (operacion_id, file_url) select id, 'foto.jpg' from operaciones_neumaticos where intervencion_id=v4905 and id<>op limit 1;
   r := tc_deshacer_importacion(l, '{}', false);
   perform prueba('con cambios: 0 borradas, 1 conservada', (r->>'borradas')||'/'||(r->>'conservadas'), '0/1');
   perform prueba('motivos claros', (r->'detalle'->0->'motivos')::text like '%huella del estado no coincide%' and (r->'detalle'->0->'motivos')::text like '%adjuntos%', true);

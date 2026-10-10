@@ -265,4 +265,14 @@ describe("validaciones del origen", () => {
     const r = resumir([a, b], 2, 0);
     expect(r).toMatchObject({ albaranes: 2, importables: 2, operaciones: 8, porCondicion: { nueva: 6, usada: 2, recauchutada: 0 }, entradasDeposito: 2 });
   });
+  it("el resumen reconcilia: operaciones = nuevas + usadas + recauchutadas, y solo cuenta los importables", async () => {
+    const a = await conciliar(ALB_4905, [h2()]);
+    const bloqueado = await conciliar([h1({ codigo: "M29580225R4", descripcion: "MONTA0 4 CUBIERTAS RECAUCHUTADA 295/80X22.5 K25", uds: 4, documento: "B2_26/9" })]);
+    const r = resumir([a, bloqueado], 0, 0);
+    expect(r.operaciones).toBe(r.porCondicion.nueva + r.porCondicion.usada + r.porCondicion.recauchutada);
+    expect(r.operaciones).toBe(4);
+    expect(r.bloqueados).toBe(1);
+    // Una operación sin condición válida no puede existir: el tipo lo impide y el resumen lo comprueba.
+    expect(() => resumir([{ ...a, operaciones: [...a.operaciones, { ...a.operaciones[0], condicion: "rara" as any }] }], 0, 0)).toThrow(/descuadrado/);
+  });
 });

@@ -464,7 +464,9 @@ export async function generarPartePdf(d: PartePdf): Promise<Uint8Array> {
     const margen = 48; let y = 841.89 - margen;
     const linea = (t: string, f: PDFFont = normal, tam = 10) => { p.drawText(t, { x: margen, y, size: tam, font: f, color: NEGRO }); y -= tam + 5; };
     linea("Montajes históricos importados", negrita, 14);
-    linea(`Parte ${d.numero ?? ""}${d.matricula ? ` · ${d.matricula}` : ""}${d.fecha ? ` · ${d.fecha}` : ""}`, normal, 10);
+    // El número del histórico ya lleva la matrícula («B2_26/4905 · 7724KBM»): no se repite.
+    const num = d.numero ?? "";
+    linea(`Parte ${num}${d.matricula && !num.includes(d.matricula) ? ` · ${d.matricula}` : ""}${d.fecha ? ` · ${d.fecha}` : ""}`, normal, 10);
     if (d.historico_etiqueta) linea(d.historico_etiqueta, normal, 10);
     linea("Registros tomados de un albarán anterior. No son trabajo de este parte ni una venta: no se facturan aquí.", normal, 9);
     linea("Histórico no significa facturado; el estado administrativo del documento original se conserva en las líneas de origen.", normal, 9);

@@ -592,7 +592,11 @@ begin
       if exists (select 1 from operaciones_neumaticos where operacion_anulada_id = any(f.operacion_ids) or operacion_prevista_id = any(f.operacion_ids)) then
         v_motivos := array_append(v_motivos, 'Otras operaciones la referencian'); end if;
       if exists (select 1 from tc_partes_guiados where intervencion_id = f.intervencion_id) then v_motivos := array_append(v_motivos, 'Tiene un parte guiado'); end if;
-      if exists (select 1 from tc_incidencias where operacion_id = any(f.operacion_ids))
+      -- Incidencias: en el esquema real la operación que resuelve un problema
+      -- cuelga de tc_incidencia_problemas.operacion_id y la sustitución de
+      -- tc_incidencia_operaciones.operacion_neumatico_id (las dos sin acción
+      -- al borrar, así que bloquearían el delete con un error feo).
+      if exists (select 1 from tc_incidencia_problemas where operacion_id = any(f.operacion_ids))
          or exists (select 1 from tc_incidencia_operaciones where operacion_neumatico_id = any(f.operacion_ids)) then
         v_motivos := array_append(v_motivos, 'Tiene incidencias'); end if;
     end if;

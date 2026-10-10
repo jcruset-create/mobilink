@@ -692,5 +692,10 @@ export function resumir(albs: AlbaranConciliado[], entradas: number, salidasSinA
     r.operaciones += a.operaciones.length; r.servicios += a.servicios.length; r.lineas += a.lineas.length;
     for (const o of a.operaciones) r.porCondicion[o.condicion]++;
   }
+  // Invariante del resumen: cada operación tiene exactamente una condición.
+  // Si alguna vez deja de cuadrar, mejor que reviente aquí que enseñar dos
+  // totales incompatibles en la pantalla.
+  const suma = r.porCondicion.nueva + r.porCondicion.usada + r.porCondicion.recauchutada;
+  if (suma !== r.operaciones) throw new Error(`Resumen descuadrado: ${r.operaciones} operaciones y ${suma} por condición`);
   return r;
 }
