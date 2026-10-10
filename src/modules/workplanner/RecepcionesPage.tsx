@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CarFront,
   Check,
@@ -56,6 +56,72 @@ function hora(ms: number): string {
   const d = new Date(ms);
   const dos = (n: number) => String(n).padStart(2, "0");
   return `${dos(d.getDate())}/${dos(d.getMonth() + 1)} ${dos(d.getHours())}:${dos(d.getMinutes())}`;
+}
+
+/**
+ * Un campo de la recepción con un botón para copiar lo que pone.
+ *
+ * La matrícula y los kilómetros se vuelven a teclear en el ERP, en el parte y
+ * en el albarán del proveedor. Teclear 1.323.295 a mano desde una pantalla es
+ * como se cuela un dígito, y un kilometraje equivocado va derecho al informe
+ * del tacógrafo.
+ *
+ * Copia lo que hay EN EL CAMPO, no lo que se guardó: si alguien acaba de
+ * corregir el número y todavía no ha salido del campo, lo que ve es lo que se
+ * lleva. Y si el navegador no deja escribir en el portapapeles —pasa en
+ * algunas vistas embebidas—, se selecciona el texto para que valga un Ctrl+C.
+ */
+function CampoConCopia({
+  etiqueta,
+  queSeCopia,
+  type,
+  defaultValue,
+  onBlur,
+}: {
+  etiqueta: string;
+  queSeCopia: string;
+  type?: string;
+  defaultValue: string | number;
+  onBlur: (e: React.FocusEvent<HTMLInputElement>) => void;
+}) {
+  const ref = useRef<HTMLInputElement | null>(null);
+  const [copiado, setCopiado] = useState(false);
+
+  async function copiar() {
+    const texto = String(ref.current?.value ?? "").trim();
+    if (!texto) return;
+
+    try {
+      await navigator.clipboard.writeText(texto);
+      setCopiado(true);
+      window.setTimeout(() => setCopiado(false), 1500);
+    } catch {
+      ref.current?.select();
+    }
+  }
+
+  return (
+    <div className="text-xs text-slate-400">
+      <div className="flex items-center justify-between gap-2">
+        <span>{etiqueta}</span>
+        <button
+          type="button"
+          onClick={() => void copiar()}
+          title={`Copiar ${queSeCopia}`}
+          className="rounded border border-slate-600 bg-slate-800 px-1.5 py-0.5 text-[10px] font-semibold text-slate-200 hover:bg-slate-700"
+        >
+          {copiado ? "✓ Copiado" : "⧉ Copiar"}
+        </button>
+      </div>
+      <input
+        ref={ref}
+        type={type}
+        defaultValue={defaultValue}
+        onBlur={onBlur}
+        className="mt-1 w-full rounded border border-slate-600 bg-slate-900 px-2 py-1 text-sm text-slate-100"
+      />
+    </div>
+  );
 }
 
 export default function RecepcionesPage() {
@@ -383,17 +449,16 @@ export default function RecepcionesPage() {
                 {abierta && actual && (
                   <div className="mt-4 space-y-3 border-t border-slate-700 pt-4">
                     <div className="grid gap-3 sm:grid-cols-2">
-                      <label className="text-xs text-slate-400">
-                        Matrícula
-                        <input
-                          defaultValue={actual.matricula}
-                          onBlur={(e) => {
-                            const v = e.target.value.trim().toUpperCase();
-                            if (v && v !== actual.matricula) void editar("matricula", v);
-                          }}
-                          className="mt-1 w-full rounded border border-slate-600 bg-slate-900 px-2 py-1 text-sm text-slate-100"
-                        />
-                      </label>
+                      <CampoConCopia
+                        key={`matricula-${actual.id}`}
+                        etiqueta="Matrícula"
+                        queSeCopia="la matrícula"
+                        defaultValue={actual.matricula}
+                        onBlur={(e) => {
+                          const v = e.target.value.trim().toUpperCase();
+                          if (v && v !== actual.matricula) void editar("matricula", v);
+                        }}
+                      />
                       <label className="text-xs text-slate-400">
                         Cliente
                         <input
@@ -410,19 +475,18 @@ export default function RecepcionesPage() {
                           className="mt-1 w-full rounded border border-slate-600 bg-slate-900 px-2 py-1 text-sm text-slate-100"
                         />
                       </label>
-                      <label className="text-xs text-slate-400">
-                        Kilómetros
-                        <input
-                          type="number"
-                          defaultValue={actual.kilometros ?? ""}
-                          onBlur={(e) => {
-                            const v = Number(e.target.value.replace(/[^0-9]/g, ""));
-                            const km = Number.isFinite(v) && v > 0 ? v : null;
-                            if (km !== (actual.kilometros ?? null)) void editar("kilometros", km);
-                          }}
-                          className="mt-1 w-full rounded border border-slate-600 bg-slate-900 px-2 py-1 text-sm text-slate-100"
-                        />
-                      </label>
+                      <CampoConCopia
+                        key={`kilometros-${actual.id}`}
+                        etiqueta="Kilómetros"
+                        queSeCopia="los kilómetros"
+                        type="number"
+                        defaultValue={actual.kilometros ?? ""}
+                        onBlur={(e) => {
+                          const v = Number(e.target.value.replace(/[^0-9]/g, ""));
+                          const km = Number.isFinite(v) && v > 0 ? v : null;
+                          if (km !== (actual.kilometros ?? null)) void editar("kilometros", km);
+                        }}
+                      />
                       <label className="text-xs text-slate-400">
                         Área
                         <select
