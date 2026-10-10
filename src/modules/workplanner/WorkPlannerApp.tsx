@@ -24,6 +24,7 @@ import PedidosErpPage from "./PedidosErpPage";
 import PlantillasChecklistPage from "./PlantillasChecklistPage";
 import AusenciasTecnicosPage from "./AusenciasTecnicosPage";
 import PlanningAusenciasPage from "./PlanningAusenciasPage";
+import AnalisisPage from "./AnalisisPage";
 import PartesTrabajoPage from "./PartesTrabajoPage";
 import RecepcionesPage from "./RecepcionesPage";
 import { supabase } from "../administracion/services/supabase";
@@ -52,7 +53,9 @@ const SECCIONES = [
   { key: "ausencias", label: "Ausencias", icon: CalendarX, proximamente: false, soloAdmin: true },
   // El año entero de un vistazo: todos los técnicos, día a día. Solo lectura.
   { key: "planning", label: "Planning anual", icon: CalendarRange, proximamente: false, soloAdmin: true },
-  { key: "estadisticas", label: "Análisis y estadísticas", icon: BarChart3, proximamente: true },
+  // El histórico de trabajos con sus fotos. Solo administradores, como
+  // Ausencias y Planning.
+  { key: "estadisticas", label: "Análisis y estadísticas", icon: BarChart3, proximamente: false, soloAdmin: true },
   { key: "configuracion", label: "Configuración", icon: Settings, proximamente: true },
 ] as const;
 
@@ -328,7 +331,16 @@ export default function WorkPlannerApp() {
               )
             }
           />
-          <Route path="estadisticas" element={<Proximamente titulo="Análisis y estadísticas" />} />
+          <Route
+            path="estadisticas"
+            element={
+              esAdmin ? (
+                <AnalisisPage />
+              ) : (
+                <Navigate to="/workplanner/operativo2" replace />
+              )
+            }
+          />
           <Route path="configuracion" element={<Proximamente titulo="Configuración" />} />
           <Route path="*" element={<Navigate to="/workplanner/operativo2" replace />} />
         </Routes>
