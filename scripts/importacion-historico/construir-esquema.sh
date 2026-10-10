@@ -49,4 +49,6 @@ while :; do
   echo "pasada $pasada: aplicadas $avance, pendientes $pend"
   [ $avance -eq 0 ] && break; [ $pasada -ge 8 ] && break
 done
+# El stub de productos_neumaticos necesita su FK al catálogo (PostgREST la usa para los embeds del panel).
+psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$DB" -q -c "alter table productos_neumaticos add constraint productos_neumaticos_referencia_fk foreign key (referencia_neumatico_id) references tc_referencias_neumatico(id)" 2>/dev/null || true
 echo "aplicadas en total: ${#ok[@]} de $(wc -l < "$ORDEN") · fallos en $FALLOS"
