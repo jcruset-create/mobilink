@@ -22,8 +22,9 @@
  *
  * Desde hace DIAS_ATRAS días hasta AYER. Ayer porque hoy «baila»: el
  * proveedor contesta valores distintos para el mismo instante del día en
- * curso (ver HistoricOdometerService), y el día se da por cerrado seis horas
- * después de medianoche. Unos días atrás porque una revisión que ayer no
+ * curso (ver HistoricOdometerService), y el día se da por cerrado dos horas
+ * después de medianoche (MARGEN_DIA_CERRADO_MS). Por eso se lanza a las 03:00
+ * y no antes: a las 02:59 todo lo de ayer saldría «día abierto». Unos días atrás porque una revisión que ayer no
  * pudo rellenarse (proveedor caído, lectura sin corroborar) merece otro
  * intento, pero no infinitos: cada intento son dos peticiones al proveedor, y
  * una revisión que tres mañanas seguidas no da nada no va a darlo a la cuarta.
@@ -39,8 +40,14 @@
 
 import { ZONA_HORARIA_POR_DEFECTO } from "../../integration-hub/domain/meses.ts";
 
-/** Hora local a partir de la cual el día de ayer ya está cerrado para el proveedor. */
-export const HORA_LOCAL = 7;
+/**
+ * Hora local a la que se lanza. Las tres de la mañana: el día de ayer ya está
+ * cerrado para el proveedor (medianoche + MARGEN_DIA_CERRADO_MS), la flota
+ * está parada y el cupo de Movertis no se lo disputa nadie. Era a las 07:00,
+ * pero a esa hora los buses ya están en ruta y quien mira las revisiones de
+ * ayer a primera hora las quiere con kilómetros.
+ */
+export const HORA_LOCAL = 3;
 /** Cuántos días atrás, contando desde ayer, se reintentan. */
 export const DIAS_ATRAS = 3;
 /** Cada cuánto se mira si toca. No es la frecuencia del relleno: es la del reloj. */
@@ -114,7 +121,7 @@ export interface ResultadoDiario {
  * Lo que pasó la última vez que el reloj miró a cada empresa, en memoria.
  *
  * El lanzamiento de hoy se guarda en `integration_sync_state`; esto es lo
- * otro: que a las 07:00 se miró y había un relleno en marcha, o que falló.
+ * otro: que a las 03:00 se miró y había un relleno en marcha, o que falló.
  * Sin ello, un panel que solo lee la base diría «todavía no se ha lanzado
  * hoy» y no por qué, que es justo lo que se le pregunta.
  */
