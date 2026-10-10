@@ -43,6 +43,9 @@ export type CajaEnRed = {
   ultimaActividadMs: number | null;
   ultimaFechaCerrada: string | null;
   diasSinCerrar: number | null;
+  /** Todo el efectivo de esa caja: cajón, fuera, esperando al banco y remanente. */
+  efectivoCentimos: number;
+  /** Lo llevado al banco en toda su vida. Es un acumulado, no un saldo. */
   ingresadoCentimos: number;
 };
 
