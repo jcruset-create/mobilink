@@ -72,11 +72,15 @@ import { resolveTelematicsConnectors } from "../../connectors/ConnectorRegistry.
 export const TOLERANCIA_ACUERDO_KM = 5;
 
 /**
- * Margen para dar un día por cerrado. Seis horas, el mismo que `mesCerrado`:
- * el proveedor consolida con retraso y un viaje que acaba de madrugada tiene
- * que haber entrado antes de preguntar.
+ * Margen para dar un día por cerrado. Dos horas: el proveedor consolida con
+ * retraso y un viaje que acaba de madrugada tiene que haber entrado antes de
+ * preguntar. Eran seis, como `mesCerrado`, pero el relleno diario se lanza a
+ * las 03:00 y con seis horas todo lo de ayer le saldría «día abierto». Dos
+ * bastan para un servicio que termina a medianoche; si Movertis se
+ * contradice porque aún está consolidando, las dos ventanas no coinciden,
+ * no se escribe nada y se reintenta al día siguiente.
  */
-export const MARGEN_DIA_CERRADO_MS = 6 * 60 * 60 * 1000;
+export const MARGEN_DIA_CERRADO_MS = 2 * 60 * 60 * 1000;
 
 /**
  * Anchuras de ventana que se prueban, en orden, todas terminando en el

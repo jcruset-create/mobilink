@@ -41,7 +41,8 @@ describe("ventanaDiaria", () => {
 
 describe("tocaHoy", () => {
   it("antes de la hora, no: el día de ayer aún no está cerrado para el proveedor", () => {
-    expect(tocaHoy(null, new Date("2026-10-09T03:00:00Z"))).toBe(false); // 05:00 Madrid
+    expect(tocaHoy(null, new Date("2026-10-08T23:30:00Z"))).toBe(false); // 01:30 Madrid
+    expect(tocaHoy(null, new Date("2026-10-09T01:00:00Z"))).toBe(true);  // 03:00 Madrid
   });
   it("a la hora y sin haberse lanzado nunca, sí", () => {
     expect(tocaHoy(null, MANANA)).toBe(true);
@@ -52,7 +53,7 @@ describe("tocaHoy", () => {
   it("si lo último fue ayer, toca otra vez", () => {
     expect(tocaHoy(new Date("2026-10-08T07:00:00Z").getTime(), MANANA)).toBe(true);
   });
-  it("un servidor reiniciado a las 11 lanza el de hoy si no lo hizo a las 7", () => {
+  it("un servidor reiniciado a las 11 lanza el de hoy si no lo hizo a las 3", () => {
     expect(tocaHoy(new Date("2026-10-08T07:00:00Z").getTime(), new Date("2026-10-09T09:00:00Z"))).toBe(true);
   });
 });
