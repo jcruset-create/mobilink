@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones, listarIntervenciones, imagenChasisDeMarca, generarPosicionesDeTipo, cotejarPlanoDeTipo, type CotejoPlano } from "../services/data";
 import type { Intervencion } from "../services/data";
+import { esHistoricoAlbaran, etiquetaHistorico, textoNeumaticoHistorico, textoPosicionHistorica } from "../../../../shared/historicoAlbaran";
 import type { MontajeActual, PosicionVehiculo, Vehiculo, TipoLlanta, VehiculoEje, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle, OperacionNeumatico } from "../types";
 import { ORIGEN_KM_LABELS, tipoLlantaLabel, presionTxt, TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS } from "../types";
 import { resumenOperaciones } from "../services/resumenOperaciones";
@@ -144,12 +145,13 @@ export default function VehiculoDetalle() {
           del parte, OP-…, va en la cabecera del bloque. */}
       <td className={tdCls + " font-mono text-slate-500"}>{o.numero_operacion ? `#${o.numero_operacion}` : "—"}</td>
       <td className={tdCls + " text-slate-400"}>
-        {o.created_at ? new Date(o.created_at).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : o.fecha_operacion}
+        {/* En el histórico de albaranes la hora de registro es la de la importación, no la del trabajo: no se enseña. */}
+        {esHistoricoAlbaran(o) ? "hora desconocida" : o.created_at ? new Date(o.created_at).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : o.fecha_operacion}
       </td>
       <td className={tdCls + " text-slate-200"}>{TIPO_OPERACION_LABELS[o.tipo_operacion] ?? o.tipo_operacion}{o.is_anulada ? " (anulada)" : ""}</td>
       <td className={tdCls + " text-slate-400"}>{o.status ? ESTADO_OPERACION_LABELS[o.status] : "—"}</td>
-      <td className={tdCls + " text-slate-400"}>{o.neumatico?.numero_interno ?? o.neumatico?.codigo_interno ?? "—"}</td>
-      <td className={tdCls + " text-slate-400"}>{o.posicion_origen?.codigo_posicion ?? ""}{o.posicion_origen && o.posicion_destino ? " → " : ""}{o.posicion_destino?.codigo_posicion ?? ""}</td>
+      <td className={tdCls + " text-slate-400"}>{esHistoricoAlbaran(o) ? textoNeumaticoHistorico(o) : (o.neumatico?.numero_interno ?? o.neumatico?.codigo_interno ?? "—")}</td>
+      <td className={tdCls + " text-slate-400"}>{esHistoricoAlbaran(o) ? textoPosicionHistorica(o.posicion_destino?.codigo_posicion, o.posicion_fuente) : <>{o.posicion_origen?.codigo_posicion ?? ""}{o.posicion_origen && o.posicion_destino ? " → " : ""}{o.posicion_destino?.codigo_posicion ?? ""}</>}</td>
       <td className={tdCls + " text-slate-400"}>{o.motivo ? MOTIVO_OPERACION_LABELS[o.motivo] : "—"}</td>
     </tr>
   );
@@ -538,10 +540,10 @@ export default function VehiculoDetalle() {
             <tbody>
               {verInterv.ops.map((o) => (
                 <tr key={o.id} className={`border-t border-slate-700/60 ${o.is_anulada ? "opacity-50" : ""}`}>
-                  <td className={tdCls + " text-slate-400"}>{o.fecha_operacion}{o.created_at ? " · " + new Date(o.created_at).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : ""}</td>
+                  <td className={tdCls + " text-slate-400"}>{o.fecha_operacion}{esHistoricoAlbaran(o) ? " · hora desconocida" : o.created_at ? " · " + new Date(o.created_at).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : ""}</td>
                   <td className={tdCls + " text-slate-200"}>{TIPO_OPERACION_LABELS[o.tipo_operacion] ?? o.tipo_operacion}</td>
-                  <td className={tdCls + " text-slate-400"}>{o.neumatico?.numero_interno ?? o.neumatico?.codigo_interno ?? "—"}</td>
-                  <td className={tdCls + " text-slate-400"}>{o.posicion_origen?.codigo_posicion ?? ""}{o.posicion_origen && o.posicion_destino ? " → " : ""}{o.posicion_destino?.codigo_posicion ?? ""}</td>
+                  <td className={tdCls + " text-slate-400"}>{esHistoricoAlbaran(o) ? textoNeumaticoHistorico(o) : (o.neumatico?.numero_interno ?? o.neumatico?.codigo_interno ?? "—")}</td>
+                  <td className={tdCls + " text-slate-400"}>{esHistoricoAlbaran(o) ? textoPosicionHistorica(o.posicion_destino?.codigo_posicion, o.posicion_fuente) : <>{o.posicion_origen?.codigo_posicion ?? ""}{o.posicion_origen && o.posicion_destino ? " → " : ""}{o.posicion_destino?.codigo_posicion ?? ""}</>}</td>
                   <td className={tdCls + " text-slate-400"}>{o.motivo ? MOTIVO_OPERACION_LABELS[o.motivo] : "—"}</td>
                 </tr>
               ))}
@@ -641,9 +643,10 @@ export default function VehiculoDetalle() {
                   <div key={i.id} className="rounded-lg border border-slate-700 bg-slate-900/60">
                     <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-slate-700 px-3 py-2">
                       <span className="font-mono text-[13px] font-bold text-sky-300">{i.numero ?? "sin número"}</span>
+                      {esHistoricoAlbaran(i) && <span className="rounded bg-slate-700 px-1 text-[10px] uppercase text-slate-300" title={etiquetaHistorico(i)}>histórico importado</span>}
                       <span className="text-[12px] text-slate-300">
                         {i.fecha}
-                        {i.created_at ? " · " + new Date(i.created_at).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : ""}
+                        {esHistoricoAlbaran(i) ? " · hora desconocida" : i.created_at ? " · " + new Date(i.created_at).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : ""}
                       </span>
                       <span className="text-[12px] text-slate-500">
                         {i.n_operaciones} {i.n_operaciones === 1 ? "operación" : "operaciones"}

@@ -1217,6 +1217,13 @@ export interface Intervencion {
   empresa?: { nombre?: string | null } | null;
   vehiculo?: { matricula?: string | null } | null;
   tecnico?: { nombre?: string | null } | null;
+  /** Histórico de albaranes importado: ver shared/historicoAlbaran.ts. */
+  importacion_lote_id?: string | null;
+  origen_sistema?: string | null;
+  origen_doc?: string | null;
+  /** cerrada_at es la medianoche del albarán, no una hora real. */
+  hora_desconocida?: boolean | null;
+  mecanico_km?: number | null;
 }
 
 /** Estado visible de una intervención, derivado (no hay columna de estado):
@@ -1242,7 +1249,11 @@ export async function listarIntervencionesPagina(
   const desde = Math.max(0, pagina) * tamano;
   let q = supabase.from("tc_intervenciones")
     .select("*, empresa:tc_empresas(nombre), vehiculo:tc_vehiculos(matricula), tecnico:tc_usuarios(nombre)", { count: "exact" })
-    .order("created_at", { ascending: false })
+    // Por la fecha del TRABAJO y no por la de registro: el histórico de
+    // albaranes se importa hoy pero es de hace meses, y no puede salir encima
+    // de lo de esta mañana. created_at desempata y sigue siendo la fecha real
+    // en que se grabó.
+    .order("fecha", { ascending: false }).order("created_at", { ascending: false })
     .range(desde, desde + tamano - 1);
   if (filtros?.empresaId) q = q.eq("empresa_id", filtros.empresaId);
   if (filtros?.vehiculoId) q = q.eq("vehiculo_id", filtros.vehiculoId);
@@ -1305,7 +1316,8 @@ export async function listarIntervenciones(vehiculoId: string): Promise<Interven
     () => undefined,
     () => undefined,
   );
-  const { data, error } = await supabase.from("tc_intervenciones").select("*").eq("vehiculo_id", vehiculoId).order("created_at", { ascending: false });
+  const { data, error } = await supabase.from("tc_intervenciones").select("*").eq("vehiculo_id", vehiculoId)
+    .order("fecha", { ascending: false }).order("created_at", { ascending: false });
   if (error) throw new Error(error.message);
   return (data ?? []) as Intervencion[];
 }
@@ -1342,7 +1354,8 @@ function filtrarOperaciones<T>(q: T, f?: FiltrosOperaciones): T {
 
 export async function listarOperaciones(filtros?: FiltrosOperaciones): Promise<OperacionNeumatico[]> {
   const q = filtrarOperaciones(
-    supabase.from("operaciones_neumaticos").select(OPERACION_SELECT).order("created_at", { ascending: false }).limit(200),
+    // Fecha del trabajo primero; created_at desempata (ver listarIntervencionesPagina).
+    supabase.from("operaciones_neumaticos").select(OPERACION_SELECT).order("fecha_operacion", { ascending: false }).order("created_at", { ascending: false }).limit(200),
     filtros,
   );
   const { data, error } = await q;
@@ -1371,7 +1384,7 @@ export async function listarOperacionesPagina(
   const q = filtrarOperaciones(
     supabase.from("operaciones_neumaticos")
       .select(OPERACION_SELECT, { count: "exact" })
-      .order("created_at", { ascending: false })
+      .order("fecha_operacion", { ascending: false }).order("created_at", { ascending: false })
       .range(desde, desde + tamano - 1),
     filtros,
   );
@@ -3479,4 +3492,71 @@ export async function asignarBaseHabitual(
   });
   if (error) throw new Error(error.message);
   return (data ?? {}) as ResultadoAsignarBase;
+}
+
+
+// ── Importación del histórico de albaranes ──────────────────────────────────
+// Todo pasa por dos RPC (tc_importar_historico, tc_deshacer_importacion) que
+// validan permisos, vehículos y catálogo en la base: el navegador solo manda
+// el contenido del albarán ya conciliado. Ver services/importHistorico.ts.
+
+export interface ResultadoAlbaranImport {
+  origen_doc: string;
+  estado: "se_crearia" | "creada" | "ya_presente" | "cambiado" | "bloqueado" | "duplicado_probable";
+  intervencion_id?: string | null;
+  motivo?: string | null;
+  operaciones?: number; servicios?: number; lineas?: number; posiciones_deducidas?: number;
+}
+export interface ResultadoImportHistorico {
+  simulacion: boolean; carga_id: string | null; lote_id: string | null; periodo: string;
+  creadas: number; ya_presentes: number; cambiados: number; bloqueados: number; duplicados_probables: number;
+  albaranes: ResultadoAlbaranImport[];
+}
+
+export async function importarHistorico(
+  empresaId: string, origenSistema: string, lote: Record<string, unknown>, simular: boolean,
+): Promise<ResultadoImportHistorico> {
+  const { data, error } = await supabase.rpc("tc_importar_historico", {
+    p_empresa: empresaId, p_origen_sistema: origenSistema, p_lote: lote, p_simular: simular,
+  });
+  if (error) throw new Error(error.message);
+  return data as ResultadoImportHistorico;
+}
+
+export interface ResultadoDeshacer {
+  simulacion: boolean; lote_id: string; borradas: number; conservadas: number;
+  estado: "deshecho" | "parcialmente_deshecho" | null;
+  detalle: { intervencion_id: string; origen_doc: string; resultado: "borrada" | "conservada"; motivos?: string[] }[];
+}
+export async function deshacerImportacion(loteId: string, excluir: string[], simular: boolean): Promise<ResultadoDeshacer> {
+  const { data, error } = await supabase.rpc("tc_deshacer_importacion", { p_lote: loteId, p_excluir: excluir, p_simular: simular });
+  if (error) throw new Error(error.message);
+  return data as ResultadoDeshacer;
+}
+
+export interface CargaImportacion {
+  id: string; empresa_id: string; origen_sistema: string; fichero: string | null; estado: string;
+  creado_at: string; actualizado_at: string;
+  lotes?: LoteImportacion[];
+}
+export interface LoteImportacion {
+  id: string; carga_id: string; periodo: string; estado: string; resumen: Record<string, unknown> | null;
+  aplicado_at: string; deshecho_at: string | null;
+}
+export async function listarCargasImportacion(empresaId: string): Promise<CargaImportacion[]> {
+  const { data, error } = await supabase.from("tc_importacion_cargas")
+    .select("*, lotes:tc_importacion_lotes(*)").eq("empresa_id", empresaId)
+    .order("creado_at", { ascending: false }).limit(50);
+  if (error) throw new Error(error.message);
+  const cargas = (data ?? []) as unknown as CargaImportacion[];
+  for (const c of cargas) c.lotes = [...(c.lotes ?? [])].sort((a, b) => (a.periodo < b.periodo ? -1 : 1));
+  return cargas;
+}
+
+/** Lo conservado de un lote parcialmente deshecho, con su motivo. */
+export async function listarConservadasDeLote(loteId: string): Promise<{ intervencion_id: string; origen_doc: string; motivo_conservada: string | null }[]> {
+  const { data, error } = await supabase.from("tc_importacion_intervenciones")
+    .select("intervencion_id, origen_doc, motivo_conservada").eq("lote_id", loteId).not("conservada_at", "is", null);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as any;
 }

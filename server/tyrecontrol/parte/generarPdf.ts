@@ -73,6 +73,13 @@ export interface PartePdf {
   cliente_nombre?: string | null;
   cliente_dni?: string | null;
   tecnico_nombre?: string | null;
+  /**
+   * Montajes históricos (albarán importado). Van en una HOJA APARTE, fuera de
+   * la plantilla y de su bloque de neumáticos a facturar: no son trabajo de
+   * este parte ni una venta. Ver filasDeOperaciones.filasHistoricas.
+   */
+  historicos?: { posicion?: string | null; descripcion?: string | null; condicion?: string | null; km?: number | null }[];
+  historico_etiqueta?: string | null;
   /** PNG de la firma, ya dibujada en la tablet. */
   firma_cliente?: Uint8Array | null;
   firma_tecnico?: Uint8Array | null;
@@ -446,6 +453,35 @@ export async function generarPartePdf(d: PartePdf): Promise<Uint8Array> {
           width: an, height: al,
         });
       }
+    }
+  }
+
+  // La hoja aparte del histórico importado: texto plano sobre una página en
+  // blanco, sin la plantilla. Lo que se afirma es lo que decía el albarán.
+  const historicos = d.historicos ?? [];
+  if (historicos.length > 0) {
+    const p = doc.addPage([595.28, 841.89]); // A4
+    const margen = 48; let y = 841.89 - margen;
+    const linea = (t: string, f: PDFFont = normal, tam = 10) => { p.drawText(t, { x: margen, y, size: tam, font: f, color: NEGRO }); y -= tam + 5; };
+    linea("Montajes históricos importados", negrita, 14);
+    linea(`Parte ${d.numero ?? ""}${d.matricula ? ` · ${d.matricula}` : ""}${d.fecha ? ` · ${d.fecha}` : ""}`, normal, 10);
+    if (d.historico_etiqueta) linea(d.historico_etiqueta, normal, 10);
+    linea("Registros tomados de un albarán anterior. No son trabajo de este parte ni una venta: no se facturan aquí.", normal, 9);
+    linea("Histórico no significa facturado; el estado administrativo del documento original se conserva en las líneas de origen.", normal, 9);
+    y -= 6;
+    const cols = { pos: margen, desc: margen + 110, cond: margen + 330, km: margen + 420 };
+    p.drawText("Posición", { x: cols.pos, y, size: 9, font: negrita, color: NEGRO });
+    p.drawText("Dimensión y modelo", { x: cols.desc, y, size: 9, font: negrita, color: NEGRO });
+    p.drawText("Condición", { x: cols.cond, y, size: 9, font: negrita, color: NEGRO });
+    p.drawText("Km", { x: cols.km, y, size: 9, font: negrita, color: NEGRO });
+    y -= 14;
+    for (const h of historicos) {
+      if (y < margen) break;
+      p.drawText(h.posicion ?? "—", { x: cols.pos, y, size: 9, font: normal, color: NEGRO });
+      p.drawText((h.descripcion ?? "—").slice(0, 48), { x: cols.desc, y, size: 9, font: normal, color: NEGRO });
+      p.drawText(h.condicion ?? "—", { x: cols.cond, y, size: 9, font: normal, color: NEGRO });
+      p.drawText(h.km != null ? String(h.km) : "—", { x: cols.km, y, size: 9, font: normal, color: NEGRO });
+      y -= 13;
     }
   }
 
