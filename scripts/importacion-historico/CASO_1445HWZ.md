@@ -60,15 +60,16 @@ evidencia independiente la confirma ni la desmiente.
 Los dos intervalos del eje 1 quedan así, y los dos avisos salen a la vez:
 
 ```
-km_estado        anomalos          ← calculable, pero el ritmo no es plausible
-recorrido_km     626290            ← se conserva: no se borra ni se pone a cero
-dias_intervalo   98
-ritmo_km_dia     6390.71
-limite_km_dia    2000
-uso_estadistico  pendiente         ← nadie ha decidido todavía
-continuidad_docs {B2_26/1590|1445HWZ}
-motivos          km_anomalos_pendientes, continuidad_pendiente
-en_medias        false
+km_estado             anomalos      ← calculable, pero el ritmo no es plausible
+recorrido_km          626290        ← se conserva: no se borra ni se pone a cero
+dias_intervalo        98
+ritmo_km_dia          6390.71
+limite_km_dia         2000
+uso_estadistico       pendiente     ← decisión sobre los KILÓMETROS
+continuidad_decision  pendiente     ← decisión sobre la CONTINUIDAD, aparte
+continuidad_docs      {B2_26/1590|1445HWZ}
+motivos               km_anomalos_pendientes, continuidad_pendiente
+en_medias             false
 ```
 
 Y el aviso, literal:
@@ -84,17 +85,29 @@ Y el aviso, literal:
 > sabe en qué posición fue, así que no se atribuye a ningún eje. La cadena de
 > esta posición no puede considerarse limpia.
 
-**Dos motivos distintos, y resolver uno no resuelve el otro.** Aceptar el
-kilometraje no limpia la continuidad: el aviso del albarán bloqueado sigue en
-pie y el intervalo sigue contando como «continuidad pendiente» hasta que una
-persona lo acepte explícitamente sabiendo las dos cosas.
+**Dos motivos distintos, dos decisiones distintas.** Y no es una forma de
+hablar: son dos puertas con su propia llave. Aceptar el kilometraje deja
+`uso_estadistico = aceptado` y el intervalo **sigue fuera de las medias**, con
+el motivo `continuidad_pendiente` a la vista, hasta que alguien acepte también
+la continuidad con su propio motivo. Las dos decisiones se auditan por
+separado, cada una con su ámbito, y las dos caducan si la evidencia cambia.
+
+Comprobado en el panel real: se aceptan los kilómetros con su motivo, el
+intervalo sigue diciendo «fuera de las medias · continuidad pendiente», y solo
+tras aceptar la continuidad —otro diálogo, otro motivo— pasa a «entra en las
+medias», con las dos decisiones visibles por separado.
 
 ## El efecto de este caso en las medias
 
-| | Intervalos en la media | Media | Máximo |
+| | Intervalos | Media | Máximo |
 |---|---|---|---|
 | Antes de la fase 3 | 52 | **47.731 km** | 626.290 km |
-| Con la fase 3 | 50 | **24.588 km** | 73.901 km |
+| Con recorrido calculable, con la fase 3 | 52 | — | 626.290 km |
+| **Elegibles tras todos los filtros** | **50** | **24.588 km** | 73.901 km |
+
+Los dos números de la fase 3 son distintos a propósito: **52 intervalos tienen
+un recorrido que se puede restar y solo 50 pasan los filtros**. Los dos que se
+caen son los de 1445HWZ, y se caen por los dos motivos a la vez.
 
 Dos registros de 52 casi duplicaban la media. La mediana no se movía (21.078
 km en los dos casos), que es exactamente lo que cabe esperar de dos valores

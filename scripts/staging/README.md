@@ -56,6 +56,79 @@ línea de cada hallazgo para poder ir uno por uno.
 
 ---
 
+## Comprobado en local: el servidor arranca con 20 variables
+
+No es una suposición. `05-probar-arranque.sh` levanta el servidor con la lista
+de abajo contra una base de pruebas y pide el PDF por el endpoint real:
+
+```
+OK    el servidor arranca y escucha en 4011
+OK    ni pagos, ni mensajería, ni correo: sin credencial no se encienden
+OK    sin token: 401 (falta sesión)
+OK    con sesión de admin: 200 y un PDF de 7.723.727 bytes
+```
+
+Las **20 variables** con las que arranca, y no hace falta ninguna más:
+
+`DATABASE_URL` · `PGSSLMODE` · `SUPABASE_URL` · `SUPABASE_SERVICE_ROLE_KEY` ·
+`VITE_SUPABASE_URL` · `VITE_SUPABASE_ANON_KEY` · `NODE_ENV` · `PORT` · `TZ` ·
+`PUBLIC_APP_URL` · `TYRE_CONTROL_WRITE_ENABLED` ·
+`TYRE_CONTROL_REPAIR_SYNC_ENABLED` · `TYRE_CONTROL_REPLACEMENT_SYNC_ENABLED` ·
+`TYRE_CONTROL_SYNC_COMPANIES` · los seis `*_STORAGE_LOCAL`.
+
+**Y una que hizo falta arreglar en el código.** El servidor NO arrancaba sin
+`STRIPE_SECRET_KEY`: el cliente de Stripe se construía en el propio arranque
+con la clave vacía y la librería lanza al instante, así que el proceso entero
+se caía antes de escuchar. Dejar la variable sin definir no resolvía nada,
+resolvía lo contrario. Ahora el cliente se crea la primera vez que se usa y
+solo si la clave existe: con clave, el comportamiento es el de siempre; sin
+ella, el servidor arranca, los tres sitios que cobran responden 503 y **no hay
+cliente de Stripe, así que no puede salir ni una llamada**.
+
+Lo que el propio arranque dice que deja apagado, con esa configuración:
+
+```
+[webfleet-sync] sin credenciales Webfleet: servicio no iniciado
+CheckPoint por correo: apagado (faltan las credenciales del buzón)
+Therefore buzón: apagado (faltan las credenciales del buzón)
+Recepciones buzón: apagado (faltan las credenciales del buzón)
+```
+
+Y sin credencial tampoco se encienden Stripe, Twilio, SMTP, OpenAI (la lectura
+de partes responde 503), Movertis, Business Central, Firebase ni Google Maps.
+
+### Qué más necesita el entorno, además de las variables
+
+Dos cosas que en Supabase pone la plataforma y que un entorno montado a mano
+puede no tener. Las dos se descubrieron levantando el servidor de verdad:
+
+1. **`service_role` tiene que saltarse la RLS** (`alter role service_role
+   bypassrls`). El endpoint del PDF lee con la service key; sin eso devuelve
+   «Parte no encontrado» en pruebas y funciona en producción, que es la peor
+   forma de enterarse.
+2. **`anon` y `authenticated` necesitan los permisos de tabla** que dan los
+   *default privileges* del esquema `public`. Sin ellos, cualquier RPC
+   `security invoker` responde «permission denied for table …». Lo que
+   protege los datos es la RLS, no la ausencia de GRANT.
+
+En un proyecto Supabase recién creado las dos vienen de serie; en una base
+restaurada a mano, hay que comprobarlas.
+
+## Los tres rechazos, que no son el mismo
+
+Medido contra el PostgREST local, llamando a `tc_imp_revisar_intervalo`:
+
+| Quién | HTTP | Qué significa |
+|---|---|---|
+| sin cabecera `Authorization` | **401** | no hay sesión |
+| con la clave `anon` | **401** | sigue sin haber sesión de usuario |
+| operador autenticado de la empresa | **403** | hay sesión, no hay permiso |
+| administrador de OTRA empresa | **403** | hay permiso, pero no sobre esta empresa |
+| administrador de la empresa | **200** | |
+
+Conviene reproducirlo en staging tal cual: que un 403 se convierta en 401, o
+al revés, suele significar que la sesión no está llegando donde se cree.
+
 ## El arranque de Express también cambia el esquema
 
 Esto no es un detalle: `server/index.ts` ejecuta `prepararEsquema(...)` al

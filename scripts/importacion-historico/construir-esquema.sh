@@ -34,7 +34,11 @@ create table if not exists clientes (id uuid primary key default gen_random_uuid
 create table if not exists productos_neumaticos (id uuid primary key default gen_random_uuid(), empresa_id uuid, marca text, modelo text, medida text, dot text, activo boolean default true, referencia_neumatico_id uuid);
 create table if not exists centros (id uuid primary key default gen_random_uuid(), nombre text);
 create table if not exists movimientos_stock (id uuid primary key default gen_random_uuid(), empresa_id uuid, tipo text, cantidad int, documento_referencia text, observaciones text, created_at timestamptz default now(), centro_origen_id uuid, centro_destino_id uuid, cliente_id uuid, producto_id uuid, estado text, condicion text, origen_movimiento text);
-create table if not exists jobs (id uuid primary key default gen_random_uuid(), created_at timestamptz default now());
+-- `jobs` es del módulo Taller y la crea el DDL de arranque de Express con
+-- `id SERIAL`. El stub tiene que tener el MISMO tipo: con uuid, arrancar el
+-- servidor contra esta base falla al poner la clave ajena «jobId» (integer)
+-- contra «id» (uuid), y entonces no se puede probar el servidor aquí.
+create table if not exists jobs (id serial primary key, created_at timestamptz default now());
 create table if not exists techs (id uuid primary key default gen_random_uuid(), name text);
 SQL
 ORDEN=$(mktemp); for f in supabase/migrations/*.sql; do echo "$(git log --diff-filter=A --format=%at -- "$f" | tail -1) $f"; done | sort -n > "$ORDEN"
@@ -67,4 +71,11 @@ alter default privileges in schema public grant all on tables    to anon, authen
 alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
 alter default privileges in schema public grant all on functions to anon, authenticated, service_role;
 SQL
+# Y la otra propiedad que pone la plataforma: en Supabase `service_role` SE
+# SALTA la RLS. Sin esto, cualquier endpoint del servidor que lea con la
+# service key (el PDF del parte, por ejemplo) devuelve «no encontrado» aquí y
+# funciona en producción, que es la peor forma de enterarse.
+psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$DB" -q -c "alter role service_role bypassrls" 2>/dev/null \
+  || echo "aviso: no se ha podido dar bypassrls a service_role (hace falta superusuario); los endpoints con service key leerán con RLS"
+
 echo "aplicadas en total: ${#ok[@]} de $(wc -l < "$ORDEN") · fallos en $FALLOS · permisos de plataforma concedidos"

@@ -201,6 +201,8 @@ app.post(
   express.raw({ type: "application/json" }),
   async (req, res) => {
     const sig = req.headers["stripe-signature"];
+    const stripe = stripeOCortar(res);
+    if (!stripe) return;
 
     try {
       const event = stripe.webhooks.constructEvent(
@@ -363,6 +365,8 @@ app.post("/api/payments/create-deposit", authenticate, requireModule("administra
 
     const desc = String(description || "").trim();
 
+    const stripe = stripeOCortar(res);
+    if (!stripe) return;
     const session = await stripe.checkout.sessions.create({
             line_items: [
         {
@@ -762,9 +766,36 @@ const PORT = process.env.PORT || 4000;
 // El cliente de OpenAI vive en core/openaiService.ts: aquí no se crea ninguno.
 // Toda la IA de la plataforma pasa por pedirIA() / transcribirAudio().
 console.log("KEY:", process.env.OPENAI_API_KEY ? "OK" : "NO CARGADA");
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
-  apiVersion: "2026-04-22.dahlia",
-});
+/**
+ * Stripe, solo si hay credencial.
+ *
+ * Antes se construía el cliente en el arranque con `process.env.STRIPE_SECRET_KEY || ""`,
+ * y la librería lanza al instante si la clave está vacía: **el servidor entero
+ * no levantaba sin credenciales de pago**. Eso hacía imposible arrancarlo en un
+ * entorno de pruebas sin poner una clave de Stripe, que es justo lo que no se
+ * quiere tener fuera de producción.
+ *
+ * Ahora el cliente se crea la primera vez que se usa, y solo si la clave
+ * existe. Con clave, el comportamiento es exactamente el de antes. Sin ella,
+ * el servidor arranca, los tres sitios que cobran responden 503 y **no hay
+ * cliente de Stripe, así que no puede salir ni una llamada**.
+ */
+let stripeCliente: Stripe | null = null;
+function stripeSiHay(): Stripe | null {
+  const clave = process.env.STRIPE_SECRET_KEY;
+  if (!clave) return null;
+  if (!stripeCliente) stripeCliente = new Stripe(clave, { apiVersion: "2026-04-22.dahlia" });
+  return stripeCliente;
+}
+/** El cliente, o 503 y null. Quien lo llama devuelve si recibe null. */
+function stripeOCortar(res: express.Response): Stripe | null {
+  const s = stripeSiHay();
+  if (!s) {
+    res.status(503).json({ success: false, message: "Pagos no disponibles: falta STRIPE_SECRET_KEY" });
+    return null;
+  }
+  return s;
+}
 /* =========================================================
    HELPERS
 ========================================================= */
@@ -7764,6 +7795,8 @@ app.post(
       if (!reference) return res.status(400).json({ success: false, message: "Referencia obligatoria" });
       if (!amountCents || amountCents < 100) return res.status(400).json({ success: false, message: "Importe mínimo 1 €" });
 
+      const stripe = stripeOCortar(res);
+      if (!stripe) return;
       const session = await stripe.checkout.sessions.create({
         line_items: [{
           price_data: {

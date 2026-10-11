@@ -127,10 +127,20 @@ estados, y los hace la máquina sin opinión humana:
 
 | Estado | Qué significa | ¿Entra en las medias? |
 |---|---|---|
-| `utilizables` | hay kilometraje en los dos extremos, crece, y el ritmo diario es plausible | sí |
-| `anomalos` | hay kilometraje en los dos extremos y crece, pero el ritmo diario supera el límite. **El recorrido se calcula y se guarda igual** | solo si una persona lo acepta |
+| `utilizables` | hay kilometraje en los dos extremos, crece, y el ritmo diario es plausible | sí, si además la continuidad está limpia |
+| `anomalos` | hay kilometraje en los dos extremos y crece, pero el ritmo diario supera el límite. **El recorrido se calcula y se guarda igual** | solo si una persona acepta los kilómetros |
 | `ausentes` | falta el kilometraje de un extremo o de los dos | no |
 | `incompatibles` | hay valores pero el kilometraje decrece. **Los dos valores se conservan** | no |
+
+Y una marca aparte, `orden_desconocido`, para el **mismo día**: montaje y
+desmontaje con la misma fecha y recorrido positivo. El recorrido se conserva,
+pero **no se publica ningún «km/día»**, porque no se sabe en qué orden se
+hicieron los trabajos ni cuánto tiempo pasó: los albaranes no traen hora de
+trabajo y la intervención se importa con `hora_desconocida`. Comparar el
+recorrido con el límite de un día sirve como comprobación auxiliar y se
+presenta como tal, nunca como un ritmo observado. Un recorrido **cero** el
+mismo día es lo normal y no genera ninguna anomalía por sí solo; uno positivo
+queda fuera de las estadísticas hasta que alguien revise ese orden.
 
 El criterio de plausibilidad es el **ritmo diario**, no el recorrido total:
 180.000 km en tres años es creíble y 180.000 km en tres meses no, y el total
@@ -143,15 +153,24 @@ compara el recorrido con el límite de un día y el aviso lo dice.
 Un aviso de plausibilidad **no demuestra que el dato sea falso**. Es un
 criterio de revisión.
 
-**2. La decisión humana es otra cosa, y se audita.** Una persona puede aceptar
-o rechazar el uso estadístico de un intervalo, con motivo obligatorio, usuario
-y fecha, en `tc_reconstruccion_revisiones`. Rechazar **no** convierte los
-kilómetros en ausentes ni en decrecientes: la clasificación sigue siendo la
-que era y el recorrido sigue guardado. Aceptar permite usar el intervalo como
-**estimado** y nunca lo convierte en rendimiento confirmado. Si la evidencia
-del intervalo cambia después, la decisión caduca, queda constancia de la
-invalidación y el intervalo vuelve a pedir revisión; la auditoría no se borra
-en ningún caso, tampoco al deshacer una importación.
+**2. La decisión humana es otra cosa, y son DOS.** Una persona puede aceptar o
+rechazar, con motivo obligatorio, usuario y fecha, en
+`tc_reconstruccion_revisiones`, y lo hace en **uno de dos ámbitos**:
+
+- `kilometros` → el recorrido es creíble y puede usarse como estimado;
+- `continuidad` → la cadena de esa posición puede darse por limpia pese al
+  documento bloqueado que hay dentro.
+
+**Aceptar los kilómetros no abre la puerta de la continuidad**, y al revés
+tampoco: son dos puertas y cada una tiene su llave. Rechazar **no** convierte
+los kilómetros en ausentes ni en decrecientes: la clasificación sigue siendo
+la que era y el recorrido sigue guardado. Aceptar permite usar el intervalo
+como **estimado** y nunca lo convierte en rendimiento confirmado. Si la
+evidencia del intervalo cambia después, la decisión caduca, queda constancia
+de la invalidación y el intervalo vuelve a pedir revisión de ese ámbito; la
+auditoría no se borra en ningún caso, tampoco al deshacer una importación, y
+los roles de la aplicación no pueden escribir en ella (RLS de solo lectura más
+los permisos revocados).
 
 **3. Un albarán bloqueado dentro de un intervalo lo deja con la continuidad
 pendiente.** Los 25 albaranes bloqueados siguen sin importarse: no se crean
@@ -169,18 +188,22 @@ fuera: intervalos incluidos, excluidos por cada motivo, gomas identificadas
 frente a ocupaciones de posición, y periodo y población analizados. Tres
 reglas de lectura que van dentro del propio dato:
 
-- **Una ficha reconstruida no es una goma identificada.** La importación crea
-  una ficha por cada montaje, pero mientras nadie la identifique esa ficha es
-  un hueco con número, no una unidad. Para las estadísticas cuenta como
-  **ocupación de la posición**. La cobertura publica los tres grupos —
-  `respaldada` (una persona la identificó), `reconstruida` (ficha de la
-  importación sin identificar) y `sin_ficha` — y suman la población.
-  **Con la carga de diez meses de Plana: 0 respaldadas y 1.452
-  reconstruidas.** Así que, hoy, ninguna media de esta reconstrucción es el
+- **Tres identidades, no dos.** `respaldada` (una persona identificó el
+  neumático físico), `reconstruida` (hay ficha, con su número interno, creada
+  por la importación, pero nadie ha confirmado qué goma era) y `sin_ficha`.
+  Las tres suman la población y **cada una tiene su media**: no se promedian
+  juntas. El número interno de una ficha reconstruida **identifica un
+  registro histórico y permite enlazarlo; no demuestra qué neumático físico
+  estuvo montado todo el intervalo**. Y «sin identificación física» no es lo
+  mismo que «sin ficha»: la ficha existe.
+  **Con la carga de diez meses de Plana: 0 respaldadas, 1.452 reconstruidas y
+  0 sin ficha.** Así que, hoy, ninguna media de esta reconstrucción es el
   rendimiento de un neumático concreto, y el informe lo dice con esas
   palabras.
-- **Las gomas identificadas y las ocupaciones no se promedian juntas.** Una
-  ocupación es el recorrido de una POSICIÓN entre dos fechas.
+- **Calculable no es elegible.** La cobertura publica el embudo: cuántos
+  intervalos tienen un recorrido que se puede restar y cuántos pasan además
+  los filtros de plausibilidad, continuidad y decisión humana. Con los diez
+  meses: **52 calculables, 50 elegibles**.
 - **Los motivos de exclusión se solapan.** Un intervalo puede ser anómalo Y
   tener continuidad pendiente: aparece en los dos. Por eso los motivos no
   suman el total y se publica además la lista de combinaciones, que sí suma.
@@ -190,9 +213,11 @@ reglas de lectura que van dentro del propio dato:
 | | |
 |---|---|
 | Intervalos reconstruidos | 1.452 (1.056 abiertos · 66 cerrados · 330 interrumpidos) |
-| Entran en las medias | **50** |
+| Con recorrido aritmético | 52 |
+| **Entran en las medias tras todos los filtros** | **50** |
 | Media de esos 50 | **24.588 km** (mediana 21.078 · de 736 a 73.901) |
-| De los 50, gomas identificadas | **0**. Las 50 son ocupaciones de posición |
+| De los 50, identidad respaldada | **0**. Las 50 son fichas reconstruidas |
+| Intervalos cerrados el mismo día | **0** (la regla del mismo día no se activa con estos datos) |
 | Fuera de las medias | 1.402 |
 | · sin cerrar | 1.386 |
 | · continuidad pendiente | 334 |
