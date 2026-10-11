@@ -343,6 +343,21 @@ declare
 begin
   select empresa_id into v_empresa from tc_vehiculos where id = p_vehiculo;
   if v_empresa is null then return 0; end if;
+  -- Un candado por VEHÍCULO, no por empresa y origen.
+  --
+  -- Rehacer la cadena es borrar los intervalos del vehículo y volver a
+  -- crearlos. Dos sesiones haciéndolo a la vez en READ COMMITTED PODRÍAN
+  -- duplicarlos: el DELETE de la segunda arranca con su propio snapshot y no
+  -- ve las filas que acaba de insertar la primera, así que las deja y añade
+  -- las suyas encima. Con dos sesiones reales no he conseguido provocarlo —la
+  -- ventana es de milisegundos y la reconstrucción es rápida—, así que esto es
+  -- una protección por si acaso, no el arreglo de un fallo reproducido. La
+  -- importación ya se serializa con
+  -- tc_imp_bloquear(empresa, origen), pero esta función también la llaman
+  -- deshacer y el cambio de límite, y el candado de la importación no cubre
+  -- esos caminos. Este sí, y es el del propio vehículo: dos vehículos
+  -- distintos siguen pudiendo reconstruirse en paralelo.
+  perform pg_advisory_xact_lock(hashtext('tc_recons:' || p_vehiculo::text));
   v_limite := tc_imp_limite_km_dia(v_empresa);
 
   delete from tc_reconstruccion_montajes where vehiculo_id = p_vehiculo;

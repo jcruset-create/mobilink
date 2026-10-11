@@ -121,4 +121,21 @@ else
   echo "  (sin intervalo cerrado que revisar en esta base)"
 fi
 
+echo "== 9. FASE 3: dos reconstrucciones del MISMO vehículo a la vez"
+# Rehacer la cadena es borrar los intervalos del vehículo y volver a crearlos.
+# Sin candado por vehículo, dos sesiones a la vez los duplican: el DELETE de la
+# segunda no ve lo que acaba de insertar la primera.
+if [ -n "${VEH8:-}" ]; then
+  ANTES=$($P -c "select count(*) from tc_reconstruccion_montajes where vehiculo_id='$VEH8'")
+  ( $P -c "select 'A:'||tc_imp_reconstruir_vehiculo('$VEH8')" ) & sleep 0.1
+  ( $P -c "select 'B:'||tc_imp_reconstruir_vehiculo('$VEH8')" ) &
+  wait
+  DESPUES=$($P -c "select count(*) from tc_reconstruccion_montajes where vehiculo_id='$VEH8'")
+  echo "  esperado: los mismos intervalos que antes, ni uno duplicado"
+  echo "  intervalos antes=$ANTES después=$DESPUES"
+  $P -c "select '  sin intervalos duplicados por operación de entrada: '||(count(*) = count(distinct operacion_entrada_id)) from tc_reconstruccion_montajes where vehiculo_id='$VEH8'"
+else
+  echo "  (sin vehículo de la prueba 8)"
+fi
+
 echo "== bloqueos que no se resuelven (fase 3):"; $P -c "select count(*) from pg_locks where not granted"
