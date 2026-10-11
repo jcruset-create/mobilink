@@ -37,7 +37,7 @@ insert into tc_vehiculos (id, empresa_id, tipo_vehiculo_id, matricula, km_actual
 create or replace function foto() returns text language sql as $$
   select md5(coalesce((select string_agg(m::text, '|' order by m.id) from tc_montajes_actuales m), '') || '#' ||
              coalesce((select string_agg(h::text, '|' order by h.id) from tc_historial_montajes h), '') || '#' ||
-             coalesce((select string_agg(n::text, '|' order by n.id) from tc_neumaticos n), '') || '#' ||
+             coalesce((select string_agg(n::text, '|' order by n.id) from tc_neumaticos n where n.importacion_lote_id is null), '') || '#' ||
              coalesce((select string_agg(s::text, '|' order by s.id) from movimientos_stock s), '') || '#' ||
              coalesce((select string_agg(r::text, '|' order by r.id) from revisiones_vehiculo r), '') || '#' ||
              coalesce((select string_agg(d::text, '|' order by d.id) from revisiones_neumaticos_detalle d), '') || '#' ||
