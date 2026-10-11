@@ -7,6 +7,12 @@ set -u
 source "$(dirname "${BASH_SOURCE[0]}")/comun.sh"
 DB="${1:-esquema_completo}"; comprobar_base "$DB"; FALLOS="${2:-/tmp/esquema_fallos.txt}"
 cd "$RAIZ"; recrear_base "$DB"
+# La marca de entorno de pruebas. Aquí se pone sin ceremonia porque la base
+# acaba de crearse, el nombre ya ha pasado por comprobar_base y esto solo
+# habla con 127.0.0.1. En un proyecto Supabase la pone, con todas sus
+# comprobaciones, scripts/staging/00-inicializar-destino.sh.
+psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d postgres -q \
+  -c "alter database \"$DB\" set mobilink.entorno = 'pruebas'"
 # Los stubs van SIN ON_ERROR_STOP: una extensión que falte (uuid-ossp) no debe impedir el resto.
 psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$DB" -q <<'SQL'
 create extension if not exists pgcrypto; create extension if not exists "uuid-ossp";
@@ -61,16 +67,15 @@ psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$DB" -q -c "alter table producto
 # proyecto real esos permisos vienen de los default privileges que Supabase
 # configura al crear el esquema public. Sin ellos, cualquier RPC `security
 # invoker` falla por PostgREST con «permission denied for table ...» aunque en
-# psql funcione, porque psql entra como dueño y se los salta. Lo que de verdad
-# protege los datos es la RLS, que sí está en las migraciones.
-psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$DB" -q <<'SQL'
-grant all on all tables    in schema public to anon, authenticated, service_role;
-grant all on all sequences in schema public to anon, authenticated, service_role;
-grant all on all functions in schema public to anon, authenticated, service_role;
-alter default privileges in schema public grant all on tables    to anon, authenticated, service_role;
-alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
-alter default privileges in schema public grant all on functions to anon, authenticated, service_role;
-SQL
+# psql funcione, porque psql entra como dueño y se los salta.
+#
+# Pero no se copia el grant global de la plataforma: se conceden por nombre
+# los objetos que usa esta prueba. El fichero lleva la lista y las
+# comprobaciones que paran la transacción si algo queda expuesto.
+psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$DB" -v ON_ERROR_STOP=1 -q \
+  -f "$RAIZ/scripts/staging/permisos-pruebas.sql" \
+  || { echo "FALLO al aplicar scripts/staging/permisos-pruebas.sql" >&2; exit 1; }
+
 # Y la otra propiedad que pone la plataforma: en Supabase `service_role` SE
 # SALTA la RLS. Sin esto, cualquier endpoint del servidor que lea con la
 # service key (el PDF del parte, por ejemplo) devuelve «no encontrado» aquí y
@@ -78,4 +83,4 @@ SQL
 psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$DB" -q -c "alter role service_role bypassrls" 2>/dev/null \
   || echo "aviso: no se ha podido dar bypassrls a service_role (hace falta superusuario); los endpoints con service key leerán con RLS"
 
-echo "aplicadas en total: ${#ok[@]} de $(wc -l < "$ORDEN") · fallos en $FALLOS · permisos de plataforma concedidos"
+echo "aplicadas en total: ${#ok[@]} de $(wc -l < "$ORDEN") · fallos en $FALLOS · permisos concedidos por nombre (scripts/staging/permisos-pruebas.sql)"

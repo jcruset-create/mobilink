@@ -1582,8 +1582,38 @@ grant execute on function tc_imp_limite_km_dia(uuid) to authenticated, service_r
 grant execute on function tc_imp_fijar_limite_km_dia(uuid, numeric) to authenticated, service_role;
 grant execute on function tc_imp_revisar_intervalo(uuid, text, text, text) to authenticated, service_role;
 grant execute on function tc_informes_recorridos_estimados(uuid, date, date, uuid) to authenticated, service_role;
+-- Los auxiliares: a quien los necesita y a nadie más.
+--
+-- PostgreSQL concede EXECUTE a PUBLIC en toda función nueva, así que un
+-- `grant … to authenticated` NO quita el acceso de los demás: hay que
+-- revocarlo. La vista tc_reconstruccion_intervalos es security_invoker, de
+-- modo que quien la consulta necesita ejecutar estos cuatro; por eso se
+-- conceden a authenticated y service_role, y se quitan de public y anon.
+revoke all on function tc_imp_intervalo_en_medias(tc_reconstruccion_montajes) from public, anon;
+revoke all on function tc_imp_intervalo_motivos(tc_reconstruccion_montajes) from public, anon;
+revoke all on function tc_imp_intervalo_duda_km(tc_reconstruccion_montajes) from public, anon;
+revoke all on function tc_imp_intervalo_duda_continuidad(tc_reconstruccion_montajes) from public, anon;
+revoke all on function tc_imp_num(numeric) from public, anon;
 grant execute on function tc_imp_intervalo_en_medias(tc_reconstruccion_montajes) to authenticated, service_role;
 grant execute on function tc_imp_intervalo_motivos(tc_reconstruccion_montajes) to authenticated, service_role;
 grant execute on function tc_imp_intervalo_duda_km(tc_reconstruccion_montajes) to authenticated, service_role;
 grant execute on function tc_imp_intervalo_duda_continuidad(tc_reconstruccion_montajes) to authenticated, service_role;
 grant execute on function tc_imp_num(numeric) to authenticated, service_role;
+
+-- Y los auxiliares de la FASE 1, que se quedaron con el EXECUTE para PUBLIC
+-- que pone PostgreSQL por defecto. Ninguno debería poder llamarlo cualquiera:
+--   · tc_imp_bloquear toma el candado de importación de una empresa, así que
+--     quien pudiera llamarlo podría bloquear las importaciones ajenas;
+--   · tc_imp_posiciones_norma es `security definer` y lee vehículos y planos,
+--     de modo que con PUBLIC cualquiera podría consultar el plano de un
+--     vehículo que no es suyo;
+--   · tc_imp_exigir_admin y tc_imp_medianoche no los usa nadie de fuera.
+-- Se dejan accesibles a service_role porque el servidor los usa por dentro.
+revoke all on function tc_imp_bloquear(uuid, text) from public, anon;
+revoke all on function tc_imp_exigir_admin(uuid) from public, anon;
+revoke all on function tc_imp_medianoche(date) from public, anon;
+revoke all on function tc_imp_posiciones_norma(uuid, int, boolean) from public, anon;
+grant execute on function tc_imp_bloquear(uuid, text) to service_role;
+grant execute on function tc_imp_exigir_admin(uuid) to service_role;
+grant execute on function tc_imp_medianoche(date) to service_role;
+grant execute on function tc_imp_posiciones_norma(uuid, int, boolean) to authenticated, service_role;
