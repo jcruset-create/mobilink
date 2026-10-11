@@ -490,9 +490,13 @@ export async function cambiarPasswordUsuario(id: string, password: string): Prom
 // ── Neumáticos ───────────────────────────────────────────────
 const NEU_SELECT = "*, empresa:tc_empresas(*)";
 
-export async function listarNeumaticos(filtros?: { empresaId?: string }): Promise<Neumatico[]> {
+export async function listarNeumaticos(filtros?: { empresaId?: string; incluirHistoricas?: boolean }): Promise<Neumatico[]> {
   let q = supabase.from("tc_neumaticos").select(NEU_SELECT).order("codigo_interno");
   if (filtros?.empresaId) q = q.eq("empresa_id", filtros.empresaId);
+  // Las fichas de la reconstrucción histórica no son existencias: dan
+  // identidad a un montaje de hace años. Fuera del listado salvo que se
+  // pidan a posta (ver shared/historicoAlbaran.ts para el criterio).
+  if (!filtros?.incluirHistoricas) q = q.is("importacion_lote_id", null);
   const { data, error } = await q;
   if (error) throw new Error(error.message);
   return (data ?? []) as unknown as Neumatico[];
@@ -3537,6 +3541,8 @@ export async function deshacerImportacion(loteId: string, excluir: string[], sim
 export interface CargaImportacion {
   id: string; empresa_id: string; origen_sistema: string; fichero: string | null; estado: string;
   creado_at: string; actualizado_at: string;
+  /** 1 = importada antes de las fichas y las sustituciones; 2 = alcance completo. */
+  alcance?: number;
   lotes?: LoteImportacion[];
 }
 export interface LoteImportacion {
@@ -3551,6 +3557,93 @@ export async function listarCargasImportacion(empresaId: string): Promise<CargaI
   const cargas = (data ?? []) as unknown as CargaImportacion[];
   for (const c of cargas) c.lotes = [...(c.lotes ?? [])].sort((a, b) => (a.periodo < b.periodo ? -1 : 1));
   return cargas;
+}
+
+export interface ResultadoAmpliar {
+  simulacion: boolean; carga_id: string; ampliadas: number; sin_ampliar: number;
+  fichas: number; salidas: number;
+  detalle: { origen_doc: string; resultado: string; motivo?: string }[];
+}
+
+/**
+ * Ampliar una carga importada con el alcance antiguo: le añade las fichas de
+ * las unidades nuevas y las salidas por sustitución que le faltan. No duplica
+ * entradas, servicios ni líneas, y se salta las intervenciones que alguien
+ * haya tocado por fuera (la huella manda).
+ */
+export async function ampliarCargaImportacion(cargaId: string, simular: boolean): Promise<ResultadoAmpliar> {
+  const { data, error } = await supabase.rpc("tc_imp_ampliar_carga", { p_carga: cargaId, p_simular: simular });
+  if (error) throw new Error(error.message);
+  return data as ResultadoAmpliar;
+}
+
+export interface UnidadPorIdentificar {
+  id: string; fecha_operacion: string; condicion: string | null;
+  marca_txt: string | null; modelo_txt: string | null; medida_txt: string | null;
+  vehiculo_id: string | null; vehiculo?: { matricula: string } | null;
+  intervencion?: { origen_doc: string | null } | null;
+}
+
+/**
+ * La bandeja: unidades históricas usadas o recauchutadas que se montaron pero
+ * no tienen ficha. No se les asigna identidad sola por parecerse a otra: esto
+ * es trabajo de una persona.
+ */
+export async function listarUnidadesPorIdentificar(empresaId: string): Promise<UnidadPorIdentificar[]> {
+  const { data, error } = await supabase.from("operaciones_neumaticos")
+    .select("id, fecha_operacion, condicion, marca_txt, modelo_txt, medida_txt, vehiculo_id, vehiculo:tc_vehiculos(matricula), intervencion:tc_intervenciones(origen_doc)")
+    .eq("empresa_id", empresaId).not("importacion_lote_id", "is", null)
+    .eq("tipo_operacion", "montaje").is("neumatico_id", null).eq("is_anulada", false)
+    .order("fecha_operacion", { ascending: false }).limit(500);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as UnidadPorIdentificar[];
+}
+
+/**
+ * Candidatas para una unidad: misma empresa, misma medida y sin montaje vivo.
+ * Son PISTAS para quien decide, no una identificación: coincidir en medida no
+ * demuestra que sea la misma goma.
+ */
+export async function listarCandidatasFicha(empresaId: string, medida: string | null): Promise<Neumatico[]> {
+  let q = supabase.from("tc_neumaticos").select(NEU_SELECT)
+    .eq("empresa_id", empresaId).eq("activo", true).is("vehiculo_id", null).limit(50);
+  if (medida) q = q.eq("medida", medida);
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as Neumatico[];
+}
+
+/** Enlaza la unidad con una ficha existente, o crea una. Acción manual y auditada. */
+export async function identificarUnidad(
+  operacionId: string, neumaticoId: string | null, crear: boolean, motivo: string,
+): Promise<{ neumatico_id: string; creada: boolean }> {
+  const { data, error } = await supabase.rpc("tc_imp_identificar_unidad", {
+    p_operacion: operacionId, p_neumatico: neumaticoId, p_crear: crear, p_motivo: motivo,
+  });
+  if (error) throw new Error(error.message);
+  return data as { neumatico_id: string; creada: boolean };
+}
+
+export interface IntervaloReconstruido {
+  id: string; vehiculo_id: string; posicion_id: string | null; neumatico_id: string | null;
+  fecha_montaje: string; km_montaje: number | null; km_montaje_conocido: boolean;
+  fecha_desmontaje: string | null; km_desmontaje: number | null; km_desmontaje_conocido: boolean;
+  estado: "abierto" | "cerrado" | "interrumpido"; nivel: "confirmado" | "estimado";
+  posicion_fuente: string | null; continuidad_desde: string | null;
+  evidencia: string | null; revisar: boolean; motivo_revision: string | null;
+  origen_doc_montaje: string | null; origen_doc_desmontaje: string | null;
+  neumatico?: { numero_interno: string | null } | null;
+  posicion?: { codigo_posicion: string } | null;
+}
+
+/** Los intervalos reconstruidos de un vehículo. Son ESTIMADOS: no alimentan
+ *  los informes de rendimiento confirmado. */
+export async function listarIntervalosReconstruidos(vehiculoId: string): Promise<IntervaloReconstruido[]> {
+  const { data, error } = await supabase.from("tc_reconstruccion_montajes")
+    .select("*, neumatico:tc_neumaticos(numero_interno), posicion:tc_posiciones_vehiculo(codigo_posicion)")
+    .eq("vehiculo_id", vehiculoId).order("fecha_montaje", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as IntervaloReconstruido[];
 }
 
 /** Lo conservado de un lote parcialmente deshecho, con su motivo. */

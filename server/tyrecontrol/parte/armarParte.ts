@@ -159,6 +159,7 @@ export function armarParte(
   movimientos: MovimientoFila[],
   servicios: ServicioFila[] = [],
   historicos: HistoricoFila[] = [],
+  historicosSalidas = 0,
 ): PartePdf {
   // Un cambio de posición es un desmontaje Y un montaje en el papel, pero en
   // la base de datos es UN movimiento. Se cuenta en las dos tablas: el parte
@@ -203,6 +204,7 @@ export function armarParte(
     cliente_dni: i.firma_cliente_dni ?? null,
     tecnico_nombre: i.firma_tecnico_nombre ?? null,
     historicos: historicos.length ? historicos : undefined,
+    historicos_salidas: historicosSalidas || undefined,
     historico_etiqueta: (i as { historico_etiqueta?: string | null }).historico_etiqueta ?? null,
   };
 }

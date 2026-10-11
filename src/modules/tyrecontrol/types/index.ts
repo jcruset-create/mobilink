@@ -757,6 +757,10 @@ export interface OperacionNeumatico {
   modelo_txt?: string | null;
   medida_txt?: string | null;
   posicion_fuente?: "indicada" | "deducida" | "desconocida" | null;
+  /** Une la entrada y la salida de una sustitución histórica. */
+  grupo_sustitucion?: string | null;
+  /** Solo en la fila de salida: si consta quién se retiró. */
+  identidad_retirado?: "respaldada" | "reconstruida" | "desconocida" | null;
   empresa?: Empresa | null;
   vehiculo?: Vehiculo | null;
   neumatico?: Neumatico | null;

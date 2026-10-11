@@ -42,3 +42,19 @@ export function textoPosicionHistorica(codigo: string | null | undefined, fuente
   if (!codigo) return fuente === "desconocida" ? "— (desconocida)" : "";
   return fuente === "deducida" ? `${codigo} (deducida)` : codigo;
 }
+
+/**
+ * Cómo se nombra la goma que SALIÓ en una sustitución histórica.
+ *
+ * El hecho del desmontaje es cierto —cada montaje sustituye al ocupante de
+ * esa posición— pero la identidad casi nunca consta. No se inventa: se dice.
+ */
+export function textoRetirado(o: {
+  identidad_retirado?: string | null;
+  neumatico?: { numero_interno?: string | null; codigo_interno?: string | null } | null;
+} | null | undefined): string {
+  const n = o?.neumatico?.numero_interno ?? o?.neumatico?.codigo_interno ?? null;
+  if (o?.identidad_retirado === "respaldada" && n) return `${n} (identificada)`;
+  if (o?.identidad_retirado === "reconstruida" && n) return `${n} (reconstruida)`;
+  return "no consta cuál salió";
+}

@@ -131,6 +131,17 @@ export function filasHistoricas(ops: OperacionFila[]): HistoricoFila[] {
 }
 
 /**
+ * Las SALIDAS del histórico: por cada montaje importado hay una retirada de
+ * la goma que ocupaba esa posición (regla de la casa). No se listan una a
+ * una en el papel —de casi ninguna consta la identidad— pero sí se dice
+ * cuántas fueron, para que el recuento cuadre.
+ */
+export function salidasHistoricas(ops: OperacionFila[]): number {
+  return ops.filter((o) => esHistoricoAlbaran(o) && !o.is_anulada
+    && (o.status == null || o.status === "completada") && o.tipo_operacion === "desmontaje").length;
+}
+
+/**
  * ¿Es una goma DECLARADA, de las que el camión ya llevaba puestas?
  *
  * Cuando un vehículo llega sin ningún neumático fichado, el técnico declara en

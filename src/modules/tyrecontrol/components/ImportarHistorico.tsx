@@ -5,8 +5,8 @@ import {
   type AlbaranConciliado, type ResumenConciliacion,
 } from "../services/importHistorico";
 import {
-  deshacerImportacion, importarHistorico, listarCargasImportacion, listarConservadasDeLote, listarEmpresas,
-  type CargaImportacion, type ResultadoAlbaranImport, type ResultadoDeshacer, type ResultadoImportHistorico,
+  ampliarCargaImportacion, deshacerImportacion, importarHistorico, listarCargasImportacion, listarConservadasDeLote, listarEmpresas,
+  type CargaImportacion, type ResultadoAlbaranImport, type ResultadoAmpliar, type ResultadoDeshacer, type ResultadoImportHistorico,
 } from "../services/data";
 import type { Empresa } from "../types";
 import { TableWrap, tdCls, thCls, inputCls } from "./ui";
@@ -45,6 +45,7 @@ export default function ImportarHistorico({ h1, h2, nombreArchivo, bytes }: {
   const [ocupado, setOcupado] = useState<"conciliando" | "simulando" | "importando" | "deshaciendo" | null>(null);
   const [error, setError] = useState("");
   const [deshacer, setDeshacer] = useState<{ loteId: string; r: ResultadoDeshacer; excluir: Set<string> } | null>(null);
+  const [ampliacion, setAmpliacion] = useState<{ cargaId: string; r: ResultadoAmpliar } | null>(null);
 
   useEffect(() => { listarEmpresas().then(setEmpresas).catch(() => setEmpresas([])); }, []);
   useEffect(() => { if (empresaId) listarCargasImportacion(empresaId).then(setCargas).catch(() => setCargas([])); }, [empresaId]);
@@ -114,6 +115,21 @@ export default function ImportarHistorico({ h1, h2, nombreArchivo, bytes }: {
     setOcupado(null);
     setSimulacion(null);
     listarCargasImportacion(empresaId).then(setCargas).catch(() => undefined);
+  }
+
+  /**
+   * Cargas importadas con el alcance antiguo: les faltan las fichas de las
+   * unidades nuevas y las salidas por sustitución. Esto se las añade sin
+   * duplicar nada; primero en seco, y solo se aplica si el usuario lo pide.
+   */
+  async function ampliar(cargaId: string, simular: boolean) {
+    setOcupado("importando"); setError("");
+    try {
+      const r = await ampliarCargaImportacion(cargaId, simular);
+      setAmpliacion({ cargaId, r });
+      if (!simular) setCargas(await listarCargasImportacion(empresaId));
+    } catch (e: any) { setError(e?.message || "No se ha podido ampliar la carga"); }
+    finally { setOcupado(null); }
   }
 
   async function prepararDeshacer(loteId: string) {
@@ -277,11 +293,21 @@ export default function ImportarHistorico({ h1, h2, nombreArchivo, bytes }: {
 
       {empresaId && cargas.length > 0 && (
         <div className="rounded-lg bg-slate-800 p-3">
-          <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Cargas anteriores de esta empresa</div>
+          <div className="mb-2 flex items-center justify-between">
+            <div className="text-[11px] font-bold uppercase text-slate-400">Cargas anteriores de esta empresa</div>
+            <Link to="/tyrecontrol/importar/identificar" className="text-[11px] text-sky-300 hover:underline">Unidades por identificar →</Link>
+          </div>
           {cargas.map((c) => (
             <div key={c.id} className="mb-2 rounded border border-slate-700 p-2 text-[12px]">
-              <div className="text-slate-200">
-                {new Date(c.creado_at).toLocaleString("es-ES")} · {c.fichero ?? "—"} · origen <b>{c.origen_sistema}</b> · <span className="uppercase text-slate-400">{c.estado.replace(/_/g, " ")}</span>
+              <div className="flex flex-wrap items-center gap-2 text-slate-200">
+                <span>{new Date(c.creado_at).toLocaleString("es-ES")} · {c.fichero ?? "—"} · origen <b>{c.origen_sistema}</b> · <span className="uppercase text-slate-400">{c.estado.replace(/_/g, " ")}</span></span>
+                {(c.alcance ?? 1) < 2 && c.estado !== "deshecha" && (
+                  <>
+                    <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] uppercase text-amber-300" title="Importada antes de las fichas y las sustituciones">sin fichas ni salidas</span>
+                    <button onClick={() => void ampliar(c.id, true)} disabled={!!ocupado}
+                      className="rounded border border-slate-600 px-1.5 py-0.5 text-[11px] text-slate-200 hover:bg-slate-700 disabled:opacity-50">Comprobar ampliación…</button>
+                  </>
+                )}
               </div>
               <div className="mt-1 flex flex-wrap gap-2">
                 {(c.lotes ?? []).map((l) => (
@@ -298,6 +324,27 @@ export default function ImportarHistorico({ h1, h2, nombreArchivo, bytes }: {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {ampliacion && (
+        <div className="mb-3 rounded-lg border border-sky-600/40 bg-sky-500/5 p-3 text-[12px]">
+          <div className="mb-1 font-bold text-sky-200">
+            {ampliacion.r.simulacion ? "Comprobación de ampliación" : "Carga ampliada"} ·{" "}
+            {ampliacion.r.ampliadas} {ampliacion.r.simulacion ? "se ampliarían" : "ampliadas"} ·{" "}
+            {ampliacion.r.fichas} fichas · {ampliacion.r.salidas} salidas
+            {ampliacion.r.sin_ampliar > 0 ? ` · ${ampliacion.r.sin_ampliar} sin ampliar` : ""}
+          </div>
+          {ampliacion.r.detalle.filter((d) => d.motivo).slice(0, 10).map((d, i) => (
+            <div key={i} className="text-slate-300">· {d.origen_doc}: {d.motivo}</div>
+          ))}
+          <div className="mt-2 flex gap-2">
+            {ampliacion.r.simulacion && ampliacion.r.ampliadas > 0 && (
+              <button onClick={() => void ampliar(ampliacion.cargaId, false)} disabled={!!ocupado}
+                className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">Ampliar de verdad</button>
+            )}
+            <button onClick={() => setAmpliacion(null)} className="rounded-lg px-3 py-1.5 text-xs text-slate-400 hover:text-slate-200">Cerrar</button>
+          </div>
         </div>
       )}
 

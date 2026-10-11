@@ -98,6 +98,27 @@ export interface OperacionesInforme {
   evolucion: { mes: string; n: number }[];
 }
 
+/** Informe «Montajes de neumáticos»: cuenta UNIDADES QUE ENTRAN. Las salidas
+ *  van aparte y no inflan el recuento (4 sustituciones = 4 montajes). */
+export type OrigenMontajes = "historico" | "normal" | "ambos";
+export interface MontajesInforme {
+  desde: string; hasta: string; origen: OrigenMontajes;
+  total: number; total_historico: number; total_normal: number;
+  desmontajes: number; desmontajes_historico: number; registros: number;
+  por_condicion: { condicion: string; n: number; historico: number; normal: number }[];
+  por_referencia: { marca: string; modelo: string; medida: string; condicion: string; n: number; historico: number; normal: number }[];
+  por_vehiculo: { vehiculo_id: string | null; matricula: string; n: number; nuevas: number; usadas: number; recauchutadas: number }[];
+  evolucion: { mes: string; n: number; historico: number; normal: number }[];
+  por_posicion: { clase: "registrada" | "deducida" | "desconocida"; n: number }[];
+  excluidas: { anuladas: number; correcciones: number; declaradas: number; no_completadas: number };
+}
+
+export interface InventarioResumen {
+  neumaticos_reales: number;
+  fichas_historicas: number;
+  unidades_sin_ficha: number;
+}
+
 export interface PresionNeumatico {
   neumatico_id: string;
   codigo: string | null;

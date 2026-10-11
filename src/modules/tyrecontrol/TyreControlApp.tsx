@@ -60,6 +60,8 @@ import InformeDesgaste from "./pages/informes/InformeDesgaste";
 import InformePresiones from "./pages/informes/InformePresiones";
 import InformeProductividad from "./pages/informes/InformeProductividad";
 import InformeOperaciones from "./pages/informes/InformeOperaciones";
+import InformeMontajes from "./pages/informes/InformeMontajes";
+import UnidadesPorIdentificar from "./pages/UnidadesPorIdentificar";
 
 export default function TyreControlApp() {
   return (
@@ -108,6 +110,7 @@ export default function TyreControlApp() {
                 <Route path="rankings" element={<InformeRankings />} />
                 <Route path="productividad" element={<InformeProductividad />} />
                 <Route path="operaciones-informe" element={<InformeOperaciones />} />
+                <Route path="montajes" element={<InformeMontajes />} />
                 <Route path="historial-neumatico" element={<InformeHistorialNeumatico />} />
               </Route>
             </Route>
@@ -154,6 +157,7 @@ export default function TyreControlApp() {
               <Route path="sonda" element={<SondaTLGX />} />
               <Route path="configuracion" element={<Configuracion />} />
               <Route path="importar" element={<Importar />} />
+              <Route path="importar/identificar" element={<UnidadesPorIdentificar />} />
               <Route path="parte-proveedor" element={<ParteProveedor />} />
             </Route>
           </Route>

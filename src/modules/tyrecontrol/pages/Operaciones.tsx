@@ -6,7 +6,7 @@ import type { Empresa, OperacionNeumatico, TipoOperacion, Vehiculo, EstadoOperac
 import { TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS, ESTADO_OPERACION_BADGE, PRIORIDAD_OPERACION_LABELS } from "../types";
 import { TableWrap, tdCls, thCls, inputCls, Modal, Field } from "../components/ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
-import { esHistoricoAlbaran, textoNeumaticoHistorico, textoPosicionHistorica } from "../../../../shared/historicoAlbaran";
+import { esHistoricoAlbaran, textoNeumaticoHistorico, textoPosicionHistorica, textoRetirado } from "../../../../shared/historicoAlbaran";
 
 // Acciones de estado disponibles según el estado actual (transiciones simples).
 // El grafo también vive en la base de datos (trg_op_valida_transicion): esto
@@ -338,7 +338,7 @@ export default function Operaciones() {
                   enseña lo que decía el albarán, y se dice que es histórico. */}
               <td className={tdCls + " text-slate-400"}>
                 {esHistoricoAlbaran(o)
-                  ? <span title="Histórico importado de albarán, sin ficha de neumático">{textoNeumaticoHistorico(o)} <span className="rounded bg-slate-700 px-1 text-[10px] uppercase text-slate-300">histórico</span></span>
+                  ? <span title="Histórico importado de albarán, sin ficha de neumático">{o.tipo_operacion === "desmontaje" ? textoRetirado(o) : textoNeumaticoHistorico(o)} <span className="rounded bg-slate-700 px-1 text-[10px] uppercase text-slate-300">histórico</span></span>
                   : (o.neumatico?.numero_interno ?? o.neumatico?.codigo_interno ?? "—")}
               </td>
               <td className={tdCls + " text-slate-400"}>

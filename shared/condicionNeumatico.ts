@@ -18,6 +18,7 @@ export interface OperacionConCondicion {
   posicion_destino?: { codigo_posicion?: string | null } | null;
   posicion_origen_id?: string | null;
   posicion_destino_id?: string | null;
+  estado_anterior?: string | null;
   /** Procedencia de la posición en el histórico importado; las operaciones normales no la traen. */
   posicion_fuente?: string | null;
 }
@@ -37,6 +38,8 @@ export interface ResumenMontajes {
   total: number;
   /** Montajes y sustituciones (una goma puesta) por condición. */
   montajes: number;
+  /** Gomas retiradas: desmontajes y la cara «sale» de una sustitución. */
+  desmontajes: number;
   porCondicion: Record<CondicionNeumatico, number>;
   conPosicion: number;
   sinPosicion: number;
@@ -53,12 +56,20 @@ export function esPosicionDeducida(o: OperacionConCondicion): boolean {
 /** Recuento honesto: el total son operaciones, no posiciones conocidas. */
 export function resumenMontajes(ops: OperacionConCondicion[]): ResumenMontajes {
   const activas = ops.filter((o) => !o.is_anulada);
-  const montajes = activas.filter((o) => o.tipo_operacion === "montaje" || o.tipo_operacion === "sustitucion");
+  // La cara que ENTRA de una sustitución es la que no venía de «montado»:
+  // misma regla que la ficha de intervención y el PDF.
+  const montajes = activas.filter((o) =>
+    (o.tipo_operacion === "montaje" || o.tipo_operacion === "sustitucion") && o.estado_anterior !== "montado");
+  const desmontajes = activas.filter((o) =>
+    o.tipo_operacion === "desmontaje" || (o.tipo_operacion === "sustitucion" && o.estado_anterior === "montado"));
   const porCondicion: Record<CondicionNeumatico, number> = { nueva: 0, usada: 0, recauchutada: 0 };
   for (const o of montajes) porCondicion[condicionDeOperacion(o)]++;
-  const conPosicion = activas.filter(tienePosicion).length;
-  const posicionDeducida = activas.filter(esPosicionDeducida).length;
-  return { total: activas.length, montajes: montajes.length, porCondicion, conPosicion, sinPosicion: activas.length - conPosicion,
+  // La posición se cuenta sobre las gomas PUESTAS: la salida repite la de su
+  // entrada y contarla otra vez duplicaría.
+  const conPosicion = montajes.filter(tienePosicion).length;
+  const posicionDeducida = montajes.filter(esPosicionDeducida).length;
+  return { total: activas.length, montajes: montajes.length, desmontajes: desmontajes.length, porCondicion,
+    conPosicion, sinPosicion: montajes.length - conPosicion,
     posicionConfirmada: conPosicion - posicionDeducida, posicionDeducida };
 }
 

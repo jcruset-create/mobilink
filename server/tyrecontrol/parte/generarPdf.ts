@@ -79,6 +79,10 @@ export interface PartePdf {
    * este parte ni una venta. Ver filasDeOperaciones.filasHistoricas.
    */
   historicos?: { posicion?: string | null; descripcion?: string | null; condicion?: string | null; km?: number | null }[];
+  /** Cuántas gomas salieron al poner esas: una por montaje, por la regla de
+   *  sustitución. De casi ninguna consta la identidad, así que se cuentan en
+   *  vez de listarlas. */
+  historicos_salidas?: number;
   historico_etiqueta?: string | null;
   /** PNG de la firma, ya dibujada en la tablet. */
   firma_cliente?: Uint8Array | null;
@@ -484,6 +488,10 @@ export async function generarPartePdf(d: PartePdf): Promise<Uint8Array> {
       p.drawText(h.condicion ?? "—", { x: cols.cond, y, size: 9, font: normal, color: NEGRO });
       p.drawText(h.km != null ? String(h.km) : "—", { x: cols.km, y, size: 9, font: normal, color: NEGRO });
       y -= 13;
+    }
+    if (d.historicos_salidas && y > margen) {
+      y -= 6;
+      linea(`Al poner estas gomas salieron otras ${d.historicos_salidas}: una por cada montaje. De las retiradas no consta la identidad.`, normal, 9);
     }
   }
 
