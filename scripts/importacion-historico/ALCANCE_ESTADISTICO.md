@@ -113,3 +113,116 @@ funciones ajenas a esta funcionalidad y el alcance autorizado no lo incluye.
    (no neumáticos ficticios, no montajes). Si se quisiera, sería un proyecto
    aparte con reglas de emparejamiento y aceptación explícita de su margen de
    error.
+
+
+---
+
+## Fase 3: qué cambia en el alcance estadístico
+
+Tres cosas, y conviene leerlas antes de dar cualquier media por buena.
+
+**1. Un recorrido calculable ya no es automáticamente un recorrido usable.**
+La clasificación de los kilómetros de un intervalo pasa a tener cuatro
+estados, y los hace la máquina sin opinión humana:
+
+| Estado | Qué significa | ¿Entra en las medias? |
+|---|---|---|
+| `utilizables` | hay kilometraje en los dos extremos, crece, y el ritmo diario es plausible | sí |
+| `anomalos` | hay kilometraje en los dos extremos y crece, pero el ritmo diario supera el límite. **El recorrido se calcula y se guarda igual** | solo si una persona lo acepta |
+| `ausentes` | falta el kilometraje de un extremo o de los dos | no |
+| `incompatibles` | hay valores pero el kilometraje decrece. **Los dos valores se conservan** | no |
+
+El criterio de plausibilidad es el **ritmo diario**, no el recorrido total:
+180.000 km en tres años es creíble y 180.000 km en tres meses no, y el total
+no distingue. El límite es configurable por empresa y arranca en **2.000
+km/día**. Está escrito en el aviso de cada intervalo junto con el ritmo
+calculado, los días, las fechas, los kilómetros y los albaranes: no es un
+umbral escondido y se puede rebatir. Con cero días no se divide entre cero: se
+compara el recorrido con el límite de un día y el aviso lo dice.
+
+Un aviso de plausibilidad **no demuestra que el dato sea falso**. Es un
+criterio de revisión.
+
+**2. La decisión humana es otra cosa, y se audita.** Una persona puede aceptar
+o rechazar el uso estadístico de un intervalo, con motivo obligatorio, usuario
+y fecha, en `tc_reconstruccion_revisiones`. Rechazar **no** convierte los
+kilómetros en ausentes ni en decrecientes: la clasificación sigue siendo la
+que era y el recorrido sigue guardado. Aceptar permite usar el intervalo como
+**estimado** y nunca lo convierte en rendimiento confirmado. Si la evidencia
+del intervalo cambia después, la decisión caduca, queda constancia de la
+invalidación y el intervalo vuelve a pedir revisión; la auditoría no se borra
+en ningún caso, tampoco al deshacer una importación.
+
+**3. Un albarán bloqueado dentro de un intervalo lo deja con la continuidad
+pendiente.** Los 25 albaranes bloqueados siguen sin importarse: no se crean
+sus operaciones, ni sus fichas, ni ninguna cantidad. Pero si uno de ellos cae
+dentro de un intervalo y contiene anotaciones de montaje, la cadena de esa
+posición **no se puede considerar limpia**, y el intervalo lo dice con el
+documento y el motivo literal del bloqueo. No se elige posición ni eje: no se
+sabe cuál fue. Y resolver el kilometraje de un intervalo no resuelve su
+continuidad: son dos motivos distintos que se cuentan por separado.
+
+### La cobertura, publicada con cada media
+
+`tc_informes_recorridos_estimados` devuelve la media **y** lo que ha dejado
+fuera: intervalos incluidos, excluidos por cada motivo, gomas identificadas
+frente a ocupaciones de posición, y periodo y población analizados. Tres
+reglas de lectura que van dentro del propio dato:
+
+- **Una ficha reconstruida no es una goma identificada.** La importación crea
+  una ficha por cada montaje, pero mientras nadie la identifique esa ficha es
+  un hueco con número, no una unidad. Para las estadísticas cuenta como
+  **ocupación de la posición**. La cobertura publica los tres grupos —
+  `respaldada` (una persona la identificó), `reconstruida` (ficha de la
+  importación sin identificar) y `sin_ficha` — y suman la población.
+  **Con la carga de diez meses de Plana: 0 respaldadas y 1.452
+  reconstruidas.** Así que, hoy, ninguna media de esta reconstrucción es el
+  rendimiento de un neumático concreto, y el informe lo dice con esas
+  palabras.
+- **Las gomas identificadas y las ocupaciones no se promedian juntas.** Una
+  ocupación es el recorrido de una POSICIÓN entre dos fechas.
+- **Los motivos de exclusión se solapan.** Un intervalo puede ser anómalo Y
+  tener continuidad pendiente: aparece en los dos. Por eso los motivos no
+  suman el total y se publica además la lista de combinaciones, que sí suma.
+
+### Los números de la carga de diez meses, con la fase 3
+
+| | |
+|---|---|
+| Intervalos reconstruidos | 1.452 (1.056 abiertos · 66 cerrados · 330 interrumpidos) |
+| Entran en las medias | **50** |
+| Media de esos 50 | **24.588 km** (mediana 21.078 · de 736 a 73.901) |
+| De los 50, gomas identificadas | **0**. Las 50 son ocupaciones de posición |
+| Fuera de las medias | 1.402 |
+| · sin cerrar | 1.386 |
+| · continuidad pendiente | 334 |
+| · kilómetros ausentes | 12 |
+| · ritmo anómalo pendiente de validar | 2 |
+| · kilometraje incompatible | 2 |
+| Albaranes bloqueados anotados | 25 (7 con evidencia de posible montaje) |
+| Intervalos con un bloqueado dentro | 4 (los 2 de 1445HWZ y los 2 de 9103KWW) |
+
+Los motivos se solapan: 332 de los 334 con continuidad pendiente están además
+sin cerrar, y los 2 anómalos tienen también continuidad pendiente. Las
+combinaciones que publica el informe sí suman los 1.402.
+
+Antes de la fase 3 esos 50 intervalos eran 52 y la media era **47.731 km**:
+los dos intervalos de 1445HWZ, con 626.290 km cada uno, casi la duplicaban. La
+mediana no se movía, que es lo que cabía esperar.
+
+### Los planos que admiten la regla de las seis nuevas
+
+La regla —2 al eje 1 y 4 al eje 2— se aplica cuando hay **una sola
+referencia** y el plano tiene **exactamente 2 posiciones activas en el eje 1 y
+4 en el eje 2**. Que exista un tercer eje no lo impide:
+
+| Plano | 2 nuevas | 4 nuevas | 6 nuevas |
+|---|---|---|---|
+| 2+4 | eje 1 | eje 2 | 2+4 |
+| 2+4+2 | eje 1 | eje 2 | 2+4, nada al eje 3 |
+| 2+4+4 | eje 1 | eje 2 | 2+4, nada al eje 3 |
+| 2+2 | eje 1 | no encaja | no encaja |
+| sin plano | — | — | — |
+
+Donde no encaja, la asignación queda pendiente de revisión y la posición se
+registra como desconocida. El albarán se importa igual.
