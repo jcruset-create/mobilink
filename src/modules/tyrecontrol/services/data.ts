@@ -3647,6 +3647,14 @@ export interface IntervaloReconstruido {
    *  convierte en rendimiento confirmado. */
   uso_estadistico: "pendiente" | "aceptado" | "rechazado";
   revisado_por: string | null; revisado_at: string | null; revisado_motivo: string | null;
+  /** Decisión sobre la CONTINUIDAD, independiente de la de los kilómetros:
+   *  aceptar un kilometraje no dice nada sobre si faltó un montaje por medio. */
+  continuidad_decision: "pendiente" | "aceptada" | "rechazada";
+  continuidad_revisada_por: string | null; continuidad_revisada_at: string | null;
+  continuidad_motivo_revision: string | null;
+  /** Montaje y desmontaje el mismo día con recorrido positivo: no consta la
+   *  hora ni el orden, así que no hay ritmo diario que publicar. */
+  orden_desconocido: boolean;
   /** Albaranes bloqueados (no importados) con evidencia de un posible
    *  montaje dentro del intervalo: la cadena no se puede dar por limpia. */
   continuidad_docs: string[] | null; continuidad_motivo: string | null;
@@ -3666,6 +3674,7 @@ export interface IntervaloReconstruido {
  *  invalidada en vez de desaparecer. */
 export interface RevisionIntervalo {
   id: string; operacion_entrada_id: string; fecha_montaje: string;
+  ambito: "kilometros" | "continuidad";
   decision: "aceptado" | "rechazado" | "invalidada";
   motivo: string; km_estado: string | null; recorrido_km: number | null;
   ritmo_km_dia: number | null; limite_km_dia: number | null;
@@ -3681,17 +3690,22 @@ export interface CoberturaRecorridos {
   periodo: { desde: string; hasta: string; origen: string };
   poblacion: { intervalos: number; vehiculos: number; posiciones: number;
                cerrados: number; abiertos: number; interrumpidos: number };
-  /** Una ficha creada por la importación y no identificada por nadie NO es
-   *  una unidad identificada: cuenta como ocupación de posición. */
+  /** Tener un recorrido que se puede restar no es lo mismo que poder usarlo. */
+  embudo: { con_recorrido_aritmetico: number; elegibles_tras_filtros: number; que_es: string };
+  /** Tres grupos, no dos: una ficha creada por la importación y no
+   *  identificada por nadie no es una unidad identificada, pero tampoco es
+   *  «sin ficha». */
   identidad: { respaldada: number; reconstruida: number; sin_ficha: number; que_es: string };
-  incluidos: { n: number; identificadas: number; ocupaciones: number; aceptados_a_mano: number };
-  recorrido: Record<"unidad_identificada" | "ocupacion_de_posicion", {
+  incluidos: { n: number; respaldada: number; reconstruida: number; sin_ficha: number;
+               aceptados_km: number; aceptados_continuidad: number };
+  recorrido: Record<"identidad_respaldada" | "ficha_reconstruida" | "ocupacion_sin_ficha", {
     n: number; media: number | null; mediana: number | null;
     minimo: number | null; maximo: number | null; total_km: number | null; que_es: string }>;
   excluidos: { n: number; motivos_se_solapan: boolean; nota: string;
                motivos: { motivo: string; n: number }[];
                combinaciones: { motivos: string[]; n: number }[] };
-  revision: { pendientes: number; aceptados: number; rechazados: number };
+  revision: { km_pendientes: number; km_aceptados: number; km_rechazados: number;
+              continuidad_pendientes: number; continuidad_aceptadas: number; continuidad_rechazadas: number };
   limite_km_dia: number | null;
 }
 
@@ -3715,14 +3729,17 @@ export async function listarRevisionesIntervalo(operacionEntradaId: string): Pro
   return (data ?? []) as unknown as RevisionIntervalo[];
 }
 
-/** Aceptar o rechazar el uso estadístico de un intervalo. El motivo es
- *  obligatorio y queda auditado con usuario y fecha. Aceptar permite usarlo
- *  como ESTIMADO: no lo convierte en rendimiento confirmado. */
+/** Aceptar o rechazar un intervalo, en UNO de los dos ámbitos. El motivo es
+ *  obligatorio y queda auditado con usuario y fecha. Aceptar los kilómetros
+ *  permite usarlo como ESTIMADO —no lo convierte en rendimiento confirmado—
+ *  y NO resuelve su continuidad, que se decide aparte. */
 export async function revisarIntervalo(
-  intervaloId: string, decision: "aceptado" | "rechazado", motivo: string,
-): Promise<{ uso_estadistico: string; en_medias: boolean; motivos_exclusion: string[] | null; aviso: string }> {
+  intervaloId: string, ambito: "kilometros" | "continuidad",
+  decision: "aceptado" | "rechazado", motivo: string,
+): Promise<{ uso_estadistico: string; continuidad_decision: string; en_medias: boolean;
+             motivos_exclusion: string[] | null; aviso: string }> {
   const { data, error } = await supabase.rpc("tc_imp_revisar_intervalo", {
-    p_intervalo: intervaloId, p_decision: decision, p_motivo: motivo,
+    p_intervalo: intervaloId, p_ambito: ambito, p_decision: decision, p_motivo: motivo,
   });
   if (error) throw new Error(error.message);
   return data as any;

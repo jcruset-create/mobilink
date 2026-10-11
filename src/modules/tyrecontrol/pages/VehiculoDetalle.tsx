@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones, listarIntervenciones, listarIntervalosReconstruidos, revisarIntervalo, cargarCoberturaRecorridos, imagenChasisDeMarca, generarPosicionesDeTipo, cotejarPlanoDeTipo, type CotejoPlano, type IntervaloReconstruido, type CoberturaRecorridos } from "../services/data";
 import type { Intervencion } from "../services/data";
 import { resumenMontajes, textoPorCondicion } from "../../../../shared/condicionNeumatico";
-import { textoRecorrido, textoRitmo, textoMotivos, textoDecision, textoCobertura, numero } from "../../../../shared/recorridoEstimado";
+import { textoRecorrido, textoRitmo, textoMotivos, textoDecision, textoDecisionContinuidad, textoCobertura, numero } from "../../../../shared/recorridoEstimado";
 import { esHistoricoAlbaran, etiquetaHistorico, textoNeumaticoHistorico, textoPosicionHistorica, textoRetirado } from "../../../../shared/historicoAlbaran";
 import type { MontajeActual, PosicionVehiculo, Vehiculo, TipoLlanta, VehiculoEje, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle, OperacionNeumatico } from "../types";
 import { ORIGEN_KM_LABELS, tipoLlantaLabel, presionTxt, TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS } from "../types";
@@ -67,7 +67,9 @@ export default function VehiculoDetalle() {
   // enseña sin decir sobre cuántos intervalos sale.
   const [cobertura, setCobertura] = useState<CoberturaRecorridos | null>(null);
   // Revisión de un intervalo: el motivo es obligatorio.
-  const [revisando, setRevisando] = useState<{ iv: IntervaloReconstruido; decision: "aceptado" | "rechazado" } | null>(null);
+  const [revisando, setRevisando] = useState<{
+    iv: IntervaloReconstruido; ambito: "kilometros" | "continuidad"; decision: "aceptado" | "rechazado";
+  } | null>(null);
   const [motivoRevision, setMotivoRevision] = useState("");
   const [errorRevision, setErrorRevision] = useState<string | null>(null);
   const [guardandoRevision, setGuardandoRevision] = useState(false);
@@ -485,18 +487,19 @@ export default function VehiculoDetalle() {
           {cobertura && (
             <div className="mb-2 rounded-lg border border-slate-700 bg-slate-900/40 p-2 text-[11px] text-slate-400">
               {textoCobertura(cobertura)}
-              {cobertura.recorrido.unidad_identificada.n > 0 && (
-                <div className="mt-1 text-slate-300">
-                  Media estimada de las gomas identificadas: {numero(cobertura.recorrido.unidad_identificada.media)} km
-                  <span className="text-slate-500"> ({cobertura.recorrido.unidad_identificada.n} intervalo(s))</span>
-                </div>
-              )}
-              {cobertura.recorrido.ocupacion_de_posicion.n > 0 && (
-                <div className="mt-1 text-slate-300">
-                  Media de las ocupaciones de posición: {numero(cobertura.recorrido.ocupacion_de_posicion.media)} km
-                  <span className="text-slate-500"> ({cobertura.recorrido.ocupacion_de_posicion.n} intervalo(s)) · {cobertura.recorrido.ocupacion_de_posicion.que_es}</span>
-                </div>
-              )}
+              {(["identidad_respaldada", "ficha_reconstruida", "ocupacion_sin_ficha"] as const).map((k) => {
+                const r = cobertura.recorrido[k];
+                if (r.n === 0) return null;
+                const titulo = k === "identidad_respaldada" ? "Media de gomas identificadas por una persona"
+                  : k === "ficha_reconstruida" ? "Media de fichas reconstruidas por la importación"
+                  : "Media de ocupaciones de posición sin ficha";
+                return (
+                  <div key={k} className="mt-1 text-slate-300">
+                    {titulo}: {numero(r.media)} km
+                    <span className="text-slate-500"> ({r.n} intervalo(s)) · {r.que_es}</span>
+                  </div>
+                );
+              })}
             </div>
           )}
           <TableWrap>
@@ -556,14 +559,33 @@ export default function VehiculoDetalle() {
                         <div className="text-[11px] text-slate-500">{textoMotivos(r.motivos_exclusion)}</div>
                       )}
                       <div className="text-[11px] text-slate-500">{textoDecision(r)}</div>
-                      {!esCliente && (r.km_estado === "anomalos" || r.km_estado === "utilizables") && (
-                        <div className="mt-1 flex gap-1">
+                      {(r.continuidad_docs?.length || r.continuidad_desde || r.continuidad_decision !== "pendiente") && (
+                        <div className="text-[11px] text-slate-500">{textoDecisionContinuidad(r)}</div>
+                      )}
+                      {/* Dos decisiones distintas, dos juegos de botones: aceptar
+                          los kilómetros no resuelve la continuidad. */}
+                      {!esCliente && (r.km_estado === "anomalos" || r.km_estado === "utilizables") && r.recorrido_km != null && (
+                        <div className="mt-1 flex flex-wrap items-center gap-1">
+                          <span className="text-[10px] uppercase text-slate-500">km</span>
                           <button
-                            onClick={() => { setRevisando({ iv: r, decision: "aceptado" }); setMotivoRevision(""); setErrorRevision(null); }}
+                            onClick={() => { setRevisando({ iv: r, ambito: "kilometros", decision: "aceptado" }); setMotivoRevision(""); setErrorRevision(null); }}
                             className="rounded border border-emerald-600/50 px-2 py-0.5 text-[11px] text-emerald-300 hover:bg-emerald-500/10"
                           >Aceptar</button>
                           <button
-                            onClick={() => { setRevisando({ iv: r, decision: "rechazado" }); setMotivoRevision(""); setErrorRevision(null); }}
+                            onClick={() => { setRevisando({ iv: r, ambito: "kilometros", decision: "rechazado" }); setMotivoRevision(""); setErrorRevision(null); }}
+                            className="rounded border border-slate-600 px-2 py-0.5 text-[11px] text-slate-300 hover:bg-slate-700"
+                          >Rechazar</button>
+                        </div>
+                      )}
+                      {!esCliente && (r.continuidad_docs?.length || r.continuidad_desde) && (
+                        <div className="mt-1 flex flex-wrap items-center gap-1">
+                          <span className="text-[10px] uppercase text-slate-500">continuidad</span>
+                          <button
+                            onClick={() => { setRevisando({ iv: r, ambito: "continuidad", decision: "aceptado" }); setMotivoRevision(""); setErrorRevision(null); }}
+                            className="rounded border border-emerald-600/50 px-2 py-0.5 text-[11px] text-emerald-300 hover:bg-emerald-500/10"
+                          >Aceptar</button>
+                          <button
+                            onClick={() => { setRevisando({ iv: r, ambito: "continuidad", decision: "rechazado" }); setMotivoRevision(""); setErrorRevision(null); }}
                             className="rounded border border-slate-600 px-2 py-0.5 text-[11px] text-slate-300 hover:bg-slate-700"
                           >Rechazar</button>
                         </div>
@@ -584,7 +606,8 @@ export default function VehiculoDetalle() {
           revisión. */}
       {revisando && (
         <Modal
-          title={revisando.decision === "aceptado" ? "Aceptar el intervalo para estadísticas" : "Rechazar el intervalo para estadísticas"}
+          title={`${revisando.decision === "aceptado" ? "Aceptar" : "Rechazar"} ${
+            revisando.ambito === "kilometros" ? "los kilómetros del intervalo" : "la continuidad de la cadena"}`}
           onClose={() => setRevisando(null)}
         >
           <div className="space-y-3 text-sm text-slate-300">
@@ -594,12 +617,21 @@ export default function VehiculoDetalle() {
                 {revisando.iv.km_montaje ?? "—"} → {revisando.iv.km_desmontaje ?? "—"} km
               </div>
               <div className="text-slate-400">{textoRitmo(revisando.iv)}</div>
+              {revisando.ambito === "continuidad" && revisando.iv.continuidad_docs?.length ? (
+                <div className="mt-1 text-amber-300/80">
+                  Documento(s) bloqueado(s) dentro del intervalo: {revisando.iv.continuidad_docs.join(", ")}
+                </div>
+              ) : null}
               {revisando.iv.motivo_revision && <div className="mt-1 text-amber-300/80">{revisando.iv.motivo_revision}</div>}
             </div>
             <p className="text-[12px] text-slate-400">
-              {revisando.decision === "aceptado"
-                ? "Aceptar permite usar este recorrido como ESTIMADO. No lo convierte en rendimiento confirmado."
-                : "Rechazar lo deja fuera de las medias y de los rankings. Los kilómetros y el recorrido NO se borran ni cambian de clasificación."}
+              {revisando.ambito === "kilometros"
+                ? (revisando.decision === "aceptado"
+                    ? "Aceptar permite usar este recorrido como ESTIMADO. No lo convierte en rendimiento confirmado, y NO resuelve la continuidad: eso se decide aparte."
+                    : "Rechazar lo deja fuera de las medias y de los rankings. Los kilómetros y el recorrido NO se borran ni cambian de clasificación.")
+                : (revisando.decision === "aceptado"
+                    ? "Aceptar la continuidad dice que la cadena de esta posición puede darse por limpia pese al documento bloqueado que hay dentro. No dice nada sobre si el kilometraje es creíble."
+                    : "Rechazar la continuidad deja el intervalo fuera de las medias aunque sus kilómetros estén aceptados.")}
             </p>
             <label className="block">
               <span className="text-[11px] uppercase text-slate-400">Motivo (obligatorio)</span>
@@ -619,7 +651,7 @@ export default function VehiculoDetalle() {
                 onClick={async () => {
                   setGuardandoRevision(true); setErrorRevision(null);
                   try {
-                    await revisarIntervalo(revisando.iv.id, revisando.decision, motivoRevision.trim());
+                    await revisarIntervalo(revisando.iv.id, revisando.ambito, revisando.decision, motivoRevision.trim());
                     setRevisando(null);
                     await cargar();
                   } catch (e) {

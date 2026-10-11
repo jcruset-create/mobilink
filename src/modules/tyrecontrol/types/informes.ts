@@ -125,18 +125,24 @@ export interface CoberturaRecorridosInforme {
   periodo: { desde: string; hasta: string; origen: string };
   poblacion: { intervalos: number; vehiculos: number; posiciones: number;
                cerrados: number; abiertos: number; interrumpidos: number };
-  /** Una ficha creada por la importación que nadie ha identificado NO es una
-   *  unidad identificada: para las estadísticas es la ocupación de una
-   *  posición. Los tres grupos suman la población. */
+  /** Tener un recorrido que se puede restar no es lo mismo que poder usarlo:
+   *  se publican los dos números. */
+  embudo: { con_recorrido_aritmetico: number; elegibles_tras_filtros: number; que_es: string };
+  /** Tres grupos que suman la población: identidad respaldada por una
+   *  persona, ficha reconstruida por la importación (tiene número interno,
+   *  pero no demuestra qué goma era) y ocupación sin ficha. «Sin
+   *  identificación física» no es lo mismo que «sin ficha». */
   identidad: { respaldada: number; reconstruida: number; sin_ficha: number; que_es: string };
-  incluidos: { n: number; identificadas: number; ocupaciones: number; aceptados_a_mano: number };
-  recorrido: Record<"unidad_identificada" | "ocupacion_de_posicion", {
+  incluidos: { n: number; respaldada: number; reconstruida: number; sin_ficha: number;
+               aceptados_km: number; aceptados_continuidad: number };
+  recorrido: Record<"identidad_respaldada" | "ficha_reconstruida" | "ocupacion_sin_ficha", {
     n: number; media: number | null; mediana: number | null;
     minimo: number | null; maximo: number | null; total_km: number | null; que_es: string }>;
   excluidos: { n: number; motivos_se_solapan: boolean; nota: string;
                motivos: { motivo: string; n: number }[];
                combinaciones: { motivos: string[]; n: number }[] };
-  revision: { pendientes: number; aceptados: number; rechazados: number };
+  revision: { km_pendientes: number; km_aceptados: number; km_rechazados: number;
+              continuidad_pendientes: number; continuidad_aceptadas: number; continuidad_rechazadas: number };
   limite_km_dia: number | null;
 }
 

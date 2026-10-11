@@ -173,30 +173,37 @@ export default function InformeMontajes() {
           </div>
           <div className="text-slate-400">{cob.aviso}</div>
           <div className="mt-2 text-slate-300">{textoCobertura(cob)}</div>
-          <div className="mt-2 grid gap-2 sm:grid-cols-2">
-            <div className="rounded border border-slate-700 p-2">
-              <div className="text-[11px] uppercase text-slate-400">Gomas identificadas por una persona</div>
-              {cob.recorrido.unidad_identificada.n > 0 ? (
-                <div className="text-slate-200">
-                  media {numero(cob.recorrido.unidad_identificada.media)} km · mediana {numero(cob.recorrido.unidad_identificada.mediana)} km
-                  <div className="text-[11px] text-slate-500">
-                    {cob.recorrido.unidad_identificada.n} intervalo(s) · de {numero(cob.recorrido.unidad_identificada.minimo)} a {numero(cob.recorrido.unidad_identificada.maximo)} km
-                  </div>
+          {/* Tres grupos, nunca en un solo número. Y una ficha reconstruida no
+              es una goma identificada, pero tampoco es «sin ficha». */}
+          <div className="mt-2 grid gap-2 sm:grid-cols-3">
+            {([
+              ["identidad_respaldada", "Identidad respaldada por una persona", "Ningún intervalo con el neumático identificado entra en la media."],
+              ["ficha_reconstruida", "Ficha reconstruida por la importación", "Ninguna ficha reconstruida entra en la media."],
+              ["ocupacion_sin_ficha", "Ocupación de posición sin ficha", "Ninguna ocupación sin ficha entra en la media."],
+            ] as const).map(([k, titulo, vacio]) => {
+              const r = cob.recorrido[k];
+              return (
+                <div key={k} className="rounded border border-slate-700 p-2">
+                  <div className="text-[11px] uppercase text-slate-400">{titulo}</div>
+                  {r.n > 0 ? (
+                    <div className="text-slate-200">
+                      media {numero(r.media)} km · mediana {numero(r.mediana)} km
+                      <div className="text-[11px] text-slate-500">
+                        {r.n} intervalo(s) · de {numero(r.minimo)} a {numero(r.maximo)} km · {r.que_es}
+                      </div>
+                    </div>
+                  ) : <div className="text-slate-500">{vacio}</div>}
                 </div>
-              ) : <div className="text-slate-500">Ningún intervalo con goma identificada entra en la media.</div>}
-            </div>
-            <div className="rounded border border-slate-700 p-2">
-              <div className="text-[11px] uppercase text-slate-400">Ocupaciones de posición</div>
-              {cob.recorrido.ocupacion_de_posicion.n > 0 ? (
-                <div className="text-slate-200">
-                  media {numero(cob.recorrido.ocupacion_de_posicion.media)} km · mediana {numero(cob.recorrido.ocupacion_de_posicion.mediana)} km
-                  <div className="text-[11px] text-slate-500">
-                    {cob.recorrido.ocupacion_de_posicion.n} intervalo(s) · {cob.recorrido.ocupacion_de_posicion.que_es}
-                  </div>
-                </div>
-              ) : <div className="text-slate-500">Ninguna ocupación entra en la media.</div>}
-            </div>
+              );
+            })}
           </div>
+          {cob.embudo && cob.embudo.con_recorrido_aritmetico !== cob.embudo.elegibles_tras_filtros && (
+            <div className="mt-2 text-slate-400">
+              De los <span className="text-slate-200">{cob.embudo.con_recorrido_aritmetico}</span> intervalos con recorrido
+              calculable, solo <span className="text-slate-200">{cob.embudo.elegibles_tras_filtros}</span> pasan todos los
+              filtros. {cob.embudo.que_es}
+            </div>
+          )}
           {cob.excluidos.n > 0 && (
             <div className="mt-2 text-slate-400">
               <div className="text-[11px] uppercase text-slate-500">Fuera de la media ({cob.excluidos.n})</div>
@@ -208,13 +215,12 @@ export default function InformeMontajes() {
               <div className="mt-1 text-[11px] text-slate-500">{cob.excluidos.nota}</div>
             </div>
           )}
-          {(cob.revision.pendientes > 0 || cob.revision.aceptados > 0 || cob.revision.rechazados > 0) && (
-            <div className="mt-2 text-[11px] text-slate-500">
-              Revisión humana: {cob.revision.pendientes} pendiente(s) · {cob.revision.aceptados} aceptado(s) ·{" "}
-              {cob.revision.rechazados} rechazado(s).
-              {cob.limite_km_dia != null && <> Límite de plausibilidad aplicado: {cob.limite_km_dia} km/día.</>}
-            </div>
-          )}
+          <div className="mt-2 text-[11px] text-slate-500">
+            Revisión humana · kilómetros: {cob.revision.km_pendientes} pendiente(s), {cob.revision.km_aceptados} aceptado(s),{" "}
+            {cob.revision.km_rechazados} rechazado(s) · continuidad: {cob.revision.continuidad_pendientes} pendiente(s),{" "}
+            {cob.revision.continuidad_aceptadas} aceptada(s), {cob.revision.continuidad_rechazadas} rechazada(s).
+            {cob.limite_km_dia != null && <> Límite de plausibilidad aplicado: {numero(cob.limite_km_dia)} km/día.</>}
+          </div>
         </div>
       )}
     </div>
