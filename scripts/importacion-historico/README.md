@@ -29,3 +29,23 @@ justificación, están en `MIGRACIONES_NO_APLICADAS.md`.
 
 El alcance estadístico (qué informes leen o no las operaciones importadas,
 comprobado con consultas) está en `ALCANCE_ESTADISTICO.md`.
+
+## Fase 2: fichas, sustituciones e intervalos
+
+`supabase/migrations/tyrecontrol_importacion_historico_fase2.sql` añade la
+ficha de cada unidad nueva (con `tc_generar_numero_interno`), la salida por
+sustitución de cada montaje (`grupo_sustitucion`) y los intervalos
+reconstruidos en `tc_reconstruccion_montajes`, que es una tabla aparte de
+`tc_historial_montajes` a propósito: ahí hay intervalos estimados y los seis
+consumidores del historial real no saben distinguirlos.
+
+- Importar una carga nueva ya lo hace todo: misma firma de
+  `tc_importar_historico`, sin parámetros nuevos (una sobrecarga rompería las
+  llamadas de PostgREST con PGRST203).
+- Una carga antigua se completa con `tc_imp_ampliar_carga(carga, simular)`,
+  que solo añade lo que falta y respeta la huella de lo que alguien haya
+  tocado.
+- Las usadas y recauchutadas se identifican a mano desde
+  `/tyrecontrol/importar/identificar`.
+- El informe «Montajes de neumáticos» vive en Informes y cuenta solo las
+  unidades que entran.

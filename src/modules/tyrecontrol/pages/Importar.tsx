@@ -23,6 +23,8 @@ export default function Importar() {
   // El histórico de albaranes (Hoja1 + Hoja2 del Excel de Genes) tiene su
   // propio componente: no se parece a las plantillas de arriba.
   const [historico, setHistorico] = useState<{ h1: any[]; h2: any[]; bytes: ArrayBuffer } | null>(null);
+  // Las cargas ya hechas se gestionan sin volver a subir el Excel.
+  const [soloCargas, setSoloCargas] = useState(false);
 
   function reset() { setRepVeh(null); setRepRev(null); setRepChk(null); setEjecutado(false); setRows([]); setModo(null); setError(""); setHistorico(null); }
 
@@ -103,6 +105,10 @@ export default function Importar() {
           📁 Elegir archivo Excel
           <input type="file" accept=".xlsx,.xlsm,.xls" className="hidden" onChange={(e) => onArchivo(e.target.files?.[0])} />
         </label>
+        <button onClick={() => setSoloCargas((v) => !v)}
+          className="ml-3 rounded-lg border border-slate-600 px-3 py-2 text-[12px] text-slate-200 hover:bg-slate-700">
+          {soloCargas ? "Ocultar cargas del histórico" : "Cargas del histórico de albaranes"}
+        </button>
         {nombreArchivo && (
           <span className="ml-3 text-[13px] text-slate-300">
             {nombreArchivo} · {rows.length} filas
@@ -125,6 +131,9 @@ export default function Importar() {
 
       {modo === "historico" && historico && (
         <ImportarHistorico h1={historico.h1} h2={historico.h2} nombreArchivo={nombreArchivo} bytes={historico.bytes} />
+      )}
+      {soloCargas && modo !== "historico" && (
+        <ImportarHistorico h1={[]} h2={[]} nombreArchivo="" bytes={null} />
       )}
       {ejecutado && reporte && <div className="mb-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 text-sm text-emerald-200">✔ Importación completada.</div>}
 

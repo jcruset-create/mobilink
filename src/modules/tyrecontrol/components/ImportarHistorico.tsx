@@ -28,7 +28,9 @@ const ORIGEN_POR_DEFECTO = "genes";
 type EstadoVista = ResultadoAlbaranImport["estado"] | "sin_contenido";
 
 export default function ImportarHistorico({ h1, h2, nombreArchivo, bytes }: {
-  h1: Record<string, unknown>[]; h2: Record<string, unknown>[]; nombreArchivo: string; bytes: ArrayBuffer;
+  // Sin fichero (h1 vacío) el panel sirve igual para lo que no necesita Excel:
+  // ver las cargas anteriores, ampliarlas al alcance actual y deshacerlas.
+  h1: Record<string, unknown>[]; h2: Record<string, unknown>[]; nombreArchivo: string; bytes: ArrayBuffer | null;
 }) {
   const [empresas, setEmpresas] = useState<Empresa[]>([]);
   const [empresaId, setEmpresaId] = useState("");
@@ -50,9 +52,11 @@ export default function ImportarHistorico({ h1, h2, nombreArchivo, bytes }: {
   useEffect(() => { listarEmpresas().then(setEmpresas).catch(() => setEmpresas([])); }, []);
   useEffect(() => { if (empresaId) listarCargasImportacion(empresaId).then(setCargas).catch(() => setCargas([])); }, [empresaId]);
 
-  // 1. Conciliar en el navegador (sin base de datos).
+  // 1. Conciliar en el navegador (sin base de datos). Sin fichero no hay nada
+  //    que conciliar: el panel se abre solo para gestionar cargas anteriores.
   useEffect(() => {
     let vivo = true;
+    if (!bytes || h1.length === 0) { setConciliados(null); setResumen(null); setSha(""); return; }
     (async () => {
       setOcupado("conciliando"); setError(""); setSimulacion(null); setProgreso([]); setCargaId(null);
       try {

@@ -10,7 +10,7 @@ P="psql -h $PGHOST -p $PGPORT -U $PGUSER -d $DB -v ON_ERROR_STOP=0 -qAt"
 E='00000000-0000-0000-0000-0000000000e1'
 # Un albarán fresco para estas pruebas.
 LOTE="lote('2026-03', alb_n('B2_26/CC01','7724KBM',2,1), alb_n('B2_26/CC02','7724KBM',4,1))"
-$P -c "delete from tc_importacion_lineas; delete from tc_importacion_intervenciones; delete from tc_operacion_adjuntos; delete from operaciones_neumaticos where importacion_lote_id is not null; delete from tc_intervencion_servicios where importacion_lote_id is not null; delete from tc_intervenciones where importacion_lote_id is not null; delete from tc_importacion_lotes; delete from tc_importacion_cargas;" >/dev/null
+$P -c "delete from tc_reconstruccion_montajes; delete from tc_importacion_eventos; delete from tc_importacion_lineas; delete from tc_importacion_intervenciones; delete from tc_operacion_adjuntos; delete from operaciones_neumaticos where importacion_lote_id is not null; delete from tc_intervencion_servicios where importacion_lote_id is not null; delete from tc_intervenciones where importacion_lote_id is not null; delete from tc_neumaticos where importacion_lote_id is not null; delete from tc_importacion_lotes; delete from tc_importacion_cargas;" >/dev/null
 $P -c "update auth_ctx set rol='admin', empresa='$E'" >/dev/null 2>&1 || true
 
 echo "== 1. Dos importaciones del MISMO documento a la vez"
@@ -69,3 +69,29 @@ wait
 echo "  esperado: el insert espera (FOR KEY SHARE vs FOR UPDATE); al liberarse, la operación ya no existe → viola la FK (error) y no queda adjunto huérfano"
 $P -c "select '  adjuntos huérfanos: '||count(*) from tc_operacion_adjuntos a left join operaciones_neumaticos o on o.id=a.operacion_id where o.id is null"
 echo "== bloqueos que no se resuelven:"; $P -c "select count(*) from pg_locks where not granted"
+
+echo "== 6. FASE 2: dos lotes del MISMO vehículo y posición a la vez (cadena)"
+# A importa enero y B importa abril para el mismo eje: la cadena la rehace
+# quien llegue segundo, y no puede quedar medio hecha.
+LA="lote('2026-01', jsonb_build_object('origen_doc','B2_26/X1|7724KBM','documento','B2_26/X1','matricula','7724KBM','fecha','2026-01-10','km',100000,'huella_origen','hx1','operaciones',jsonb_build_array(jsonb_build_object('origen_linea','X1|u1','condicion','nueva','marca','Hankook','modelo','AH51','medida','295/80R22.5'),jsonb_build_object('origen_linea','X1|u2','condicion','nueva','marca','Hankook','modelo','AH51','medida','295/80R22.5')),'servicios','[]'::jsonb,'lineas','[]'::jsonb))"
+LB="lote('2026-04', jsonb_build_object('origen_doc','B2_26/X2|7724KBM','documento','B2_26/X2','matricula','7724KBM','fecha','2026-04-10','km',150000,'huella_origen','hx2','operaciones',jsonb_build_array(jsonb_build_object('origen_linea','X2|u1','condicion','nueva','marca','Hankook','modelo','AH51','medida','295/80R22.5'),jsonb_build_object('origen_linea','X2|u2','condicion','nueva','marca','Hankook','modelo','AH51','medida','295/80R22.5')),'servicios','[]'::jsonb,'lineas','[]'::jsonb))"
+( $P -c "select 'A:'||(tc_importar_historico('$E','genes',$LA,false)->>'creadas')" ) & sleep 0.3
+( $P -c "select 'B:'||(tc_importar_historico('$E','genes',$LB,false)->>'creadas')" ) &
+wait
+echo "  esperado: las dos crean 1; la cadena queda coherente (2 cerrados o 2 abiertos, nunca a medias)"
+$P -c "select '  intervalos: '||coalesce(string_agg(estado||'='||n, ' '),'ninguno') from (select estado, count(*) n from tc_reconstruccion_montajes group by 1) x"
+$P -c "select '  fichas: '||count(*)||' · salidas: '||(select count(*) from operaciones_neumaticos where tipo_operacion='desmontaje' and importacion_lote_id is not null) from tc_neumaticos where importacion_lote_id is not null"
+$P -c "select '  ninguna ficha duplicada por origen_linea: '||(count(*) = count(distinct origen_linea)) from tc_neumaticos where origen_linea is not null"
+
+echo "== 7. FASE 2: identificar una unidad mientras se deshace su lote"
+LOTE7=$($P -c "select importacion_lote_id from tc_intervenciones where origen_doc='B2_26/X2|7724KBM'")
+OP7=$($P -c "select o.id from operaciones_neumaticos o join tc_intervenciones i on i.id=o.intervencion_id where i.origen_doc='B2_26/X2|7724KBM' and o.tipo_operacion='montaje' limit 1")
+( $P <<SQL
+begin; select 'deshacer:'||(tc_deshacer_importacion('$LOTE7','{}',false)->>'borradas'); select pg_sleep(3); commit;
+SQL
+) & sleep 0.5
+( $P -c "select tc_imp_identificar_unidad('$OP7', null, true, 'prueba concurrente')" 2>&1 | sed 's/^/  identificar → /' | head -2 ) &
+wait
+echo "  esperado: identificar espera al deshacer y falla porque la operación ya no existe; nada a medias"
+$P -c "select '  operación X2 existe: '||(select count(*) from operaciones_neumaticos where id='$OP7')||' · fichas huérfanas: '||(select count(*) from tc_neumaticos n where n.importacion_lote_id='$LOTE7')"
+echo "== bloqueos que no se resuelven (fase 2):"; $P -c "select count(*) from pg_locks where not granted"
