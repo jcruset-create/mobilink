@@ -9,6 +9,15 @@
 -- aplica a las tablas que no la tienen activada y no se aplica a las vistas
 -- que no son `security_invoker`.
 --
+-- ESTO NO ES UNA COPIA DE LOS PERMISOS DE PRODUCCIÓN, y no debe presentarse
+-- como tal. Es más estricto a propósito, en tres sitios: los permisos van por
+-- nombre en vez de por default privileges, tres vistas pasan a
+-- `security_invoker` (sección 5.b) y productos_neumaticos se queda en solo
+-- lectura (sección 5). Lo que aquí sale CERRADO no demuestra que lo esté en
+-- producción; lo que aquí FUNCIONA sí funcionará allí. El reparto exacto,
+-- resultado por resultado, está en DIFERENCIAS_CON_PRODUCCION.md. Nada de
+-- esto se lleva a producción con esta prueba: es una revisión aparte.
+--
 -- Aquí se concede, por nombre, solo lo que usa esta prueba:
 --   · el panel de TyreControl           → rol `authenticated`
 --   · los endpoints del servidor        → rol `service_role`

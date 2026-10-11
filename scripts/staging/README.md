@@ -4,6 +4,17 @@ Un solo documento, en orden. **Nada de esto se ha ejecutado** y nada se
 ejecuta solo: los pasos marcados con 🔒 los lanza una persona autorizada.
 No hay credenciales en ningún fichero de esta carpeta y no debe haberlas.
 
+Tres documentos acompañan a este:
+
+- [`QUE_HACE_FALTA.md`](QUE_HACE_FALTA.md) — lo que hay que aportar para
+  empezar, y **dónde se configura cada cosa**. Ninguna clave se pide ni se
+  escribe aquí.
+- [`DIFERENCIAS_CON_PRODUCCION.md`](DIFERENCIAS_CON_PRODUCCION.md) —
+  **staging no es una réplica de los permisos de producción**: en qué se
+  diferencian y qué resultados de la validación no se pueden extrapolar.
+- [`REGISTRO.md`](REGISTRO.md) — la plantilla donde se anota cada paso, su
+  resultado y el SHA probado, cuando se autorice.
+
 El entorno es la **opción B: esquema real, datos sintéticos**. Producción
 tiene unas 437 tablas en `public` y el repositorio solo conoce las de las
 migraciones, así que un entorno construido desde el repositorio probaría la
@@ -352,6 +363,18 @@ en verde, revisiones incluidas: la escritura va por los RPC `security
 definer`, así que no hace falta `insert` ni `update` en las tablas de la
 reconstrucción.
 
+> **Cuidado al leer estos resultados.** Estos permisos son **de pruebas**, y
+> son **más estrictos** que los de producción, donde `anon` y `authenticated`
+> reciben el esquema entero por los *default privileges*. Lo que aquí sale
+> **cerrado no demuestra** que esté cerrado en producción; lo que aquí
+> **funciona** sí funcionará allí. La excepción son los `revoke` que están en
+> las **migraciones** —la auditoría de revisiones y los nueve auxiliares de la
+> importación—, que viajan a los dos sitios, y la RLS, que es la que da el
+> aislamiento entre empresas. El reparto exacto, resultado por resultado, está
+> en [`DIFERENCIAS_CON_PRODUCCION.md`](DIFERENCIAS_CON_PRODUCCION.md). Y los
+> dos hallazgos y los tres ajustes de aquí **no se llevan a producción con
+> esta prueba**: son una revisión aparte.
+
 ## 5. Respaldo, y la prueba de que sirve 🔒
 
 ```bash
@@ -629,6 +652,13 @@ En este orden. Cada punto tiene su condición de parada más abajo.
 
 ## Criterios de aceptación
 
+Cada resultado se anota en [`REGISTRO.md`](REGISTRO.md) marcando de dónde
+viene: **`[migración]`** si lo garantiza una migración (vale también para
+producción) o **`[staging]`** si lo garantiza el entorno de pruebas (**no se
+puede afirmar de producción**). Los criterios 1 a 14 son `[migración]`; el 15
+y el 16 son del entorno. El detalle está en
+[`DIFERENCIAS_CON_PRODUCCION.md`](DIFERENCIAS_CON_PRODUCCION.md).
+
 **La importación**
 
 1. B2_26/4905 (albarán de Plana, no una empresa): 4 montajes, 4 desmontajes,
@@ -746,8 +776,15 @@ la prueba pase lo que pase.
   comprobada al restaurar en el proyecto Supabase de pruebas, en el paso 4.
 - **No arregla los dos hallazgos de permisos** del esquema real
   (`productos_neumaticos` sin RLS, y tres vistas sin `security_invoker`
-  concedidas por las migraciones). Aquí se tapan **para la base de pruebas**
-  y quedan anotados; cambiarlos en producción es otra decisión.
+  concedidas por las migraciones), ni las 212 funciones que en producción
+  siguen siendo ejecutables por `PUBLIC`. Aquí se tapan **para la base de
+  pruebas** y quedan anotados en
+  [`DIFERENCIAS_CON_PRODUCCION.md`](DIFERENCIAS_CON_PRODUCCION.md);
+  cambiarlos en producción es **una revisión aparte**, con su propio análisis
+  de impacto, y no entra en este PR.
+- **No demuestra nada sobre los permisos de producción.** Staging es más
+  estricto a propósito; ver el documento de diferencias antes de dar por
+  buena cualquier conclusión sobre qué está cerrado allí.
 
 ## Los tres rechazos, que no son el mismo
 
