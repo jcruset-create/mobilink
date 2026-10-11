@@ -19,21 +19,44 @@ fila de datos de producción.**
 | 0 | Leer este documento entero | | — |
 | 1 | Volcar el **esquema** de producción, sin datos | 🔒 | `01-volcar-esquema.sh` |
 | 2 | Repasar ese DDL antes de restaurarlo | | `02-revisar-ddl.sh` |
-| 2b | **Ensayar la restauración** en una base que emula un proyecto nuevo | | `08-ensayar-restauracion.sh` |
+| 2b | **Ensayar la restauración** (PRELIMINAR, con stubs locales) | | `08-ensayar-restauracion.sh` |
 | 3 | Crear el proyecto Supabase de pruebas | 🔒 | — (panel) |
-| **★** | **Comprobar el destino. Antes de restaurar, de migrar y de arrancar** | | `00-comprobar-destino.sh` |
-| 4 | Restaurar el DDL y **marcar** la base | 🔒 | `03-levantar-staging.sh` |
+| **★A** | **Inicializar el destino: identificar, comprobar que está vacía y MARCAR.** Una sola vez, antes de restaurar | 🔒 | `00-inicializar-destino.sh` |
+| **★B** | **Comprobar el destino. Antes de restaurar, migrar, sembrar y arrancar.** Exige destino **y** marca | | `00-comprobar-destino.sh` |
+| 4 | Restaurar el DDL y aplicar los **permisos por nombre** | 🔒 | `03-levantar-staging.sh` |
+| 4b | Comprobar los permisos de la base de pruebas | | `10-comprobar-permisos.sh` |
 | 5 | Respaldo y **prueba de restauración** | 🔒 | `06-respaldo-y-restauracion.sh` |
 | 5b | Guardar y **probar** la vuelta atrás de inventario | | `07-guardar-vuelta-atras.sh` |
-| 6 | Aplicar las **tres migraciones**, en orden (★ antes) | 🔒 | SQL Editor |
-| 7 | Sembrar los datos sintéticos | 🔒 | `semilla-staging.sql` |
-| 8 | Desplegar panel y servidor de la misma versión (★ antes) | 🔒 | — (Render) |
+| 6 | Aplicar las **tres migraciones**, en orden (★B antes) | 🔒 | SQL Editor |
+| 7 | Sembrar los datos sintéticos (★B antes) | 🔒 | `semilla-staging.sql` |
+| 8 | Desplegar panel y servidor de la misma versión (★B antes) | 🔒 | — (Render) |
 | 9 | **Identificar el entorno** ya desplegado: bundle, servidor y base | | `04-identificar-entorno.sh` |
 | 10 | Comprobar el arranque y el PDF | | `05-probar-arranque.sh` |
 | 11 | Simular, importar, medir, PDF, inventario, recarga y deshacer | 🔒 | abajo |
 
-El paso **★ no es un paso más: es una precondición de los pasos 4, 6 y 8**, y
-se repite antes de cada uno.
+**★A y ★B no son el mismo control y no se pueden confundir.**
+
+- **★A, inicialización**, se hace **una sola vez** sobre el proyecto recién
+  creado: identifica el proyecto de pruebas autorizado y el destino de la
+  conexión, rechaza producción sin llegar a conectarse, comprueba que la base
+  está **vacía** (sin marca previa, sin tablas ni funciones `tc_*`), pide una
+  confirmación escrita y **solo entonces pone la marca**
+  `mobilink.entorno = 'pruebas'`. Antes de restaurar, no después.
+- **★B, operaciones**, se repite **antes de cada** restauración, migración,
+  siembra y arranque, y exige **las dos cosas**: destino autorizado **y**
+  marca. Nunca pone la marca.
+
+La marca no sustituye a la comprobación del destino —una marca se puede poner
+en cualquier base— y el destino no sustituye a la marca: el proyecto correcto
+puede tener una base que no es la que se preparó. Por eso ★B pide las dos, y
+por eso poner la marca es un paso aparte que antes comprueba que la base está
+vacía. **No se le pone la marca a una base para que pase el control.**
+
+Los dos controles están probados, con sus rechazos incluidos:
+
+```bash
+bash scripts/staging/09-probar-controles.sh   # 10 casos, sobre bases locales de usar y tirar
+```
 
 ---
 
@@ -74,7 +97,32 @@ Plan gratuito. Dos límites conocidos: el número de proyectos gratuitos por
 organización, y que un proyecto gratuito **se pausa tras una semana sin
 actividad**.
 
-## ★ Comprobar el destino — antes de restaurar, de migrar y de arrancar
+## ★A Inicializar el destino — una sola vez, con el proyecto recién creado 🔒
+
+```bash
+DATABASE_URL=… \
+REF_PRUEBAS=<subdominio de pruebas> REF_PRODUCCION=<subdominio de producción> \
+bash scripts/staging/00-inicializar-destino.sh
+```
+
+Hace, en este orden:
+
+1. **Identifica** el proyecto de pruebas autorizado (`REF_PRUEBAS`) y el
+   destino de la conexión (`DATABASE_URL`). Si el host es el de producción, o
+   no es ni el de pruebas ni local, **sale sin abrir conexión**: a producción
+   no se le abre ni una sesión de lectura por error.
+2. Mira `SUPABASE_URL` y `VITE_SUPABASE_URL` si están definidas (en este
+   momento pueden faltar todavía) y avisa de credenciales externas.
+3. **Comprueba que la base es nueva**: sin marca previa, sin tablas `tc_*`,
+   sin funciones `tc_*`, y avisa si `public` ya tiene tablas.
+4. Pide escribir `marcar como pruebas`. Cualquier otra respuesta cancela.
+5. **Y solo entonces** ejecuta
+   `alter database "…" set mobilink.entorno = 'pruebas'`.
+
+Si cualquiera de esas comprobaciones falla, **no marca nada**. Producción no
+tiene la marca y no se le pone.
+
+## ★B Comprobar el destino — antes de restaurar, migrar, sembrar y arrancar
 
 ```bash
 DATABASE_URL=… SUPABASE_URL=… VITE_SUPABASE_URL=… \
@@ -94,9 +142,11 @@ Comprueba cuatro cosas y **sale con error a la primera que falle**:
 1. **`DATABASE_URL`**: host, puerto y base, sin enseñar la contraseña. Si el
    host contiene el proyecto de producción, falla.
 2. **La marca de la base**: `current_setting('mobilink.entorno')` tiene que
-   decir `pruebas`. Es lo único que no se puede confundir: el nombre de la
-   base se repite y, con el esquema real restaurado, el número de tablas es
-   idéntico al de producción.
+   decir `pruebas`. Es la segunda llave, no la única: el nombre de la base se
+   repite y, con el esquema real restaurado, el número de tablas es idéntico
+   al de producción, así que la marca distingue lo que el nombre no
+   distingue — pero **no sustituye** a la comprobación del destino, que se
+   hace igual. Este script **nunca pone la marca**; la pone ★A.
 3. **`SUPABASE_URL` y `VITE_SUPABASE_URL`**: a qué proyecto va a hablar el
    servidor y qué se va a compilar en el panel.
 4. **Lo que NO debería estar definido**: `STRIPE_SECRET_KEY`,
@@ -105,46 +155,77 @@ Comprueba cuatro cosas y **sale con error a la primera que falle**:
    credenciales externas en el entorno, avisa.
 
 `05-probar-arranque.sh` lo ejecuta por su cuenta y **se niega a arrancar el
-servidor** si no pasa. Comprobado con una base sin marcar: «El destino no
-está confirmado: NO se arranca el servidor».
+servidor** si no pasa. `03-levantar-staging.sh` lo ejecuta antes de restaurar.
+`permisos-pruebas.sql` y `semilla-staging.sql` llevan además su propio
+guardián dentro: si la base no está marcada, la transacción se para con un
+`raise exception`, aunque alguien los lance a mano sin pasar por el script.
+
+Probado en `09-probar-controles.sh`, con sus diez casos: base nueva sin marcar
+rechazada; host de producción rechazado por los dos controles y sin conectar;
+host desconocido rechazado; los dos ficheros SQL negándose en una base sin
+marca; la inicialización marcando una base vacía y **negándose** sobre una ya
+marcada, sobre una que ya tiene tablas `tc_*` y cuando no se escribe la frase
+de confirmación; y, con la marca puesta, el control de operaciones rechazando
+igualmente un `SUPABASE_URL` de producción y unas credenciales externas.
 
 Después del despliegue se repite la comprobación, pero **la otra**: la del
 paso 9, que mira el bundle servido, el commit del servidor y la base. Son
 complementarias, no la misma: esta mira lo que se va a usar, aquella lo que
 ya está desplegado.
 
-## 4. Restaurar y marcar la base 🔒
+## 4. Restaurar el DDL y poner los permisos 🔒
 
 ```bash
-DESTINO_URL='postgresql://…' bash scripts/staging/03-levantar-staging.sh esquema-produccion.sql
+DATABASE_URL='postgresql://…' REF_PRUEBAS=… REF_PRODUCCION=… \
+SUPABASE_URL=… VITE_SUPABASE_URL=… \
+bash scripts/staging/03-levantar-staging.sh esquema-produccion.sql
 ```
 
-Se niega si la base ya tiene tablas `tc_*`, y al terminar **marca** la base:
+La base **ya tiene que estar marcada** por ★A: el script empieza llamando a
+★B, que exige destino autorizado **y** marca, y no sigue si falta cualquiera
+de las dos. Después se niega si la base ya tiene tablas `tc_*`, restaura el
+DDL, aplica `permisos-pruebas.sql` y pasa `10-comprobar-permisos.sh`. Aquí no
+se marca nada: marcar es ★A, y va antes.
 
-```sql
-alter database "…" set mobilink.entorno = 'pruebas';
-```
-
-Esa marca es la comprobación que sirve. El nombre de la base se repite, el
-número de tablas con el esquema real es idéntico, y `current_database()` no
-distingue dos bases llamadas igual en servidores distintos. Producción no
-tiene la marca y no se le pone.
-
-### Ensayo previo: ¿entra ese DDL en un proyecto nuevo?
+### Ensayo PRELIMINAR: ¿entra ese DDL en una imitación de proyecto nuevo?
 
 ```bash
 DDL=esquema-produccion.sql BASE=banco_nuevo_supabase \
 bash scripts/staging/08-ensayar-restauracion.sh
 ```
 
-Crea una base desechable con **lo que trae un proyecto Supabase recién
-creado y nada más** —los roles `anon`/`authenticated`/`service_role`, los
-esquemas `auth`/`storage`/`extensions`, `pgcrypto` y los stubs de `auth.uid()`
-y compañía—, restaura el DDL ahí y dice qué falta. Ensayado en local con el
-esquema completo (463 tablas, 256 funciones, 7 vistas, 304 políticas RLS, 86
-triggers):
+**Preliminar, y conviene no llamarlo de otra manera.** Crea una base
+desechable con **stubs**: los roles `anon`/`authenticated`/`service_role`
+creados a mano, los esquemas `auth`/`storage`/`extensions` vacíos, `pgcrypto`
+y cuatro funciones `auth.*` escritas en el propio script. Un proyecto Supabase
+de verdad trae GoTrue, Storage, Realtime, sus extensiones en el esquema
+`extensions`, sus roles con sus atributos y sus *default privileges*. Lo que
+falle aquí fallará allí; **lo que pase aquí todavía no está validado**. La
+compatibilidad queda comprobada cuando el mismo DDL entra en el **proyecto
+Supabase de pruebas**, en el paso 4, y no antes.
 
-> restaurado (1 error, «schema "public" already exists», inofensivo)
+**Qué errores se dan por buenos.** Solo los de una lista escrita en el script,
+conflictos concretos identificados de antemano y comprobados uno a uno.
+«Ya existe» a secas no vale como excusa: que una tabla, una función o un tipo
+ya existan en una base supuestamente nueva significa que la base no estaba
+limpia o que el volcado trae algo repetido, y eso hay que mirarlo. Hoy la
+lista tiene **una sola entrada**:
+
+| Error tolerado | Por qué |
+|---|---|
+| `schema "public" already exists` | PostgreSQL crea `public` al crear la base y `pg_dump` emite su `CREATE SCHEMA` igualmente. Comprobado: el esquema resultante es el mismo con y sin ese error. |
+
+Cualquier otro error **para la restauración** y el script sale con código 1.
+Para añadir una entrada hay que escribir el motivo en el script, no ignorarlo.
+
+Ensayado en local con el esquema completo (463 tablas, 256 funciones, 7
+vistas, 304 políticas RLS, 86 triggers):
+
+> restaurado · 1 error(es), todos de la lista de conflictos previstos
+
+Y comprobado que el filtro no es un adorno: metiendo a propósito un
+`create type` repetido en el DDL, el ensayo se para con
+«1 error(es) que NO están en la lista de conflictos previstos».
 
 ### Lo que NO viaja en el volcado, y hay que poner aparte
 
@@ -152,7 +233,7 @@ Comprobado sobre la base restaurada, no supuesto:
 
 | Qué | Por qué no viaja | Quién lo pone |
 |---|---|---|
-| **Permisos de tabla** de `anon` y `authenticated` (salen a **0**) | el volcado va con `--no-privileges`, y en Supabase vienen de los *default privileges* del esquema `public` | `grant all on all tables/sequences/functions in schema public to anon, authenticated, service_role` más los `alter default privileges` |
+| **Permisos de tabla** de `anon` y `authenticated` (salen a **0**) | el volcado va con `--no-privileges`, y en Supabase vienen de los *default privileges* del esquema `public` | `scripts/staging/permisos-pruebas.sql`, **por nombre** (ver más abajo). Ni `grant ... on all ...` ni `alter default privileges` |
 | **`bypassrls` de `service_role`** | es un atributo del ROL, y los roles son del clúster, no del volcado | el proyecto Supabase ya lo trae; en una base a mano, `alter role service_role bypassrls` |
 | **Extensiones** | con `--schema=public` no viajan las de otros esquemas. El DDL usa `gen_random_uuid()` (214 veces) y `crypt()` (3), así que **`pgcrypto` tiene que estar habilitado ANTES de restaurar** | el panel de Supabase, o `create extension` |
 | **Los roles** `anon`, `authenticated`, `service_role` | ídem: son del clúster | el proyecto los trae de serie |
@@ -178,13 +259,98 @@ puede no tener. Las dos se descubrieron levantando el servidor de verdad:
 1. **`service_role` tiene que saltarse la RLS** (`alter role service_role
    bypassrls`). El endpoint del PDF lee con la service key; sin eso devuelve
    «Parte no encontrado» en pruebas y funciona en producción.
-2. **`anon` y `authenticated` necesitan los permisos de tabla** de los
-   *default privileges* de `public`. Sin ellos, cualquier RPC `security
-   invoker` responde «permission denied for table …». Lo que protege los
-   datos es la RLS, no la ausencia de GRANT.
+2. **`anon` y `authenticated` necesitan permisos de tabla**: sin ellos,
+   cualquier RPC `security invoker` responde «permission denied for table …».
+   En un proyecto Supabase vienen de los *default privileges* de `public`,
+   que abren el esquema entero. Aquí **no se copia eso**: los pone
+   `permisos-pruebas.sql`, objeto por objeto. La sección siguiente explica
+   qué concede y qué deja fuera.
 
-En un proyecto Supabase recién creado vienen de serie; en una base restaurada,
-hay que comprobarlas.
+### Los permisos: por nombre, no en bloque
+
+```bash
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/staging/permisos-pruebas.sql
+DESTINO_URL="$DATABASE_URL" bash scripts/staging/10-comprobar-permisos.sh
+```
+
+El banco local tenía, hasta ahora, un
+`grant all on all tables/sequences/functions in schema public to anon,
+authenticated, service_role` con sus `alter default privileges` detrás. Eso
+abría **470 relaciones y 266 funciones** a los tres roles —módulos que esta
+prueba ni toca incluidos— y hacía que cualquier objeto creado después naciera
+igual de abierto, el arranque de Express incluido, que crea tablas. **Se ha
+retirado.** La RLS no tapa ese agujero: no se aplica a las funciones, no se
+aplica a las tablas que no la tienen activada y no se aplica a las vistas que
+no son `security_invoker`.
+
+En su lugar, `permisos-pruebas.sql` concede por nombre lo que usa esta prueba:
+
+| Sección | Qué | Cuántos |
+|---|---|---|
+| 0 | `revoke execute ... from public` y retirada de los *default privileges* | — |
+| 2 | Tablas que el panel solo **lee** | 21 |
+| 3 | Tablas que el panel **lee y escribe** (todas con RLS y política) | 55 |
+| 4 | Tablas que solo usa el **servidor** con la service key | 15 |
+| 5 | **Excepción declarada**: `productos_neumaticos`, sin RLS, solo `select` | 1 |
+| 5b | Vistas que se saltaban la RLS, pasadas a `security_invoker` | 3 |
+| 6 | RPC del panel y RPC solo del servidor | 35 + 4 |
+| 7 | Lo que ya conceden las **migraciones**, repetido tal cual | 91 |
+| 8 | Auxiliares de las políticas RLS y de los valores por defecto | 14 |
+| 9 | La auditoría de revisiones: `select` y nada más | 1 |
+| 10 | Nueve comprobaciones que **paran la transacción** | — |
+
+De dónde sale la lista: las llamadas `.from("…")` y `.rpc("…")` del panel y
+del servidor, cruzadas con el catálogo de la base y con los `grant` de
+`supabase/migrations`. El cruce lo rehace `10-comprobar-permisos.sh`, que
+falla si el fichero se queda atrás; `generar-permisos.py` lo regenera.
+
+**Lo que queda fuera a propósito:**
+
+- `anon` **no recibe ninguna tabla ni vista**. Solo las seis funciones que las
+  migraciones le conceden expresamente (el quiosco del operario y el login por
+  correo).
+- `clientes` no tiene RLS y **no se concede a nadie**.
+- Los módulos Seguridad, Presencia, Caja, Asistencia y Administración no
+  entran en esta prueba: sus páginas darán 403. Si hiciera falta alguna, se
+  añade por nombre.
+- Ninguna secuencia (todas las tablas concedidas tienen clave primaria uuid) y
+  **ningún `alter default privileges`**.
+
+**Dos hallazgos del esquema real, que esta prueba tapa pero el proyecto de
+producción no:**
+
+1. **`productos_neumaticos` no tiene RLS.** Viene del módulo Almacén, fuera de
+   `supabase/migrations`, y el panel de TyreControl la necesita (el embed de
+   la ficha del vehículo y `profundidadDibujoPorProducto()`, que lee el
+   catálogo entero sin filtrar por empresa). Se concede `select` y nada más,
+   como **excepción declarada** y con el motivo escrito. Si en el proyecto de
+   pruebas llega igual desde el volcado, el aviso será el mismo: la decisión
+   —ponerle RLS en el módulo Almacén o volver a declarar la excepción— es de
+   quien autorice el staging.
+2. **Tres vistas concedidas por las migraciones se saltaban la RLS**:
+   `tc_marcas_contadores` (cuenta neumáticos de todas las empresas),
+   `tc_tipos_plano_descuadrado` y `adm_ot_estado`. Ninguna es
+   `security_invoker` ni filtra por empresa dentro, así que con permisos del
+   dueño enseñan de más. En la base de pruebas se pasan a `security_invoker`.
+   Eso **no cambia las migraciones ni producción**: queda anotado aquí para
+   que lo decida quien corresponda.
+
+`10-comprobar-permisos.sh` comprueba las cinco cosas que importan, en SQL y
+—si se le dan `REST_URL` y `JWT_SECRET`— también por HTTP, que es como entra
+el panel:
+
+| Qué | Resultado en el banco local |
+|---|---|
+| RPC de escritura solo para los roles autorizados | `authenticated` **no** ejecuta `tc_imp_bloquear`, `tc_imp_exigir_admin` ni `tc_imp_medianoche` (403 por HTTP); `service_role` sí (204) |
+| Funciones auxiliares sin ejecución pública | **0** funciones del esquema ejecutables por `PUBLIC`; los `tc_imp_intervalo_*` fuera del alcance de `anon` |
+| Auditoría sin escritura desde la aplicación | `POST`, `PATCH` y `DELETE` sobre `tc_reconstruccion_revisiones` → **403** para `authenticated`; la escribe solo `tc_imp_revisar_intervalo`, que es `security definer` |
+| Tablas sin RLS no expuestas | la única con permisos es la excepción declarada, y en solo lectura; `clientes` → **403**; `anon` no lee ninguna tabla ni vista |
+| Aislamiento entre empresas | un usuario de otra empresa ve **0 de 580** vehículos y **0** intervalos; el control de la misma empresa ve 580 y 1.452 |
+
+Con estos permisos, las **26 comprobaciones del panel** de la fase 3 siguen
+en verde, revisiones incluidas: la escritura va por los RPC `security
+definer`, así que no hace falta `insert` ni `update` en las tablas de la
+reconstrucción.
 
 ## 5. Respaldo, y la prueba de que sirve 🔒
 
@@ -342,10 +508,13 @@ Y la comprobación de que la redefinición hace lo que debe es funcional:
 ## 7. Los datos sintéticos 🔒
 
 ```bash
-psql "$DESTINO_URL" -f scripts/staging/semilla-staging.sql
+bash scripts/staging/00-comprobar-destino.sh   # ★B: destino Y marca
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/staging/semilla-staging.sql
 ```
 
-Se niega a sembrar una base que no lleve la marca `mobilink.entorno`. Lo
+Sembrar también pasa por ★B. Y el propio fichero **se niega** a sembrar una
+base que no lleve la marca `mobilink.entorno`, aunque alguien lo lance a mano
+saltándose el control. Lo
 primero que pone son **las doce filas de `tc_cat_servicios`**: son datos, no
 viajan en el volcado, y sin ellas la importación bloquea todos los albaranes
 que lleven servicios. Después crea
@@ -392,7 +561,7 @@ COMMIT_ESPERADO=… bash scripts/staging/04-identificar-entorno.sh
 ```
 
 Esta es la **segunda** comprobación, la de después del despliegue, y mira
-cosas distintas de la del paso ★: allí se miraba la configuración que se iba
+cosas distintas de la del paso ★B: allí se miraba la configuración que se iba
 a usar; aquí, lo que de verdad se ha desplegado. Las tres piezas, **por a
 dónde apuntan**:
 
@@ -415,7 +584,7 @@ restaurado son idénticos a los de producción.
 NOT EXISTS` y `ADD COLUMN IF NOT EXISTS` sobre `DATABASE_URL`. **Arrancar el
 servidor ya modifica la base**, sin que nadie haya pedido una migración.
 
-Por eso la comprobación obligatoria es la del paso ★ y va **antes** de
+Por eso la comprobación obligatoria es la del paso ★B y va **antes** de
 arrancar, no aquí. `05-probar-arranque.sh` la ejecuta solo y se niega a
 levantar el servidor si no pasa.
 
@@ -498,6 +667,17 @@ En este orden. Cada punto tiene su condición de parada más abajo.
     modificaciones o revisiones humanas **conserva** y explica por qué.
 12. El contador de números internos **no vuelve atrás**.
 
+**El entorno**
+
+15. La base lleva la marca `mobilink.entorno = 'pruebas'`, **puesta por ★A
+    sobre una base vacía y antes de restaurar**, y ★B se ha pasado antes de
+    cada restauración, migración, siembra y arranque. Ninguna de las dos
+    comprobaciones se ha saltado, y la marca no se ha puesto a mano.
+16. Los permisos son los de `permisos-pruebas.sql` —concedidos por nombre—,
+    y `10-comprobar-permisos.sh` sale en verde: sin `grant ... on all ...`,
+    sin *default privileges*, sin funciones ejecutables por `PUBLIC`, con la
+    auditoría en solo lectura y con el aislamiento entre empresas probado.
+
 **Lo que no se exige, porque no está construido**
 
 13. La **ingesta auditada de las OR**: no existe, y no se promete.
@@ -510,12 +690,18 @@ En este orden. Cada punto tiene su condición de parada más abajo.
 
 Sin discusión, en el momento:
 
-- **La comprobación del destino falla** (paso ★): no se restaura, no se
-  migra y no se arranca. Nada de «seguimos a ver qué pasa».
+- **La comprobación del destino falla** (paso ★B): no se restaura, no se
+  migra, no se siembra y no se arranca. Nada de «seguimos a ver qué pasa».
+- **La base no está marcada y alguien propone marcarla a mano** para seguir.
+  La marca la pone ★A sobre una base vacía, o no se pone.
 - **La identificación del entorno desplegado falla** en cualquiera de las
   tres piezas (paso 9).
-- **El ensayo de restauración** (paso 2b) da errores que no sean «ya
-  existe».
+- **La restauración da un error que no está en la lista de conflictos
+  previstos** de `08-ensayar-restauracion.sh`. No vale «es un “ya existe”,
+  será inofensivo»: se mira qué objeto es y por qué estaba ya ahí.
+- **`10-comprobar-permisos.sh` falla**, en cualquiera de sus apartados: en
+  particular, si aparece una tabla sin RLS con permisos que no sea la
+  excepción declarada, o si el aislamiento entre empresas no sale a cero.
 - **La prueba de la vuelta atrás** (paso 5b) no devuelve la misma huella de
   definiciones y permisos.
 - **`tc_cat_servicios` está vacío** cuando empieza la importación: todo lo
@@ -542,6 +728,7 @@ la prueba pase lo que pase.
 
 ---
 
+
 ## Qué NO cubre este paquete
 
 - **No crea nada de pago.** Los planes gratuitos dan para esto; el servicio
@@ -554,6 +741,13 @@ la prueba pase lo que pase.
   apuntando a producción. Este PR no toca ningún fichero de `*_app/`.
 - **No despliega.** `render.yaml` define un único servicio con `autoDeploy`
   sobre `main`; el segundo servicio lo crea una persona en el panel.
+- **No valida la compatibilidad del DDL por sí solo.** El ensayo del paso 2b
+  es **preliminar**: corre contra stubs locales. La compatibilidad queda
+  comprobada al restaurar en el proyecto Supabase de pruebas, en el paso 4.
+- **No arregla los dos hallazgos de permisos** del esquema real
+  (`productos_neumaticos` sin RLS, y tres vistas sin `security_invoker`
+  concedidas por las migraciones). Aquí se tapan **para la base de pruebas**
+  y quedan anotados; cambiarlos en producción es otra decisión.
 
 ## Los tres rechazos, que no son el mismo
 
