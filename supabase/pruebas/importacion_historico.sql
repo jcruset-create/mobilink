@@ -751,3 +751,63 @@ do $$ declare r jsonb; begin
     (select count(*) from tc_neumaticos where importacion_lote_id is not null
        and estado in ('montado','almacen','reparacion','descartado')), 0::bigint);
 end $$;
+
+-- ── 22. Evidencia explícita de posición (lo que daría una OR) ──────────────
+-- Prioridad: una posición indicada por una OR manda sobre la deducción, y un
+-- montaje con posición conocida solo afecta a SU posición: no interrumpe los
+-- demás ejes del vehículo. (La lectura de OR no existe todavía; aquí se
+-- comprueba que el modelo la soporta.)
+do $$ declare r jsonb; l uuid; op uuid; pos uuid; begin
+  insert into tc_vehiculos (id, empresa_id, tipo_vehiculo_id, matricula, km_actual)
+    values ('00000000-0000-0000-0000-0000000000c2','00000000-0000-0000-0000-0000000000e1','00000000-0000-0000-0000-00000000000a','CADENA02', 999999)
+    on conflict do nothing;
+  -- Enero: 4 nuevas al eje 2 (deducido).
+  r := tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes',
+        lote('2026-01', alb_fk('B2_26/E1','CADENA02',4,'2026-01-10',100000)), false);
+  -- Marzo: un USADO. Sin evidencia, rompe la continuidad del eje 2.
+  r := tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes',
+        lote('2026-03', alb_fk('B2_26/E2','CADENA02',1,'2026-03-10',120000,'usada')), false);
+  perform prueba('sin evidencia: el usado sin posición interrumpe el eje 2',
+    (select count(*) from tc_reconstruccion_montajes where vehiculo_id='00000000-0000-0000-0000-0000000000c2' and estado='interrumpido'), 4::bigint);
+
+  -- Llega la OR y dice que ese usado fue al eje 1 izquierda. Se anota como
+  -- INDICADA (no deducida) y se rehace la cadena del vehículo.
+  select o.id into op from operaciones_neumaticos o join tc_intervenciones i on i.id=o.intervencion_id
+    where i.origen_doc='B2_26/E2|CADENA02' and o.tipo_operacion='montaje';
+  select id into pos from tc_posiciones_vehiculo where tipo_vehiculo_id='00000000-0000-0000-0000-00000000000a' and codigo_posicion='E1_IZQ';
+  update operaciones_neumaticos set posicion_destino_id=pos, posicion_fuente='indicada' where id=op;
+  update operaciones_neumaticos set posicion_origen_id=pos, posicion_fuente='indicada'
+    where grupo_sustitucion=(select grupo_sustitucion from operaciones_neumaticos where id=op) and tipo_operacion='desmontaje';
+  perform tc_imp_reconstruir_vehiculo('00000000-0000-0000-0000-0000000000c2');
+  perform prueba('con evidencia: el eje 2 deja de estar interrumpido',
+    (select count(*) from tc_reconstruccion_montajes where vehiculo_id='00000000-0000-0000-0000-0000000000c2' and estado='interrumpido'), 0::bigint);
+  perform prueba('con evidencia: el eje 2 sigue abierto y el usado abre su propia ocupación',
+    (select count(*) from tc_reconstruccion_montajes where vehiculo_id='00000000-0000-0000-0000-0000000000c2' and estado='abierto'), 5::bigint);
+  perform prueba('la posición indicada no se degrada a deducida',
+    (select posicion_fuente from tc_reconstruccion_montajes where vehiculo_id='00000000-0000-0000-0000-0000000000c2' and fecha_montaje='2026-03-10'), 'indicada');
+  -- Y el informe la cuenta como REGISTRADA, no como deducida.
+  r := tc_informes_montajes('00000000-0000-0000-0000-0000000000e1','2026-03-01','2026-03-31','historico');
+  perform prueba('el informe separa la posición registrada de la deducida',
+    (select string_agg(x->>'clase'||'='||(x->>'n'), ',' order by x->>'clase') from jsonb_array_elements(r->'por_posicion') x), 'registrada=1');
+end $$;
+
+-- ── 23. Un vehículo sin ninguna evidencia sigue siendo importable ──────────
+do $$ declare r jsonb; begin
+  insert into tc_vehiculos (id, empresa_id, tipo_vehiculo_id, matricula, km_actual)
+    values ('00000000-0000-0000-0000-0000000000c3','00000000-0000-0000-0000-0000000000e1','00000000-0000-0000-0000-00000000000a','SINOR01', 50000)
+    on conflict do nothing;
+  r := tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes',
+        lote('2026-02', alb_fk('B2_26/S1','SINOR01',3,'2026-02-10',60000), alb_fk('B2_26/S2','SINOR01',2,'2026-05-10',70000,'recauchutada')), false);
+  perform prueba('sin OR: se importa igual', (r->>'creadas')::int, 2);
+  perform prueba('sin OR: 3 nuevas sin posición (la norma no cubre el 3) y 2 recauchutadas tampoco',
+    (select count(*) from operaciones_neumaticos o join tc_intervenciones i on i.id=o.intervencion_id
+      where i.vehiculo_id='00000000-0000-0000-0000-0000000000c3' and o.tipo_operacion='montaje' and o.posicion_fuente='desconocida'), 5::bigint);
+  perform prueba('sin OR: sus salidas constan igual, con identidad desconocida',
+    (select count(*) from operaciones_neumaticos o join tc_intervenciones i on i.id=o.intervencion_id
+      where i.vehiculo_id='00000000-0000-0000-0000-0000000000c3' and o.tipo_operacion='desmontaje' and o.identidad_retirado='desconocida'), 5::bigint);
+  perform prueba('sin OR: sin posición no se abre ninguna ocupación ni se atribuye recorrido',
+    (select count(*) from tc_reconstruccion_montajes where vehiculo_id='00000000-0000-0000-0000-0000000000c3'), 0::bigint);
+  perform prueba('sin OR: las 3 nuevas tienen ficha igual',
+    (select count(*) from operaciones_neumaticos o join tc_intervenciones i on i.id=o.intervencion_id
+      where i.vehiculo_id='00000000-0000-0000-0000-0000000000c3' and o.condicion='nueva' and o.neumatico_id is not null), 3::bigint);
+end $$;

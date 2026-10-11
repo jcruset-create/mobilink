@@ -49,3 +49,19 @@ consumidores del historial real no saben distinguirlos.
   `/tyrecontrol/importar/identificar`.
 - El informe «Montajes de neumáticos» vive en Informes y cuenta solo las
   unidades que entran.
+
+### Que el inventario no se mezcle
+
+`comprobar-inventario.sh` pregunta a los informes y compara con las fichas
+reales de la empresa, en vez de leer el texto de las funciones:
+
+```bash
+bash scripts/importacion-historico/comprobar-inventario.sh esquema_completo
+```
+
+Falla si alguien vuelve a aplicar una migración que redefina
+`tc_informes_inventario_por`, `tc_informes_inventario_marca_medida` o
+`tc_marcas_contadores` sin el filtro del vínculo de importación —por ejemplo
+`tyrecontrol_informes_TODO.sql`, que contiene copias antiguas de esas
+funciones—, o si alguna ficha histórica aparece como disponible para montar.
+Conviene ejecutarlo después de cualquier despliegue que toque informes.
