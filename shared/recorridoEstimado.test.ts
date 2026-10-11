@@ -87,7 +87,7 @@ describe("textoCobertura", () => {
     expect(t).toContain("Fuera 1402");
   });
   it("separa gomas identificadas de ocupaciones de posición", () => {
-    expect(textoCobertura(c)).toContain("0 de gomas identificadas y 50 ocupaciones de posición");
+    expect(textoCobertura(c)).toContain("gomas identificadas: 0 · ocupaciones de posición: 50");
   });
   it("avisa de que los motivos se solapan y no suman", () => {
     expect(textoCobertura(c)).toContain("no suman");

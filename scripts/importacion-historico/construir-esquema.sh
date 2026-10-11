@@ -51,4 +51,20 @@ while :; do
 done
 # El stub de productos_neumaticos necesita su FK al catálogo (PostgREST la usa para los embeds del panel).
 psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$DB" -q -c "alter table productos_neumaticos add constraint productos_neumaticos_referencia_fk foreign key (referencia_neumatico_id) references tc_referencias_neumatico(id)" 2>/dev/null || true
-echo "aplicadas en total: ${#ok[@]} de $(wc -l < "$ORDEN") · fallos en $FALLOS"
+# Los permisos que en Supabase pone la PLATAFORMA, no las migraciones.
+#
+# Ninguna migración del repositorio concede nada a anon/authenticated: en el
+# proyecto real esos permisos vienen de los default privileges que Supabase
+# configura al crear el esquema public. Sin ellos, cualquier RPC `security
+# invoker` falla por PostgREST con «permission denied for table ...» aunque en
+# psql funcione, porque psql entra como dueño y se los salta. Lo que de verdad
+# protege los datos es la RLS, que sí está en las migraciones.
+psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$DB" -q <<'SQL'
+grant all on all tables    in schema public to anon, authenticated, service_role;
+grant all on all sequences in schema public to anon, authenticated, service_role;
+grant all on all functions in schema public to anon, authenticated, service_role;
+alter default privileges in schema public grant all on tables    to anon, authenticated, service_role;
+alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
+alter default privileges in schema public grant all on functions to anon, authenticated, service_role;
+SQL
+echo "aplicadas en total: ${#ok[@]} de $(wc -l < "$ORDEN") · fallos en $FALLOS · permisos de plataforma concedidos"

@@ -111,6 +111,6 @@ export function textoCobertura(c: CoberturaMinima): string {
     ? ` Fuera ${c.excluidos.n}: ${c.excluidos.motivos.map((m) => `${etiquetaMotivo(m.motivo)} ${m.n}`).join(", ")} (un intervalo puede tener varios motivos, así que no suman).`
     : c.excluidos.n > 0 ? ` Fuera ${c.excluidos.n}.` : "";
   return `Sobre ${c.incluidos.n} de ${c.poblacion.intervalos} intervalos reconstruidos`
-    + ` (${c.incluidos.identificadas} de gomas identificadas y ${c.incluidos.ocupaciones} ocupaciones de posición).`
+    + ` (gomas identificadas: ${c.incluidos.identificadas} · ocupaciones de posición: ${c.incluidos.ocupaciones}).`
     + fuera;
 }

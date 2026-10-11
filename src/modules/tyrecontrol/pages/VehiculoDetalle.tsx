@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones, listarIntervenciones, listarIntervalosReconstruidos, revisarIntervalo, cargarCoberturaRecorridos, imagenChasisDeMarca, generarPosicionesDeTipo, cotejarPlanoDeTipo, type CotejoPlano, type IntervaloReconstruido, type CoberturaRecorridos } from "../services/data";
 import type { Intervencion } from "../services/data";
 import { resumenMontajes, textoPorCondicion } from "../../../../shared/condicionNeumatico";
-import { textoRecorrido, textoRitmo, textoMotivos, textoDecision, textoCobertura } from "../../../../shared/recorridoEstimado";
+import { textoRecorrido, textoRitmo, textoMotivos, textoDecision, textoCobertura, numero } from "../../../../shared/recorridoEstimado";
 import { esHistoricoAlbaran, etiquetaHistorico, textoNeumaticoHistorico, textoPosicionHistorica, textoRetirado } from "../../../../shared/historicoAlbaran";
 import type { MontajeActual, PosicionVehiculo, Vehiculo, TipoLlanta, VehiculoEje, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle, OperacionNeumatico } from "../types";
 import { ORIGEN_KM_LABELS, tipoLlantaLabel, presionTxt, TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS } from "../types";
@@ -487,13 +487,13 @@ export default function VehiculoDetalle() {
               {textoCobertura(cobertura)}
               {cobertura.recorrido.unidad_identificada.n > 0 && (
                 <div className="mt-1 text-slate-300">
-                  Media estimada de las gomas identificadas: {cobertura.recorrido.unidad_identificada.media} km
+                  Media estimada de las gomas identificadas: {numero(cobertura.recorrido.unidad_identificada.media)} km
                   <span className="text-slate-500"> ({cobertura.recorrido.unidad_identificada.n} intervalo(s))</span>
                 </div>
               )}
               {cobertura.recorrido.ocupacion_de_posicion.n > 0 && (
                 <div className="mt-1 text-slate-300">
-                  Media de las ocupaciones de posición: {cobertura.recorrido.ocupacion_de_posicion.media} km
+                  Media de las ocupaciones de posición: {numero(cobertura.recorrido.ocupacion_de_posicion.media)} km
                   <span className="text-slate-500"> ({cobertura.recorrido.ocupacion_de_posicion.n} intervalo(s)) · {cobertura.recorrido.ocupacion_de_posicion.que_es}</span>
                 </div>
               )}

@@ -6,7 +6,7 @@ import { KpiCard } from "../../components/informes/KpiCard";
 import { BarList, ColumnChart } from "../../components/informes/charts";
 import { descargarCSV } from "../../utils/exportar";
 import { TableWrap, tdCls, thCls } from "../../components/ui";
-import { etiquetaMotivo, textoCobertura } from "../../../../../shared/recorridoEstimado";
+import { etiquetaMotivo, numero, textoCobertura } from "../../../../../shared/recorridoEstimado";
 
 /**
  * Montajes de neumáticos: cuántas gomas se pusieron.
@@ -178,9 +178,9 @@ export default function InformeMontajes() {
               <div className="text-[11px] uppercase text-slate-400">Gomas identificadas por una persona</div>
               {cob.recorrido.unidad_identificada.n > 0 ? (
                 <div className="text-slate-200">
-                  media {cob.recorrido.unidad_identificada.media} km · mediana {cob.recorrido.unidad_identificada.mediana} km
+                  media {numero(cob.recorrido.unidad_identificada.media)} km · mediana {numero(cob.recorrido.unidad_identificada.mediana)} km
                   <div className="text-[11px] text-slate-500">
-                    {cob.recorrido.unidad_identificada.n} intervalo(s) · de {cob.recorrido.unidad_identificada.minimo} a {cob.recorrido.unidad_identificada.maximo} km
+                    {cob.recorrido.unidad_identificada.n} intervalo(s) · de {numero(cob.recorrido.unidad_identificada.minimo)} a {numero(cob.recorrido.unidad_identificada.maximo)} km
                   </div>
                 </div>
               ) : <div className="text-slate-500">Ningún intervalo con goma identificada entra en la media.</div>}
@@ -189,7 +189,7 @@ export default function InformeMontajes() {
               <div className="text-[11px] uppercase text-slate-400">Ocupaciones de posición</div>
               {cob.recorrido.ocupacion_de_posicion.n > 0 ? (
                 <div className="text-slate-200">
-                  media {cob.recorrido.ocupacion_de_posicion.media} km · mediana {cob.recorrido.ocupacion_de_posicion.mediana} km
+                  media {numero(cob.recorrido.ocupacion_de_posicion.media)} km · mediana {numero(cob.recorrido.ocupacion_de_posicion.mediana)} km
                   <div className="text-[11px] text-slate-500">
                     {cob.recorrido.ocupacion_de_posicion.n} intervalo(s) · {cob.recorrido.ocupacion_de_posicion.que_es}
                   </div>
