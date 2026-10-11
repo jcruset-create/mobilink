@@ -14,8 +14,8 @@ end $$;
 --   · B2_26/4905: 1 intervención, 4 operaciones (2 nuevas eje 1 deducido,
 --     2 usadas sin posición), 3 servicios, 10 líneas; km en la operación y
 --     en la intervención, NUNCA en el vehículo;
---   · 6 nuevas → sin posición; dos referencias → sin posición; plano sin
---     eje compatible → sin posición;
+--   · 6 nuevas de una referencia → 2 al eje 1 y 4 al eje 2; dos referencias
+--     → sin posición; plano sin ejes compatibles → sin posición;
 --   · ni montajes actuales, ni neumáticos, ni stock, ni revisiones se tocan;
 --   · recargar = ya presente; otra huella = cambiado, sin sobrescribir;
 --   · vehículo inexistente / de otra empresa → bloqueado;
@@ -189,7 +189,7 @@ create or replace function alb_4905(p_huella text default 'h4905') returns jsonb
               || jsonb_build_array(jsonb_build_object('origen_linea','B2_26/4905|7724KBM|H2|0107092270002|DC_0016005|-2|1','hoja','H2','articulo','0107092270002','descripcion','315/80X22.5 HANKOOK AH51 156L','carcasa_mov','DC_0016005','uds',-2,'tipo_mov','salida','hora_origen','2026-10-10T09:09:12+02:00','papel','salida','grupo','10000000-0000-0000-0000-000000000001')))
 $$;
 
--- 4310: N4 + N2 = 6 nuevas de la misma referencia → sin posición.
+-- 4310: N4 + N2 = 6 nuevas de la misma referencia → 2 al eje 1 y 4 al eje 2.
 create or replace function alb_n(p_doc text, p_mat text, p_n int, p_refs int, p_cond text default 'nueva') returns jsonb language sql as $$
   select jsonb_build_object('origen_doc',p_doc||'|'||p_mat,'documento',p_doc,'matricula',p_mat,'fecha','2026-09-20','km',null,'huella_origen','h'||p_doc,
     'operaciones',(select jsonb_agg(jsonb_build_object('origen_linea',p_doc||'|'||p_mat||'|H1|M|1|u'||i||'/'||p_n,'condicion',p_cond,'marca','Hankook',
@@ -253,13 +253,23 @@ end $$;
 -- ── 4. Posiciones: 6 nuevas, dos referencias, plano incompatible ────────────
 do $$ declare r jsonb; begin
   r := tc_importar_historico('00000000-0000-0000-0000-0000000000e1', 'genes',
-        lote('2026-09', alb_n('B2_26/4310','9005KMR',6,1), alb_n('B2_26/4508','9005KMR',6,2), alb_n('B2_26/0591','0591JGV',4,1), alb_n('B2_26/0002','0591JGV',2,1)), false);
-  perform prueba('se crean 4', (r->>'creadas')::int, 4);
-  perform prueba('4310: 6 operaciones sin posición', (select count(*) from operaciones_neumaticos o join tc_intervenciones i on i.id=o.intervencion_id where i.origen_doc='B2_26/4310|9005KMR' and o.posicion_destino_id is null and o.posicion_fuente='desconocida'), 6::bigint);
+        lote('2026-09', alb_n('B2_26/4310','9005KMR',6,1), alb_n('B2_26/4508','9005KMR',6,2), alb_n('B2_26/0591','0591JGV',4,1), alb_n('B2_26/0002','0591JGV',2,1),
+             alb_n('B2_26/0003','0591JGV',6,1)), false);
+  perform prueba('se crean 5', (r->>'creadas')::int, 5);
+  -- 6 nuevas de una referencia en un 2x4: el vehículo entero, 2 al eje 1 y 4 al eje 2.
+  perform prueba('4310: 6 nuevas → 2 al eje 1 y 4 al eje 2',
+    (select string_agg(p.codigo_posicion, ',' order by p.eje, p.codigo_posicion) from operaciones_neumaticos o join tc_intervenciones i on i.id=o.intervencion_id join tc_posiciones_vehiculo p on p.id=o.posicion_destino_id where i.origen_doc='B2_26/4310|9005KMR'),
+    'E1_DER,E1_IZQ,E2_DER_EXT,E2_DER_INT,E2_IZQ_EXT,E2_IZQ_INT');
+  perform prueba('4310: las 6 quedan marcadas como deducidas, ninguna confirmada',
+    (select count(*) filter (where posicion_fuente='deducida')||'/'||count(*) from operaciones_neumaticos o join tc_intervenciones i on i.id=o.intervencion_id where i.origen_doc='B2_26/4310|9005KMR'), '6/6');
+  perform prueba('6 nuevas en un 2x2 (el plano no tiene 2+4) → sin posición',
+    (select count(*) from operaciones_neumaticos o join tc_intervenciones i on i.id=o.intervencion_id where i.origen_doc='B2_26/0003|0591JGV' and o.posicion_destino_id is null and o.posicion_fuente='desconocida'), 6::bigint);
   perform prueba('4508: dos referencias → sin posición', (select count(*) from operaciones_neumaticos o join tc_intervenciones i on i.id=o.intervencion_id where i.origen_doc='B2_26/4508|9005KMR' and o.posicion_destino_id is null), 6::bigint);
   perform prueba('4 nuevas en un 2x2 (eje 2 con 2 posiciones) → sin posición', (select count(*) from operaciones_neumaticos o join tc_intervenciones i on i.id=o.intervencion_id where i.origen_doc='B2_26/0591|0591JGV' and o.posicion_destino_id is null), 4::bigint);
   perform prueba('2 nuevas en un 2x2 → eje 1 deducido', (select string_agg(p.codigo_posicion, ',' order by p.codigo_posicion) from operaciones_neumaticos o join tc_intervenciones i on i.id=o.intervencion_id join tc_posiciones_vehiculo p on p.id=o.posicion_destino_id where i.origen_doc='B2_26/0002|0591JGV'), 'E1_DER,E1_IZQ');
   perform prueba('km ausente: queda null', (select bool_and(km_vehiculo is null) from operaciones_neumaticos o join tc_intervenciones i on i.id=o.intervencion_id where i.origen_doc='B2_26/4310|9005KMR'), true);
+  perform prueba('ninguna posición se repite en el mismo albarán',
+    (select count(*) from (select o.intervencion_id, o.posicion_destino_id from operaciones_neumaticos o where o.posicion_destino_id is not null and o.importacion_lote_id is not null group by 1,2 having count(*) > 1) d), 0::bigint);
 end $$;
 
 -- ── 5. Bloqueos: vehículo inexistente, de otra empresa, servicio raro, bloqueante del navegador ──
@@ -293,7 +303,7 @@ do $$ begin
   insert into operaciones_neumaticos (empresa_id, vehiculo_id, intervencion_id, tipo_operacion, source) values ('00000000-0000-0000-0000-0000000000e1','00000000-0000-0000-0000-00000000000d','00000000-0000-0000-0000-00000000d001','montaje','import');
   perform prueba('una operación con source=import pero sin vínculo NO es histórico de albarán',
     (select count(*) from operaciones_neumaticos where source='import' and importacion_lote_id is null), 1::bigint);
-  perform prueba('las importadas tienen vínculo', (select count(*) from operaciones_neumaticos where importacion_lote_id is not null), 4+6+6+4+2::bigint);
+  perform prueba('las importadas tienen vínculo', (select count(*) from operaciones_neumaticos where importacion_lote_id is not null), 4+6+6+4+2+6::bigint);
 end $$;
 
 -- ── 8. Permisos ─────────────────────────────────────────────────────────────
@@ -332,9 +342,9 @@ do $$ declare r jsonb; l uuid; v4905 uuid; v4310 uuid; op uuid; begin
   select importacion_lote_id, id into l, v4310 from tc_intervenciones where origen_doc='B2_26/4310|9005KMR';
   insert into tc_intervencion_servicios (intervencion_id, servicio, cantidad) values (v4310, 'valvulas', 1);
   r := tc_deshacer_importacion(l, '{}', false);
-  perform prueba('septiembre sin excluir: 3 borradas, 1 conservada (servicio añadido)', (r->>'borradas')||'/'||(r->>'conservadas'), '3/1');
+  perform prueba('septiembre sin excluir: 4 borradas, 1 conservada (servicio añadido)', (r->>'borradas')||'/'||(r->>'conservadas'), '4/1');
   perform prueba('4310 sigue con sus 6 operaciones y su servicio', (select count(*) from operaciones_neumaticos where intervencion_id=v4310) + (select count(*) from tc_intervencion_servicios where intervencion_id=v4310), 7::bigint);
-  perform prueba('4508 y las del 2x2 ya no están', (select count(*) from tc_intervenciones where origen_doc in ('B2_26/4508|9005KMR','B2_26/0591|0591JGV','B2_26/0002|0591JGV')), 0::bigint);
+  perform prueba('4508 y las del 2x2 ya no están', (select count(*) from tc_intervenciones where origen_doc in ('B2_26/4508|9005KMR','B2_26/0591|0591JGV','B2_26/0002|0591JGV','B2_26/0003|0591JGV')), 0::bigint);
   perform prueba('ninguna operación huérfana', (select count(*) from operaciones_neumaticos where intervencion_id is null), 0::bigint);
   -- Y deshacer con exclusión explícita no la vuelve a tocar.
   r := tc_deshacer_importacion(l, array[v4310], false);

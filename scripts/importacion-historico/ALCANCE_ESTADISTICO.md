@@ -69,8 +69,9 @@ por vehículo y por mes**, y **con qué servicios**. Sí.
   albarán no dice cuándo se desmontó ni con qué km. Solo hay km del vehículo
   en el momento del montaje (43 de 48 en pruebas) y ningún km de desmontaje.
   Calcular «km por goma» exigiría emparejar montajes sucesivos en la misma
-  posición del mismo vehículo, y la posición solo se conoce deducida en 2 y 4
-  nuevas y nunca en usadas, recauchutadas ni 6 nuevas: no es fiable.
+  posición del mismo vehículo, y la posición solo se conoce **deducida** (2, 4
+  o 6 nuevas de una referencia, con plano compatible) y nunca en usadas ni
+  recauchutadas: no es fiable.
 - **Trazabilidad de stock, coste de compra, profundidades, presiones**: no;
   no se tocan `movimientos_stock`, `tc_neumaticos`, revisiones ni `km_actual`.
 - **Posición**: las operaciones con `posicion_fuente = 'desconocida'` no

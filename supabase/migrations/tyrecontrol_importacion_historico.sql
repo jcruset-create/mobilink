@@ -238,15 +238,27 @@ $$;
 -- Devuelve los ids de posición en orden visual, o nada (sin posición).
 create or replace function tc_imp_posiciones_norma(p_vehiculo uuid, p_nuevas int, p_una_referencia boolean)
 returns uuid[] language plpgsql stable security definer set search_path = public as $$
-declare v_tipo uuid; v_eje int; v_ids uuid[];
+declare v_tipo uuid; v_e1 uuid[]; v_e2 uuid[]; v_ids uuid[];
 begin
-  if not p_una_referencia or p_nuevas not in (2, 4) then return null; end if;
+  -- La norma de la casa, y solo con UNA referencia en el albarán:
+  --   2 nuevas → el eje 1 entero (direccional).
+  --   4 nuevas → el eje 2 entero (tracción).
+  --   6 nuevas → 2 al eje 1 y 4 al eje 2, es decir el vehículo calzado entero.
+  -- Si el plano del vehículo no encaja con esos números, no se deduce nada.
+  if not p_una_referencia or p_nuevas not in (2, 4, 6) then return null; end if;
   select tipo_vehiculo_id into v_tipo from tc_vehiculos where id = p_vehiculo;
   if v_tipo is null then return null; end if;
-  v_eje := case when p_nuevas = 2 then 1 else 2 end;
-  select array_agg(id order by orden_visual, codigo_posicion) into v_ids
+  select array_agg(id order by orden_visual, codigo_posicion) filter (where eje = 1),
+         array_agg(id order by orden_visual, codigo_posicion) filter (where eje = 2)
+    into v_e1, v_e2
     from tc_posiciones_vehiculo
-   where tipo_vehiculo_id = v_tipo and activo and eje = v_eje;
+   where tipo_vehiculo_id = v_tipo and activo;
+  v_ids := case p_nuevas
+             when 2 then v_e1
+             when 4 then v_e2
+             else case when coalesce(array_length(v_e1, 1), 0) = 2 and coalesce(array_length(v_e2, 1), 0) = 4
+                       then v_e1 || v_e2 end
+           end;
   if coalesce(array_length(v_ids, 1), 0) <> p_nuevas then return null; end if;
   return v_ids;
 end $$;

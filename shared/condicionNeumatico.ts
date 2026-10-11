@@ -45,7 +45,7 @@ export interface ResumenMontajes {
   posicionDeducida: number;
 }
 
-/** ¿La posición se dedujo (regla 2 nuevas → eje 1, 4 → eje 2) en vez de registrarse? */
+/** ¿La posición se dedujo (regla 2 nuevas → eje 1, 4 → eje 2, 6 → 2 al eje 1 y 4 al eje 2) en vez de registrarse? */
 export function esPosicionDeducida(o: OperacionConCondicion): boolean {
   return tienePosicion(o) && o.posicion_fuente === "deducida";
 }
