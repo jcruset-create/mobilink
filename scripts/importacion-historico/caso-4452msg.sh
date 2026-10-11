@@ -72,37 +72,77 @@ select estado, count(*) from tc_reconstruccion_montajes where vehiculo_id='$VEH'
 SQL
 
 echo
-echo "── 4. Se aplica la evidencia de las OR ────────────────────────────────"
-# OR B2_26/1736 (25/04) y B2_26/3121 (27/07): las USADAS van a 7 y 10.
-# OR B2_26/4167 (01/10): la USADA va a 7.
+echo "── 4. Se aplica la evidencia de las CINCO OR, completa ────────────────"
+# Lo que dice cada OR, con su referencia. Las posiciones de la OR (1,2 /
+# 3,4,5,6 / 7,10) se mapean a los códigos del plano. Se aplican TODAS, no
+# solo las de los usados: las OR documentan también dónde fueron las nuevas.
+#
+#   OR B2_26/24   · alb B2_26/9    · nuevas 1,2        · PERM en 7 y 10
+#   OR B2_26/1736 · alb B2_26/1922 · nuevas 1,2        · usadas 7,10
+#   OR B2_26/2377 · alb B2_26/2679 · nuevas 3,4,5,6
+#   OR B2_26/3121 · alb B2_26/3580 · nuevas 1,2        · usadas 7,10
+#   OR B2_26/4167 · alb B2_26/4708 · usada 7
 PSQL -d "$DB" -q <<SQL
-with usadas as (
-  select o.id, i.origen_doc,
-         row_number() over (partition by o.intervencion_id order by o.origen_linea) n
-    from operaciones_neumaticos o join tc_intervenciones i on i.id=o.intervencion_id
-   where o.vehiculo_id='$VEH' and o.importacion_lote_id is not null
-     and o.tipo_operacion='montaje' and o.condicion='usada'
+create temp table _or (doc text, orden int, condicion text, codigo text, ref text);
+insert into _or values
+  ('B2_26/9|4452MSG',    1,'nueva','E1_IZQ','B2_26/24'),   ('B2_26/9|4452MSG',    2,'nueva','E1_DER','B2_26/24'),
+  ('B2_26/1922|4452MSG', 1,'nueva','E1_IZQ','B2_26/1736'), ('B2_26/1922|4452MSG', 2,'nueva','E1_DER','B2_26/1736'),
+  ('B2_26/1922|4452MSG', 1,'usada','E3_IZQ','B2_26/1736'), ('B2_26/1922|4452MSG', 2,'usada','E3_DER','B2_26/1736'),
+  ('B2_26/2679|4452MSG', 1,'nueva','E2_IZQ_EXT','B2_26/2377'), ('B2_26/2679|4452MSG', 2,'nueva','E2_IZQ_INT','B2_26/2377'),
+  ('B2_26/2679|4452MSG', 3,'nueva','E2_DER_INT','B2_26/2377'), ('B2_26/2679|4452MSG', 4,'nueva','E2_DER_EXT','B2_26/2377'),
+  ('B2_26/3580|4452MSG', 1,'nueva','E1_IZQ','B2_26/3121'), ('B2_26/3580|4452MSG', 2,'nueva','E1_DER','B2_26/3121'),
+  ('B2_26/3580|4452MSG', 1,'usada','E3_IZQ','B2_26/3121'), ('B2_26/3580|4452MSG', 2,'usada','E3_DER','B2_26/3121'),
+  ('B2_26/4708|4452MSG', 1,'usada','E3_IZQ','B2_26/4167');
+
+with entradas as (
+  select o.id, i.origen_doc doc, o.condicion,
+         row_number() over (partition by o.intervencion_id, o.condicion order by o.origen_linea) n
+    from operaciones_neumaticos o join tc_intervenciones i on i.id = o.intervencion_id
+   where o.vehiculo_id = '$VEH' and o.importacion_lote_id is not null
+     and o.tipo_operacion = 'montaje' and coalesce(o.is_anulada,false) = false
 ),
 destino as (
-  select u.id, (select pv.id from tc_posiciones_vehiculo pv
-                 where pv.tipo_vehiculo_id='$TIPO'
-                   and pv.codigo_posicion = case when u.n = 1 then 'E3_IZQ' else 'E3_DER' end) pos
-    from usadas u
+  select e.id, pv.id pos, v.ref
+    from entradas e join _or v on v.doc = e.doc and v.condicion = e.condicion and v.orden = e.n
+    join tc_posiciones_vehiculo pv on pv.tipo_vehiculo_id = '$TIPO' and pv.codigo_posicion = v.codigo
 )
-update operaciones_neumaticos o set posicion_destino_id = d.pos, posicion_fuente = 'indicada', updated_at = now()
+update operaciones_neumaticos o
+   set posicion_destino_id = d.pos, posicion_fuente = 'indicada',
+       -- La referencia de la OR viaja con el dato, en la convención de la casa.
+       observaciones = trim(both ' ' from coalesce(o.observaciones,'') || ' [OR ' || d.ref || ']'),
+       updated_at = now()
   from destino d where o.id = d.id;
--- La salida hereda la posición de su entrada.
-update operaciones_neumaticos s set posicion_origen_id = e.posicion_destino_id, posicion_fuente = 'indicada', updated_at = now()
+
+-- La salida hereda la posición y la referencia de su entrada.
+update operaciones_neumaticos s
+   set posicion_origen_id = e.posicion_destino_id, posicion_fuente = 'indicada',
+       observaciones = trim(both ' ' from coalesce(s.observaciones,'') || ' ' ||
+         coalesce(substring(e.observaciones from '\[OR [^]]+\]'), '')),
+       updated_at = now()
   from operaciones_neumaticos e
- where s.grupo_sustitucion = e.grupo_sustitucion and s.tipo_operacion='desmontaje' and e.tipo_operacion='montaje'
-   and e.vehiculo_id='$VEH' and e.posicion_fuente='indicada';
+ where s.grupo_sustitucion = e.grupo_sustitucion and s.tipo_operacion = 'desmontaje'
+   and e.tipo_operacion = 'montaje' and e.vehiculo_id = '$VEH' and e.posicion_fuente = 'indicada';
+
+-- La PERM del 02/01 afecta a 7 y 10. Se deja constancia SIN afirmar que se
+-- intercambien entre sí: la OR marca las posiciones, no el destino.
+update tc_intervenciones
+   set observaciones = trim(both ' ' from coalesce(observaciones,'')
+     || ' [OR B2_26/24 · PERM en las posiciones 7 y 10: movimiento documentado, destino no declarado]')
+ where origen_doc = 'B2_26/9|4452MSG';
+
 select tc_imp_reconstruir_vehiculo('$VEH');
 SQL
 PSQL -d "$DB" -qA -F' | ' <<SQL
-select coalesce(p.codigo_posicion,'—') pos, r.fecha_montaje, r.km_montaje, r.estado,
-       coalesce(r.fecha_desmontaje::text,'—') salida, coalesce(r.km_desmontaje::text,'—') km_salida,
-       r.posicion_fuente, coalesce(r.continuidad_desde::text,'—') continuidad_desde
+select coalesce(p.codigo_posicion,'—') pos, r.clase, r.fecha_montaje, r.km_montaje, r.estado,
+       coalesce(r.fecha_desmontaje::text,'—') salida,
+       case when r.km_desmontaje_conocido then (r.km_desmontaje - r.km_montaje)::text else 'desconocido' end recorrido,
+       r.posicion_fuente, r.nivel
   from tc_reconstruccion_montajes r left join tc_posiciones_vehiculo p on p.id=r.posicion_id
  where r.vehiculo_id='$VEH' order by r.fecha_montaje, p.orden_visual;
-select estado, count(*) from tc_reconstruccion_montajes where vehiculo_id='$VEH' group by 1 order by 1;
+select estado, clase, count(*) from tc_reconstruccion_montajes where vehiculo_id='$VEH' group by 1,2 order by 1,2;
+select posicion_fuente, count(*) from operaciones_neumaticos
+ where vehiculo_id='$VEH' and importacion_lote_id is not null and tipo_operacion='montaje' group by 1;
+select i.origen_doc, substring(o.observaciones from '\[OR [^]]+\]') or_ref, count(*)
+  from operaciones_neumaticos o join tc_intervenciones i on i.id=o.intervencion_id
+ where o.vehiculo_id='$VEH' and o.observaciones like '%[OR %' group by 1,2 order by 1;
 SQL

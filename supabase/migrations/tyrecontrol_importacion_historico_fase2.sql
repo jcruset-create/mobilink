@@ -118,6 +118,15 @@ create table if not exists tc_reconstruccion_montajes (
   -- Certezas
   estado                 text not null default 'abierto'
                          check (estado in ('abierto','cerrado','interrumpido')),
+  -- Qué es este intervalo:
+  --   'unidad'    → hay una goma identificada (neumatico_id) y su recorrido
+  --                 puede estimarse para ESA unidad.
+  --   'ocupacion' → sabemos que esa POSICIÓN estuvo calzada entre dos fechas,
+  --                 pero no qué goma la ocupaba. No es el recorrido de ningún
+  --                 neumático: no se le pone ficha ficticia y la referencia de
+  --                 la unidad histórica es su operación de entrada.
+  clase                  text not null default 'ocupacion'
+                         check (clase in ('unidad','ocupacion')),
   nivel                  text not null default 'estimado'
                          check (nivel in ('confirmado','estimado')),
   posicion_fuente        text,
@@ -137,6 +146,13 @@ comment on column tc_reconstruccion_montajes.estado is
   'abierto = sin cierre registrado · cerrado = se sabe cuándo salió · interrumpido = un montaje sin posición rompió la continuidad y no se puede seguir atribuyendo recorrido.';
 comment on column tc_reconstruccion_montajes.km_montaje_conocido is
   'Falso = kilómetros DESCONOCIDOS. Nunca se interpretan como cero.';
+
+alter table tc_reconstruccion_montajes add column if not exists clase text not null default 'ocupacion';
+do $$ begin
+  alter table tc_reconstruccion_montajes add constraint ck_recons_clase check (clase in ('unidad','ocupacion'));
+exception when duplicate_object then null; end $$;
+comment on column tc_reconstruccion_montajes.clase is
+  'unidad = hay goma identificada y su recorrido puede estimarse. ocupacion = sabemos que la posición estuvo calzada, no qué goma: no es el rendimiento de ningún neumático.';
 
 alter table tc_reconstruccion_montajes enable row level security;
 alter table tc_importacion_eventos enable row level security;
@@ -260,32 +276,32 @@ begin
   return jsonb_build_object('neumaticos', v_neus, 'salidas', v_sals);
 end $$;
 
--- ── 6bis. Ruedas movidas sin montar goma ───────────────────────────────────
+-- ── 6bis. Desfase de mano de obra de ruedas ────────────────────────────────
 --
--- Un albarán que cobra más «quitar y poner rueda» que gomas monta delata un
--- movimiento que el Excel no describe: una permuta, una rueda retirada para
--- llegar a otra… Las OR del taller sí lo dicen («PERMUTAR»), pero el Excel
--- no, y mientras no esté la OR hay que darlo por desconocido.
-create or replace function tc_imp_ruedas_sin_goma(p_vehiculo uuid)
-returns table(fecha date, origen_doc text, ruedas numeric)
+-- Un albarán que cobra más «quitar y poner rueda» que gomas monta puede
+-- esconder trabajo adicional (una permuta, una rueda retirada para llegar a
+-- otra, un reapriete facturado aparte). NO lo demuestra, y desde luego no
+-- dice cuántas ruedas se movieron ni cuáles: la mano de obra se cobra por
+-- criterios de taller, no por movimientos de goma.
+--
+-- Por eso esto es un AVISO y nada más: no crea movimientos, no inventa
+-- posiciones y NO interrumpe ningún intervalo. Lo que sí interrumpe la
+-- continuidad es un montaje real sin posición, o un movimiento explícito
+-- cuya ubicación no se pueda determinar.
+create or replace function tc_imp_desfase_mano_obra(p_vehiculo uuid)
+returns table(fecha date, origen_doc text)
 language sql stable security definer set search_path = public as $$
-  select i.fecha, i.origen_doc,
-         coalesce((select sum(s.cantidad) from tc_intervencion_servicios s
-                    where s.intervencion_id = i.id and s.servicio = 'quitar_poner_rueda'), 0)
-         - (select count(*) from operaciones_neumaticos o
-             where o.intervencion_id = i.id and o.tipo_operacion = 'montaje'
-               and coalesce(o.is_anulada, false) = false) as ruedas
+  select i.fecha, i.origen_doc
     from tc_intervenciones i
    where i.vehiculo_id = p_vehiculo and i.importacion_lote_id is not null
-   group by i.id, i.fecha, i.origen_doc
-  having coalesce((select sum(s.cantidad) from tc_intervencion_servicios s
+     and coalesce((select sum(s.cantidad) from tc_intervencion_servicios s
                     where s.intervencion_id = i.id and s.servicio = 'quitar_poner_rueda'), 0)
          > (select count(*) from operaciones_neumaticos o
              where o.intervencion_id = i.id and o.tipo_operacion = 'montaje'
                and coalesce(o.is_anulada, false) = false);
 $$;
-revoke all on function tc_imp_ruedas_sin_goma(uuid) from public, anon;
-grant execute on function tc_imp_ruedas_sin_goma(uuid) to authenticated, service_role;
+revoke all on function tc_imp_desfase_mano_obra(uuid) from public, anon;
+grant execute on function tc_imp_desfase_mano_obra(uuid) to authenticated, service_role;
 
 -- ── 7. Reconstruir la cronología de un vehículo ─────────────────────────────
 --
@@ -298,10 +314,9 @@ grant execute on function tc_imp_ruedas_sin_goma(uuid) to authenticated, service
 --   · Un montaje SIN POSICIÓN no abre ocupación —no sabemos dónde fue— y
 --     rompe la continuidad de lo que estuviera abierto: a partir de esa fecha
 --     no se atribuye recorrido.
---   · RUEDAS MOVIDAS SIN GOMA: si un albarán cobra más «quitar y poner
---     rueda» que gomas monta, alguien movió ruedas sin cambiar goma (una
---     permuta, por ejemplo). El Excel no dice cuáles, así que a partir de esa
---     fecha la continuidad tampoco está respaldada.
+--   · DESFASE DE MANO DE OBRA: si un albarán cobra más «quitar y poner
+--     rueda» que gomas monta, puede haber trabajo adicional. Es un AVISO
+--     para revisar, no un movimiento: no interrumpe nada ni cuenta ruedas.
 --   · Kilómetros ausentes o no crecientes → DESCONOCIDOS, nunca cero.
 --   · El último intervalo de cada posición queda ABIERTO. No se cierra contra
 --     tc_montajes_actuales.
@@ -362,18 +377,14 @@ begin
              and x.posicion_destino_id is null
              and x.fecha_operacion > o.fecha_montaje and x.fecha_operacion <= e.fecha_operacion
              and xi.origen_doc <> e.doc)
-        or exists (
-          select 1 from tc_imp_ruedas_sin_goma(p_vehiculo) g
-           where g.fecha > o.fecha_montaje and g.fecha <= e.fecha_operacion and g.origen_doc <> e.doc);
-      v_desde := coalesce(o.continuidad_desde, least(
-        (select min(x.fecha_operacion) from operaciones_neumaticos x join tc_intervenciones xi on xi.id = x.intervencion_id
+        ;   -- el desfase de mano de obra NO rompe la cadena: es solo un aviso
+      v_desde := coalesce(o.continuidad_desde, (
+        select min(x.fecha_operacion) from operaciones_neumaticos x join tc_intervenciones xi on xi.id = x.intervencion_id
           where x.vehiculo_id = p_vehiculo and x.importacion_lote_id is not null
             and x.tipo_operacion = 'montaje' and coalesce(x.is_anulada, false) = false
             and x.posicion_destino_id is null
             and x.fecha_operacion > o.fecha_montaje and x.fecha_operacion <= e.fecha_operacion
-            and xi.origen_doc <> e.doc),
-        (select min(g.fecha) from tc_imp_ruedas_sin_goma(p_vehiculo) g
-          where g.fecha > o.fecha_montaje and g.fecha <= e.fecha_operacion and g.origen_doc <> e.doc)));
+            and xi.origen_doc <> e.doc));
 
       -- Quién salió: respaldada solo si su ficha la identificó una persona.
       v_ident := case
@@ -436,40 +447,33 @@ begin
       empresa_id, vehiculo_id, posicion_id, neumatico_id,
       fecha_montaje, km_montaje, km_montaje_conocido,
       lote_montaje_id, origen_doc_montaje, operacion_entrada_id,
-      estado, nivel, posicion_fuente, revisar, motivo_revision)
+      estado, nivel, clase, posicion_fuente, revisar, motivo_revision)
     values (
       e.empresa_id, p_vehiculo, e.pos, e.neumatico_id,
       e.fecha_operacion, e.km_vehiculo, e.km_vehiculo is not null,
       e.importacion_lote_id, e.doc, e.id,
-      'abierto', 'estimado', e.posicion_fuente,
+      -- Sin ficha no es el intervalo de una goma: es la ocupación de una
+      -- posición. La referencia de la unidad es operacion_entrada_id.
+      'abierto', 'estimado', case when e.neumatico_id is null then 'ocupacion' else 'unidad' end,
+      e.posicion_fuente,
       e.neumatico_id is null,
-      case when e.neumatico_id is null then 'Unidad sin ficha: usada o recauchutada pendiente de identificar' end);
+      case when e.neumatico_id is null then 'Ocupación de la posición sin goma identificada: usada o recauchutada pendiente de identificar' end);
     v_n := v_n + 1;
   end loop;
 
-  -- Ruedas movidas sin goma: lo que siguiera abierto antes de ese día deja de
-  -- tener la continuidad respaldada. No sabemos QUÉ ruedas se movieron, así
-  -- que no se adivina ninguna: se marca y se revisa.
-  for ev in select * from tc_imp_ruedas_sin_goma(p_vehiculo) order by fecha loop
-    -- Lo que ya estaba puesto antes de ese día: pudo moverse. Interrumpido.
-    update tc_reconstruccion_montajes
-       set estado = 'interrumpido',
-           continuidad_desde = coalesce(continuidad_desde, ev.fecha),
-           revisar = true,
-           motivo_revision = coalesce(motivo_revision || ' · ', '')
-             || 'Continuidad desconocida desde ' || to_char(ev.fecha, 'DD/MM/YYYY') || ': el albarán '
-             || coalesce(ev.origen_doc, '—') || ' cobra ' || ev.ruedas
-             || ' rueda(s) movidas sin montar goma (posible permuta)'
-     where vehiculo_id = p_vehiculo and estado = 'abierto' and fecha_montaje < ev.fecha;
-    -- Lo que se montó EN ese mismo albarán no se interrumpe —acaba de
-    -- ponerse— pero queda señalado: ese día se movió algo más que no consta.
+  -- Desfase de mano de obra: un aviso, no un movimiento. No cambia el estado
+  -- de ningún intervalo ni afirma cuántas ruedas se tocaron.
+  for ev in select * from tc_imp_desfase_mano_obra(p_vehiculo) order by fecha loop
     update tc_reconstruccion_montajes
        set revisar = true,
            motivo_revision = coalesce(motivo_revision || ' · ', '')
-             || 'Ese mismo día el albarán ' || coalesce(ev.origen_doc, '—') || ' movió '
-             || ev.ruedas || ' rueda(s) sin montar goma: puede haber cambiado algo más de sitio'
-     where vehiculo_id = p_vehiculo and fecha_montaje = ev.fecha
-       and origen_doc_montaje is not distinct from ev.origen_doc;
+             || 'Posible trabajo adicional de ruedas el ' || to_char(ev.fecha, 'DD/MM/YYYY')
+             || ' (albarán ' || coalesce(ev.origen_doc, '—')
+             || '): el albarán cobra más mano de obra de ruedas que gomas monta, sin decir posiciones ni movimiento'
+     where vehiculo_id = p_vehiculo
+       and (fecha_montaje = ev.fecha            -- lo que se montó ese día
+            or fecha_desmontaje = ev.fecha      -- y lo que se retiró ese día
+            or (estado = 'abierto' and fecha_montaje < ev.fecha));
   end loop;
   return v_n;
 end $$;

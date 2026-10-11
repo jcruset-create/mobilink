@@ -3626,6 +3626,11 @@ export async function identificarUnidad(
 
 export interface IntervaloReconstruido {
   id: string; vehiculo_id: string; posicion_id: string | null; neumatico_id: string | null;
+  /** unidad = hay goma identificada; ocupacion = sabemos que la posición
+   *  estuvo calzada, no qué goma. Una ocupación NO es el recorrido de un
+   *  neumático. */
+  clase: "unidad" | "ocupacion";
+  operacion_entrada_id: string | null;
   fecha_montaje: string; km_montaje: number | null; km_montaje_conocido: boolean;
   fecha_desmontaje: string | null; km_desmontaje: number | null; km_desmontaje_conocido: boolean;
   estado: "abierto" | "cerrado" | "interrumpido"; nivel: "confirmado" | "estimado";

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones, listarIntervenciones, imagenChasisDeMarca, generarPosicionesDeTipo, cotejarPlanoDeTipo, type CotejoPlano } from "../services/data";
+import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones, listarIntervenciones, listarIntervalosReconstruidos, imagenChasisDeMarca, generarPosicionesDeTipo, cotejarPlanoDeTipo, type CotejoPlano, type IntervaloReconstruido } from "../services/data";
 import type { Intervencion } from "../services/data";
 import { resumenMontajes, textoPorCondicion } from "../../../../shared/condicionNeumatico";
 import { esHistoricoAlbaran, etiquetaHistorico, textoNeumaticoHistorico, textoPosicionHistorica, textoRetirado } from "../../../../shared/historicoAlbaran";
@@ -61,6 +61,7 @@ export default function VehiculoDetalle() {
   const [fichaDetalle, setFichaDetalle] = useState<RevisionDetalle[]>([]);
   const [cargandoFicha, setCargandoFicha] = useState(false);
   const [operaciones, setOperaciones] = useState<OperacionNeumatico[]>([]);
+  const [intervalos, setIntervalos] = useState<IntervaloReconstruido[]>([]);
   const [modalOps, setModalOps] = useState(false);
   const [filtroOps, setFiltroOps] = useState("");
   const [intervenciones, setIntervenciones] = useState<Intervencion[]>([]);
@@ -110,6 +111,7 @@ export default function VehiculoDetalle() {
     setEjes(veh?.medidas_por_eje ? await listarEjesVehiculo(id) : []);
     setRevisiones(await listarRevisiones(id));
     setOperaciones(await listarOperaciones({ vehiculoId: id }).catch(() => []));
+    setIntervalos(await listarIntervalosReconstruidos(id).catch(() => []));
     setIntervenciones(await listarIntervenciones(id).catch(() => []));
     setImagenMarca(
       await imagenChasisDeMarca(veh?.config_ejes_id, (veh as any)?.marca_id, veh?.marca).catch(() => null),
@@ -454,6 +456,60 @@ export default function VehiculoDetalle() {
           </div>
         )}
       </div>
+
+      {/* Ocupación reconstruida del histórico. NO es rendimiento confirmado:
+          vive en su propia tabla y no alimenta los informes de siempre. */}
+      {intervalos.length > 0 && (
+        <div className="mt-3 rounded-lg bg-slate-800 p-3">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <span className="text-[11px] font-bold uppercase text-slate-400">Ocupación reconstruida del histórico ({intervalos.length})</span>
+            <span className="text-[11px] text-slate-500">
+              Reconstruida de los albaranes importados. No es rendimiento confirmado y no suma en los informes.
+            </span>
+          </div>
+          <TableWrap>
+            <table className="min-w-full text-sm">
+              <thead><tr>
+                <th className={thCls}>Posición</th><th className={thCls}>Qué es</th><th className={thCls}>Montaje</th>
+                <th className={thCls}>Salida</th><th className={thCls}>Recorrido</th><th className={thCls}>Estado</th>
+              </tr></thead>
+              <tbody>
+                {intervalos.map((r) => (
+                  <tr key={r.id} className="border-t border-slate-700">
+                    <td className={tdCls}>
+                      {r.posicion?.codigo_posicion ?? "—"}
+                      {r.posicion_fuente && <span className="ml-1 text-[11px] text-slate-500">({r.posicion_fuente})</span>}
+                    </td>
+                    <td className={tdCls}>
+                      {r.clase === "unidad" ? (
+                        <span title="Hay una goma identificada: su recorrido puede estimarse">
+                          {r.neumatico?.numero_interno ?? "unidad"}
+                        </span>
+                      ) : (
+                        <span className="text-slate-400" title="Sabemos que la posición estuvo calzada, no qué goma: no es el recorrido de ningún neumático">
+                          ocupación de la posición
+                        </span>
+                      )}
+                    </td>
+                    <td className={tdCls}>{r.fecha_montaje}{r.km_montaje_conocido ? ` · ${r.km_montaje} km` : " · km desconocidos"}</td>
+                    <td className={tdCls}>{r.fecha_desmontaje ?? "—"}{r.fecha_desmontaje && !r.km_desmontaje_conocido ? " · km desconocidos" : ""}</td>
+                    <td className={tdCls}>
+                      {r.km_montaje_conocido && r.km_desmontaje_conocido && r.km_montaje != null && r.km_desmontaje != null
+                        ? <span className="text-slate-200">{r.km_desmontaje - r.km_montaje} km <span className="text-[11px] text-slate-500">({r.nivel})</span></span>
+                        : <span className="text-slate-500">desconocido</span>}
+                    </td>
+                    <td className={tdCls}>
+                      <span className={r.estado === "interrumpido" ? "text-amber-300" : "text-slate-300"}>{r.estado}</span>
+                      {r.continuidad_desde && <div className="text-[11px] text-amber-300/80">continuidad desconocida desde {r.continuidad_desde}</div>}
+                      {r.motivo_revision && <div className="text-[11px] text-slate-500">{r.motivo_revision}</div>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </TableWrap>
+        </div>
+      )}
 
       {/* Operaciones del vehículo: informe resumido + histórico */}
       <div className="mt-3 rounded-lg bg-slate-800 p-3">

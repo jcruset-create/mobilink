@@ -812,55 +812,136 @@ do $$ declare r jsonb; begin
       where i.vehiculo_id='00000000-0000-0000-0000-0000000000c3' and o.condicion='nueva' and o.neumatico_id is not null), 3::bigint);
 end $$;
 
--- ── 24. Ruedas movidas sin montar goma (la permuta que el Excel no dice) ───
--- Un albarán que cobra 4 «quitar y poner rueda» y monta 2 gomas delata que se
--- movieron 2 ruedas más. No sabemos cuáles: la continuidad deja de estar
--- respaldada desde esa fecha.
-do $$ declare r jsonb; v uuid; begin
+-- ── 24. Desfase de mano de obra: AVISO, no movimiento ─────────────────────
+-- Cobrar 4 «quitar y poner rueda» montando 2 gomas NO demuestra una permuta
+-- ni identifica ruedas movidas. Avisa, y nada más: no interrumpe la cadena.
+do $$ declare r jsonb; begin
   insert into tc_vehiculos (id, empresa_id, tipo_vehiculo_id, matricula, km_actual)
     values ('00000000-0000-0000-0000-0000000000c4','00000000-0000-0000-0000-0000000000e1','00000000-0000-0000-0000-00000000000a','PERMUTA1', 999999)
     on conflict do nothing;
-  -- Enero: 2 nuevas al eje 1, sin ruedas de más.
   r := tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes',
         lote('2026-01', alb_fk('B2_26/P1','PERMUTA1',2,'2026-01-10',100000)), false);
-  perform prueba('permuta: de entrada, las dos ocupaciones están abiertas',
-    (select count(*) from tc_reconstruccion_montajes where vehiculo_id='00000000-0000-0000-0000-0000000000c4' and estado='abierto'), 2::bigint);
-
-  -- Marzo: 2 nuevas al eje 1 pero cobrando 4 quitar y poner → 2 ruedas movidas
-  -- sin goma. Cierra el eje 1… y deja constancia de que hubo más movimiento.
   r := tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes',
         lote('2026-03', alb_fk('B2_26/P2','PERMUTA1',2,'2026-03-10',120000)
           || jsonb_build_object('servicios', jsonb_build_array(jsonb_build_object('servicio','quitar_poner_rueda','cantidad',4)))), false);
-  perform prueba('permuta: el albarán delata 2 ruedas movidas sin goma',
-    (select ruedas::int from tc_imp_ruedas_sin_goma('00000000-0000-0000-0000-0000000000c4')), 2);
-  -- Lo que se monta ESE día no se interrumpe (acaba de ponerse), pero queda
-  -- señalado: ese día se movió algo más que el albarán no describe.
-  perform prueba('permuta: lo montado ese día sigue abierto pero señalado',
-    (select bool_and(estado='abierto' and revisar and motivo_revision like '%sin montar goma%')
-       from tc_reconstruccion_montajes where vehiculo_id='00000000-0000-0000-0000-0000000000c4' and fecha_montaje='2026-03-10'), true);
-  perform prueba('permuta: lo que ya estaba puesto antes se interrumpe',
-    (select count(*) from tc_reconstruccion_montajes where vehiculo_id='00000000-0000-0000-0000-0000000000c4'
-       and estado='interrumpido' and continuidad_desde='2026-03-10'), 0::bigint);
-
-  -- Mayo: otra vez el eje 1. El intervalo de marzo NO se cierra con recorrido:
-  -- entre medias hubo ruedas movidas que no sabemos cuáles.
-  r := tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes',
-        lote('2026-05', alb_fk('B2_26/P3','PERMUTA1',2,'2026-05-10',140000)), false);
-  perform prueba('permuta: el tramo de marzo se cierra en mayo, señalado para revisar',
-    (select bool_and(estado='cerrado' and km_desmontaje=140000 and revisar) from tc_reconstruccion_montajes
+  perform prueba('desfase: se detecta el albarán con más mano de obra que gomas',
+    (select origen_doc from tc_imp_desfase_mano_obra('00000000-0000-0000-0000-0000000000c4')), 'B2_26/P2|PERMUTA1');
+  perform prueba('desfase: NO interrumpe nada; el eje 1 de enero se cierra con sus kilómetros',
+    (select estado||'/'||km_desmontaje from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-0000000000c4' and fecha_montaje='2026-01-10' limit 1), 'cerrado/120000');
+  perform prueba('desfase: lo montado ese día sigue ABIERTO',
+    (select bool_and(estado='abierto') from tc_reconstruccion_montajes
       where vehiculo_id='00000000-0000-0000-0000-0000000000c4' and fecha_montaje='2026-03-10'), true);
-  perform prueba('permuta: el tramo de enero sí se cerró (la permuta fue después)',
-    (select bool_and(estado='cerrado' and km_desmontaje=120000) from tc_reconstruccion_montajes
-      where vehiculo_id='00000000-0000-0000-0000-0000000000c4' and fecha_montaje='2026-01-10'), true);
-  perform prueba('permuta: la salida de mayo sí identifica (la permuta fue del albarán de marzo, no intermedia)',
-    (select bool_and(identidad_retirado='reconstruida') from operaciones_neumaticos o join tc_intervenciones i on i.id=o.intervencion_id
-      where i.origen_doc='B2_26/P3|PERMUTA1' and o.tipo_operacion='desmontaje'), true);
-  -- Y si la permuta ocurre en un albarán INTERMEDIO, sí rompe la cadena.
+  perform prueba('desfase: solo deja un aviso prudente, sin contar ruedas ni inventar movimientos',
+    (select bool_and(revisar and motivo_revision like '%Posible trabajo adicional de ruedas%'
+                     and motivo_revision not like '%permuta%' and motivo_revision not like '%rueda(s) movidas%')
+       from tc_reconstruccion_montajes where vehiculo_id='00000000-0000-0000-0000-0000000000c4'), true);
+  perform prueba('desfase: no crea ninguna operación de más',
+    (select count(*) from operaciones_neumaticos o join tc_intervenciones i on i.id=o.intervencion_id
+      where i.origen_doc='B2_26/P2|PERMUTA1'), 4::bigint);
+end $$;
+
+-- ── 25. Lo que SÍ interrumpe: un montaje real sin posición ────────────────
+do $$ declare r jsonb; begin
+  insert into tc_vehiculos (id, empresa_id, tipo_vehiculo_id, matricula, km_actual)
+    values ('00000000-0000-0000-0000-0000000000c5','00000000-0000-0000-0000-0000000000e1','00000000-0000-0000-0000-00000000000a','SINPOS01', 999999)
+    on conflict do nothing;
   r := tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes',
-        lote('2026-06', jsonb_build_object('origen_doc','B2_26/P4|PERMUTA1','documento','B2_26/P4','matricula','PERMUTA1',
-          'fecha','2026-06-10','km',150000,'huella_origen','hp4','operaciones','[]'::jsonb,
-          'servicios', jsonb_build_array(jsonb_build_object('servicio','quitar_poner_rueda','cantidad',2)), 'lineas','[]'::jsonb)), false);
-  perform prueba('permuta intermedia: el eje 1 de mayo queda interrumpido',
-    (select bool_and(estado='interrumpido' and continuidad_desde='2026-06-10') from tc_reconstruccion_montajes
-      where vehiculo_id='00000000-0000-0000-0000-0000000000c4' and fecha_montaje='2026-05-10'), true);
+        lote('2026-01', alb_fk('B2_26/Q1','SINPOS01',4,'2026-01-10',100000)), false);
+  r := tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes',
+        lote('2026-03', alb_fk('B2_26/Q2','SINPOS01',1,'2026-03-10',120000,'usada')), false);
+  perform prueba('montaje real sin posición: interrumpe el eje 2',
+    (select count(*) from tc_reconstruccion_montajes where vehiculo_id='00000000-0000-0000-0000-0000000000c5'
+       and estado='interrumpido' and continuidad_desde='2026-03-10'), 4::bigint);
+end $$;
+
+-- ── 26. Un movimiento con posición conocida no toca los demás ejes ────────
+do $$ declare r jsonb; op uuid; pos uuid; begin
+  insert into tc_vehiculos (id, empresa_id, tipo_vehiculo_id, matricula, km_actual)
+    values ('00000000-0000-0000-0000-0000000000c6','00000000-0000-0000-0000-0000000000e1','00000000-0000-0000-0000-00000000000a','CONPOS01', 999999)
+    on conflict do nothing;
+  r := tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes',
+        lote('2026-01', alb_fk('B2_26/R1','CONPOS01',4,'2026-01-10',100000)), false);
+  r := tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes',
+        lote('2026-03', alb_fk('B2_26/R2','CONPOS01',1,'2026-03-10',120000,'usada')), false);
+  -- La OR dice que esa usada fue al eje 1 izquierda.
+  select o.id into op from operaciones_neumaticos o join tc_intervenciones i on i.id=o.intervencion_id
+    where i.origen_doc='B2_26/R2|CONPOS01' and o.tipo_operacion='montaje';
+  select id into pos from tc_posiciones_vehiculo where tipo_vehiculo_id='00000000-0000-0000-0000-00000000000a' and codigo_posicion='E1_IZQ';
+  update operaciones_neumaticos set posicion_destino_id=pos, posicion_fuente='indicada' where id=op;
+  update operaciones_neumaticos set posicion_origen_id=pos, posicion_fuente='indicada'
+    where grupo_sustitucion=(select grupo_sustitucion from operaciones_neumaticos where id=op) and tipo_operacion='desmontaje';
+  perform tc_imp_reconstruir_vehiculo('00000000-0000-0000-0000-0000000000c6');
+  perform prueba('posición conocida: el eje 2 sigue abierto, sin interrumpir',
+    (select count(*) from tc_reconstruccion_montajes where vehiculo_id='00000000-0000-0000-0000-0000000000c6'
+       and estado='abierto' and posicion_fuente='deducida'), 4::bigint);
+  perform prueba('posición conocida: ningún intervalo interrumpido en ese vehículo',
+    (select count(*) from tc_reconstruccion_montajes where vehiculo_id='00000000-0000-0000-0000-0000000000c6' and estado='interrumpido'), 0::bigint);
+  perform prueba('posición conocida: el intervalo de la usada es OCUPACIÓN, no unidad',
+    (select clase||'/'||coalesce(neumatico_id::text,'sin ficha') from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-0000000000c6' and fecha_montaje='2026-03-10'), 'ocupacion/sin ficha');
+  perform prueba('posición conocida: la referencia de la unidad es su operación de entrada, sin ficha ficticia',
+    (select operacion_entrada_id = op from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-0000000000c6' and fecha_montaje='2026-03-10'), true);
+  perform prueba('las nuevas con ficha sí son intervalos de UNIDAD',
+    (select bool_and(clase='unidad' and neumatico_id is not null) from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-0000000000c6' and fecha_montaje='2026-01-10'), true);
+end $$;
+
+-- ── 27. Planos: la norma solo se aplica donde encaja ──────────────────────
+do $$ declare r jsonb; begin
+  -- 2x4x2 (camión de tres ejes, como el que enseñan las OR de 4452MSG)
+  insert into tc_tipos_vehiculo (id, nombre) values ('00000000-0000-0000-0000-0000000000d1','camion_2x4x2_pruebas') on conflict (id) do nothing;
+  insert into tc_posiciones_vehiculo (tipo_vehiculo_id, codigo_posicion, eje, lado, interior_exterior, orden_visual) values
+    ('00000000-0000-0000-0000-0000000000d1','E1_IZQ',1,'izq',null,1), ('00000000-0000-0000-0000-0000000000d1','E1_DER',1,'der',null,2),
+    ('00000000-0000-0000-0000-0000000000d1','E2_IZQ_EXT',2,'izq','ext',3), ('00000000-0000-0000-0000-0000000000d1','E2_IZQ_INT',2,'izq','int',4),
+    ('00000000-0000-0000-0000-0000000000d1','E2_DER_INT',2,'der','int',5), ('00000000-0000-0000-0000-0000000000d1','E2_DER_EXT',2,'der','ext',6),
+    ('00000000-0000-0000-0000-0000000000d1','E3_IZQ',3,'izq',null,7), ('00000000-0000-0000-0000-0000000000d1','E3_DER',3,'der',null,8)
+    on conflict do nothing;
+  -- 2x2x2: el eje 2 solo tiene 2 posiciones
+  insert into tc_tipos_vehiculo (id, nombre) values ('00000000-0000-0000-0000-0000000000d2','camion_2x2x2_pruebas') on conflict (id) do nothing;
+  insert into tc_posiciones_vehiculo (tipo_vehiculo_id, codigo_posicion, eje, lado, interior_exterior, orden_visual) values
+    ('00000000-0000-0000-0000-0000000000d2','E1_IZQ',1,'izq',null,1), ('00000000-0000-0000-0000-0000000000d2','E1_DER',1,'der',null,2),
+    ('00000000-0000-0000-0000-0000000000d2','E2_IZQ',2,'izq',null,3), ('00000000-0000-0000-0000-0000000000d2','E2_DER',2,'der',null,4),
+    ('00000000-0000-0000-0000-0000000000d2','E3_IZQ',3,'izq',null,5), ('00000000-0000-0000-0000-0000000000d2','E3_DER',3,'der',null,6)
+    on conflict do nothing;
+  -- Un tipo SIN plano
+  insert into tc_tipos_vehiculo (id, nombre) values ('00000000-0000-0000-0000-0000000000d3','sin_plano_pruebas') on conflict (id) do nothing;
+
+  insert into tc_vehiculos (id, empresa_id, tipo_vehiculo_id, matricula, km_actual) values
+    ('00000000-0000-0000-0000-0000000000e4','00000000-0000-0000-0000-0000000000e1','00000000-0000-0000-0000-0000000000d1','PLANO242', 1),
+    ('00000000-0000-0000-0000-0000000000e5','00000000-0000-0000-0000-0000000000e1','00000000-0000-0000-0000-0000000000d2','PLANO222', 1),
+    ('00000000-0000-0000-0000-0000000000e6','00000000-0000-0000-0000-0000000000e1','00000000-0000-0000-0000-0000000000d3','SINPLANO', 1)
+    on conflict do nothing;
+
+  r := tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes', lote('2026-08',
+        alb_fk('B2_26/T1','PLANO242',2,'2026-08-01',10000), alb_fk('B2_26/T2','PLANO242',4,'2026-08-02',10001),
+        alb_fk('B2_26/T3','PLANO242',6,'2026-08-03',10002),
+        alb_fk('B2_26/T4','PLANO222',2,'2026-08-04',10003), alb_fk('B2_26/T5','PLANO222',4,'2026-08-05',10004),
+        alb_fk('B2_26/T6','PLANO222',6,'2026-08-06',10005),
+        alb_fk('B2_26/T7','SINPLANO',2,'2026-08-07',10006)), false);
+  perform prueba('2x4x2: 2 nuevas → eje 1',
+    (select string_agg(p.codigo_posicion,',' order by p.codigo_posicion) from operaciones_neumaticos o
+       join tc_intervenciones i on i.id=o.intervencion_id join tc_posiciones_vehiculo p on p.id=o.posicion_destino_id
+      where i.origen_doc='B2_26/T1|PLANO242' and o.tipo_operacion='montaje'), 'E1_DER,E1_IZQ');
+  perform prueba('2x4x2: 4 nuevas → eje 2 (las cuatro gemelas)',
+    (select count(*) from operaciones_neumaticos o join tc_intervenciones i on i.id=o.intervencion_id
+       join tc_posiciones_vehiculo p on p.id=o.posicion_destino_id
+      where i.origen_doc='B2_26/T2|PLANO242' and p.eje=2), 4::bigint);
+  perform prueba('2x4x2: 6 nuevas → 2 al eje 1 y 4 al eje 2, nada al eje 3',
+    (select string_agg(distinct p.eje::text,',' order by p.eje::text) from operaciones_neumaticos o
+       join tc_intervenciones i on i.id=o.intervencion_id join tc_posiciones_vehiculo p on p.id=o.posicion_destino_id
+      where i.origen_doc='B2_26/T3|PLANO242' and o.tipo_operacion='montaje'), '1,2');
+  perform prueba('2x2x2: 2 nuevas → eje 1 (encaja)',
+    (select count(*) from operaciones_neumaticos o join tc_intervenciones i on i.id=o.intervencion_id
+      where i.origen_doc='B2_26/T4|PLANO222' and o.posicion_destino_id is not null), 2::bigint);
+  perform prueba('2x2x2: 4 nuevas → el eje 2 solo tiene 2: sin posición',
+    (select count(*) from operaciones_neumaticos o join tc_intervenciones i on i.id=o.intervencion_id
+      where i.origen_doc='B2_26/T5|PLANO222' and o.tipo_operacion='montaje' and o.posicion_fuente='desconocida'), 4::bigint);
+  perform prueba('2x2x2: 6 nuevas → el plano no es 2+4: sin posición',
+    (select count(*) from operaciones_neumaticos o join tc_intervenciones i on i.id=o.intervencion_id
+      where i.origen_doc='B2_26/T6|PLANO222' and o.tipo_operacion='montaje' and o.posicion_fuente='desconocida'), 6::bigint);
+  perform prueba('tipo sin plano: sin posición, pero se importa igual',
+    (select count(*) from operaciones_neumaticos o join tc_intervenciones i on i.id=o.intervencion_id
+      where i.origen_doc='B2_26/T7|SINPLANO' and o.tipo_operacion='montaje' and o.posicion_fuente='desconocida'), 2::bigint);
 end $$;
