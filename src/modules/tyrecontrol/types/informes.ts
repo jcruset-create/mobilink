@@ -111,6 +111,33 @@ export interface MontajesInforme {
   evolucion: { mes: string; n: number; historico: number; normal: number }[];
   por_posicion: { clase: "registrada" | "deducida" | "desconocida"; n: number }[];
   excluidas: { anuladas: number; correcciones: number; declaradas: number; no_completadas: number };
+  /** Cobertura de las medias de recorrido ESTIMADO del mismo periodo: sobre
+   *  cuántos intervalos salen y qué queda fuera. Una media sin esto no se
+   *  publica. Puede faltar si la base todavía no tiene la fase 3. */
+  recorridos_estimados?: CoberturaRecorridosInforme | null;
+}
+
+/** Lo que devuelve tc_informes_recorridos_estimados. Los motivos de exclusión
+ *  SE SOLAPAN: un intervalo puede tener varios, así que no se suman. Para
+ *  sumar están las combinaciones. */
+export interface CoberturaRecorridosInforme {
+  nivel: "estimado"; aviso: string;
+  periodo: { desde: string; hasta: string; origen: string };
+  poblacion: { intervalos: number; vehiculos: number; posiciones: number;
+               cerrados: number; abiertos: number; interrumpidos: number };
+  /** Una ficha creada por la importación que nadie ha identificado NO es una
+   *  unidad identificada: para las estadísticas es la ocupación de una
+   *  posición. Los tres grupos suman la población. */
+  identidad: { respaldada: number; reconstruida: number; sin_ficha: number; que_es: string };
+  incluidos: { n: number; identificadas: number; ocupaciones: number; aceptados_a_mano: number };
+  recorrido: Record<"unidad_identificada" | "ocupacion_de_posicion", {
+    n: number; media: number | null; mediana: number | null;
+    minimo: number | null; maximo: number | null; total_km: number | null; que_es: string }>;
+  excluidos: { n: number; motivos_se_solapan: boolean; nota: string;
+               motivos: { motivo: string; n: number }[];
+               combinaciones: { motivos: string[]; n: number }[] };
+  revision: { pendientes: number; aceptados: number; rechazados: number };
+  limite_km_dia: number | null;
 }
 
 export interface InventarioResumen {

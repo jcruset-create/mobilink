@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones, listarIntervenciones, listarIntervalosReconstruidos, imagenChasisDeMarca, generarPosicionesDeTipo, cotejarPlanoDeTipo, type CotejoPlano, type IntervaloReconstruido } from "../services/data";
+import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones, listarIntervenciones, listarIntervalosReconstruidos, revisarIntervalo, cargarCoberturaRecorridos, imagenChasisDeMarca, generarPosicionesDeTipo, cotejarPlanoDeTipo, type CotejoPlano, type IntervaloReconstruido, type CoberturaRecorridos } from "../services/data";
 import type { Intervencion } from "../services/data";
 import { resumenMontajes, textoPorCondicion } from "../../../../shared/condicionNeumatico";
+import { textoRecorrido, textoRitmo, textoMotivos, textoDecision, textoCobertura } from "../../../../shared/recorridoEstimado";
 import { esHistoricoAlbaran, etiquetaHistorico, textoNeumaticoHistorico, textoPosicionHistorica, textoRetirado } from "../../../../shared/historicoAlbaran";
 import type { MontajeActual, PosicionVehiculo, Vehiculo, TipoLlanta, VehiculoEje, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle, OperacionNeumatico } from "../types";
 import { ORIGEN_KM_LABELS, tipoLlantaLabel, presionTxt, TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS } from "../types";
@@ -62,6 +63,14 @@ export default function VehiculoDetalle() {
   const [cargandoFicha, setCargandoFicha] = useState(false);
   const [operaciones, setOperaciones] = useState<OperacionNeumatico[]>([]);
   const [intervalos, setIntervalos] = useState<IntervaloReconstruido[]>([]);
+  // Cobertura de las medias estimadas de este vehículo: ninguna media se
+  // enseña sin decir sobre cuántos intervalos sale.
+  const [cobertura, setCobertura] = useState<CoberturaRecorridos | null>(null);
+  // Revisión de un intervalo: el motivo es obligatorio.
+  const [revisando, setRevisando] = useState<{ iv: IntervaloReconstruido; decision: "aceptado" | "rechazado" } | null>(null);
+  const [motivoRevision, setMotivoRevision] = useState("");
+  const [errorRevision, setErrorRevision] = useState<string | null>(null);
+  const [guardandoRevision, setGuardandoRevision] = useState(false);
   const [modalOps, setModalOps] = useState(false);
   const [filtroOps, setFiltroOps] = useState("");
   const [intervenciones, setIntervenciones] = useState<Intervencion[]>([]);
@@ -112,6 +121,7 @@ export default function VehiculoDetalle() {
     setRevisiones(await listarRevisiones(id));
     setOperaciones(await listarOperaciones({ vehiculoId: id }).catch(() => []));
     setIntervalos(await listarIntervalosReconstruidos(id).catch(() => []));
+    setCobertura(veh?.empresa_id ? await cargarCoberturaRecorridos(veh.empresa_id, null, null, id).catch(() => null) : null);
     setIntervenciones(await listarIntervenciones(id).catch(() => []));
     setImagenMarca(
       await imagenChasisDeMarca(veh?.config_ejes_id, (veh as any)?.marca_id, veh?.marca).catch(() => null),
@@ -458,7 +468,12 @@ export default function VehiculoDetalle() {
       </div>
 
       {/* Ocupación reconstruida del histórico. NO es rendimiento confirmado:
-          vive en su propia tabla y no alimenta los informes de siempre. */}
+          vive en su propia tabla y no alimenta los informes de siempre.
+          Las dos cosas que se separan aquí a propósito:
+            · la CLASIFICACIÓN de los kilómetros, que hace la base sola;
+            · la DECISIÓN humana de usar o no el intervalo en estadísticas.
+          Rechazar no borra kilómetros, y aceptar no convierte un estimado en
+          rendimiento confirmado. */}
       {intervalos.length > 0 && (
         <div className="mt-3 rounded-lg bg-slate-800 p-3">
           <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -467,14 +482,35 @@ export default function VehiculoDetalle() {
               Reconstruida de los albaranes importados. No es rendimiento confirmado y no suma en los informes.
             </span>
           </div>
+          {cobertura && (
+            <div className="mb-2 rounded-lg border border-slate-700 bg-slate-900/40 p-2 text-[11px] text-slate-400">
+              {textoCobertura(cobertura)}
+              {cobertura.recorrido.unidad_identificada.n > 0 && (
+                <div className="mt-1 text-slate-300">
+                  Media estimada de las gomas identificadas: {cobertura.recorrido.unidad_identificada.media} km
+                  <span className="text-slate-500"> ({cobertura.recorrido.unidad_identificada.n} intervalo(s))</span>
+                </div>
+              )}
+              {cobertura.recorrido.ocupacion_de_posicion.n > 0 && (
+                <div className="mt-1 text-slate-300">
+                  Media de las ocupaciones de posición: {cobertura.recorrido.ocupacion_de_posicion.media} km
+                  <span className="text-slate-500"> ({cobertura.recorrido.ocupacion_de_posicion.n} intervalo(s)) · {cobertura.recorrido.ocupacion_de_posicion.que_es}</span>
+                </div>
+              )}
+            </div>
+          )}
           <TableWrap>
             <table className="min-w-full text-sm">
               <thead><tr>
                 <th className={thCls}>Posición</th><th className={thCls}>Qué es</th><th className={thCls}>Montaje</th>
                 <th className={thCls}>Salida</th><th className={thCls}>Recorrido</th><th className={thCls}>Estado</th>
+                <th className={thCls}>Uso estadístico</th>
               </tr></thead>
               <tbody>
-                {intervalos.map((r) => (
+                {intervalos.map((r) => {
+                  const rec = textoRecorrido(r);
+                  const ritmo = textoRitmo(r);
+                  return (
                   <tr key={r.id} className="border-t border-slate-700">
                     <td className={tdCls}>
                       {r.posicion?.codigo_posicion ?? "—"}
@@ -497,27 +533,106 @@ export default function VehiculoDetalle() {
                       {r.fecha_desmontaje ? (r.km_desmontaje_conocido ? ` · ${r.km_desmontaje} km` : " · sin km") : ""}
                     </td>
                     <td className={tdCls}>
-                      {r.km_estado === "utilizables" && r.recorrido_km != null
-                        ? <span className="text-slate-200">{r.recorrido_km} km <span className="text-[11px] text-slate-500">({r.nivel})</span></span>
-                        : r.km_estado === "incompatibles"
-                        ? <span className="text-amber-300" title="Hay kilometraje en los dos extremos pero no da un recorrido válido">
-                            incompatible <span className="text-[11px] text-amber-300/70">({r.km_montaje} → {r.km_desmontaje})</span>
-                          </span>
-                        : r.km_estado === "ausentes"
-                        ? <span className="text-slate-500">ausentes</span>
-                        : <span className="text-slate-500">—</span>}
+                      <span className={rec.aviso ? "text-amber-300" : "text-slate-200"}>{rec.texto}</span>
+                      {ritmo && <div className="text-[11px] text-slate-500">{ritmo}</div>}
                     </td>
                     <td className={tdCls}>
                       <span className={r.estado === "interrumpido" ? "text-amber-300" : "text-slate-300"}>{r.estado}</span>
                       {r.continuidad_desde && <div className="text-[11px] text-amber-300/80">continuidad desconocida desde {r.continuidad_desde}</div>}
+                      {/* Un albarán bloqueado dentro del intervalo: no se ha
+                          importado nada de él, pero la cadena no está limpia. */}
+                      {r.continuidad_docs && r.continuidad_docs.length > 0 && (
+                        <div className="text-[11px] text-amber-300/80">
+                          posible montaje intermedio sin importar: {r.continuidad_docs.join(", ")}
+                        </div>
+                      )}
                       {r.motivo_revision && <div className="text-[11px] text-slate-500">{r.motivo_revision}</div>}
                     </td>
+                    <td className={tdCls}>
+                      <div className={r.en_medias ? "text-emerald-300" : "text-slate-400"}>
+                        {r.en_medias ? "entra en las medias" : "fuera de las medias"}
+                      </div>
+                      {!r.en_medias && r.motivos_exclusion && r.motivos_exclusion.length > 0 && (
+                        <div className="text-[11px] text-slate-500">{textoMotivos(r.motivos_exclusion)}</div>
+                      )}
+                      <div className="text-[11px] text-slate-500">{textoDecision(r)}</div>
+                      {!esCliente && (r.km_estado === "anomalos" || r.km_estado === "utilizables") && (
+                        <div className="mt-1 flex gap-1">
+                          <button
+                            onClick={() => { setRevisando({ iv: r, decision: "aceptado" }); setMotivoRevision(""); setErrorRevision(null); }}
+                            className="rounded border border-emerald-600/50 px-2 py-0.5 text-[11px] text-emerald-300 hover:bg-emerald-500/10"
+                          >Aceptar</button>
+                          <button
+                            onClick={() => { setRevisando({ iv: r, decision: "rechazado" }); setMotivoRevision(""); setErrorRevision(null); }}
+                            className="rounded border border-slate-600 px-2 py-0.5 text-[11px] text-slate-300 hover:bg-slate-700"
+                          >Rechazar</button>
+                        </div>
+                      )}
+                    </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </TableWrap>
         </div>
+      )}
+
+      {/* Aceptar o rechazar el uso estadístico de un intervalo. El motivo es
+          obligatorio: queda auditado con usuario y fecha, y si la evidencia
+          del intervalo cambia después, la decisión caduca y vuelve a pedir
+          revisión. */}
+      {revisando && (
+        <Modal
+          title={revisando.decision === "aceptado" ? "Aceptar el intervalo para estadísticas" : "Rechazar el intervalo para estadísticas"}
+          onClose={() => setRevisando(null)}
+        >
+          <div className="space-y-3 text-sm text-slate-300">
+            <div className="rounded-lg bg-slate-900/50 p-2 text-[12px]">
+              <div>
+                {revisando.iv.fecha_montaje} → {revisando.iv.fecha_desmontaje ?? "—"} ·{" "}
+                {revisando.iv.km_montaje ?? "—"} → {revisando.iv.km_desmontaje ?? "—"} km
+              </div>
+              <div className="text-slate-400">{textoRitmo(revisando.iv)}</div>
+              {revisando.iv.motivo_revision && <div className="mt-1 text-amber-300/80">{revisando.iv.motivo_revision}</div>}
+            </div>
+            <p className="text-[12px] text-slate-400">
+              {revisando.decision === "aceptado"
+                ? "Aceptar permite usar este recorrido como ESTIMADO. No lo convierte en rendimiento confirmado."
+                : "Rechazar lo deja fuera de las medias y de los rankings. Los kilómetros y el recorrido NO se borran ni cambian de clasificación."}
+            </p>
+            <label className="block">
+              <span className="text-[11px] uppercase text-slate-400">Motivo (obligatorio)</span>
+              <textarea
+                value={motivoRevision}
+                onChange={(e) => setMotivoRevision(e.target.value)}
+                rows={3}
+                className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 p-2 text-sm text-slate-100"
+                placeholder="Qué se ha comprobado y con quién"
+              />
+            </label>
+            {errorRevision && <div className="text-[12px] text-rose-300">{errorRevision}</div>}
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setRevisando(null)} className="rounded-lg border border-slate-600 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-700">Cancelar</button>
+              <button
+                disabled={guardandoRevision || motivoRevision.trim() === ""}
+                onClick={async () => {
+                  setGuardandoRevision(true); setErrorRevision(null);
+                  try {
+                    await revisarIntervalo(revisando.iv.id, revisando.decision, motivoRevision.trim());
+                    setRevisando(null);
+                    await cargar();
+                  } catch (e) {
+                    setErrorRevision(e instanceof Error ? e.message : "No se ha podido guardar la revisión");
+                  } finally {
+                    setGuardandoRevision(false);
+                  }
+                }}
+                className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+              >{guardandoRevision ? "Guardando…" : "Guardar"}</button>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {/* Operaciones del vehículo: informe resumido + histórico */}

@@ -6,6 +6,7 @@ import { KpiCard } from "../../components/informes/KpiCard";
 import { BarList, ColumnChart } from "../../components/informes/charts";
 import { descargarCSV } from "../../utils/exportar";
 import { TableWrap, tdCls, thCls } from "../../components/ui";
+import { etiquetaMotivo, textoCobertura } from "../../../../../shared/recorridoEstimado";
 
 /**
  * Montajes de neumáticos: cuántas gomas se pusieron.
@@ -53,6 +54,7 @@ export default function InformeMontajes() {
   const pos = (c: string) => data.por_posicion.find((x) => x.clase === c)?.n ?? 0;
   const exc = data.excluidas;
   const hayExcluidas = exc.anuladas + exc.correcciones + exc.declaradas + exc.no_completadas > 0;
+  const cob = data.recorridos_estimados ?? null;
 
   return (
     <div>
@@ -157,6 +159,62 @@ export default function InformeMontajes() {
         <div className="mt-3 rounded-lg border border-slate-700 bg-slate-800/60 p-3 text-xs text-slate-400">
           Fuera del recuento: {exc.anuladas} anuladas · {exc.correcciones} correcciones ·{" "}
           {exc.declaradas} declaradas en el parte · {exc.no_completadas} sin completar. No se borran: no son montajes.
+        </div>
+      )}
+
+      {/* Recorridos ESTIMADOS de la reconstrucción histórica, con su
+          cobertura. Van aparte del recuento de montajes y aparte de los
+          informes de rendimiento confirmado: son otra cosa. Las ocupaciones
+          de posición no se promedian con las unidades identificadas. */}
+      {cob && cob.poblacion.intervalos > 0 && (
+        <div className="mt-3 rounded-lg border border-slate-700 bg-slate-800/60 p-3 text-xs">
+          <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">
+            Recorrido estimado del histórico · no es rendimiento confirmado
+          </div>
+          <div className="text-slate-400">{cob.aviso}</div>
+          <div className="mt-2 text-slate-300">{textoCobertura(cob)}</div>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            <div className="rounded border border-slate-700 p-2">
+              <div className="text-[11px] uppercase text-slate-400">Gomas identificadas por una persona</div>
+              {cob.recorrido.unidad_identificada.n > 0 ? (
+                <div className="text-slate-200">
+                  media {cob.recorrido.unidad_identificada.media} km · mediana {cob.recorrido.unidad_identificada.mediana} km
+                  <div className="text-[11px] text-slate-500">
+                    {cob.recorrido.unidad_identificada.n} intervalo(s) · de {cob.recorrido.unidad_identificada.minimo} a {cob.recorrido.unidad_identificada.maximo} km
+                  </div>
+                </div>
+              ) : <div className="text-slate-500">Ningún intervalo con goma identificada entra en la media.</div>}
+            </div>
+            <div className="rounded border border-slate-700 p-2">
+              <div className="text-[11px] uppercase text-slate-400">Ocupaciones de posición</div>
+              {cob.recorrido.ocupacion_de_posicion.n > 0 ? (
+                <div className="text-slate-200">
+                  media {cob.recorrido.ocupacion_de_posicion.media} km · mediana {cob.recorrido.ocupacion_de_posicion.mediana} km
+                  <div className="text-[11px] text-slate-500">
+                    {cob.recorrido.ocupacion_de_posicion.n} intervalo(s) · {cob.recorrido.ocupacion_de_posicion.que_es}
+                  </div>
+                </div>
+              ) : <div className="text-slate-500">Ninguna ocupación entra en la media.</div>}
+            </div>
+          </div>
+          {cob.excluidos.n > 0 && (
+            <div className="mt-2 text-slate-400">
+              <div className="text-[11px] uppercase text-slate-500">Fuera de la media ({cob.excluidos.n})</div>
+              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
+                {cob.excluidos.motivos.map((m) => (
+                  <span key={m.motivo}>{etiquetaMotivo(m.motivo)}: <span className="text-slate-200">{m.n}</span></span>
+                ))}
+              </div>
+              <div className="mt-1 text-[11px] text-slate-500">{cob.excluidos.nota}</div>
+            </div>
+          )}
+          {(cob.revision.pendientes > 0 || cob.revision.aceptados > 0 || cob.revision.rechazados > 0) && (
+            <div className="mt-2 text-[11px] text-slate-500">
+              Revisión humana: {cob.revision.pendientes} pendiente(s) · {cob.revision.aceptados} aceptado(s) ·{" "}
+              {cob.revision.rechazados} rechazado(s).
+              {cob.limite_km_dia != null && <> Límite de plausibilidad aplicado: {cob.limite_km_dia} km/día.</>}
+            </div>
+          )}
         </div>
       )}
     </div>

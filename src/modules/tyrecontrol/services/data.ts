@@ -3634,25 +3634,126 @@ export interface IntervaloReconstruido {
   fecha_montaje: string; km_montaje: number | null; km_montaje_conocido: boolean;
   fecha_desmontaje: string | null; km_desmontaje: number | null; km_desmontaje_conocido: boolean;
   estado: "abierto" | "cerrado" | "interrumpido"; nivel: "confirmado" | "estimado";
-  /** Cómo están los kilómetros: utilizables, ausentes (falta un extremo),
-   *  incompatibles (hay valores pero decrecen; se conservan) o sin cierre. */
-  km_estado: "utilizables" | "ausentes" | "incompatibles" | "sin_cierre";
+  /** Clasificación AUTOMÁTICA de los kilómetros, sin opinión humana:
+   *  utilizables (recorrido calculable y plausible), anomalos (calculable
+   *  pero el ritmo diario supera el límite; el recorrido se conserva),
+   *  ausentes (falta un extremo), incompatibles (decrecen; se conservan) o
+   *  sin cierre. */
+  km_estado: "utilizables" | "anomalos" | "ausentes" | "incompatibles" | "sin_cierre";
   recorrido_km: number | null;
+  dias_intervalo: number | null; ritmo_km_dia: number | null; limite_km_dia: number | null;
+  /** Decisión HUMANA, separada de km_estado. Rechazar no cambia los
+   *  kilómetros; aceptar permite usar el intervalo como estimado y nunca lo
+   *  convierte en rendimiento confirmado. */
+  uso_estadistico: "pendiente" | "aceptado" | "rechazado";
+  revisado_por: string | null; revisado_at: string | null; revisado_motivo: string | null;
+  /** Albaranes bloqueados (no importados) con evidencia de un posible
+   *  montaje dentro del intervalo: la cadena no se puede dar por limpia. */
+  continuidad_docs: string[] | null; continuidad_motivo: string | null;
   posicion_fuente: string | null; continuidad_desde: string | null;
   evidencia: string | null; revisar: boolean; motivo_revision: string | null;
   origen_doc_montaje: string | null; origen_doc_desmontaje: string | null;
+  /** Las dos los calcula la base (vista tc_reconstruccion_intervalos): si el
+   *  intervalo entra en las medias y, si no, por qué. Pueden ser VARIOS
+   *  motivos a la vez. */
+  en_medias: boolean; motivos_exclusion: string[] | null;
   neumatico?: { numero_interno: string | null } | null;
   posicion?: { codigo_posicion: string } | null;
+}
+
+/** Una decisión humana sobre el uso estadístico de un intervalo. Append-only:
+ *  deshacer una importación no la borra, y si la evidencia cambia se marca
+ *  invalidada en vez de desaparecer. */
+export interface RevisionIntervalo {
+  id: string; operacion_entrada_id: string; fecha_montaje: string;
+  decision: "aceptado" | "rechazado" | "invalidada";
+  motivo: string; km_estado: string | null; recorrido_km: number | null;
+  ritmo_km_dia: number | null; limite_km_dia: number | null;
+  usuario_id: string | null; creado_at: string;
+  invalidada_at: string | null; motivo_invalidacion: string | null;
+}
+
+/** Cobertura de una media de recorrido estimado: sobre cuántos intervalos se
+ *  calcula y qué ha dejado fuera. Los motivos SE SOLAPAN (un intervalo puede
+ *  tener varios), así que no se suman: para eso están las combinaciones. */
+export interface CoberturaRecorridos {
+  nivel: "estimado"; aviso: string;
+  periodo: { desde: string; hasta: string; origen: string };
+  poblacion: { intervalos: number; vehiculos: number; posiciones: number;
+               cerrados: number; abiertos: number; interrumpidos: number };
+  /** Una ficha creada por la importación y no identificada por nadie NO es
+   *  una unidad identificada: cuenta como ocupación de posición. */
+  identidad: { respaldada: number; reconstruida: number; sin_ficha: number; que_es: string };
+  incluidos: { n: number; identificadas: number; ocupaciones: number; aceptados_a_mano: number };
+  recorrido: Record<"unidad_identificada" | "ocupacion_de_posicion", {
+    n: number; media: number | null; mediana: number | null;
+    minimo: number | null; maximo: number | null; total_km: number | null; que_es: string }>;
+  excluidos: { n: number; motivos_se_solapan: boolean; nota: string;
+               motivos: { motivo: string; n: number }[];
+               combinaciones: { motivos: string[]; n: number }[] };
+  revision: { pendientes: number; aceptados: number; rechazados: number };
+  limite_km_dia: number | null;
 }
 
 /** Los intervalos reconstruidos de un vehículo. Son ESTIMADOS: no alimentan
  *  los informes de rendimiento confirmado. */
 export async function listarIntervalosReconstruidos(vehiculoId: string): Promise<IntervaloReconstruido[]> {
-  const { data, error } = await supabase.from("tc_reconstruccion_montajes")
+  // De la vista, no de la tabla: `en_medias` y `motivos_exclusion` los
+  // calcula la base. El panel no reimplementa esa regla.
+  const { data, error } = await supabase.from("tc_reconstruccion_intervalos")
     .select("*, neumatico:tc_neumaticos(numero_interno), posicion:tc_posiciones_vehiculo(codigo_posicion)")
     .eq("vehiculo_id", vehiculoId).order("fecha_montaje", { ascending: false });
   if (error) throw new Error(error.message);
   return (data ?? []) as unknown as IntervaloReconstruido[];
+}
+
+/** Las decisiones humanas de un intervalo, la vigente y las invalidadas. */
+export async function listarRevisionesIntervalo(operacionEntradaId: string): Promise<RevisionIntervalo[]> {
+  const { data, error } = await supabase.from("tc_reconstruccion_revisiones")
+    .select("*").eq("operacion_entrada_id", operacionEntradaId).order("creado_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as RevisionIntervalo[];
+}
+
+/** Aceptar o rechazar el uso estadístico de un intervalo. El motivo es
+ *  obligatorio y queda auditado con usuario y fecha. Aceptar permite usarlo
+ *  como ESTIMADO: no lo convierte en rendimiento confirmado. */
+export async function revisarIntervalo(
+  intervaloId: string, decision: "aceptado" | "rechazado", motivo: string,
+): Promise<{ uso_estadistico: string; en_medias: boolean; motivos_exclusion: string[] | null; aviso: string }> {
+  const { data, error } = await supabase.rpc("tc_imp_revisar_intervalo", {
+    p_intervalo: intervaloId, p_decision: decision, p_motivo: motivo,
+  });
+  if (error) throw new Error(error.message);
+  return data as any;
+}
+
+/** La cobertura de las medias de recorrido estimado. Sin esto, una media no
+ *  se puede publicar: hay que decir sobre cuántos intervalos sale. */
+export async function cargarCoberturaRecorridos(
+  empresaId: string, desde?: string | null, hasta?: string | null, vehiculoId?: string | null,
+): Promise<CoberturaRecorridos> {
+  const { data, error } = await supabase.rpc("tc_informes_recorridos_estimados", {
+    p_empresa: empresaId, p_desde: desde ?? null, p_hasta: hasta ?? null, p_vehiculo: vehiculoId ?? null,
+  });
+  if (error) throw new Error(error.message);
+  return data as unknown as CoberturaRecorridos;
+}
+
+/** El límite de plausibilidad del ritmo diario de la empresa (2.000 km/día
+ *  si no se ha configurado otro). */
+export async function cargarLimiteKmDia(empresaId: string): Promise<number> {
+  const { data, error } = await supabase.rpc("tc_imp_limite_km_dia", { p_empresa: empresaId });
+  if (error) throw new Error(error.message);
+  return Number(data ?? 2000);
+}
+
+/** Cambiar ese límite. Reclasifica los intervalos de la empresa y NO toca
+ *  las decisiones humanas: el límite no es evidencia. */
+export async function fijarLimiteKmDia(empresaId: string, limite: number): Promise<number> {
+  const { data, error } = await supabase.rpc("tc_imp_fijar_limite_km_dia", { p_empresa: empresaId, p_limite: limite });
+  if (error) throw new Error(error.message);
+  return Number(data);
 }
 
 /** Lo conservado de un lote parcialmente deshecho, con su motivo. */
