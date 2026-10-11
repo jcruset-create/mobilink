@@ -26,3 +26,6 @@ construido desde `supabase/migrations`, usar `construir-esquema.sh` y pasar
 
 Las 12 migraciones que no se aplican en la reconstrucción, con motivo y
 justificación, están en `MIGRACIONES_NO_APLICADAS.md`.
+
+El alcance estadístico (qué informes leen o no las operaciones importadas,
+comprobado con consultas) está en `ALCANCE_ESTADISTICO.md`.
