@@ -208,6 +208,56 @@ reglas de lectura que van dentro del propio dato:
   tener continuidad pendiente: aparece en los dos. Por eso los motivos no
   suman el total y se publica además la lista de combinaciones, que sí suma.
 
+### Los denominadores, y por qué son distintos
+
+Cuatro cifras que se citan juntas y **no miden lo mismo**. Cada una con la
+consulta que la sostiene, sobre la carga de diez meses:
+
+| Cifra | Qué cuenta | Consulta |
+|---|---|---|
+| **1.511** | fichas creadas por la importación | `select count(*) from tc_neumaticos where importacion_lote_id is not null` |
+| **1.452** | intervalos reconstruidos (uno por montaje **con posición**) | `select count(*) from tc_reconstruccion_montajes` |
+| **66** | de esos intervalos, los que están **cerrados** | `… where estado = 'cerrado'` |
+| **50** | los **elegibles** para las medias estimadas | `… where tc_imp_intervalo_en_medias(rm)` |
+
+**Los 1.452 intervalos no son el total de fichas**, y la diferencia tiene una
+explicación exacta. La cadena, de arriba abajo:
+
+```
+2.731 montajes históricos
+  ├─ 1.511 nuevas  ──┬─ 1.452 con posición deducida  → 1.452 intervalos
+  │                  └─    59 sin posición           → sin intervalo
+  ├─   960 usadas        (nunca reciben posición deducida)
+  └─   260 recauchutadas (nunca reciben posición deducida)
+```
+
+- **Ficha ≠ intervalo.** La ficha se crea para **cada montaje de goma
+  nueva**: 1.511, ni una más (comprobado: todas las fichas de la importación
+  cuelgan de un montaje `nueva`). Las usadas y las recauchutadas no reciben
+  ficha; van a la bandeja de identificación.
+- **El intervalo se abre solo si hay posición.** Un montaje sin posición no
+  dice dónde fue la goma, así que no abre ocupación. De las 1.511 nuevas,
+  **59 se montaron en vehículos cuyo plano no admitía la norma** (o en
+  albaranes con varias referencias), se quedaron sin posición deducida y por
+  tanto sin intervalo. 1.452 + 59 = 1.511.
+- **Los montajes sin posición son 1.279** = 59 nuevas + 960 usadas + 260
+  recauchutadas. 1.452 + 1.279 = 2.731.
+
+De los **1.452 intervalos**: 1.056 abiertos, 330 interrumpidos y **66
+cerrados**. Solo un intervalo cerrado puede tener recorrido.
+
+De los **66 cerrados**: 52 tienen un recorrido que se puede calcular (50
+utilizables + 2 anómalos) y 14 no (12 sin kilómetros + 2 incompatibles). De
+esos 52, **50 son elegibles**: los 2 que se caen son los de 1445HWZ, por ritmo
+no plausible **y** por continuidad pendiente a la vez.
+
+```
+1.452 intervalos → 66 cerrados → 52 con recorrido calculable → 50 elegibles
+```
+
+Que el informe publique los dos últimos números por separado (`embudo`) es a
+propósito: **tener un recorrido que se puede restar no es poder usarlo**.
+
 ### Los números de la carga de diez meses, con la fase 3
 
 | | |

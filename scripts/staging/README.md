@@ -1,232 +1,145 @@
-# Entorno de pruebas separado (opción B: esquema real, datos sintéticos)
+# Procedimiento de staging del PR #492
 
-Esto es un **paquete de preparación**. Nada de aquí se ha ejecutado y nada se
-ejecuta solo: los pasos que tocan algo fuera del repositorio los lanza una
-persona autorizada, en el orden de abajo. No hay credenciales en ninguno de
-estos ficheros y no debe haberlas.
+Un solo documento, en orden. **Nada de esto se ha ejecutado** y nada se
+ejecuta solo: los pasos marcados con 🔒 los lanza una persona autorizada.
+No hay credenciales en ningún fichero de esta carpeta y no debe haberlas.
 
-Por qué la opción B y no levantar el esquema de las migraciones: producción
-tiene unas 437 tablas en `public`, el repositorio solo conoce las de
-`supabase/migrations/`, y hay tablas creadas a mano en el dashboard. Un
-entorno construido desde el repositorio probaría que la migración se aplica
-sobre el esquema *del repositorio*, que no es el que hay. Con el DDL real se
-prueba contra la deriva real. **Solo el esquema: ni una fila de datos de
-producción.**
+El entorno es la **opción B: esquema real, datos sintéticos**. Producción
+tiene unas 437 tablas en `public` y el repositorio solo conoce las de las
+migraciones, así que un entorno construido desde el repositorio probaría la
+migración contra un esquema que no es el que hay. **Solo el esquema: ni una
+fila de datos de producción.**
 
 ---
 
-## El orden
+## Resumen de los pasos
 
-| # | Qué | Quién | Qué toca |
+| # | Qué | 🔒 | Script |
 |---|---|---|---|
-| 0 | Leer este fichero entero | — | nada |
-| 1 | `01-volcar-esquema.sh` → DDL de producción, **solo esquema** | persona con credencial | lectura de producción |
-| 2 | `02-revisar-ddl.sh` → qué trae ese DDL que no debe ejecutarse en pruebas | cualquiera | un fichero local |
-| 3 | Crear el proyecto Supabase de pruebas | persona autorizada | Supabase |
-| 4 | `03-levantar-staging.sh` → restaurar el DDL ya revisado | persona autorizada | base de pruebas |
-| 5 | `semilla-staging.sql` → datos sintéticos con las configuraciones de la prueba | persona autorizada | base de pruebas |
-| 6 | Copiar `variables-staging.env.example`, rellenar y desplegar | persona autorizada | Render + Supabase |
-| 7 | `04-identificar-entorno.sh` → confirmar que panel, servidor y base son los de pruebas | cualquiera | lecturas |
-| 8 | Las migraciones de la importación, en orden, y la prueba | persona autorizada | base de pruebas |
-
-Los pasos 1, 3, 4, 5, 6 y 8 **están pendientes de vuestra autorización**. Los
-pasos 2 y 7 son de lectura y se pueden ejecutar sin tocar nada.
+| 0 | Leer este documento entero | | — |
+| 1 | Volcar el **esquema** de producción, sin datos | 🔒 | `01-volcar-esquema.sh` |
+| 2 | Repasar ese DDL antes de restaurarlo | | `02-revisar-ddl.sh` |
+| 3 | Crear el proyecto Supabase de pruebas | 🔒 | — (panel) |
+| 4 | Restaurar el DDL y **marcar** la base | 🔒 | `03-levantar-staging.sh` |
+| 5 | Respaldo y **prueba de restauración** | 🔒 | `06-respaldo-y-restauracion.sh` |
+| 6 | Aplicar las **tres migraciones**, en orden | 🔒 | SQL Editor |
+| 7 | Sembrar los datos sintéticos | 🔒 | `semilla-staging.sql` |
+| 8 | Desplegar panel y servidor de la misma versión | 🔒 | — (Render) |
+| 9 | **Identificar el entorno**: panel, servidor y base | | `04-identificar-entorno.sh` |
+| 10 | Comprobar el arranque y el PDF | | `05-probar-arranque.sh` |
+| 11 | Simular, importar, medir, PDF, inventario, recarga y deshacer | 🔒 | abajo |
 
 ---
 
-## Antes de restaurar el DDL: lo que hay que mirar
+## 1. Volcar el esquema de producción 🔒
 
-Un `pg_dump --schema-only` de producción no es inerte. Puede traer cosas que,
-restauradas en otra base, **salen al mundo o se disparan solas**. `02-revisar-ddl.sh`
-las busca y las lista; estas son las que importan y por qué:
+```bash
+ORIGEN_URL='postgresql://…' bash scripts/staging/01-volcar-esquema.sh esquema-produccion.sql
+```
 
-| Qué | Por qué no puede pasar a pruebas tal cual |
+`--schema-only --no-owner --no-privileges --schema=public`. El script enseña
+el host antes de nada y pide confirmación, y comprueba que no se haya colado
+ni un bloque `COPY`: si hay datos, para.
+
+## 2. Repasar el DDL antes de restaurarlo
+
+```bash
+bash scripts/staging/02-revisar-ddl.sh esquema-produccion.sql
+```
+
+Un `pg_dump --schema-only` no es inerte. Esto es lo que **no puede ejecutarse
+en pruebas tal cual**, y el script lo lista con el número de línea en
+`<fichero>.avisos`:
+
+| Qué | Por qué |
 |---|---|
-| `cron.schedule(...)` (pg_cron) | Un trabajo programado que se restaure en pruebas se ejecutará en pruebas. Si además llama a algo externo, lo llama de verdad. |
-| `net.http_post(...)` / `net.http_get(...)` (pg_net) | Llamadas HTTP salientes desde la base. Son el mecanismo de los avisos y de las Edge Functions. |
-| `dblink`, `postgres_fdw`, `CREATE SERVER`, `USER MAPPING` | Conexiones a otras bases. Una de ellas podría ser producción. |
-| `CREATE EVENT TRIGGER` | Se dispara con cualquier DDL, incluido el del arranque de Express. |
-| `CREATE PUBLICATION` / `SUBSCRIPTION` | Replicación. Una suscripción apuntando a producción es exactamente lo que no se quiere. |
-| URLs y hosts dentro de funciones | Un `security definer` con una URL de producción escrita dentro sigue llamando a producción desde pruebas. |
-| `ALTER ... OWNER TO` y roles que no existen | No es peligroso, pero hace fallar la restauración a mitad. Mejor saberlo antes. |
+| `cron.schedule(...)` (pg_cron) | un trabajo programado restaurado en pruebas se ejecuta en pruebas |
+| `net.http_post` / `net.http_get` (pg_net) | llamadas HTTP salientes desde la propia base |
+| `dblink`, `postgres_fdw`, `create server`, `user mapping` | conexiones a otras bases; una podría ser producción |
+| `create event trigger` | se dispara con cualquier DDL, incluido el del arranque de Express |
+| `create publication` / `subscription` | replicación apuntando a producción |
+| URLs dentro de funciones | un `security definer` con una URL de producción escrita dentro la sigue llamando |
 
-**Lo que hay que hacer con lo que salga**: comentarlo en el DDL antes de
-restaurar, no después. El script escribe un fichero `.avisos` con el número de
-línea de cada hallazgo para poder ir uno por uno.
+Lo que salga se **comenta a mano en el DDL antes** de restaurar, no después.
 
----
+## 3. Crear el proyecto Supabase de pruebas 🔒
 
-## Comprobado en local: el servidor arranca con 20 variables
+Plan gratuito. Dos límites conocidos: el número de proyectos gratuitos por
+organización, y que un proyecto gratuito **se pausa tras una semana sin
+actividad**.
 
-No es una suposición. `05-probar-arranque.sh` levanta el servidor con la lista
-de abajo contra una base de pruebas y pide el PDF por el endpoint real:
+## 4. Restaurar y marcar la base 🔒
 
-```
-OK    el servidor arranca y escucha en 4011
-OK    ni pagos, ni mensajería, ni correo: sin credencial no se encienden
-OK    sin token: 401 (falta sesión)
-OK    con sesión de admin: 200 y un PDF de 7.723.727 bytes
+```bash
+DESTINO_URL='postgresql://…' bash scripts/staging/03-levantar-staging.sh esquema-produccion.sql
 ```
 
-Las **20 variables** con las que arranca, y no hace falta ninguna más:
+Se niega si la base ya tiene tablas `tc_*`, y al terminar **marca** la base:
 
-`DATABASE_URL` · `PGSSLMODE` · `SUPABASE_URL` · `SUPABASE_SERVICE_ROLE_KEY` ·
-`VITE_SUPABASE_URL` · `VITE_SUPABASE_ANON_KEY` · `NODE_ENV` · `PORT` · `TZ` ·
-`PUBLIC_APP_URL` · `TYRE_CONTROL_WRITE_ENABLED` ·
-`TYRE_CONTROL_REPAIR_SYNC_ENABLED` · `TYRE_CONTROL_REPLACEMENT_SYNC_ENABLED` ·
-`TYRE_CONTROL_SYNC_COMPANIES` · los seis `*_STORAGE_LOCAL`.
-
-**Y una que hizo falta arreglar en el código.** El servidor NO arrancaba sin
-`STRIPE_SECRET_KEY`: el cliente de Stripe se construía en el propio arranque
-con la clave vacía y la librería lanza al instante, así que el proceso entero
-se caía antes de escuchar. Dejar la variable sin definir no resolvía nada,
-resolvía lo contrario. Ahora el cliente se crea la primera vez que se usa y
-solo si la clave existe: con clave, el comportamiento es el de siempre; sin
-ella, el servidor arranca, los tres sitios que cobran responden 503 y **no hay
-cliente de Stripe, así que no puede salir ni una llamada**.
-
-Lo que el propio arranque dice que deja apagado, con esa configuración:
-
-```
-[webfleet-sync] sin credenciales Webfleet: servicio no iniciado
-CheckPoint por correo: apagado (faltan las credenciales del buzón)
-Therefore buzón: apagado (faltan las credenciales del buzón)
-Recepciones buzón: apagado (faltan las credenciales del buzón)
+```sql
+alter database "…" set mobilink.entorno = 'pruebas';
 ```
 
-Y sin credencial tampoco se encienden Stripe, Twilio, SMTP, OpenAI (la lectura
-de partes responde 503), Movertis, Business Central, Firebase ni Google Maps.
+Esa marca es la comprobación que sirve. El nombre de la base se repite, el
+número de tablas con el esquema real es idéntico, y `current_database()` no
+distingue dos bases llamadas igual en servidores distintos. Producción no
+tiene la marca y no se le pone.
 
-### Qué más necesita el entorno, además de las variables
+### Qué más necesita la base, además del DDL
 
-Dos cosas que en Supabase pone la plataforma y que un entorno montado a mano
+Dos cosas que en Supabase pone la plataforma y que una base restaurada a mano
 puede no tener. Las dos se descubrieron levantando el servidor de verdad:
 
 1. **`service_role` tiene que saltarse la RLS** (`alter role service_role
    bypassrls`). El endpoint del PDF lee con la service key; sin eso devuelve
-   «Parte no encontrado» en pruebas y funciona en producción, que es la peor
-   forma de enterarse.
-2. **`anon` y `authenticated` necesitan los permisos de tabla** que dan los
-   *default privileges* del esquema `public`. Sin ellos, cualquier RPC
-   `security invoker` responde «permission denied for table …». Lo que
-   protege los datos es la RLS, no la ausencia de GRANT.
+   «Parte no encontrado» en pruebas y funciona en producción.
+2. **`anon` y `authenticated` necesitan los permisos de tabla** de los
+   *default privileges* de `public`. Sin ellos, cualquier RPC `security
+   invoker` responde «permission denied for table …». Lo que protege los
+   datos es la RLS, no la ausencia de GRANT.
 
-En un proyecto Supabase recién creado las dos vienen de serie; en una base
-restaurada a mano, hay que comprobarlas.
+En un proyecto Supabase recién creado vienen de serie; en una base restaurada,
+hay que comprobarlas.
 
-## Los tres rechazos, que no son el mismo
-
-Medido contra el PostgREST local, llamando a `tc_imp_revisar_intervalo`:
-
-| Quién | HTTP | Qué significa |
-|---|---|---|
-| sin cabecera `Authorization` | **401** | no hay sesión |
-| con la clave `anon` | **401** | sigue sin haber sesión de usuario |
-| operador autenticado de la empresa | **403** | hay sesión, no hay permiso |
-| administrador de OTRA empresa | **403** | hay permiso, pero no sobre esta empresa |
-| administrador de la empresa | **200** | |
-
-Conviene reproducirlo en staging tal cual: que un 403 se convierta en 401, o
-al revés, suele significar que la sesión no está llegando donde se cree.
-
-## El arranque de Express también cambia el esquema
-
-Esto no es un detalle: `server/index.ts` ejecuta `prepararEsquema(...)` al
-arrancar, con `CREATE TABLE IF NOT EXISTS` y `ADD COLUMN IF NOT EXISTS` sobre
-la base a la que apunte `DATABASE_URL`. **Arrancar el servidor ya modifica la
-base.** Un `npm start` con el `.env` equivocado delante hace DDL en producción
-sin que nadie haya pedido una migración.
-
-Así que antes de arrancar, siempre:
+## 5. Respaldo, y la prueba de que sirve 🔒
 
 ```bash
-# 1. ¿A qué base apunta lo que voy a arrancar? Sin enseñar la contraseña.
-node -e 'const u=new URL(process.env.DATABASE_URL);console.log(u.hostname, u.port, u.pathname)'
-
-# 2. ¿Y esa base es la de pruebas? Lo dice ella misma, no yo.
-psql "$DATABASE_URL" -At -c "select current_setting('mobilink.entorno', true)"
+ORIGEN_DB=<base> COPIA_DB=<base>_copia bash scripts/staging/06-respaldo-y-restauracion.sh
 ```
 
-`03-levantar-staging.sh` **marca la base de pruebas** con
-`alter database ... set mobilink.entorno = 'pruebas'`. Esa marca es la
-comprobación que sí sirve: el nombre de la base se puede repetir, el número de
-tablas también, y `current_database()` no distingue dos bases llamadas igual en
-servidores distintos. Producción no tiene esa marca y no se le va a poner.
+Hacer un volcado no es tener respaldo: lo que cuenta es haber restaurado y
+visto que vuelve. El script vuelca, restaura **en otra base** y compara los
+recuentos de intervenciones, operaciones, fichas, intervalos, revisiones y
+bloqueados. Probado en local contra la base del histórico completo: los seis
+recuentos coinciden.
 
----
+La vuelta atrás, si algo sale mal, es restaurar ese volcado **en una base
+nueva** y cambiar el destino del servidor. Nunca restaurar encima de la base
+viva.
 
-## Las variables: las que hacen falta, no las 34
+## 6. Las tres migraciones, en este orden 🔒
 
-Copiar las 34 variables del servicio de producción sería meter en pruebas las
-credenciales de Stripe, Twilio, los buzones IMAP y el ERP. La prueba de la
-importación histórica **no usa ninguna de ellas**.
+Cada una en su transacción, en el SQL Editor, mirando la salida:
 
-`variables-staging.env.example` lleva la lista mínima, con valores de pruebas
-y los interruptores que apagan lo que puede salir al mundo. Resumen:
+1. `supabase/migrations/tyrecontrol_importacion_historico.sql` — **fase 1**:
+   tablas `tc_importacion_*`, columnas de vínculo, `tc_importar_historico`,
+   `tc_deshacer_importacion`, corrección de `tc_anular_operacion`.
+2. `supabase/migrations/tyrecontrol_importacion_historico_fase2.sql` —
+   **fase 2**, necesita la 1: fichas, sustituciones,
+   `tc_reconstruccion_montajes`, informe de montajes, ajustes de inventario.
+3. `supabase/migrations/tyrecontrol_importacion_historico_fase3.sql` —
+   **fase 3**, necesita las dos: plausibilidad, revisión humana en dos
+   ámbitos, albaranes bloqueados como contexto y la cobertura de las medias.
 
-- **Imprescindibles**: `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
-  `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `PORT`, `NODE_ENV`, `TZ`,
-  `PUBLIC_APP_URL`. Las dos de `SUPABASE_*` sin prefijo son **de arranque**: el
-  servidor no levanta sin ellas (`server/supabase.ts`).
-- **Apagadas a propósito**: `TYRE_CONTROL_WRITE_ENABLED=false`,
-  `TYRE_CONTROL_REPAIR_SYNC_ENABLED=false`,
-  `TYRE_CONTROL_REPLACEMENT_SYNC_ENABLED=false`,
-  `TYRE_CONTROL_SYNC_COMPANIES=` (vacío = ninguna empresa).
-- **Sin definir, nunca con el valor de producción**: `STRIPE_*`, `TWILIO_*`,
-  `SMTP_*`, `*_IMAP_*`, `OPENAI_*`, `WEBFLEET_*`, `MOVERTIS_*`, `BC_*`,
-  `IH_SECRET__*`, `FIREBASE_*`, `GOOGLE_MAPS_API_KEY`. Sin credencial, cada
-  integración se queda fuera de servicio, que es lo que se busca: lo que no
-  está configurado no puede cobrar, ni enviar un WhatsApp, ni vaciar un buzón.
-- **Al disco, no a Storage**: `CASH_STORAGE_LOCAL=1`, `RECEPCIONES_STORAGE_LOCAL=1`,
-  `OR_MANUALES_STORAGE_LOCAL=1`, `TACOGRAFOS_STORAGE_LOCAL=1`,
-  `THEREFORE_STORAGE_LOCAL=1`, `SELF_STORAGE_STORAGE_LOCAL=1`.
+Las tres son **idempotentes**: se vuelven a aplicar sin efecto, y así se
+prueba (aplicar dos veces cada una).
 
-Para la prueba de la importación histórica, el PDF se pide por
-`GET /api/tyrecontrol/parte/:id/pdf`, que **devuelve el PDF en la respuesta y
-no escribe en Storage**. El que sí escribe es `/pdf/enlace`, y no hace falta.
+### Antes de aplicar: cotejar las firmas
 
----
-
-## Identificar el entorno: referencias y destinos, no recuentos
-
-`04-identificar-entorno.sh` comprueba lo único que de verdad distingue un
-entorno de otro: **a dónde apunta cada pieza**.
-
-1. **Panel**: el bundle servido tiene que llevar dentro el subdominio del
-   proyecto Supabase de pruebas (`VITE_SUPABASE_URL` se compila dentro del
-   JavaScript). Si el bundle lleva el subdominio de producción, el panel está
-   hablando con producción aunque la URL del sitio sea la de pruebas. Esto es
-   lo que hay que mirar, y es un `grep` sobre el bundle.
-2. **Servidor**: `GET /api/health` devuelve `{ok, version, commit}` con el
-   commit desplegado (8 caracteres, de `RENDER_GIT_COMMIT`). Tiene que ser el
-   commit que se quiere probar, y el host tiene que ser el de pruebas.
-3. **Base**: la marca `mobilink.entorno = 'pruebas'` que pone
-   `03-levantar-staging.sh`, más el subdominio del proyecto en la cadena de
-   conexión. `current_database()` y el número de tablas **no valen**: dos
-   bases pueden llamarse igual y tener el mismo recuento.
-
-Si cualquiera de las tres falla, se para. No se sigue «por ver qué pasa».
-
----
-
-## Las migraciones de la importación, cuando el entorno esté identificado
-
-En este orden y cada una en su transacción:
-
-1. `supabase/migrations/tyrecontrol_importacion_historico.sql`
-2. `supabase/migrations/tyrecontrol_importacion_historico_fase2.sql`
-3. `supabase/migrations/tyrecontrol_importacion_historico_fase3.sql`
-
-Las tres son idempotentes: se pueden volver a aplicar. La 2 necesita la 1 y la
-3 necesita las dos.
-
-### Las firmas reales de las RPC de este PR
-
-Esto importa porque `create or replace function` con una firma distinta **crea
-una segunda función** en vez de sustituir la primera, y entonces PostgREST
-responde `PGRST203` («Could not choose the best candidate function») a todas
-las llamadas. Antes de aplicar, hay que comprobar que lo que ya existe en la
-base tiene exactamente estas firmas. Son las del diff, verbatim:
+`create or replace function` sobre una firma distinta **crea una segunda
+función** y PostgREST responde `PGRST203` a todas las llamadas. Hay que
+comprobar que lo que ya existe en la base tiene exactamente estas firmas, tal
+como las devuelve `pg_get_function_identity_arguments`:
 
 | Función | Firma (como la devuelve `pg_get_function_identity_arguments`) | Fase |
 |---|---|---|
@@ -258,52 +171,252 @@ base tiene exactamente estas firmas. Son las del diff, verbatim:
 | `tc_informes_montajes` | `(p_empresa uuid, p_desde date, p_hasta date, p_origen text)` → `jsonb` | 2, redefinida en 3 |
 | `tc_informes_recorridos_estimados` | `(p_empresa uuid, p_desde date, p_hasta date, p_vehiculo uuid)` → `jsonb` | 3 |
 
-Dos cosas que conviene decir con precisión, porque es fácil contar de más:
+Dos precisiones, porque es fácil contar de más:
 
-- **Ninguna migración de este PR hace `drop function`.** No hay ni uno en el
-  diff: todas las redefiniciones son `create or replace` **sobre la misma
-  firma**, y las funciones nuevas de la fase 3 no existían antes. El riesgo de
-  `PGRST203` no viene de este PR; viene de que la base real pueda tener hoy
-  una de las funciones de la lista con otra firma por deriva del SQL Editor. Por
-  eso se comprueba antes, no porque la migración vaya a duplicar nada.
-- **`tc_imp_anotar_bloqueado` devuelve `uuid`** (el vehículo cuya cadena hay
-  que rehacer), no `void`. Es nueva en la fase 3; se dice porque cambiar el
-  tipo de retorno de una función que ya existiera sí exigiría un `drop`, y si
-  alguien aplicó una versión anterior de la fase 3 tendría que hacerlo.
+- **La única función que se elimina en todo el PR es
+  `tc_imp_revisar_intervalo(uuid, text, text)`**, y la elimina la fase 3 justo
+  antes de crear su versión de cuatro parámetros. Es una función de la propia
+  fase 3, que no está desplegada en ninguna parte; el `drop` está por si
+  alguien aplicó una versión anterior en una base de pruebas. Ninguna otra
+  redefinición dropea nada: todas son `create or replace` sobre la **misma
+  firma**.
+- `tc_imp_anotar_bloqueado` devuelve `uuid`, no `void`.
 
-Las tres funciones de inventario y la vista `tc_marcas_contadores` son las
-únicas que la migración **redefine habiendo sido escritas antes por otra
-migración**. Si en la base real tienen un cuerpo distinto al del repositorio,
-la migración se lo lleva por delante. Antes de aplicar:
+### Y guardar la vuelta atrás de los informes de inventario
+
+Las tres funciones de inventario y la vista `tc_marcas_contadores` son lo
+único que la migración **redefine habiendo sido escrito por otra migración**.
+Si en la base real tienen otro cuerpo, la migración se lo lleva por delante:
 
 ```bash
 psql "$DATABASE_URL" -At -c "select pg_get_functiondef(p.oid) from pg_proc p
   join pg_namespace n on n.oid=p.pronamespace
  where n.nspname='public' and p.proname in
    ('tc_informes_inventario_por','tc_informes_inventario_marca_medida','tc_informes_inventario_resumen')" \
-  > /tmp/inventario-antes.sql
+  > inventario-antes.sql
 psql "$DATABASE_URL" -At -c "select pg_get_viewdef('tc_marcas_contadores'::regclass, true)" \
-  >> /tmp/inventario-antes.sql
+  >> inventario-antes.sql
 ```
 
 Ese fichero **es** la vuelta atrás de esa parte. Y la comprobación de que la
-redefinición hace lo que debe es funcional, no «el fichero no se ha tocado»:
+redefinición hace lo que debe es funcional:
 `scripts/importacion-historico/comprobar-inventario.sh`.
+
+## 7. Los datos sintéticos 🔒
+
+```bash
+psql "$DESTINO_URL" -f scripts/staging/semilla-staging.sql
+```
+
+Se niega a sembrar una base que no lleve la marca `mobilink.entorno`. Crea
+nueve vehículos con las configuraciones que la prueba tiene que distinguir
+—2+4, 2+4+2, 2+4+4, 2+2, sin plano, sin tipo, varias referencias, con datos
+vivos, y 1445HWZ— y deja **sin crear** la matrícula `PRUNOEX`, que es el caso
+de «vehículo no encontrado». Ni una fila viene de producción.
+
+## 8. Desplegar 🔒
+
+Panel y servidor son **un solo artefacto**: Express sirve la API y entrega el
+panel compilado desde `dist`. Un segundo servicio en Render apuntando a la
+rama, con las variables de abajo.
+
+### Las variables mínimas, comprobadas
+
+`05-probar-arranque.sh` levanta el servidor con **estas 20 y ninguna más**:
+
+`DATABASE_URL` · `PGSSLMODE` · `SUPABASE_URL` · `SUPABASE_SERVICE_ROLE_KEY` ·
+`VITE_SUPABASE_URL` · `VITE_SUPABASE_ANON_KEY` · `NODE_ENV` · `PORT` · `TZ` ·
+`PUBLIC_APP_URL` · `TYRE_CONTROL_WRITE_ENABLED` ·
+`TYRE_CONTROL_REPAIR_SYNC_ENABLED` · `TYRE_CONTROL_REPLACEMENT_SYNC_ENABLED` ·
+`TYRE_CONTROL_SYNC_COMPANIES` · los seis `*_STORAGE_LOCAL`.
+
+Copiar las 34 de producción metería en pruebas las credenciales de pagos,
+mensajería, buzones y ERP, y la prueba no usa ninguna. Stripe, Twilio, SMTP,
+los buzones IMAP, OpenAI, Webfleet, Movertis, Business Central, Firebase y
+Google Maps **se quedan sin definir a propósito**: sin credencial no se
+encienden. La plantilla está en `variables-staging.env.example`.
+
+**Y el servidor no arrancaba sin Stripe.** El cliente se construía en el
+arranque con la clave vacía y la librería lanza al instante, así que el
+proceso moría antes de escuchar: dejar la variable sin definir no evitaba el
+obstáculo, era el obstáculo. Ahora el cliente vive en
+`server/core/stripeCliente.ts`, se crea la primera vez que se usa y solo si
+hay clave; sin ella el servidor levanta y las tres rutas de cobro responden
+503 antes de intentar nada. Con clave, el comportamiento es el de siempre.
+
+## 9. Identificar el entorno antes de tocar nada
+
+```bash
+PANEL_URL=… SERVIDOR_URL=… DESTINO_URL=… REF_PRUEBAS=… REF_PRODUCCION=… \
+COMMIT_ESPERADO=… bash scripts/staging/04-identificar-entorno.sh
+```
+
+Las tres piezas, **por a dónde apuntan**:
+
+1. **Panel**: el subdominio del proyecto Supabase va **compilado dentro del
+   bundle**. Si el bundle lleva el de producción, el panel habla con
+   producción aunque la URL del sitio sea la de pruebas.
+2. **Servidor**: `/api/health` devuelve `{ok, version, commit}` con el commit
+   desplegado en 8 caracteres. Tiene que ser el que se quiere probar.
+3. **Base**: la marca `mobilink.entorno = 'pruebas'` y el proyecto en la
+   cadena de conexión.
+
+`current_database()` y el número de tablas **no valen**: con el esquema real
+restaurado son idénticos a los de producción.
+
+**Si cualquiera de las tres falla, se para.**
+
+### El arranque de Express también hace DDL
+
+`server/index.ts` ejecuta `prepararEsquema(...)` al arrancar: `CREATE TABLE IF
+NOT EXISTS` y `ADD COLUMN IF NOT EXISTS` sobre `DATABASE_URL`. **Arrancar el
+servidor ya modifica la base**, sin que nadie haya pedido una migración. Antes
+de arrancar, siempre:
+
+```bash
+node -e 'const u=new URL(process.env.DATABASE_URL);console.log(u.hostname,u.port,u.pathname)'
+psql "$DATABASE_URL" -At -c "select current_setting('mobilink.entorno', true)"
+```
+
+## 10. Comprobar el arranque y el PDF
+
+```bash
+BASE_DB=<base> CLAVES=<ruta>/claves.json bash scripts/staging/05-probar-arranque.sh
+```
+
+Comprueba que el servidor arranca, que ninguna integración externa se ha
+encendido, y que el endpoint real del PDF da **401 sin token** y **200 con
+sesión de admin**.
+
+## 11. La prueba 🔒
+
+En este orden. Cada punto tiene su condición de parada más abajo.
+
+1. **Simular** el lote pequeño (`p_simular = true`). No escribe nada: ni
+   filas, ni numeración. Tiene que enseñar, y se comprueba uno a uno:
+   **vehículos no encontrados** (`PRUNOEX`), **planes ausentes o
+   incompatibles** (el vehículo sin tipo y el 2+2 con seis nuevas),
+   **duplicados** (volver a simular: cero nuevos) y **documentos cambiados**
+   (alterar una línea de un albarán ya importado: lo detecta por la huella y
+   no toca nada).
+2. **Importar** ese lote pequeño y conciliar contra el Excel: albaranes,
+   montajes, desmontajes, fichas, pendientes de identidad, servicios y líneas.
+3. **PDF** de una intervención con histórico, por `GET
+   /api/tyrecontrol/parte/:id/pdf`. El histórico en su hoja, separado del
+   bloque facturable, con la nota de las salidas.
+4. **Medir el lote mayor** llamando al mismo endpoint PostgREST que usa el
+   panel, con el JWT de admin, y quedarse con el tiempo. En local el lote
+   mayor son ~1 MB de JSON; lo que interesa es si Supabase lo aguanta en una
+   sola llamada o hay que partirlo.
+5. **Inventario**: `comprobar-inventario.sh` y a ojo en el panel. Las fichas
+   históricas no son existencias.
+6. **Recargar** el mismo lote: cero fichas nuevas, cero numeración consumida.
+7. **Deshacer** y comparar con la fotografía previa. Tiene que quedar
+   idéntica. Incluye los dos casos difíciles: intervalos que cruzan lotes y
+   registros modificados después de importar.
+
+---
+
+## Criterios de aceptación
+
+**La importación**
+
+1. B2_26/4905 (albarán de Plana, no una empresa): 4 montajes, 4 desmontajes,
+   2 fichas nuevas, y las usadas **pendientes de identidad**, no inventadas.
+2. Seis nuevas = **2 al eje 1 y 4 al eje 2**, solo con una referencia y plano
+   compatible: 2+4, 2+4+2 y 2+4+4 sí; 2+2 y sin plano, no, y entonces la
+   asignación queda pendiente y la posición es «desconocida».
+3. Los **25 albaranes bloqueados** siguen sin importarse: cero operaciones,
+   cero fichas, cero cantidades. La lista exacta, con documento, matrícula,
+   fecha, kilómetros, motivo literal y filas de origen, está en
+   `scripts/importacion-historico/ALBARANES_BLOQUEADOS.md`.
+4. Las **OR son evidencia complementaria**: un vehículo sin OR se importa
+   igual.
+
+**Los kilómetros y las estadísticas**
+
+5. Los kilómetros **originales se conservan** siempre, también cuando no dan
+   recorrido: incompatibles y anómalos guardan los dos valores.
+6. Un intervalo entra en las medias **solo** si está cerrado, tiene recorrido
+   calculable, sus kilómetros no están rechazados, si hay duda de kilómetros
+   está aceptada expresamente, y **la continuidad no está pendiente ni
+   rechazada**. Aceptar los kilómetros **no** resuelve la continuidad.
+7. Toda media publica su **cobertura**: incluidos, excluidos por motivo
+   (sabiendo que **se solapan** y no se suman), las tres identidades
+   —respaldada, ficha reconstruida, sin ficha— y el periodo.
+8. El **rendimiento estimado no se mezcla con el confirmado**: viven en
+   tablas distintas y ningún informe de rendimiento lee la reconstrucción.
+
+**Lo que no se toca**
+
+9. Montajes vivos, historial confirmado, stock, revisiones y `km_actual`:
+   **intactos**, contador a contador.
+10. Las fichas anteriores, idénticas; el inventario disponible, sin fichas
+    históricas.
+11. Deshacer limpio deja la fotografía previa igual. Deshacer con
+    modificaciones o revisiones humanas **conserva** y explica por qué.
+12. El contador de números internos **no vuelve atrás**.
+
+**Lo que no se exige, porque no está construido**
+
+13. La **ingesta auditada de las OR**: no existe, y no se promete.
+14. La **corrección del kilometraje de origen**: propuesta escrita, sin
+    implementar (`PROPUESTA_corregir_km_origen.md`).
+
+---
+
+## Cuándo se para la prueba
+
+Sin discusión, en el momento:
+
+- **La identificación del entorno falla** en cualquiera de las tres piezas
+  (paso 9). Nada de «seguimos a ver qué pasa».
+- **El repaso del DDL** encuentra un trabajo programado, una llamada
+  saliente, una conexión a otra base o un disparador de DDL que no se haya
+  comentado antes de restaurar.
+- **Falta algún objeto** de los que la migración da por supuestos, o alguna
+  función tiene una firma distinta de la de la tabla de arriba.
+- **El volcado trae datos** (`COPY`) en vez de solo esquema.
+- **La restauración de prueba no devuelve los mismos recuentos**.
+- **La simulación escribe algo**: una sola fila o un número interno
+  consumido.
+- **Cambia algo que no debía**: montajes vivos, historial confirmado, stock,
+  revisiones o `km_actual`.
+- **El deshacer no deja la fotografía previa igual** sin un motivo escrito.
+- **Aparece una ficha histórica en el inventario disponible.**
+- **El panel de staging habla con producción** (el bundle lleva el proyecto
+  equivocado) o el servidor apunta a otra base.
+
+En cualquiera de esos casos: se para, se restaura el respaldo del paso 5 en
+una base nueva y se avisa. La norma es probar lo que está bien, no terminar
+la prueba pase lo que pase.
 
 ---
 
 ## Qué NO cubre este paquete
 
-- **No crea nada de pago.** Los planes gratuitos de Supabase y Render dan para
-  esto, con dos límites conocidos: un proyecto gratuito de Supabase se pausa
-  tras una semana sin actividad, y un servicio gratuito de Render se duerme.
-- **No copia datos de producción.** Ni anonimizados: no hay herramienta de
-  anonimización para TyreControl, y para esta prueba no hace falta.
-- **No cubre las apps móviles.** Las tres apps Flutter llevan el proyecto de
-  producción escrito a mano en el código, así que una build de pruebas
-  seguiría apuntando a producción. Este PR no toca ningún fichero de `*_app/`,
-  así que para esta validación no es bloqueante; para cualquier cambio con
-  parte móvil, sí lo sería.
-- **No despliega.** `render.yaml` define un único servicio con
-  `autoDeploy: true` sobre `main`. Un segundo servicio apuntando a la rama lo
-  crea una persona en el panel.
+- **No crea nada de pago.** Los planes gratuitos dan para esto; el servicio
+  gratuito de Render se duerme y el proyecto gratuito de Supabase se pausa
+  tras una semana sin actividad.
+- **No copia datos de producción**, ni anonimizados: no hay herramienta de
+  anonimización para TyreControl y para esta prueba no hace falta.
+- **No cubre las apps móviles**: las tres apps Flutter llevan el proyecto de
+  producción escrito en el código, así que una build de pruebas seguiría
+  apuntando a producción. Este PR no toca ningún fichero de `*_app/`.
+- **No despliega.** `render.yaml` define un único servicio con `autoDeploy`
+  sobre `main`; el segundo servicio lo crea una persona en el panel.
+
+## Los tres rechazos, que no son el mismo
+
+Medido contra el PostgREST local, llamando a `tc_imp_revisar_intervalo`:
+
+| Quién | HTTP |
+|---|---|
+| sin cabecera `Authorization` | **401** |
+| con la clave `anon` | **401** |
+| operador autenticado de la empresa | **403** |
+| administrador de **otra** empresa | **403** |
+| administrador de la empresa | **200** |
+
+Conviene reproducirlo igual en staging: que un 403 se convierta en 401, o al
+revés, suele significar que la sesión no llega donde se cree.
