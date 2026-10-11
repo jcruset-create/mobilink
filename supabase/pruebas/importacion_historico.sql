@@ -112,9 +112,9 @@ create table tc_intervencion_servicios (
 create table tc_operacion_adjuntos (id uuid primary key default gen_random_uuid(), operacion_id uuid references operaciones_neumaticos(id) on delete cascade, file_url text);
 create table tc_operacion_movimientos (id uuid primary key default gen_random_uuid(), operacion_id uuid references operaciones_neumaticos(id) on delete cascade);
 create table tc_operacion_estado_historial (id uuid primary key default gen_random_uuid(), operacion_id uuid references operaciones_neumaticos(id) on delete cascade);
-create table tc_operacion_auditoria (id uuid primary key default gen_random_uuid(), operacion_id uuid references operaciones_neumaticos(id) on delete set null);
+create table tc_operacion_auditoria (id uuid primary key default gen_random_uuid(), operacion_id uuid references operaciones_neumaticos(id) on delete set null, accion text, datos_anteriores jsonb, datos_nuevos jsonb, motivo text, created_at timestamptz default now());
 create table autorizaciones_operaciones (id uuid primary key default gen_random_uuid(), operacion_id uuid references operaciones_neumaticos(id) on delete set null);
-create table tc_reservas_neumatico (id uuid primary key default gen_random_uuid(), operacion_id uuid references operaciones_neumaticos(id) on delete set null);
+create table tc_reservas_neumatico (id uuid primary key default gen_random_uuid(), operacion_id uuid references operaciones_neumaticos(id) on delete set null, status text default 'activa', liberado_at timestamptz, liberado_por uuid, motivo_liberacion text);
 create table tc_partes_guiados (clave uuid primary key, intervencion_id uuid references tc_intervenciones(id) on delete cascade);
 create table tc_incidencia_problemas (id uuid primary key default gen_random_uuid(), operacion_id uuid references operaciones_neumaticos(id));
 create table tc_incidencia_operaciones (id uuid primary key default gen_random_uuid(), operacion_neumatico_id uuid references operaciones_neumaticos(id));
@@ -379,4 +379,36 @@ do $$ begin
       values ('00000000-0000-0000-0000-0000000000e1','00000000-0000-0000-0000-00000000000c','2026-10-10','x','genes','B2_26/4905|7724KBM');
     perform prueba('dos intervenciones con la misma identidad de origen: imposible', false, true);
   exception when unique_violation then perform prueba('dos intervenciones con la misma identidad de origen: imposible', true, true); end;
+end $$;
+
+create or replace function sqlerrm_de(p uuid) returns text language plpgsql as $$
+begin perform tc_anular_operacion(p, 'x'); return null; exception when others then return sqlerrm; end $$;
+
+-- ── 13. Anular frente a deshacer ────────────────────────────────────────────
+-- Una anulación normal sigue funcionando; anular una operación que deshacer
+-- ya ha borrado se rechaza con un mensaje claro y no deja rastro.
+do $$ declare r jsonb; l uuid; op uuid; op2 uuid; msg text; n_aud bigint; begin
+  r := tc_importar_historico('00000000-0000-0000-0000-0000000000e1', 'genes', lote('2026-07', alb_n('B2_26/7001','7724KBM',2,1)), false);
+  l := (r->>'lote_id')::uuid;
+  select id into op from operaciones_neumaticos where importacion_lote_id=l order by origen_linea limit 1;
+  select id into op2 from operaciones_neumaticos where importacion_lote_id=l and id<>op;
+  insert into tc_reservas_neumatico (operacion_id) values (op);
+  -- Anulación normal (el admin de auth_ctx sobre su empresa)
+  perform tc_anular_operacion(op, 'prueba');
+  perform prueba('anular normal: queda anulada', (select is_anulada and status='anulada' from operaciones_neumaticos where id=op), true);
+  perform prueba('anular normal: auditoría con motivo', (select count(*) from tc_operacion_auditoria where operacion_id=op and accion='anular' and motivo='prueba'), 1::bigint);
+  perform prueba('anular normal: reserva liberada', (select status from tc_reservas_neumatico where operacion_id=op), 'liberada');
+  begin perform tc_anular_operacion(op, 'otra vez'); msg := null; exception when others then msg := sqlerrm; end;
+  perform prueba('anular dos veces: rechazado', msg, 'La operación ya está anulada');
+  begin perform tc_anular_operacion(op2, '  '); msg := null; exception when others then msg := sqlerrm; end;
+  perform prueba('sin motivo: rechazado', msg, 'El motivo de anulación es obligatorio');
+  -- La otra operación la borra deshacer (la anulada se conserva con motivo); anularla después debe decirlo.
+  r := tc_deshacer_importacion(l, '{}', false);
+  n_aud := (select count(*) from tc_operacion_auditoria);
+  perform prueba('deshacer con una anulada: conservada', (r->>'borradas')||'/'||(r->>'conservadas'), '0/1');
+  delete from operaciones_neumaticos where id=op2;  -- lo que haría deshacer sobre una fila sin cambios
+  begin perform tc_anular_operacion(op2, 'tarde'); msg := null; exception when others then msg := sqlerrm; end;
+  perform prueba('anular una operación que ya no existe: mensaje claro', msg, 'La operación ya no existe; no se ha realizado la anulación');
+  perform prueba('y no deja auditoría huérfana', (select count(*) from tc_operacion_auditoria), n_aud);
+  perform prueba('un uuid cualquiera: mismo mensaje', (select sqlerrm_de(gen_random_uuid())), 'La operación ya no existe; no se ha realizado la anulación');
 end $$;

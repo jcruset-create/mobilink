@@ -42,10 +42,10 @@ echo "== 3. Deshacer frente a ANULAR una operación (update concurrente)"
 begin; select 'deshacer-sim:'||(tc_deshacer_importacion('$LOTE3','{}',true)->>'borradas'); select pg_sleep(3); select 'deshacer-real:'||(tc_deshacer_importacion('$LOTE3','{}',false)->>'borradas'); commit;
 SQL
 ) & sleep 0.5
-( $P -c "update operaciones_neumaticos set status='anulada', is_anulada=true where id='$OP3'; select 'anular: hecho'" ) &
+( $P -c "select tc_anular_operacion('$OP3','prueba concurrente'); select 'anular: hecho'" 2>&1 | sed 's/^/  anular → /' | head -2 ) &
 wait
-echo "  esperado: el update espera al commit de deshacer; al intentar, la fila ya no existe (0 filas) o deshacer la ve y conserva"
-$P -c "select '  interv CC03 existe: '||(select count(*) from tc_intervenciones where origen_doc='B2_26/CC03|7724KBM')||' · ops: '||(select count(*) from operaciones_neumaticos where id='$OP3')"
+echo "  esperado: la RPC espera (FOR UPDATE) al commit de deshacer y entonces falla con 'La operación ya no existe; no se ha realizado la anulación'; nunca 'anular: hecho'"
+$P -c "select '  interv CC03 existe: '||(select count(*) from tc_intervenciones where origen_doc='B2_26/CC03|7724KBM')||' · ops: '||(select count(*) from operaciones_neumaticos where id='$OP3')||' · auditoría de anular sobre ella: '||(select count(*) from tc_operacion_auditoria where accion='anular' and operacion_id='$OP3')"
 
 echo "== 4. Deshacer frente a modificar un SERVICIO"
 $P -c "select tc_importar_historico('$E','genes',lote('2026-03', alb_n('B2_26/CC04','7724KBM',2,1) || jsonb_build_object('servicios', jsonb_build_array(jsonb_build_object('servicio','equilibrado','cantidad',2)))),false)->>'creadas'" >/dev/null

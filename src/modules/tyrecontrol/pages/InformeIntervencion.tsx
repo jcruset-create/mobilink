@@ -7,6 +7,7 @@ import {
 } from "../services/data";
 import type { Intervencion, EstadoHistorialEntry, AuditoriaEntry } from "../services/data";
 import { esHistoricoAlbaran, etiquetaHistorico, textoNeumaticoHistorico, textoPosicionHistorica } from "../../../../shared/historicoAlbaran";
+import { condicionDeOperacion, resumenMontajes } from "../../../../shared/condicionNeumatico";
 import type { OperacionNeumatico, OperacionMovimiento, OperacionAdjunto, CatDestino } from "../types";
 import { TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS } from "../types";
 import PlanoSnapshot from "../components/PlanoSnapshot";
@@ -129,7 +130,7 @@ export default function InformeIntervencion() {
     const historicos = activas.filter((o) => esHistoricoAlbaran(o) && o.tipo_operacion === "montaje");
     const montadosAlmacen = activas.filter((o) =>
       (o.tipo_operacion === "montaje" || o.tipo_operacion === "sustitucion") && o.estado_anterior === "almacen");
-    const esUsado = (o: OperacionNeumatico) => (o.observaciones ?? "").includes("[USADO]");
+    const esUsado = (o: OperacionNeumatico) => condicionDeOperacion(o) !== "nueva";
     const sinControl = activas.filter((o) =>
       (o.tipo_operacion === "montaje" || o.tipo_operacion === "sustitucion")
       && o.estado_anterior !== "almacen" && o.estado_anterior !== "montado"
@@ -141,11 +142,7 @@ export default function InformeIntervencion() {
       activas,
       declaradas,
       historicos,
-      historicosPorCondicion: {
-        nueva: historicos.filter((o) => o.condicion === "nueva").length,
-        usada: historicos.filter((o) => o.condicion === "usada").length,
-        recauchutada: historicos.filter((o) => o.condicion === "recauchutada").length,
-      },
+      historicosPorCondicion: resumenMontajes(historicos).porCondicion,
       montadosAlmacen,
       montadosNuevos: montadosAlmacen.filter((o) => !esUsado(o)),
       montadosUsados: montadosAlmacen.filter(esUsado),

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones, listarIntervenciones, imagenChasisDeMarca, generarPosicionesDeTipo, cotejarPlanoDeTipo, type CotejoPlano } from "../services/data";
 import type { Intervencion } from "../services/data";
+import { resumenMontajes, textoPorCondicion } from "../../../../shared/condicionNeumatico";
 import { esHistoricoAlbaran, etiquetaHistorico, textoNeumaticoHistorico, textoPosicionHistorica } from "../../../../shared/historicoAlbaran";
 import type { MontajeActual, PosicionVehiculo, Vehiculo, TipoLlanta, VehiculoEje, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle, OperacionNeumatico } from "../types";
 import { ORIGEN_KM_LABELS, tipoLlantaLabel, presionTxt, TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS } from "../types";
@@ -592,9 +593,18 @@ export default function VehiculoDetalle() {
           />
           {(() => {
             const lineas = resumenOperaciones(operaciones);
+            const r = resumenMontajes(operaciones);
             return lineas.length > 0 ? (
               <div className="mb-3 rounded-lg border border-emerald-600/30 bg-emerald-500/5 p-3">
                 <div className="mb-1 text-[11px] font-semibold uppercase text-emerald-300">Resumen general</div>
+                {/* Recuento por operaciones, no por posiciones conocidas: el
+                    histórico importado trae gomas sin posición y antes salía
+                    «Montados 2» de 4. */}
+                <div className="mb-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-300" data-testid="resumen-recuento">
+                  <span><b className="text-slate-100">{r.total}</b> {r.total === 1 ? "operación" : "operaciones"}</span>
+                  {r.montajes > 0 && <span><b className="text-slate-100">{r.montajes}</b> {r.montajes === 1 ? "montaje" : "montajes"}{textoPorCondicion(r) ? `: ${textoPorCondicion(r)}` : ""}</span>}
+                  <span><b className="text-slate-100">{r.conPosicion}</b> con posición conocida · <b className="text-slate-100">{r.sinPosicion}</b> sin posición</span>
+                </div>
                 <ul className="list-disc space-y-0.5 pl-5 text-sm text-slate-200 marker:text-emerald-400">
                   {lineas.map((l, i) => <li key={i}>{l}</li>)}
                 </ul>

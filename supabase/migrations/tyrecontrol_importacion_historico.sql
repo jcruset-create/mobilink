@@ -656,3 +656,37 @@ grant execute on function tc_importar_historico(uuid, text, jsonb, boolean) to a
 grant execute on function tc_deshacer_importacion(uuid, uuid[], boolean) to authenticated, service_role;
 revoke all on function tc_imp_huella_estado(uuid) from public, anon;
 grant execute on function tc_imp_huella_estado(uuid) to authenticated, service_role;
+
+-- ── Anular frente a deshacer ────────────────────────────────────────────────
+-- Deshacer una importación borra operaciones. Si alguien anulaba una de ellas
+-- en ese mismo instante, la versión anterior de tc_anular_operacion la leía
+-- sin bloquearla, esperaba en el UPDATE al commit del deshacer, actualizaba
+-- CERO filas y seguía como si nada (la auditoría quedaba con operacion_id
+-- nulo y el panel decía «anulada»). Ahora la fila se lee FOR UPDATE: si
+-- deshacer la está borrando, se espera; si al llegar ya no existe, se dice
+-- claramente y no se anula nada. El resto de la función no cambia.
+create or replace function tc_anular_operacion(p_operacion uuid, p_motivo text)
+returns void language plpgsql security definer set search_path = public as $$
+declare o record; v_filas int;
+begin
+  if p_motivo is null or trim(p_motivo) = '' then raise exception 'El motivo de anulación es obligatorio'; end if;
+  select * into o from operaciones_neumaticos where id = p_operacion for update;
+  if not found then raise exception 'La operación ya no existe; no se ha realizado la anulación'; end if;
+  -- anular es una acción sensible: solo admin/superadmin
+  if not (tc_is_superadmin() or (tc_is_admin() and o.empresa_id = tc_auth_empresa_id())) then
+    raise exception 'Solo un administrador puede anular operaciones';
+  end if;
+  if o.is_anulada then raise exception 'La operación ya está anulada'; end if;
+
+  update operaciones_neumaticos set is_anulada = true, status = 'anulada', updated_at = now() where id = p_operacion;
+  get diagnostics v_filas = row_count;
+  if v_filas <> 1 then raise exception 'La operación ya no existe; no se ha realizado la anulación'; end if;
+
+  insert into tc_operacion_auditoria (operacion_id, accion, datos_anteriores, motivo)
+  values (p_operacion, 'anular', jsonb_build_object('status', o.status, 'tipo', o.tipo_operacion), p_motivo);
+
+  -- libera cualquier reserva asociada que siguiera activa
+  update tc_reservas_neumatico set status = 'liberada', liberado_at = now(), liberado_por = auth.uid(),
+    motivo_liberacion = 'operación anulada'
+    where operacion_id = p_operacion and status = 'activa';
+end $$;

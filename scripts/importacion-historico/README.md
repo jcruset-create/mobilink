@@ -23,3 +23,6 @@ Sobre el esquema: `banco.sh` y `e2e.sh` usan el esquema mínimo que reconstruye 
 banco (tablas, triggers y FKs relevantes). Para probar contra el esquema completo
 construido desde `supabase/migrations`, usar `construir-esquema.sh` y pasar
 `esquema_completo` como base a `e2e.sh` y `concurrencia.sh`.
+
+Las 12 migraciones que no se aplican en la reconstrucción, con motivo y
+justificación, están en `MIGRACIONES_NO_APLICADAS.md`.

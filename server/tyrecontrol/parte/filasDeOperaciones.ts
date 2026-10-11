@@ -1,5 +1,6 @@
 import type { HistoricoFila, MovimientoFila } from "./armarParte.ts";
 import { esHistoricoAlbaran, textoPosicionHistorica } from "../../../shared/historicoAlbaran.ts";
+import { condicionDeOperacion } from "../../../shared/condicionNeumatico.ts";
 
 /**
  * Las filas del parte, sacadas de las OPERACIONES.
@@ -101,11 +102,8 @@ export function serieDe(n: OperacionFila["neumatico"]): string | null {
 
 /** Una goma montada es NUEVA salvo que la RPC la marcara como usada. */
 export function esNuevo(o: OperacionFila): boolean {
-  // Con condición explícita (histórico importado) manda ella: un recauchutado
-  // no es nuevo aunque no lleve el marcador [USADO]. Sin ella, el marcador de
-  // siempre.
-  if (o.condicion) return o.condicion === "nueva";
-  return !(o.observaciones ?? "").includes("[USADO]");
+  // Criterio compartido con el panel (shared/condicionNeumatico.ts).
+  return condicionDeOperacion(o) === "nueva";
 }
 
 /**
