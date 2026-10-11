@@ -41,6 +41,7 @@ import { toFile } from "openai";
 import { findUserByPassword } from "./modules/users";
 import twilio from "twilio";
 import Stripe from "stripe";
+import { stripeOCortar } from "./core/stripeCliente.ts";
 import { initIntegrationHub, mountIntegrationHub, startIntegrationWorker } from "./integration-hub/index.ts";
 import { initCash, mountCash, startCashErpWorker, startCashEventWorker } from "./cash/index.ts";
 import { initTacografos, mountTacografos } from "./tacografos/index.ts";
@@ -766,36 +767,10 @@ const PORT = process.env.PORT || 4000;
 // El cliente de OpenAI vive en core/openaiService.ts: aquí no se crea ninguno.
 // Toda la IA de la plataforma pasa por pedirIA() / transcribirAudio().
 console.log("KEY:", process.env.OPENAI_API_KEY ? "OK" : "NO CARGADA");
-/**
- * Stripe, solo si hay credencial.
- *
- * Antes se construía el cliente en el arranque con `process.env.STRIPE_SECRET_KEY || ""`,
- * y la librería lanza al instante si la clave está vacía: **el servidor entero
- * no levantaba sin credenciales de pago**. Eso hacía imposible arrancarlo en un
- * entorno de pruebas sin poner una clave de Stripe, que es justo lo que no se
- * quiere tener fuera de producción.
- *
- * Ahora el cliente se crea la primera vez que se usa, y solo si la clave
- * existe. Con clave, el comportamiento es exactamente el de antes. Sin ella,
- * el servidor arranca, los tres sitios que cobran responden 503 y **no hay
- * cliente de Stripe, así que no puede salir ni una llamada**.
- */
-let stripeCliente: Stripe | null = null;
-function stripeSiHay(): Stripe | null {
-  const clave = process.env.STRIPE_SECRET_KEY;
-  if (!clave) return null;
-  if (!stripeCliente) stripeCliente = new Stripe(clave, { apiVersion: "2026-04-22.dahlia" });
-  return stripeCliente;
-}
-/** El cliente, o 503 y null. Quien lo llama devuelve si recibe null. */
-function stripeOCortar(res: express.Response): Stripe | null {
-  const s = stripeSiHay();
-  if (!s) {
-    res.status(503).json({ success: false, message: "Pagos no disponibles: falta STRIPE_SECRET_KEY" });
-    return null;
-  }
-  return s;
-}
+// Stripe vive en core/stripeCliente.ts: aquí no se construye ninguno. Sin
+// STRIPE_SECRET_KEY el servidor arranca igual y las rutas de cobro responden
+// 503 antes de intentar nada (antes, el cliente se creaba en el arranque con
+// la clave vacía y la librería tumbaba el proceso entero).
 /* =========================================================
    HELPERS
 ========================================================= */
