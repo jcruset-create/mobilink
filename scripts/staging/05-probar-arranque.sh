@@ -61,6 +61,19 @@ FALLOS=0
 ok()  { printf '  OK    %s\n' "$1"; }
 mal() { printf '  FALLA %s\n' "$1"; FALLOS=$((FALLOS+1)); }
 
+# ── ANTES de arrancar: el destino ─────────────────────────────────────────
+#
+# Arrancar el servidor ejecuta DDL sobre DATABASE_URL. Comprobar el entorno
+# DESPUÉS del despliegue llega tarde: para entonces la base ya está tocada.
+# Así que no se arranca sin que 00-comprobar-destino.sh dé el visto bueno.
+echo "0. Comprobación del destino, antes de arrancar nada"
+if ! ( set -a; . "$ENV_FILE"; set +a
+       REF_PRUEBAS="${REF_PRUEBAS:-127.0.0.1}" REF_PRODUCCION="${REF_PRODUCCION:-qhbtpebfkckzmtdcutvv}" \
+       bash "$(dirname "${BASH_SOURCE[0]}")/00-comprobar-destino.sh" ) ; then
+  echo "El destino no está confirmado: NO se arranca el servidor." >&2
+  exit 1
+fi
+
 echo "Arrancando el servidor con $(grep -c '=' "$ENV_FILE") variables, contra $BASE_DB"
 ( cd "$RAIZ" && set -a && . "$ENV_FILE" && set +a && exec npx tsx server/index.ts ) > "$LOG" 2>&1 &
 SRV=$!

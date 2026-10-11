@@ -17,6 +17,27 @@ do $$ begin
   end if;
 end $$;
 
+-- ── El catálogo de servicios, que NO viaja en el volcado ───────────────────
+--
+-- Son datos, y un `pg_dump --schema-only` no los trae. Sin ellos, la
+-- importación bloquea TODOS los albaranes que lleven servicios con
+-- «Servicio desconocido: …», comprobado. Los doce códigos son los que crea
+-- la migración `tyrecontrol_parte_servicio.sql` en producción.
+insert into tc_cat_servicios (codigo, nombre, unidad, orden, activo) values
+  ('desmontar_montar_cubierta', 'Desmontar/Montar cubierta',               'unidad', 10, true),
+  ('quitar_poner_rueda',        'Quitar y poner rueda del vehículo',       'unidad', 20, true),
+  ('equilibrado',               'Equilibrados',                            'unidad', 30, true),
+  ('valvulas',                  'Válvulas',                                'unidad', 40, true),
+  ('alargaderas',               'Alargaderas',                             'unidad', 50, true),
+  ('pinchazo',                  'Pinchazo',                                'unidad', 60, true),
+  ('rayados',                   'Rayados',                                 'unidad', 70, true),
+  ('alineacion_standard',       'Alineación de dirección (standard)',      'unidad', 80, true),
+  ('alineacion_compleja',       'Alineación de dirección (compleja)',      'unidad', 90, true),
+  ('salida_servicio_movil',     'Salida de servicio móvil',                'unidad', 100, true),
+  ('horas_oficial_1a',          'Horas de oficial de 1ª (servicio móvil)', 'hora',   110, true),
+  ('km_recorridos',             'Kilómetros recorridos',                   'km',     120, true)
+on conflict (codigo) do nothing;
+
 -- ── La empresa de pruebas ──────────────────────────────────────────────────
 insert into tc_empresas (id, nombre)
 values ('aaaaaaaa-0000-4000-8000-000000000001', 'Pruebas · flota sintética')
@@ -109,6 +130,8 @@ do $$
 declare v_244 uuid := 'cccccccc-0000-4000-8000-000000000004';
         v_22  uuid := 'cccccccc-0000-4000-8000-000000000005';
 begin
+  raise notice 'Servicios en el catálogo: % (sin ellos la importación bloquea todo lo que lleve servicios)',
+    (select count(*) from tc_cat_servicios where activo);
   raise notice 'Vehículos sembrados: %', (select count(*) from tc_vehiculos where empresa_id='aaaaaaaa-0000-4000-8000-000000000001');
   raise notice 'La matrícula PRUNOEX NO existe (es el caso de vehículo no encontrado): %',
     (select count(*) = 0 from tc_vehiculos where matricula='PRUNOEX');

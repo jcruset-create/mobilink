@@ -19,15 +19,21 @@ fila de datos de producción.**
 | 0 | Leer este documento entero | | — |
 | 1 | Volcar el **esquema** de producción, sin datos | 🔒 | `01-volcar-esquema.sh` |
 | 2 | Repasar ese DDL antes de restaurarlo | | `02-revisar-ddl.sh` |
+| 2b | **Ensayar la restauración** en una base que emula un proyecto nuevo | | `08-ensayar-restauracion.sh` |
 | 3 | Crear el proyecto Supabase de pruebas | 🔒 | — (panel) |
+| **★** | **Comprobar el destino. Antes de restaurar, de migrar y de arrancar** | | `00-comprobar-destino.sh` |
 | 4 | Restaurar el DDL y **marcar** la base | 🔒 | `03-levantar-staging.sh` |
 | 5 | Respaldo y **prueba de restauración** | 🔒 | `06-respaldo-y-restauracion.sh` |
-| 6 | Aplicar las **tres migraciones**, en orden | 🔒 | SQL Editor |
+| 5b | Guardar y **probar** la vuelta atrás de inventario | | `07-guardar-vuelta-atras.sh` |
+| 6 | Aplicar las **tres migraciones**, en orden (★ antes) | 🔒 | SQL Editor |
 | 7 | Sembrar los datos sintéticos | 🔒 | `semilla-staging.sql` |
-| 8 | Desplegar panel y servidor de la misma versión | 🔒 | — (Render) |
-| 9 | **Identificar el entorno**: panel, servidor y base | | `04-identificar-entorno.sh` |
+| 8 | Desplegar panel y servidor de la misma versión (★ antes) | 🔒 | — (Render) |
+| 9 | **Identificar el entorno** ya desplegado: bundle, servidor y base | | `04-identificar-entorno.sh` |
 | 10 | Comprobar el arranque y el PDF | | `05-probar-arranque.sh` |
 | 11 | Simular, importar, medir, PDF, inventario, recarga y deshacer | 🔒 | abajo |
+
+El paso **★ no es un paso más: es una precondición de los pasos 4, 6 y 8**, y
+se repite antes de cada uno.
 
 ---
 
@@ -68,6 +74,45 @@ Plan gratuito. Dos límites conocidos: el número de proyectos gratuitos por
 organización, y que un proyecto gratuito **se pausa tras una semana sin
 actividad**.
 
+## ★ Comprobar el destino — antes de restaurar, de migrar y de arrancar
+
+```bash
+DATABASE_URL=… SUPABASE_URL=… VITE_SUPABASE_URL=… \
+REF_PRUEBAS=<subdominio de pruebas> REF_PRODUCCION=<subdominio de producción> \
+bash scripts/staging/00-comprobar-destino.sh
+```
+
+**Por qué va antes y no después.** El arranque de Express ejecuta DDL sobre
+`DATABASE_URL` (`prepararEsquema`, en `server/index.ts`): `npm start` con el
+`.env` equivocado delante **modifica la base** antes de que nadie haya pedido
+ninguna migración. Identificar el entorno después del despliegue llega tarde,
+porque para entonces ya está tocada. Lo mismo vale para restaurar y para
+migrar.
+
+Comprueba cuatro cosas y **sale con error a la primera que falle**:
+
+1. **`DATABASE_URL`**: host, puerto y base, sin enseñar la contraseña. Si el
+   host contiene el proyecto de producción, falla.
+2. **La marca de la base**: `current_setting('mobilink.entorno')` tiene que
+   decir `pruebas`. Es lo único que no se puede confundir: el nombre de la
+   base se repite y, con el esquema real restaurado, el número de tablas es
+   idéntico al de producción.
+3. **`SUPABASE_URL` y `VITE_SUPABASE_URL`**: a qué proyecto va a hablar el
+   servidor y qué se va a compilar en el panel.
+4. **Lo que NO debería estar definido**: `STRIPE_SECRET_KEY`,
+   `TWILIO_AUTH_TOKEN`, `SMTP_PASS`, `OPENAI_API_KEY`, `WEBFLEET_PASSWORD`,
+   `MOVERTIS_TOKEN`, `BC_CLIENT_SECRET`, `FIREBASE_SERVICE_ACCOUNT`… Si hay
+   credenciales externas en el entorno, avisa.
+
+`05-probar-arranque.sh` lo ejecuta por su cuenta y **se niega a arrancar el
+servidor** si no pasa. Comprobado con una base sin marcar: «El destino no
+está confirmado: NO se arranca el servidor».
+
+Después del despliegue se repite la comprobación, pero **la otra**: la del
+paso 9, que mira el bundle servido, el commit del servidor y la base. Son
+complementarias, no la misma: esta mira lo que se va a usar, aquella lo que
+ya está desplegado.
+
 ## 4. Restaurar y marcar la base 🔒
 
 ```bash
@@ -84,6 +129,46 @@ Esa marca es la comprobación que sirve. El nombre de la base se repite, el
 número de tablas con el esquema real es idéntico, y `current_database()` no
 distingue dos bases llamadas igual en servidores distintos. Producción no
 tiene la marca y no se le pone.
+
+### Ensayo previo: ¿entra ese DDL en un proyecto nuevo?
+
+```bash
+DDL=esquema-produccion.sql BASE=banco_nuevo_supabase \
+bash scripts/staging/08-ensayar-restauracion.sh
+```
+
+Crea una base desechable con **lo que trae un proyecto Supabase recién
+creado y nada más** —los roles `anon`/`authenticated`/`service_role`, los
+esquemas `auth`/`storage`/`extensions`, `pgcrypto` y los stubs de `auth.uid()`
+y compañía—, restaura el DDL ahí y dice qué falta. Ensayado en local con el
+esquema completo (463 tablas, 256 funciones, 7 vistas, 304 políticas RLS, 86
+triggers):
+
+> restaurado (1 error, «schema "public" already exists», inofensivo)
+
+### Lo que NO viaja en el volcado, y hay que poner aparte
+
+Comprobado sobre la base restaurada, no supuesto:
+
+| Qué | Por qué no viaja | Quién lo pone |
+|---|---|---|
+| **Permisos de tabla** de `anon` y `authenticated` (salen a **0**) | el volcado va con `--no-privileges`, y en Supabase vienen de los *default privileges* del esquema `public` | `grant all on all tables/sequences/functions in schema public to anon, authenticated, service_role` más los `alter default privileges` |
+| **`bypassrls` de `service_role`** | es un atributo del ROL, y los roles son del clúster, no del volcado | el proyecto Supabase ya lo trae; en una base a mano, `alter role service_role bypassrls` |
+| **Extensiones** | con `--schema=public` no viajan las de otros esquemas. El DDL usa `gen_random_uuid()` (214 veces) y `crypt()` (3), así que **`pgcrypto` tiene que estar habilitado ANTES de restaurar** | el panel de Supabase, o `create extension` |
+| **Los roles** `anon`, `authenticated`, `service_role` | ídem: son del clúster | el proyecto los trae de serie |
+| **Objetos de `auth`, `storage`, `cron`, `net`** | el volcado es solo de `public` | el proyecto trae `auth` y `storage`; `cron` y `net` se habilitan si hacen falta, y **para esta prueba no hacen falta** |
+| **TODOS los datos**, incluidos los catálogos | `--schema-only` | `semilla-staging.sql` |
+
+El catálogo merece un aviso aparte, porque no es evidente: **`tc_cat_servicios`
+queda vacío**, y la importación valida cada servicio contra él. Sin esas doce
+filas, **todos** los albaranes con servicios salen bloqueados. Comprobado:
+
+```
+sin catálogo:  {"estado": "bloqueado", "motivo": "Servicio desconocido: equilibrado"}
+con catálogo:  {"estado": "se_crearia", "servicios": 1, …}
+```
+
+`semilla-staging.sql` las pone.
 
 ### Qué más necesita la base, además del DDL
 
@@ -141,7 +226,7 @@ función** y PostgREST responde `PGRST203` a todas las llamadas. Hay que
 comprobar que lo que ya existe en la base tiene exactamente estas firmas, tal
 como las devuelve `pg_get_function_identity_arguments`:
 
-| Función | Firma (como la devuelve `pg_get_function_identity_arguments`) | Fase |
+| Función | Firma (de `pg_get_function_identity_arguments` en la base de pruebas) | Fase |
 |---|---|---|
 | `tc_anular_operacion` | `(p_operacion uuid, p_motivo text)` → `void` | 1 (ya existía; misma firma) |
 | `tc_deshacer_importacion` | `(p_lote uuid, p_excluir uuid[], p_simular boolean)` → `jsonb` | 1, redefinida en 2 y 3 |
@@ -156,6 +241,8 @@ como las devuelve `pg_get_function_identity_arguments`:
 | `tc_imp_huella_estado` | `(p_intervencion uuid)` → `text` | 1, redefinida en 2 |
 | `tc_imp_huella_intervalo` | `(p_intervalo uuid)` → `text` | 3 |
 | `tc_imp_identificar_unidad` | `(p_operacion uuid, p_neumatico uuid, p_crear boolean, p_motivo text)` → `jsonb` | 2 |
+| `tc_imp_intervalo_duda_continuidad` | `(p_intervalo tc_reconstruccion_montajes)` → `boolean` | 3 |
+| `tc_imp_intervalo_duda_km` | `(p_intervalo tc_reconstruccion_montajes)` → `boolean` | 3 |
 | `tc_imp_intervalo_en_medias` | `(p_intervalo tc_reconstruccion_montajes)` → `boolean` | 3 |
 | `tc_imp_intervalo_motivos` | `(p_intervalo tc_reconstruccion_montajes)` → `text[]` | 3 |
 | `tc_imp_limite_km_dia` | `(p_empresa uuid)` → `numeric` | 3 |
@@ -163,7 +250,7 @@ como las devuelve `pg_get_function_identity_arguments`:
 | `tc_imp_num` | `(p_valor numeric)` → `text` | 3 |
 | `tc_imp_posiciones_norma` | `(p_vehiculo uuid, p_nuevas integer, p_una_referencia boolean)` → `uuid[]` | 1 |
 | `tc_imp_reconstruir_vehiculo` | `(p_vehiculo uuid)` → `integer` | 2, redefinida en 3 |
-| `tc_imp_revisar_intervalo` | `(p_intervalo uuid, p_decision text, p_motivo text)` → `jsonb` | 3 |
+| **`tc_imp_revisar_intervalo`** | **`(p_intervalo uuid, p_ambito text, p_decision text, p_motivo text)` → `jsonb`** | **3 · cuatro parámetros** |
 | `tc_importar_historico` | `(p_empresa uuid, p_origen_sistema text, p_lote jsonb, p_simular boolean)` → `jsonb` | 1, redefinida en 2 y 3 |
 | `tc_informes_inventario_marca_medida` | `(p_empresa uuid)` → `TABLE(marca text, medida text, total bigint)` | 2 (ya existía) |
 | `tc_informes_inventario_por` | `(p_empresa uuid, p_dim text)` → `TABLE(etiqueta text, total bigint)` | 2 (ya existía) |
@@ -171,35 +258,85 @@ como las devuelve `pg_get_function_identity_arguments`:
 | `tc_informes_montajes` | `(p_empresa uuid, p_desde date, p_hasta date, p_origen text)` → `jsonb` | 2, redefinida en 3 |
 | `tc_informes_recorridos_estimados` | `(p_empresa uuid, p_desde date, p_hasta date, p_vehiculo uuid)` → `jsonb` | 3 |
 
-Dos precisiones, porque es fácil contar de más:
+Son 29 funciones y **ninguna está duplicada** en la base de pruebas:
 
-- **La única función que se elimina en todo el PR es
-  `tc_imp_revisar_intervalo(uuid, text, text)`**, y la elimina la fase 3 justo
-  antes de crear su versión de cuatro parámetros. Es una función de la propia
-  fase 3, que no está desplegada en ninguna parte; el `drop` está por si
-  alguien aplicó una versión anterior en una base de pruebas. Ninguna otra
-  redefinición dropea nada: todas son `create or replace` sobre la **misma
-  firma**.
+```sql
+select p.proname, count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+ where n.nspname = 'public' and (p.proname like 'tc_imp%' or p.proname like 'tc_informes_%')
+ group by 1 having count(*) > 1;     -- no devuelve nada
+```
+
+Tres precisiones, porque es fácil contar de más:
+
+- **`tc_imp_revisar_intervalo` tiene CUATRO parámetros**, no tres:
+  `(p_intervalo uuid, p_ambito text, p_decision text, p_motivo text)`. El
+  ámbito es lo que separa la decisión sobre los kilómetros de la decisión
+  sobre la continuidad. **La versión de tres parámetros ya no existe**, y se
+  ha comprobado llamando por PostgREST:
+
+  | Llamada | Respuesta |
+  |---|---|
+  | `{p_intervalo, p_decision, p_motivo}` (la vieja) | **404 `PGRST202`** · «Searched for the function … with parameters p_decision, p_intervalo, p_motivo» |
+  | `{p_intervalo, p_ambito:"kilometros", p_decision, p_motivo}` | **200** · `uso_estadistico: aceptado`, `continuidad_decision: pendiente`, `en_medias: false`, motivo `continuidad_pendiente` |
+  | `{p_intervalo, p_ambito:"continuidad", p_decision, p_motivo}` | **200** · `continuidad_decision: aceptada`, `en_medias: true` |
+
+  Un 404 `PGRST202` y no un 409 `PGRST203`: la función vieja **no está**, no
+  es que haya dos candidatas. Que la llamada antigua falle es lo correcto; el
+  panel ya llama con los cuatro.
+- **La única función que se elimina en todo el PR es esa misma**, con su
+  firma de tres parámetros, y la elimina la fase 3 justo antes de crear la
+  nueva. Es una función de la propia fase 3, que no está desplegada en
+  ninguna parte; el `drop` está por si alguien aplicó una versión anterior en
+  una base de pruebas. Ninguna otra redefinición dropea nada: todas son
+  `create or replace` sobre la **misma firma**.
 - `tc_imp_anotar_bloqueado` devuelve `uuid`, no `void`.
 
 ### Y guardar la vuelta atrás de los informes de inventario
 
 Las tres funciones de inventario y la vista `tc_marcas_contadores` son lo
 único que la migración **redefine habiendo sido escrito por otra migración**.
-Si en la base real tienen otro cuerpo, la migración se lo lleva por delante:
+Si en la base real tienen otro cuerpo, la migración se lo lleva por delante.
 
 ```bash
-psql "$DATABASE_URL" -At -c "select pg_get_functiondef(p.oid) from pg_proc p
-  join pg_namespace n on n.oid=p.pronamespace
- where n.nspname='public' and p.proname in
-   ('tc_informes_inventario_por','tc_informes_inventario_marca_medida','tc_informes_inventario_resumen')" \
-  > inventario-antes.sql
-psql "$DATABASE_URL" -At -c "select pg_get_viewdef('tc_marcas_contadores'::regclass, true)" \
-  >> inventario-antes.sql
+ORIGEN_URL="$DESTINO_URL" bash scripts/staging/07-guardar-vuelta-atras.sh vuelta-atras-inventario.sql
 ```
 
-Ese fichero **es** la vuelta atrás de esa parte. Y la comprobación de que la
-redefinición hace lo que debe es funcional:
+El fichero que sale es **ejecutable**, no un apunte. Dos cosas que no salen
+solas y que antes faltaban:
+
+- **`pg_get_viewdef` devuelve la CONSULTA de la vista, no una sentencia.**
+  Pegar su salida en un `psql` no restaura nada: hay que envolverla en un
+  `create or replace view … as …;`, y con sus `reloptions` si las lleva
+  (`security_invoker`). `pg_get_functiondef`, en cambio, sí devuelve la
+  sentencia completa.
+- **Los permisos tampoco viajan.** Se reconstruyen desde `relacl` y `proacl`,
+  un `grant` por línea. Sin ellos, restaurar la definición deja los objetos
+  sin acceso para `anon`/`authenticated` y el panel deja de leer.
+
+Y no se llama «vuelta atrás» hasta que se prueba en una base desechable:
+
+```bash
+bash scripts/staging/07-guardar-vuelta-atras.sh --probar vuelta-atras-inventario.sql <base_desechable>
+```
+
+El modo `--probar` guarda la huella de las definiciones **y** los permisos,
+los **rompe** como lo haría la migración —mismo nombre, mismo tipo de
+retorno, otro cuerpo, y los permisos revocados—, ejecuta el fichero y
+comprueba que la huella vuelve a ser **exactamente** la de antes. Probado en
+local sobre una copia del esquema completo:
+
+```
+huella antes:     ec9b53b7ca47d7ffda04567622084702
+huella rota:      1448f2c4bb43d24017ac15f597062988
+huella después:   ec9b53b7ca47d7ffda04567622084702
+OK: el fichero devuelve las definiciones Y los permisos exactamente como estaban.
+```
+
+Si el `create or replace view` falla porque la vista nueva tiene **otras
+columnas**, hay que borrarla antes (`drop view tc_marcas_contadores;`) y
+mirar primero qué depende de ella. El fichero lo avisa en su cabecera.
+
+Y la comprobación de que la redefinición hace lo que debe es funcional:
 `scripts/importacion-historico/comprobar-inventario.sh`.
 
 ## 7. Los datos sintéticos 🔒
@@ -208,7 +345,10 @@ redefinición hace lo que debe es funcional:
 psql "$DESTINO_URL" -f scripts/staging/semilla-staging.sql
 ```
 
-Se niega a sembrar una base que no lleve la marca `mobilink.entorno`. Crea
+Se niega a sembrar una base que no lleve la marca `mobilink.entorno`. Lo
+primero que pone son **las doce filas de `tc_cat_servicios`**: son datos, no
+viajan en el volcado, y sin ellas la importación bloquea todos los albaranes
+que lleven servicios. Después crea
 nueve vehículos con las configuraciones que la prueba tiene que distinguir
 —2+4, 2+4+2, 2+4+4, 2+2, sin plano, sin tipo, varias referencias, con datos
 vivos, y 1445HWZ— y deja **sin crear** la matrícula `PRUNOEX`, que es el caso
@@ -244,14 +384,17 @@ obstáculo, era el obstáculo. Ahora el cliente vive en
 hay clave; sin ella el servidor levanta y las tres rutas de cobro responden
 503 antes de intentar nada. Con clave, el comportamiento es el de siempre.
 
-## 9. Identificar el entorno antes de tocar nada
+## 9. Identificar el entorno YA DESPLEGADO
 
 ```bash
 PANEL_URL=… SERVIDOR_URL=… DESTINO_URL=… REF_PRUEBAS=… REF_PRODUCCION=… \
 COMMIT_ESPERADO=… bash scripts/staging/04-identificar-entorno.sh
 ```
 
-Las tres piezas, **por a dónde apuntan**:
+Esta es la **segunda** comprobación, la de después del despliegue, y mira
+cosas distintas de la del paso ★: allí se miraba la configuración que se iba
+a usar; aquí, lo que de verdad se ha desplegado. Las tres piezas, **por a
+dónde apuntan**:
 
 1. **Panel**: el subdominio del proyecto Supabase va **compilado dentro del
    bundle**. Si el bundle lleva el de producción, el panel habla con
@@ -270,13 +413,11 @@ restaurado son idénticos a los de producción.
 
 `server/index.ts` ejecuta `prepararEsquema(...)` al arrancar: `CREATE TABLE IF
 NOT EXISTS` y `ADD COLUMN IF NOT EXISTS` sobre `DATABASE_URL`. **Arrancar el
-servidor ya modifica la base**, sin que nadie haya pedido una migración. Antes
-de arrancar, siempre:
+servidor ya modifica la base**, sin que nadie haya pedido una migración.
 
-```bash
-node -e 'const u=new URL(process.env.DATABASE_URL);console.log(u.hostname,u.port,u.pathname)'
-psql "$DATABASE_URL" -At -c "select current_setting('mobilink.entorno', true)"
-```
+Por eso la comprobación obligatoria es la del paso ★ y va **antes** de
+arrancar, no aquí. `05-probar-arranque.sh` la ejecuta solo y se niega a
+levantar el servidor si no pasa.
 
 ## 10. Comprobar el arranque y el PDF
 
@@ -369,8 +510,16 @@ En este orden. Cada punto tiene su condición de parada más abajo.
 
 Sin discusión, en el momento:
 
-- **La identificación del entorno falla** en cualquiera de las tres piezas
-  (paso 9). Nada de «seguimos a ver qué pasa».
+- **La comprobación del destino falla** (paso ★): no se restaura, no se
+  migra y no se arranca. Nada de «seguimos a ver qué pasa».
+- **La identificación del entorno desplegado falla** en cualquiera de las
+  tres piezas (paso 9).
+- **El ensayo de restauración** (paso 2b) da errores que no sean «ya
+  existe».
+- **La prueba de la vuelta atrás** (paso 5b) no devuelve la misma huella de
+  definiciones y permisos.
+- **`tc_cat_servicios` está vacío** cuando empieza la importación: todo lo
+  que lleve servicios saldría bloqueado y el resultado no mediría nada.
 - **El repaso del DDL** encuentra un trabajo programado, una llamada
   saliente, una conexión a otra base o un disparador de DDL que no se haya
   comentado antes de restaurar.
