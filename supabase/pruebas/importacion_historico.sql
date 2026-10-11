@@ -516,8 +516,8 @@ do $$ declare r jsonb; c uuid; n1 uuid; i record; begin
   perform prueba('cadena: el segundo montaje cierra los dos intervalos',
     (select count(*) from tc_reconstruccion_montajes where vehiculo_id='00000000-0000-0000-0000-0000000000c1' and estado='cerrado'), 2::bigint);
   perform prueba('cadena: recorrido 50.000 km y fechas correctas',
-    (select (km_desmontaje-km_montaje)::int||'/'||fecha_montaje||'/'||fecha_desmontaje||'/'||km_desmontaje_conocido
-       from tc_reconstruccion_montajes where neumatico_id=n1), '50000/2026-01-10/2026-04-10/true');
+    (select recorrido_km::int||'/'||fecha_montaje||'/'||fecha_desmontaje||'/'||km_estado
+       from tc_reconstruccion_montajes where neumatico_id=n1), '50000/2026-01-10/2026-04-10/utilizables');
   perform prueba('cadena: nivel estimado, nunca confirmado',
     (select bool_and(nivel='estimado') from tc_reconstruccion_montajes where vehiculo_id='00000000-0000-0000-0000-0000000000c1' and estado='cerrado'), true);
   perform prueba('cadena: la salida del segundo albarán sabe a quién retiró',
@@ -944,4 +944,68 @@ do $$ declare r jsonb; begin
   perform prueba('tipo sin plano: sin posición, pero se importa igual',
     (select count(*) from operaciones_neumaticos o join tc_intervenciones i on i.id=o.intervencion_id
       where i.origen_doc='B2_26/T7|SINPLANO' and o.tipo_operacion='montaje' and o.posicion_fuente='desconocida'), 2::bigint);
+end $$;
+
+-- ── 28. Kilómetros: ausentes, incompatibles y utilizables ─────────────────
+-- Un dato incompatible NO se convierte en ausente: el valor se conserva y se
+-- clasifica. Y un recorrido cero no es un error por sí solo.
+do $$ declare r jsonb; v uuid; begin
+  insert into tc_vehiculos (id, empresa_id, tipo_vehiculo_id, matricula, km_actual) values
+    ('00000000-0000-0000-0000-00000000ab01','00000000-0000-0000-0000-0000000000e1','00000000-0000-0000-0000-00000000000a','KM0001', 1),
+    ('00000000-0000-0000-0000-00000000ab02','00000000-0000-0000-0000-0000000000e1','00000000-0000-0000-0000-00000000000a','KM0002', 1),
+    ('00000000-0000-0000-0000-00000000ab03','00000000-0000-0000-0000-0000000000e1','00000000-0000-0000-0000-00000000000a','KM0003', 1),
+    ('00000000-0000-0000-0000-00000000ab04','00000000-0000-0000-0000-0000000000e1','00000000-0000-0000-0000-00000000000a','KM0004', 1)
+    on conflict do nothing;
+  -- Utilizables: 100.000 → 130.000
+  perform tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes', lote('2026-01', alb_fk('B2_26/K1','KM0001',2,'2026-01-10',100000)), false);
+  perform tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes', lote('2026-03', alb_fk('B2_26/K2','KM0001',2,'2026-03-10',130000)), false);
+  perform prueba('km utilizables: recorrido calculado y clasificado',
+    (select km_estado||'/'||recorrido_km::int||'/'||revisar from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ab01' and estado='cerrado' limit 1), 'utilizables/30000/false');
+  -- Incompatibles: 200.000 → 180.000 (decreciente). Los valores se conservan.
+  perform tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes', lote('2026-01', alb_fk('B2_26/K3','KM0002',2,'2026-01-10',200000)), false);
+  perform tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes', lote('2026-03', alb_fk('B2_26/K4','KM0002',2,'2026-03-10',180000)), false);
+  perform prueba('km incompatibles: se clasifican como tales, no como ausentes',
+    (select km_estado||'/'||coalesce(recorrido_km::text,'—')||'/'||revisar from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ab02' and estado='cerrado' limit 1), 'incompatibles/—/true');
+  perform prueba('km incompatibles: los valores originales NO se borran',
+    (select km_montaje::int||' → '||km_desmontaje::int||' ('||km_desmontaje_conocido||')' from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ab02' and estado='cerrado' limit 1), '200000 → 180000 (true)');
+  perform prueba('km incompatibles: el motivo dice los dos valores',
+    (select motivo_revision like '%200000%180000%' from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ab02' and estado='cerrado' limit 1), true);
+  -- Ausentes: sin km en el cierre
+  perform tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes', lote('2026-01', alb_fk('B2_26/K5','KM0003',2,'2026-01-10',300000)), false);
+  perform tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes', lote('2026-03', alb_fk('B2_26/K6','KM0003',2,'2026-03-10',null)), false);
+  perform prueba('km ausentes: ni recorrido ni aviso; solo constan como ausentes',
+    (select km_estado||'/'||coalesce(recorrido_km::text,'—')||'/'||revisar from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ab03' and estado='cerrado' limit 1), 'ausentes/—/false');
+  perform prueba('km ausentes: el motivo dice qué extremo falta',
+    (select motivo_revision from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ab03' and estado='cerrado' limit 1), 'Kilómetros ausentes en el desmontaje');
+  -- Iguales el mismo día: recorrido 0 y SIN aviso.
+  perform tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes',
+    lote('2026-01', alb_fk('B2_26/K7','KM0004',2,'2026-01-10',400000)), false);
+  perform tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes',
+    lote('2026-01', alb_fk('B2_26/K8','KM0004',2,'2026-01-10',400000)), false);
+  -- Mismo día: el recorrido 0 es normal y NO genera aviso por sí mismo (el
+  -- aviso que sí sale es el de dos albaranes el mismo día, que es otra cosa).
+  perform prueba('km iguales el mismo día: recorrido 0 y utilizable',
+    (select km_estado||'/'||recorrido_km::int from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ab04' and estado='cerrado' limit 1), 'utilizables/0');
+  perform prueba('km iguales el mismo día: no se avisa por el recorrido cero',
+    (select coalesce(motivo_revision,'') not like '%recorrido cero%' from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ab04' and estado='cerrado' limit 1), true);
+  -- Iguales con días de por medio: recorrido 0 pero a revisar.
+  perform tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes',
+    lote('2026-05', alb_fk('B2_26/K9','KM0004',2,'2026-05-10',400000)), false);
+  perform prueba('km iguales tras meses: recorrido 0 pero marcado para revisar',
+    (select km_estado||'/'||recorrido_km::int||'/'||revisar from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ab04' and fecha_montaje='2026-01-10' and estado='cerrado'
+        and fecha_desmontaje='2026-05-10' limit 1), 'utilizables/0/true');
+  perform prueba('km iguales tras meses: el motivo lo explica',
+    (select motivo_revision like '%recorrido cero%' from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ab04' and fecha_desmontaje='2026-05-10' limit 1), true);
+  perform prueba('un intervalo sin cerrar no clasifica kilómetros',
+    (select bool_and(km_estado='sin_cierre' and recorrido_km is null) from tc_reconstruccion_montajes where estado <> 'cerrado'), true);
 end $$;

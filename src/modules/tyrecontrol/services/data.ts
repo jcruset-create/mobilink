@@ -3634,6 +3634,10 @@ export interface IntervaloReconstruido {
   fecha_montaje: string; km_montaje: number | null; km_montaje_conocido: boolean;
   fecha_desmontaje: string | null; km_desmontaje: number | null; km_desmontaje_conocido: boolean;
   estado: "abierto" | "cerrado" | "interrumpido"; nivel: "confirmado" | "estimado";
+  /** Cómo están los kilómetros: utilizables, ausentes (falta un extremo),
+   *  incompatibles (hay valores pero decrecen; se conservan) o sin cierre. */
+  km_estado: "utilizables" | "ausentes" | "incompatibles" | "sin_cierre";
+  recorrido_km: number | null;
   posicion_fuente: string | null; continuidad_desde: string | null;
   evidencia: string | null; revisar: boolean; motivo_revision: string | null;
   origen_doc_montaje: string | null; origen_doc_desmontaje: string | null;

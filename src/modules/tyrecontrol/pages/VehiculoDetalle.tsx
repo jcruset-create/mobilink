@@ -491,12 +491,21 @@ export default function VehiculoDetalle() {
                         </span>
                       )}
                     </td>
-                    <td className={tdCls}>{r.fecha_montaje}{r.km_montaje_conocido ? ` · ${r.km_montaje} km` : " · km desconocidos"}</td>
-                    <td className={tdCls}>{r.fecha_desmontaje ?? "—"}{r.fecha_desmontaje && !r.km_desmontaje_conocido ? " · km desconocidos" : ""}</td>
+                    <td className={tdCls}>{r.fecha_montaje}{r.km_montaje_conocido ? ` · ${r.km_montaje} km` : " · sin km"}</td>
                     <td className={tdCls}>
-                      {r.km_montaje_conocido && r.km_desmontaje_conocido && r.km_montaje != null && r.km_desmontaje != null
-                        ? <span className="text-slate-200">{r.km_desmontaje - r.km_montaje} km <span className="text-[11px] text-slate-500">({r.nivel})</span></span>
-                        : <span className="text-slate-500">desconocido</span>}
+                      {r.fecha_desmontaje ?? "—"}
+                      {r.fecha_desmontaje ? (r.km_desmontaje_conocido ? ` · ${r.km_desmontaje} km` : " · sin km") : ""}
+                    </td>
+                    <td className={tdCls}>
+                      {r.km_estado === "utilizables" && r.recorrido_km != null
+                        ? <span className="text-slate-200">{r.recorrido_km} km <span className="text-[11px] text-slate-500">({r.nivel})</span></span>
+                        : r.km_estado === "incompatibles"
+                        ? <span className="text-amber-300" title="Hay kilometraje en los dos extremos pero no da un recorrido válido">
+                            incompatible <span className="text-[11px] text-amber-300/70">({r.km_montaje} → {r.km_desmontaje})</span>
+                          </span>
+                        : r.km_estado === "ausentes"
+                        ? <span className="text-slate-500">ausentes</span>
+                        : <span className="text-slate-500">—</span>}
                     </td>
                     <td className={tdCls}>
                       <span className={r.estado === "interrumpido" ? "text-amber-300" : "text-slate-300"}>{r.estado}</span>

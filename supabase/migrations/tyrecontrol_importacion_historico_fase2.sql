@@ -112,6 +112,16 @@ create table if not exists tc_reconstruccion_montajes (
   fecha_desmontaje       date,
   km_desmontaje          numeric,
   km_desmontaje_conocido boolean not null default false,
+  -- Cómo están los kilómetros de este intervalo:
+  --   'utilizables'   → hay valores en los dos extremos y permiten calcular
+  --                     el recorrido (que puede ser 0).
+  --   'ausentes'      → falta el kilometraje de uno o de los dos extremos.
+  --   'incompatibles' → hay valores, pero no dan un recorrido válido
+  --                     (kilometraje decreciente). Los valores NO se borran.
+  --   'sin_cierre'    → el intervalo no está cerrado, así que no hay recorrido.
+  km_estado              text not null default 'sin_cierre'
+                         check (km_estado in ('utilizables','ausentes','incompatibles','sin_cierre')),
+  recorrido_km           numeric,
   lote_desmontaje_id     uuid references tc_importacion_lotes(id) on delete set null,
   origen_doc_desmontaje  text,
   operacion_salida_id    uuid references operaciones_neumaticos(id) on delete set null,
@@ -148,6 +158,16 @@ comment on column tc_reconstruccion_montajes.km_montaje_conocido is
   'Falso = kilómetros DESCONOCIDOS. Nunca se interpretan como cero.';
 
 alter table tc_reconstruccion_montajes add column if not exists clase text not null default 'ocupacion';
+alter table tc_reconstruccion_montajes add column if not exists km_estado text not null default 'sin_cierre';
+alter table tc_reconstruccion_montajes add column if not exists recorrido_km numeric;
+do $$ begin
+  alter table tc_reconstruccion_montajes add constraint ck_recons_km_estado
+    check (km_estado in ('utilizables','ausentes','incompatibles','sin_cierre'));
+exception when duplicate_object then null; end $$;
+comment on column tc_reconstruccion_montajes.km_estado is
+  'utilizables / ausentes (falta un extremo) / incompatibles (hay valores pero el kilometraje decrece; se conservan) / sin_cierre. Un dato incompatible NUNCA se convierte en ausente.';
+comment on column tc_reconstruccion_montajes.recorrido_km is
+  'Solo cuando km_estado = utilizables. Puede ser 0: dos visitas el mismo día sin rodar es normal; con días de por medio, se marca para revisar.';
 do $$ begin
   alter table tc_reconstruccion_montajes add constraint ck_recons_clase check (clase in ('unidad','ocupacion'));
 exception when duplicate_object then null; end $$;
@@ -326,6 +346,7 @@ declare
   e record; o record; ev record;
   v_n int := 0; v_rota boolean; v_desde date;
   v_km numeric; v_km_ok boolean; v_revisar boolean; v_motivo text;
+  v_km_estado text; v_recorrido numeric;
   v_ident text; v_nivel text; v_mismo_dia boolean;
 begin
   delete from tc_reconstruccion_montajes where vehiculo_id = p_vehiculo;
@@ -403,6 +424,7 @@ begin
         -- interrumpido, sin fecha de salida y sin recorrido.
         update tc_reconstruccion_montajes set
           estado = 'interrumpido', continuidad_desde = v_desde,
+          km_estado = 'sin_cierre', recorrido_km = null,
           revisar = true,
           motivo_revision = coalesce(motivo_revision || ' · ', '')
             || 'Interrumpido: entre el montaje y el ' || to_char(e.fecha_operacion, 'DD/MM/YYYY')
@@ -412,20 +434,36 @@ begin
         where id = o.id;
         v_ident := 'desconocida';
       else
+        -- Los kilómetros del cierre se CONSERVAN siempre; lo que cambia es
+        -- si sirven para calcular recorrido.
+        v_km := e.km_vehiculo; v_km_ok := e.km_vehiculo is not null;
         if e.km_vehiculo is null or o.km_montaje is null then
-          v_km := null; v_km_ok := false; v_revisar := false;
-          v_motivo := 'Kilómetros desconocidos en algún extremo del intervalo';
-        elsif e.km_vehiculo <= o.km_montaje then
-          v_km := null; v_km_ok := false; v_revisar := true;
-          v_motivo := 'Kilómetros no crecientes entre montaje y desmontaje';
+          v_km_estado := 'ausentes'; v_recorrido := null; v_revisar := false;
+          v_motivo := 'Kilómetros ausentes en ' ||
+            case when e.km_vehiculo is null and o.km_montaje is null then 'los dos extremos'
+                 when o.km_montaje is null then 'el montaje' else 'el desmontaje' end;
+        elsif e.km_vehiculo < o.km_montaje then
+          -- Decreciente: el dato existe y no se pierde, pero no da recorrido.
+          v_km_estado := 'incompatibles'; v_recorrido := null; v_revisar := true;
+          v_motivo := 'Kilometraje decreciente: ' || o.km_montaje || ' en el montaje y ' || e.km_vehiculo || ' en el desmontaje';
         else
-          v_km := e.km_vehiculo; v_km_ok := true; v_revisar := false; v_motivo := null;
+          v_km_estado := 'utilizables'; v_recorrido := e.km_vehiculo - o.km_montaje;
+          -- Diferencia cero: normal si las dos visitas son el mismo día; con
+          -- días de por medio, un vehículo que no rueda nada merece un vistazo.
+          if v_recorrido = 0 and e.fecha_operacion > o.fecha_montaje then
+            v_revisar := true;
+            v_motivo := 'Mismo kilometraje (' || e.km_vehiculo || ') tras '
+              || (e.fecha_operacion - o.fecha_montaje) || ' día(s): recorrido cero, conviene comprobarlo';
+          else
+            v_revisar := false; v_motivo := null;
+          end if;
         end if;
         v_nivel := case when v_ident = 'respaldada' then 'confirmado' else 'estimado' end;
         update tc_reconstruccion_montajes set
           estado = 'cerrado', nivel = v_nivel,
           fecha_desmontaje = e.fecha_operacion,
           km_desmontaje = v_km, km_desmontaje_conocido = v_km_ok,
+          km_estado = v_km_estado, recorrido_km = v_recorrido,
           lote_desmontaje_id = e.importacion_lote_id, origen_doc_desmontaje = e.doc,
           operacion_salida_id = (select s.id from operaciones_neumaticos s
                                   where s.grupo_sustitucion = e.grupo_sustitucion and s.tipo_operacion = 'desmontaje' limit 1),
