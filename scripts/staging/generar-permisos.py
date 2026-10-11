@@ -1,13 +1,26 @@
-"""Genera scripts/staging/permisos-pruebas.sql. Se ejecuta a mano cuando cambia
-la superficie de la aplicación; 10-comprobar-permisos.sh avisa si se ha
-quedado atrás."""
-import json, re, collections, pathlib, subprocess, sys
+"""Genera scripts/staging/permisos-pruebas.sql y permisos-pruebas.json.
 
-RAIZ = pathlib.Path("/home/user/mobilink")
+Se ejecuta a mano cuando cambia la superficie de la aplicación o alguna
+migración añade un grant; 10-comprobar-permisos.sh avisa si el fichero se ha
+quedado atrás. Necesita una base de PRUEBAS con el esquema completo aplicado,
+para leer el catálogo (RLS, políticas, firmas de función).
+
+    python3 scripts/staging/generar-permisos.py [base]           # local, puerto 5433
+    DATABASE_URL=postgresql://… python3 scripts/staging/generar-permisos.py
+
+Lee el catálogo; no escribe nada en la base.
+"""
+import json, os, re, collections, pathlib, subprocess, sys
+
+RAIZ = pathlib.Path(__file__).resolve().parents[2]
+URL  = os.environ.get("DATABASE_URL")
 DB   = sys.argv[1] if len(sys.argv) > 1 else "esquema_completo_f3"
+CONN = ([URL] if URL else
+        ["-h", os.environ.get("PGHOST", "127.0.0.1"), "-p", os.environ.get("PGPORT", "5433"),
+         "-U", os.environ.get("PGUSER", "mobilink"), "-d", DB])
 
 def psql(q):
-    return subprocess.run(["psql","-h","127.0.0.1","-p","5433","-U","mobilink","-d",DB,"-At","-F","|","-c",q],
+    return subprocess.run(["psql", *CONN, "-At", "-F", "|", "-c", q],
                           capture_output=True, text=True, check=True).stdout.strip().splitlines()
 
 cat = {}
