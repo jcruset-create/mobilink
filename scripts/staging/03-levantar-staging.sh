@@ -1,22 +1,28 @@
 #!/usr/bin/env bash
 #
-# Restaura un DDL ya repasado en una base de PRUEBAS y la marca como tal.
+# Restaura un DDL ya repasado en la base de PRUEBAS ya inicializada.
 #
-#   DESTINO_URL='postgresql://…' bash scripts/staging/03-levantar-staging.sh esquema-produccion.sql
+#   DATABASE_URL='postgresql://…' REF_PRUEBAS=… REF_PRODUCCION=… \
+#   SUPABASE_URL=… VITE_SUPABASE_URL=… \
+#   bash scripts/staging/03-levantar-staging.sh esquema-produccion.sql
 #
-# Tres cosas, en este orden:
-#   1. Se niega a tocar una base que no esté vacía de TyreControl. Así no se
-#      puede confundir el destino con una base que ya tiene datos.
-#   2. Restaura el DDL.
-#   3. MARCA la base: `mobilink.entorno = 'pruebas'`. Esa marca es lo que
-#      comprueban después los demás scripts y lo que hay que mirar antes de
-#      arrancar Express, porque el arranque hace DDL sobre DATABASE_URL.
+# Orden, que importa:
+#   1. La comprobación de operaciones: destino autorizado Y marca. La marca ya
+#      tiene que estar: la pone 00-inicializar-destino.sh sobre la base nueva
+#      y vacía, ANTES de restaurar. Aquí no se pone ninguna marca.
+#   2. Se niega a tocar una base que ya tenga tablas tc_*.
+#   3. Restaura el DDL.
+#   4. Aplica los permisos de la base de pruebas.
 #
-# Producción no tiene esa marca y no se le pone.
+# Producción no tiene la marca y no se le pone.
 set -euo pipefail
 
 DDL="${1:?Falta el fichero de DDL ya repasado}"
-: "${DESTINO_URL:?Falta DESTINO_URL (cadena de conexión de la base de PRUEBAS)}"
+AQUI="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Compatibilidad: antes esto se llamaba DESTINO_URL.
+export DATABASE_URL="${DATABASE_URL:-${DESTINO_URL:-}}"
+: "${DATABASE_URL:?Falta DATABASE_URL (cadena de conexión de la base de PRUEBAS)}"
 
 if [[ ! -f "$DDL.avisos" ]]; then
   echo "No veo '$DDL.avisos': repasa el DDL antes de restaurarlo." >&2
@@ -24,14 +30,11 @@ if [[ ! -f "$DDL.avisos" ]]; then
   exit 1
 fi
 
-python3 - "$DESTINO_URL" <<'PY'
-import sys
-from urllib.parse import urlsplit
-u = urlsplit(sys.argv[1])
-print(f"Destino: host={u.hostname} puerto={u.port or 5432} base={(u.path or '/').lstrip('/')}")
-PY
+echo "── Comprobación de operaciones (destino Y marca) ────────────────"
+bash "$AQUI/00-comprobar-destino.sh"
+echo
 
-YA=$(psql "$DESTINO_URL" -At -c "select count(*) from pg_tables where schemaname='public' and tablename like 'tc_%'")
+YA=$(psql "$DATABASE_URL" -At -c "select count(*) from pg_tables where schemaname='public' and tablename like 'tc\_%'")
 if [[ "$YA" != "0" ]]; then
   echo "PARA. Esa base ya tiene $YA tablas tc_*: no es una base vacía de pruebas." >&2
   exit 2
@@ -39,14 +42,14 @@ fi
 read -r -p "¿Restauro el esquema en ese destino? [escribe: si] " ok
 [[ "$ok" == "si" ]] || { echo "Cancelado."; exit 1; }
 
-psql "$DESTINO_URL" -v ON_ERROR_STOP=0 -f "$DDL"
+psql "$DATABASE_URL" -v ON_ERROR_STOP=0 -f "$DDL"
 
-# La marca. Hace falta una reconexión para que se lea.
-BASE=$(psql "$DESTINO_URL" -At -c "select current_database()")
-psql "$DESTINO_URL" -c "alter database \"$BASE\" set mobilink.entorno = 'pruebas'"
 echo
-echo "Marcada como entorno de pruebas. Compruébalo en una conexión NUEVA:"
-echo "  psql \"\$DESTINO_URL\" -At -c \"select current_setting('mobilink.entorno', true)\""
+echo "── Permisos de la base de pruebas ───────────────────────────────"
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$AQUI/permisos-pruebas.sql"
+DESTINO_URL="$DATABASE_URL" bash "$AQUI/10-comprobar-permisos.sh"
+
 echo
-echo "Siguiente: la semilla de datos sintéticos."
-echo "  psql \"\$DESTINO_URL\" -f scripts/staging/semilla-staging.sql"
+echo "Siguiente: la semilla de datos sintéticos (vuelve a pasar por el control)."
+echo "  bash scripts/staging/00-comprobar-destino.sh && \\"
+echo "  psql \"\$DATABASE_URL\" -v ON_ERROR_STOP=1 -f scripts/staging/semilla-staging.sql"
