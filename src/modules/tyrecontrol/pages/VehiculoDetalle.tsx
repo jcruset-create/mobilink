@@ -603,7 +603,12 @@ export default function VehiculoDetalle() {
                 <div className="mb-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-300" data-testid="resumen-recuento">
                   <span><b className="text-slate-100">{r.total}</b> {r.total === 1 ? "operación" : "operaciones"}</span>
                   {r.montajes > 0 && <span><b className="text-slate-100">{r.montajes}</b> {r.montajes === 1 ? "montaje" : "montajes"}{textoPorCondicion(r) ? `: ${textoPorCondicion(r)}` : ""}</span>}
-                  <span><b className="text-slate-100">{r.conPosicion}</b> con posición conocida · <b className="text-slate-100">{r.sinPosicion}</b> sin posición</span>
+                  <span>
+                    <b className="text-slate-100">{r.conPosicion}</b> con posición conocida
+                    {r.posicionDeducida > 0 && r.posicionConfirmada > 0 && <> ({r.posicionConfirmada} confirmada{r.posicionConfirmada === 1 ? "" : "s"} · {r.posicionDeducida} deducida{r.posicionDeducida === 1 ? "" : "s"})</>}
+                    {r.posicionDeducida > 0 && r.posicionConfirmada === 0 && <> (deducida{r.posicionDeducida === 1 ? "" : "s"}, no confirmada{r.posicionDeducida === 1 ? "" : "s"})</>}
+                    {" "}· <b className="text-slate-100">{r.sinPosicion}</b> sin posición
+                  </span>
                 </div>
                 <ul className="list-disc space-y-0.5 pl-5 text-sm text-slate-200 marker:text-emerald-400">
                   {lineas.map((l, i) => <li key={i}>{l}</li>)}

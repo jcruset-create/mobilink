@@ -18,6 +18,8 @@ export interface OperacionConCondicion {
   posicion_destino?: { codigo_posicion?: string | null } | null;
   posicion_origen_id?: string | null;
   posicion_destino_id?: string | null;
+  /** Procedencia de la posición en el histórico importado; las operaciones normales no la traen. */
+  posicion_fuente?: string | null;
 }
 
 export function condicionDeOperacion(o: OperacionConCondicion): CondicionNeumatico {
@@ -38,6 +40,14 @@ export interface ResumenMontajes {
   porCondicion: Record<CondicionNeumatico, number>;
   conPosicion: number;
   sinPosicion: number;
+  /** De las que tienen posición: confirmada (registrada o indicada) frente a deducida por la regla de ejes. */
+  posicionConfirmada: number;
+  posicionDeducida: number;
+}
+
+/** ¿La posición se dedujo (regla 2 nuevas → eje 1, 4 → eje 2) en vez de registrarse? */
+export function esPosicionDeducida(o: OperacionConCondicion): boolean {
+  return tienePosicion(o) && o.posicion_fuente === "deducida";
 }
 
 /** Recuento honesto: el total son operaciones, no posiciones conocidas. */
@@ -47,7 +57,9 @@ export function resumenMontajes(ops: OperacionConCondicion[]): ResumenMontajes {
   const porCondicion: Record<CondicionNeumatico, number> = { nueva: 0, usada: 0, recauchutada: 0 };
   for (const o of montajes) porCondicion[condicionDeOperacion(o)]++;
   const conPosicion = activas.filter(tienePosicion).length;
-  return { total: activas.length, montajes: montajes.length, porCondicion, conPosicion, sinPosicion: activas.length - conPosicion };
+  const posicionDeducida = activas.filter(esPosicionDeducida).length;
+  return { total: activas.length, montajes: montajes.length, porCondicion, conPosicion, sinPosicion: activas.length - conPosicion,
+    posicionConfirmada: conPosicion - posicionDeducida, posicionDeducida };
 }
 
 /** «4 montajes: 2 nuevos · 2 usados» (solo las condiciones con algo). */
