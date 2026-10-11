@@ -811,3 +811,56 @@ do $$ declare r jsonb; begin
     (select count(*) from operaciones_neumaticos o join tc_intervenciones i on i.id=o.intervencion_id
       where i.vehiculo_id='00000000-0000-0000-0000-0000000000c3' and o.condicion='nueva' and o.neumatico_id is not null), 3::bigint);
 end $$;
+
+-- ── 24. Ruedas movidas sin montar goma (la permuta que el Excel no dice) ───
+-- Un albarán que cobra 4 «quitar y poner rueda» y monta 2 gomas delata que se
+-- movieron 2 ruedas más. No sabemos cuáles: la continuidad deja de estar
+-- respaldada desde esa fecha.
+do $$ declare r jsonb; v uuid; begin
+  insert into tc_vehiculos (id, empresa_id, tipo_vehiculo_id, matricula, km_actual)
+    values ('00000000-0000-0000-0000-0000000000c4','00000000-0000-0000-0000-0000000000e1','00000000-0000-0000-0000-00000000000a','PERMUTA1', 999999)
+    on conflict do nothing;
+  -- Enero: 2 nuevas al eje 1, sin ruedas de más.
+  r := tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes',
+        lote('2026-01', alb_fk('B2_26/P1','PERMUTA1',2,'2026-01-10',100000)), false);
+  perform prueba('permuta: de entrada, las dos ocupaciones están abiertas',
+    (select count(*) from tc_reconstruccion_montajes where vehiculo_id='00000000-0000-0000-0000-0000000000c4' and estado='abierto'), 2::bigint);
+
+  -- Marzo: 2 nuevas al eje 1 pero cobrando 4 quitar y poner → 2 ruedas movidas
+  -- sin goma. Cierra el eje 1… y deja constancia de que hubo más movimiento.
+  r := tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes',
+        lote('2026-03', alb_fk('B2_26/P2','PERMUTA1',2,'2026-03-10',120000)
+          || jsonb_build_object('servicios', jsonb_build_array(jsonb_build_object('servicio','quitar_poner_rueda','cantidad',4)))), false);
+  perform prueba('permuta: el albarán delata 2 ruedas movidas sin goma',
+    (select ruedas::int from tc_imp_ruedas_sin_goma('00000000-0000-0000-0000-0000000000c4')), 2);
+  -- Lo que se monta ESE día no se interrumpe (acaba de ponerse), pero queda
+  -- señalado: ese día se movió algo más que el albarán no describe.
+  perform prueba('permuta: lo montado ese día sigue abierto pero señalado',
+    (select bool_and(estado='abierto' and revisar and motivo_revision like '%sin montar goma%')
+       from tc_reconstruccion_montajes where vehiculo_id='00000000-0000-0000-0000-0000000000c4' and fecha_montaje='2026-03-10'), true);
+  perform prueba('permuta: lo que ya estaba puesto antes se interrumpe',
+    (select count(*) from tc_reconstruccion_montajes where vehiculo_id='00000000-0000-0000-0000-0000000000c4'
+       and estado='interrumpido' and continuidad_desde='2026-03-10'), 0::bigint);
+
+  -- Mayo: otra vez el eje 1. El intervalo de marzo NO se cierra con recorrido:
+  -- entre medias hubo ruedas movidas que no sabemos cuáles.
+  r := tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes',
+        lote('2026-05', alb_fk('B2_26/P3','PERMUTA1',2,'2026-05-10',140000)), false);
+  perform prueba('permuta: el tramo de marzo se cierra en mayo, señalado para revisar',
+    (select bool_and(estado='cerrado' and km_desmontaje=140000 and revisar) from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-0000000000c4' and fecha_montaje='2026-03-10'), true);
+  perform prueba('permuta: el tramo de enero sí se cerró (la permuta fue después)',
+    (select bool_and(estado='cerrado' and km_desmontaje=120000) from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-0000000000c4' and fecha_montaje='2026-01-10'), true);
+  perform prueba('permuta: la salida de mayo sí identifica (la permuta fue del albarán de marzo, no intermedia)',
+    (select bool_and(identidad_retirado='reconstruida') from operaciones_neumaticos o join tc_intervenciones i on i.id=o.intervencion_id
+      where i.origen_doc='B2_26/P3|PERMUTA1' and o.tipo_operacion='desmontaje'), true);
+  -- Y si la permuta ocurre en un albarán INTERMEDIO, sí rompe la cadena.
+  r := tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes',
+        lote('2026-06', jsonb_build_object('origen_doc','B2_26/P4|PERMUTA1','documento','B2_26/P4','matricula','PERMUTA1',
+          'fecha','2026-06-10','km',150000,'huella_origen','hp4','operaciones','[]'::jsonb,
+          'servicios', jsonb_build_array(jsonb_build_object('servicio','quitar_poner_rueda','cantidad',2)), 'lineas','[]'::jsonb)), false);
+  perform prueba('permuta intermedia: el eje 1 de mayo queda interrumpido',
+    (select bool_and(estado='interrumpido' and continuidad_desde='2026-06-10') from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-0000000000c4' and fecha_montaje='2026-05-10'), true);
+end $$;

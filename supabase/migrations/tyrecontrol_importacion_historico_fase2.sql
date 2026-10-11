@@ -260,6 +260,33 @@ begin
   return jsonb_build_object('neumaticos', v_neus, 'salidas', v_sals);
 end $$;
 
+-- ── 6bis. Ruedas movidas sin montar goma ───────────────────────────────────
+--
+-- Un albarán que cobra más «quitar y poner rueda» que gomas monta delata un
+-- movimiento que el Excel no describe: una permuta, una rueda retirada para
+-- llegar a otra… Las OR del taller sí lo dicen («PERMUTAR»), pero el Excel
+-- no, y mientras no esté la OR hay que darlo por desconocido.
+create or replace function tc_imp_ruedas_sin_goma(p_vehiculo uuid)
+returns table(fecha date, origen_doc text, ruedas numeric)
+language sql stable security definer set search_path = public as $$
+  select i.fecha, i.origen_doc,
+         coalesce((select sum(s.cantidad) from tc_intervencion_servicios s
+                    where s.intervencion_id = i.id and s.servicio = 'quitar_poner_rueda'), 0)
+         - (select count(*) from operaciones_neumaticos o
+             where o.intervencion_id = i.id and o.tipo_operacion = 'montaje'
+               and coalesce(o.is_anulada, false) = false) as ruedas
+    from tc_intervenciones i
+   where i.vehiculo_id = p_vehiculo and i.importacion_lote_id is not null
+   group by i.id, i.fecha, i.origen_doc
+  having coalesce((select sum(s.cantidad) from tc_intervencion_servicios s
+                    where s.intervencion_id = i.id and s.servicio = 'quitar_poner_rueda'), 0)
+         > (select count(*) from operaciones_neumaticos o
+             where o.intervencion_id = i.id and o.tipo_operacion = 'montaje'
+               and coalesce(o.is_anulada, false) = false);
+$$;
+revoke all on function tc_imp_ruedas_sin_goma(uuid) from public, anon;
+grant execute on function tc_imp_ruedas_sin_goma(uuid) to authenticated, service_role;
+
 -- ── 7. Reconstruir la cronología de un vehículo ─────────────────────────────
 --
 -- Recorre TODOS los montajes históricos del vehículo por fecha y posición y
@@ -271,13 +298,17 @@ end $$;
 --   · Un montaje SIN POSICIÓN no abre ocupación —no sabemos dónde fue— y
 --     rompe la continuidad de lo que estuviera abierto: a partir de esa fecha
 --     no se atribuye recorrido.
+--   · RUEDAS MOVIDAS SIN GOMA: si un albarán cobra más «quitar y poner
+--     rueda» que gomas monta, alguien movió ruedas sin cambiar goma (una
+--     permuta, por ejemplo). El Excel no dice cuáles, así que a partir de esa
+--     fecha la continuidad tampoco está respaldada.
 --   · Kilómetros ausentes o no crecientes → DESCONOCIDOS, nunca cero.
 --   · El último intervalo de cada posición queda ABIERTO. No se cierra contra
 --     tc_montajes_actuales.
 create or replace function tc_imp_reconstruir_vehiculo(p_vehiculo uuid)
 returns int language plpgsql security definer set search_path = public as $$
 declare
-  e record; o record;
+  e record; o record; ev record;
   v_n int := 0; v_rota boolean; v_desde date;
   v_km numeric; v_km_ok boolean; v_revisar boolean; v_motivo text;
   v_ident text; v_nivel text; v_mismo_dia boolean;
@@ -323,20 +354,26 @@ begin
       order by fecha_montaje desc, creado_at desc limit 1;
 
     if found then
-      v_rota := o.continuidad_desde is not null or exists (
-        select 1 from operaciones_neumaticos x join tc_intervenciones xi on xi.id = x.intervencion_id
-         where x.vehiculo_id = p_vehiculo and x.importacion_lote_id is not null
-           and x.tipo_operacion = 'montaje' and coalesce(x.is_anulada, false) = false
-           and x.posicion_destino_id is null
-           and x.fecha_operacion > o.fecha_montaje and x.fecha_operacion <= e.fecha_operacion
-           and xi.origen_doc <> e.doc);
-      v_desde := coalesce(o.continuidad_desde, (
-        select min(x.fecha_operacion) from operaciones_neumaticos x join tc_intervenciones xi on xi.id = x.intervencion_id
-         where x.vehiculo_id = p_vehiculo and x.importacion_lote_id is not null
-           and x.tipo_operacion = 'montaje' and coalesce(x.is_anulada, false) = false
-           and x.posicion_destino_id is null
-           and x.fecha_operacion > o.fecha_montaje and x.fecha_operacion <= e.fecha_operacion
-           and xi.origen_doc <> e.doc));
+      v_rota := o.continuidad_desde is not null
+        or exists (
+          select 1 from operaciones_neumaticos x join tc_intervenciones xi on xi.id = x.intervencion_id
+           where x.vehiculo_id = p_vehiculo and x.importacion_lote_id is not null
+             and x.tipo_operacion = 'montaje' and coalesce(x.is_anulada, false) = false
+             and x.posicion_destino_id is null
+             and x.fecha_operacion > o.fecha_montaje and x.fecha_operacion <= e.fecha_operacion
+             and xi.origen_doc <> e.doc)
+        or exists (
+          select 1 from tc_imp_ruedas_sin_goma(p_vehiculo) g
+           where g.fecha > o.fecha_montaje and g.fecha <= e.fecha_operacion and g.origen_doc <> e.doc);
+      v_desde := coalesce(o.continuidad_desde, least(
+        (select min(x.fecha_operacion) from operaciones_neumaticos x join tc_intervenciones xi on xi.id = x.intervencion_id
+          where x.vehiculo_id = p_vehiculo and x.importacion_lote_id is not null
+            and x.tipo_operacion = 'montaje' and coalesce(x.is_anulada, false) = false
+            and x.posicion_destino_id is null
+            and x.fecha_operacion > o.fecha_montaje and x.fecha_operacion <= e.fecha_operacion
+            and xi.origen_doc <> e.doc),
+        (select min(g.fecha) from tc_imp_ruedas_sin_goma(p_vehiculo) g
+          where g.fecha > o.fecha_montaje and g.fecha <= e.fecha_operacion and g.origen_doc <> e.doc)));
 
       -- Quién salió: respaldada solo si su ficha la identificó una persona.
       v_ident := case
@@ -408,6 +445,31 @@ begin
       e.neumatico_id is null,
       case when e.neumatico_id is null then 'Unidad sin ficha: usada o recauchutada pendiente de identificar' end);
     v_n := v_n + 1;
+  end loop;
+
+  -- Ruedas movidas sin goma: lo que siguiera abierto antes de ese día deja de
+  -- tener la continuidad respaldada. No sabemos QUÉ ruedas se movieron, así
+  -- que no se adivina ninguna: se marca y se revisa.
+  for ev in select * from tc_imp_ruedas_sin_goma(p_vehiculo) order by fecha loop
+    -- Lo que ya estaba puesto antes de ese día: pudo moverse. Interrumpido.
+    update tc_reconstruccion_montajes
+       set estado = 'interrumpido',
+           continuidad_desde = coalesce(continuidad_desde, ev.fecha),
+           revisar = true,
+           motivo_revision = coalesce(motivo_revision || ' · ', '')
+             || 'Continuidad desconocida desde ' || to_char(ev.fecha, 'DD/MM/YYYY') || ': el albarán '
+             || coalesce(ev.origen_doc, '—') || ' cobra ' || ev.ruedas
+             || ' rueda(s) movidas sin montar goma (posible permuta)'
+     where vehiculo_id = p_vehiculo and estado = 'abierto' and fecha_montaje < ev.fecha;
+    -- Lo que se montó EN ese mismo albarán no se interrumpe —acaba de
+    -- ponerse— pero queda señalado: ese día se movió algo más que no consta.
+    update tc_reconstruccion_montajes
+       set revisar = true,
+           motivo_revision = coalesce(motivo_revision || ' · ', '')
+             || 'Ese mismo día el albarán ' || coalesce(ev.origen_doc, '—') || ' movió '
+             || ev.ruedas || ' rueda(s) sin montar goma: puede haber cambiado algo más de sitio'
+     where vehiculo_id = p_vehiculo and fecha_montaje = ev.fecha
+       and origen_doc_montaje is not distinct from ev.origen_doc;
   end loop;
   return v_n;
 end $$;
