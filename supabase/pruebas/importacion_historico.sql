@@ -152,6 +152,7 @@ end $$;
 
 \i supabase/migrations/tyrecontrol_importacion_historico.sql
 \i supabase/migrations/tyrecontrol_importacion_historico_fase2.sql
+\i supabase/migrations/tyrecontrol_importacion_historico_fase3.sql
 
 -- ── Datos ───────────────────────────────────────────────────────────────────
 insert into tc_empresas values ('00000000-0000-0000-0000-0000000000e1','Plana'), ('00000000-0000-0000-0000-0000000000e2','Otra');
@@ -1008,4 +1009,509 @@ do $$ declare r jsonb; v uuid; begin
       where vehiculo_id='00000000-0000-0000-0000-00000000ab04' and fecha_desmontaje='2026-05-10' limit 1), true);
   perform prueba('un intervalo sin cerrar no clasifica kilómetros',
     (select bool_and(km_estado='sin_cierre' and recorrido_km is null) from tc_reconstruccion_montajes where estado <> 'cerrado'), true);
+end $$;
+
+-- ── 29. Planos 2+4, 2+4+2 y 2+4+4 con seis nuevas ─────────────────────────
+-- La regla es 2 al eje 1 y 4 al eje 2. Que exista un tercer eje NO impide
+-- aplicarla: lo que importa es que el eje 1 tenga 2 posiciones activas y el
+-- eje 2 tenga 4. Un plano 2+2 no la admite (ya se comprueba en la 27).
+do $$ declare r jsonb; begin
+  -- 2x4x4: tractora de cuatro ejes con eje 2 gemelo y eje 3 gemelo
+  insert into tc_tipos_vehiculo (id, nombre) values ('00000000-0000-0000-0000-0000000000d4','camion_2x4x4_pruebas') on conflict (id) do nothing;
+  insert into tc_posiciones_vehiculo (tipo_vehiculo_id, codigo_posicion, eje, lado, interior_exterior, orden_visual) values
+    ('00000000-0000-0000-0000-0000000000d4','E1_IZQ',1,'izq',null,1), ('00000000-0000-0000-0000-0000000000d4','E1_DER',1,'der',null,2),
+    ('00000000-0000-0000-0000-0000000000d4','E2_IZQ_EXT',2,'izq','ext',3), ('00000000-0000-0000-0000-0000000000d4','E2_IZQ_INT',2,'izq','int',4),
+    ('00000000-0000-0000-0000-0000000000d4','E2_DER_INT',2,'der','int',5), ('00000000-0000-0000-0000-0000000000d4','E2_DER_EXT',2,'der','ext',6),
+    ('00000000-0000-0000-0000-0000000000d4','E3_IZQ_EXT',3,'izq','ext',7), ('00000000-0000-0000-0000-0000000000d4','E3_IZQ_INT',3,'izq','int',8),
+    ('00000000-0000-0000-0000-0000000000d4','E3_DER_INT',3,'der','int',9), ('00000000-0000-0000-0000-0000000000d4','E3_DER_EXT',3,'der','ext',10)
+    on conflict do nothing;
+  insert into tc_vehiculos (id, empresa_id, tipo_vehiculo_id, matricula, km_actual) values
+    ('00000000-0000-0000-0000-0000000000e7','00000000-0000-0000-0000-0000000000e1','00000000-0000-0000-0000-0000000000d4','PLANO244', 1)
+    on conflict do nothing;
+  r := tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes', lote('2026-08',
+        alb_fk('B2_26/T8','PLANO244',6,'2026-08-08',20000),
+        alb_fk('B2_26/T9','PLANO244',2,'2026-08-09',20010),
+        alb_fk('B2_26/TA','PLANO244',4,'2026-08-10',20020)), false);
+  perform prueba('2x4x4: 6 nuevas → las 6 colocadas (el tercer eje no estorba)',
+    (select count(*) from operaciones_neumaticos o join tc_intervenciones i on i.id=o.intervencion_id
+      where i.origen_doc='B2_26/T8|PLANO244' and o.tipo_operacion='montaje' and o.posicion_destino_id is not null), 6::bigint);
+  perform prueba('2x4x4: 6 nuevas → 2 al eje 1 y 4 al eje 2, nada al eje 3',
+    (select string_agg(eje::text||':'||n, ',' order by eje) from (
+       select p.eje, count(*) n from operaciones_neumaticos o
+         join tc_intervenciones i on i.id=o.intervencion_id
+         join tc_posiciones_vehiculo p on p.id=o.posicion_destino_id
+        where i.origen_doc='B2_26/T8|PLANO244' and o.tipo_operacion='montaje' group by p.eje) x), '1:2,2:4');
+  perform prueba('2x4x4: 6 nuevas → ejes tocados',
+    (select string_agg(distinct p.eje::text, ',' order by p.eje::text) from operaciones_neumaticos o
+       join tc_intervenciones i on i.id=o.intervencion_id join tc_posiciones_vehiculo p on p.id=o.posicion_destino_id
+      where i.origen_doc='B2_26/T8|PLANO244'), '1,2');
+  perform prueba('2x4x4: 2 nuevas → eje 1',
+    (select string_agg(p.codigo_posicion,',' order by p.codigo_posicion) from operaciones_neumaticos o
+       join tc_intervenciones i on i.id=o.intervencion_id join tc_posiciones_vehiculo p on p.id=o.posicion_destino_id
+      where i.origen_doc='B2_26/T9|PLANO244'), 'E1_DER,E1_IZQ');
+  perform prueba('2x4x4: 4 nuevas → eje 2, no el 3',
+    (select string_agg(distinct p.eje::text,',') from operaciones_neumaticos o
+       join tc_intervenciones i on i.id=o.intervencion_id join tc_posiciones_vehiculo p on p.id=o.posicion_destino_id
+      where i.origen_doc='B2_26/TA|PLANO244'), '2');
+  -- Y una posición desactivada no cuenta: el plano deja de encajar.
+  update tc_posiciones_vehiculo set activo = false
+   where tipo_vehiculo_id='00000000-0000-0000-0000-0000000000d4' and codigo_posicion='E2_DER_EXT';
+  perform prueba('2x4x4 con una posición del eje 2 desactivada: 6 nuevas ya no encajan',
+    tc_imp_posiciones_norma('00000000-0000-0000-0000-0000000000e7', 6, true), null);
+  update tc_posiciones_vehiculo set activo = true
+   where tipo_vehiculo_id='00000000-0000-0000-0000-0000000000d4' and codigo_posicion='E2_DER_EXT';
+  perform prueba('2x4x4 reactivada: 6 nuevas vuelven a encajar',
+    coalesce(array_length(tc_imp_posiciones_norma('00000000-0000-0000-0000-0000000000e7', 6, true), 1), 0), 6);
+end $$;
+
+-- ── 30. Plausibilidad: el criterio es el RITMO, no el recorrido total ─────
+-- 180.000 km en tres años es creíble. Los mismos 180.000 km en 60 días no.
+-- El recorrido se guarda en los dos casos.
+do $$ begin
+  insert into tc_vehiculos (id, empresa_id, tipo_vehiculo_id, matricula, km_actual) values
+    ('00000000-0000-0000-0000-00000000ac01','00000000-0000-0000-0000-0000000000e1','00000000-0000-0000-0000-00000000000a','RITMO01', 1),
+    ('00000000-0000-0000-0000-00000000ac02','00000000-0000-0000-0000-0000000000e1','00000000-0000-0000-0000-00000000000a','RITMO02', 1)
+    on conflict do nothing;
+  -- Largo pero plausible: 180.000 km en 1.096 días → 164 km/día
+  perform tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes', lote('2023-01', alb_fk('B2_26/R1','RITMO01',2,'2023-01-10',100000)), false);
+  perform tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes', lote('2026-01', alb_fk('B2_26/R2','RITMO01',2,'2026-01-10',280000)), false);
+  perform prueba('recorrido largo pero plausible: utilizable, sin aviso de ritmo',
+    (select km_estado||'/'||recorrido_km::int||'/'||revisar from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ac01' and estado='cerrado' limit 1), 'utilizables/180000/false');
+  perform prueba('recorrido largo plausible: el ritmo queda guardado',
+    (select tc_imp_num(round(ritmo_km_dia))||' km/día en '||dias_intervalo||' días' from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ac01' and estado='cerrado' limit 1), '164 km/día en 1096 días');
+  -- Mismo recorrido, 60 días → 3.000 km/día: anómalo
+  perform tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes', lote('2026-01', alb_fk('B2_26/R3','RITMO02',2,'2026-01-10',100000)), false);
+  perform tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes', lote('2026-03', alb_fk('B2_26/R4','RITMO02',2,'2026-03-11',280000)), false);
+  perform prueba('mismo recorrido en 60 días: anómalo, y el recorrido SE CONSERVA',
+    (select km_estado||'/'||recorrido_km::int||'/'||revisar from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ac02' and estado='cerrado' limit 1), 'anomalos/180000/true');
+  perform prueba('anómalo: los kilómetros originales siguen ahí',
+    (select km_montaje::int||' → '||km_desmontaje::int from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ac02' and estado='cerrado' limit 1), '100000 → 280000');
+  perform prueba('anómalo: el aviso dice días, ritmo y límite',
+    (select motivo_revision like '%60 día(s)%3000 km/día%límite de 2000 km/día%' from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ac02' and estado='cerrado' limit 1), true);
+  perform prueba('anómalo: el aviso dice que es para revisar, no una prueba',
+    (select motivo_revision like '%no una prueba de que el dato sea falso%' from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ac02' and estado='cerrado' limit 1), true);
+  perform prueba('anómalo pendiente: no entra en medias',
+    (select tc_imp_intervalo_en_medias(rm) from tc_reconstruccion_montajes rm
+      where rm.vehiculo_id='00000000-0000-0000-0000-00000000ac02' and rm.estado='cerrado' limit 1), false);
+  perform prueba('anómalo pendiente: el motivo de exclusión es el suyo',
+    (select array_to_string(tc_imp_intervalo_motivos(rm),',') from tc_reconstruccion_montajes rm
+      where rm.vehiculo_id='00000000-0000-0000-0000-00000000ac02' and rm.estado='cerrado' limit 1), 'km_anomalos_pendientes');
+  -- El límite es configurable: subirlo reclasifica sin tocar los datos.
+  perform tc_imp_fijar_limite_km_dia('00000000-0000-0000-0000-0000000000e1', 5000);
+  perform prueba('subir el límite a 5.000: el mismo intervalo pasa a utilizable',
+    (select km_estado||'/'||recorrido_km::int||'/'||limite_km_dia::int from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ac02' and estado='cerrado' limit 1), 'utilizables/180000/5000');
+  perform tc_imp_fijar_limite_km_dia('00000000-0000-0000-0000-0000000000e1', 2000);
+  perform prueba('volver a 2.000: vuelve a ser anómalo',
+    (select km_estado from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ac02' and estado='cerrado' limit 1), 'anomalos');
+  perform prueba('el límite por defecto es 2.000 km/día', tc_imp_limite_km_dia('00000000-0000-0000-0000-0000000000e2'), 2000::numeric);
+end $$;
+
+-- ── 31. Intervalos de cero días: no se divide entre cero ──────────────────
+do $$ begin
+  insert into tc_vehiculos (id, empresa_id, tipo_vehiculo_id, matricula, km_actual) values
+    ('00000000-0000-0000-0000-00000000ac03','00000000-0000-0000-0000-0000000000e1','00000000-0000-0000-0000-00000000000a','CERO001', 1),
+    ('00000000-0000-0000-0000-00000000ac04','00000000-0000-0000-0000-0000000000e1','00000000-0000-0000-0000-00000000000a','CERO002', 1)
+    on conflict do nothing;
+  -- Mismo día, salto pequeño (300 km): plausible, y sin dividir entre cero.
+  perform tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes', lote('2026-06', alb_fk('B2_26/Z1','CERO001',2,'2026-06-01',500000)), false);
+  perform tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes', lote('2026-06', alb_fk('B2_26/Z2','CERO001',2,'2026-06-01',500300)), false);
+  perform prueba('cero días con salto pequeño: utilizable y sin error',
+    (select km_estado||'/'||recorrido_km::int||'/'||dias_intervalo from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ac03' and estado='cerrado' limit 1), 'utilizables/300/0');
+  -- Mismo día, salto imposible: anómalo, comparando con el límite de UN día.
+  perform tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes', lote('2026-06', alb_fk('B2_26/Z3','CERO002',2,'2026-06-01',500000)), false);
+  perform tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes', lote('2026-06', alb_fk('B2_26/Z4','CERO002',2,'2026-06-01',626290)), false);
+  perform prueba('cero días con salto imposible: anómalo, no colado por no poder dividir',
+    (select km_estado||'/'||recorrido_km::int||'/'||dias_intervalo from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ac04' and estado='cerrado' limit 1), 'anomalos/126290/0');
+  perform prueba('cero días: el aviso explica que no se divide entre cero',
+    (select motivo_revision like '%no se divide entre cero%' from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ac04' and estado='cerrado' limit 1), true);
+  perform prueba('cero días: el ritmo guardado es el recorrido, no una división',
+    (select ritmo_km_dia::int from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ac04' and estado='cerrado' limit 1), 126290);
+  -- Y el kilometraje decreciente sigue siendo incompatible, no anómalo.
+  perform prueba('decreciente no se convierte en anómalo',
+    (select km_estado from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ab02' and estado='cerrado' limit 1), 'incompatibles');
+end $$;
+
+-- ── 32. 1445HWZ: el caso real, con el albarán bloqueado de por medio ──────
+--
+-- Las tres lecturas del Excel para esa matrícula:
+--   B2_26/614   09/02/2026  127.424 km  se importa
+--   B2_26/1590  07/04/2026  739.964 km  BLOQUEADO (Uds. = 4: ¿4 o 16 gomas?)
+--   B2_26/2334  18/05/2026  753.714 km  se importa
+--
+-- El intervalo febrero→mayo tiene que avisar de DOS cosas a la vez: el ritmo
+-- no es plausible Y hay un posible montaje intermedio sin importar. Resolver
+-- una no resuelve la otra.
+do $$ declare r jsonb; begin
+  insert into tc_vehiculos (id, empresa_id, tipo_vehiculo_id, matricula, km_actual) values
+    ('00000000-0000-0000-0000-00000000ad01','00000000-0000-0000-0000-0000000000e1','00000000-0000-0000-0000-00000000000a','1445HWZ', 1)
+    on conflict do nothing;
+  perform tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes',
+    lote('2026-02', alb_fk('B2_26/614','1445HWZ',2,'2026-02-09',127424)), false);
+  -- El bloqueado va SOLO en su lote: así se comprueba además que un lote que
+  -- no crea nada pero sí deja constancia de un bloqueado no se borra.
+  r := tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes',
+    lote('2026-04', alb_fk('B2_26/1590','1445HWZ',4,'2026-04-07',739964,'recauchutada')
+      || jsonb_build_object('bloqueante','La anotación «MONTA0 4 CUBIERTAS RECAUCHUTADA 295/80X22.5 K25» lleva Uds. = 4: no se sabe si son 4 o 16 neumáticos')), false);
+  perform prueba('bloqueado: ni creado ni importado', (r->>'bloqueados')||'/'||(r->>'creadas'), '1/0');
+  perform prueba('bloqueado: NO crea intervención',
+    (select count(*) from tc_intervenciones where origen_doc='B2_26/1590|1445HWZ'), 0::bigint);
+  perform prueba('bloqueado: NO crea operaciones',
+    (select count(*) from operaciones_neumaticos where origen_linea like 'B2_26/1590%'), 0::bigint);
+  perform prueba('bloqueado: NO crea fichas',
+    (select count(*) from tc_neumaticos where origen_doc = 'B2_26/1590|1445HWZ'), 0::bigint);
+  perform prueba('bloqueado: queda la referencia, el motivo y su lectura de origen',
+    (select origen_doc||'/'||posible_montaje||'/'||km_origen::int||'/'||fecha from tc_importacion_bloqueados
+      where origen_doc='B2_26/1590|1445HWZ'), 'B2_26/1590|1445HWZ/true/739964/2026-04-07');
+  perform prueba('bloqueado: el motivo se guarda literal',
+    (select motivo like '%no se sabe si son 4 o 16 neumáticos%' from tc_importacion_bloqueados
+      where origen_doc='B2_26/1590|1445HWZ'), true);
+  perform prueba('bloqueado: el registro NO guarda cantidades (es justo lo que está en duda)',
+    (select count(*) from information_schema.columns where table_name='tc_importacion_bloqueados'
+       and (column_name like '%cantidad%' or column_name like '%unidades%' or column_name like '%uds%')), 0::bigint);
+  -- Antes de cerrar: el intervalo abierto ya avisa del bloqueado.
+  perform prueba('con el intervalo todavía abierto, el bloqueado ya avisa',
+    (select bool_and('B2_26/1590|1445HWZ' = any(continuidad_docs)) from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ad01'), true);
+  -- Y ahora el cierre de mayo.
+  perform tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes',
+    lote('2026-05', alb_fk('B2_26/2334','1445HWZ',2,'2026-05-18',753714)), false);
+  perform prueba('1445HWZ: dos intervalos cerrados, los dos anómalos',
+    (select count(*) from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ad01' and estado='cerrado' and km_estado='anomalos'), 2::bigint);
+  perform prueba('1445HWZ: el recorrido aritmético se conserva',
+    (select distinct recorrido_km::int from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ad01' and estado='cerrado'), 626290);
+  perform prueba('1445HWZ: días, ritmo y límite guardados',
+    (select distinct dias_intervalo||'/'||round(ritmo_km_dia)||'/'||limite_km_dia::int from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ad01' and estado='cerrado'), '98/6391/2000');
+  perform prueba('1445HWZ: el aviso de ritmo da fechas, kilómetros y albaranes',
+    (select bool_and(motivo_revision like '%09/02/2026%127424%B2_26/614%18/05/2026%753714%B2_26/2334%')
+       from tc_reconstruccion_montajes where vehiculo_id='00000000-0000-0000-0000-00000000ad01' and estado='cerrado'), true);
+  perform prueba('1445HWZ: el aviso de ritmo da los días, el ritmo y el límite',
+    (select bool_and(motivo_revision like '%98 día(s), 6391 km/día, por encima del límite de 2000 km/día%')
+       from tc_reconstruccion_montajes where vehiculo_id='00000000-0000-0000-0000-00000000ad01' and estado='cerrado'), true);
+  perform prueba('1445HWZ: también avisa del posible montaje intermedio bloqueado',
+    (select bool_and(motivo_revision like '%Posible montaje intermedio sin importar el 07/04/2026%739964%')
+       from tc_reconstruccion_montajes where vehiculo_id='00000000-0000-0000-0000-00000000ad01' and estado='cerrado'), true);
+  perform prueba('1445HWZ: el aviso de continuidad NO elige eje',
+    (select bool_and(continuidad_motivo like '%No se sabe en qué posición fue, así que no se atribuye a ningún eje%')
+       from tc_reconstruccion_montajes where vehiculo_id='00000000-0000-0000-0000-00000000ad01' and estado='cerrado'), true);
+  perform prueba('1445HWZ: el documento bloqueado queda referido en el intervalo',
+    (select distinct array_to_string(continuidad_docs,',') from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ad01' and estado='cerrado'), 'B2_26/1590|1445HWZ');
+  perform prueba('1445HWZ: fuera de las medias, y por los DOS motivos',
+    (select distinct array_to_string(tc_imp_intervalo_motivos(rm),',') from tc_reconstruccion_montajes rm
+      where rm.vehiculo_id='00000000-0000-0000-0000-00000000ad01' and rm.estado='cerrado'),
+    'km_anomalos_pendientes,continuidad_pendiente');
+  perform prueba('1445HWZ: no entra en medias',
+    (select bool_or(tc_imp_intervalo_en_medias(rm)) from tc_reconstruccion_montajes rm
+      where rm.vehiculo_id='00000000-0000-0000-0000-00000000ad01' and rm.estado='cerrado'), false);
+  perform prueba('1445HWZ: los montajes de mayo siguen abiertos y sin clasificar km',
+    (select count(*) from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ad01' and estado='abierto' and km_estado='sin_cierre'), 2::bigint);
+end $$;
+
+-- ── 33. Un bloqueado SIN posible montaje no interrumpe por sí solo ────────
+do $$ declare r jsonb; begin
+  insert into tc_vehiculos (id, empresa_id, tipo_vehiculo_id, matricula, km_actual) values
+    ('00000000-0000-0000-0000-00000000ad02','00000000-0000-0000-0000-0000000000e1','00000000-0000-0000-0000-00000000000a','BLOQ002', 1)
+    on conflict do nothing;
+  perform tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes',
+    lote('2026-02', alb_fk('B2_26/B1','BLOQ002',2,'2026-02-10',600000)), false);
+  -- Un albarán bloqueado SIN gomas: solo servicios. No es evidencia de montaje.
+  r := tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes',
+    lote('2026-03', jsonb_build_object('origen_doc','B2_26/B2|BLOQ002','documento','B2_26/B2','matricula','BLOQ002',
+      'fecha','2026-03-10','km',610000,'huella_origen','hB2','bloqueante','Fecha del documento ilegible',
+      'operaciones','[]'::jsonb,'servicios','[]'::jsonb,'lineas','[]'::jsonb)), false);
+  perform prueba('bloqueado sin gomas: bloqueado igual', (r->>'bloqueados')::int, 1);
+  perform tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes',
+    lote('2026-04', alb_fk('B2_26/B3','BLOQ002',2,'2026-04-10',620000)), false);
+  perform prueba('bloqueado sin posible montaje: NO marca continuidad pendiente',
+    (select bool_and(coalesce(array_length(continuidad_docs,1),0) = 0) from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ad02'), true);
+  perform prueba('bloqueado sin posible montaje: el intervalo cierra limpio y entra en medias',
+    (select km_estado||'/'||recorrido_km::int||'/'||tc_imp_intervalo_en_medias(rm) from tc_reconstruccion_montajes rm
+      where rm.vehiculo_id='00000000-0000-0000-0000-00000000ad02' and rm.estado='cerrado' limit 1), 'utilizables/20000/true');
+end $$;
+
+-- ── 34. Revisión humana auditada: aceptar y rechazar ──────────────────────
+-- La clasificación la hace la máquina; esto es otra cosa. Aceptar permite
+-- usar el intervalo como ESTIMADO y nunca lo convierte en confirmado.
+-- Rechazar no toca los kilómetros ni el recorrido.
+do $$ declare iv uuid; r jsonb; begin
+  select id into iv from tc_reconstruccion_montajes
+   where vehiculo_id='00000000-0000-0000-0000-00000000ad01' and estado='cerrado'
+   order by posicion_id limit 1;
+  -- Motivo obligatorio
+  begin
+    perform tc_imp_revisar_intervalo(iv, 'aceptado', '   ');
+    perform prueba('revisar sin motivo no se puede', false, true);
+  exception when invalid_parameter_value then perform prueba('revisar sin motivo no se puede', true, true); end;
+  -- Decisión inventada
+  begin
+    perform tc_imp_revisar_intervalo(iv, 'quizá', 'porque sí');
+    perform prueba('decisión inventada no se puede', false, true);
+  exception when invalid_parameter_value then perform prueba('decisión inventada no se puede', true, true); end;
+  -- Aceptar
+  r := tc_imp_revisar_intervalo(iv, 'aceptado', 'Comprobado con el conductor: el cuentakilómetros se cambió en marzo');
+  perform prueba('aceptado: entra en medias', (r->>'en_medias')::boolean, true);
+  perform prueba('aceptado: el aviso dice que sigue siendo estimado',
+    r->>'aviso' like '%No lo convierte en rendimiento confirmado%', true);
+  perform prueba('aceptado: la clasificación automática NO cambia', r->>'km_estado', 'anomalos');
+  perform prueba('aceptado: el recorrido sigue ahí', (r->>'recorrido_km')::int, 626290);
+  perform prueba('aceptado: el nivel sigue siendo estimado',
+    (select nivel from tc_reconstruccion_montajes where id=iv), 'estimado');
+  perform prueba('aceptado: queda usuario, fecha y motivo',
+    (select (revisado_por is not null)||'/'||(revisado_at is not null)||'/'||(revisado_motivo like '%cuentakilómetros%')
+       from tc_reconstruccion_montajes where id=iv), 'true/true/true');
+  perform prueba('aceptado: hay una fila de auditoría con su motivo y su usuario',
+    (select count(*) from tc_reconstruccion_revisiones
+      where operacion_entrada_id = (select operacion_entrada_id from tc_reconstruccion_montajes where id=iv)
+        and decision='aceptado' and usuario_id is not null and motivo like '%cuentakilómetros%'), 1::bigint);
+  perform prueba('aceptado: la auditoría guarda el ritmo y el límite del momento',
+    (select round(ritmo_km_dia)||'/'||limite_km_dia::int from tc_reconstruccion_revisiones
+      where operacion_entrada_id = (select operacion_entrada_id from tc_reconstruccion_montajes where id=iv)
+        and decision='aceptado' limit 1), '6391/2000');
+  -- Rechazar el OTRO intervalo del mismo vehículo
+  select id into iv from tc_reconstruccion_montajes
+   where vehiculo_id='00000000-0000-0000-0000-00000000ad01' and estado='cerrado'
+   order by posicion_id desc limit 1;
+  r := tc_imp_revisar_intervalo(iv, 'rechazado', 'La lectura de febrero no es creíble y no hay forma de confirmarla');
+  perform prueba('rechazado: no entra en medias', (r->>'en_medias')::boolean, false);
+  perform prueba('rechazado: los kilómetros NO pasan a ausentes ni a decrecientes',
+    (select km_estado||'/'||recorrido_km::int||'/'||km_montaje::int||'/'||km_desmontaje::int
+       from tc_reconstruccion_montajes where id=iv), 'anomalos/626290/127424/753714');
+  perform prueba('rechazado: su motivo de exclusión lo dice',
+    (select array_to_string(tc_imp_intervalo_motivos(rm),',') from tc_reconstruccion_montajes rm where rm.id=iv),
+    'km_anomalos_rechazados,continuidad_pendiente');
+  -- Un intervalo sin recorrido no se puede aceptar ni rechazar
+  select id into iv from tc_reconstruccion_montajes
+   where vehiculo_id='00000000-0000-0000-0000-00000000ab03' and km_estado='ausentes' limit 1;
+  begin
+    perform tc_imp_revisar_intervalo(iv, 'aceptado', 'da igual');
+    perform prueba('sin recorrido no hay nada que aceptar', false, true);
+  exception when invalid_parameter_value then perform prueba('sin recorrido no hay nada que aceptar', true, true); end;
+end $$;
+-- Permisos y aislamiento entre empresas
+update auth_ctx set rol='operador';
+do $$ declare iv uuid; begin
+  select id into iv from tc_reconstruccion_montajes where vehiculo_id='00000000-0000-0000-0000-00000000ad01' and estado='cerrado' limit 1;
+  begin
+    perform tc_imp_revisar_intervalo(iv, 'aceptado', 'no debería poder');
+    perform prueba('un operador no puede revisar', false, true);
+  exception when insufficient_privilege then perform prueba('un operador no puede revisar', true, true); end;
+end $$;
+update auth_ctx set rol='admin', empresa='00000000-0000-0000-0000-0000000000e2';
+do $$ declare iv uuid; begin
+  select id into iv from tc_reconstruccion_montajes where vehiculo_id='00000000-0000-0000-0000-00000000ad01' and estado='cerrado' limit 1;
+  begin
+    perform tc_imp_revisar_intervalo(iv, 'aceptado', 'de otra empresa');
+    perform prueba('el admin de otra empresa no puede revisar', false, true);
+  exception when insufficient_privilege then perform prueba('el admin de otra empresa no puede revisar', true, true); end;
+  begin
+    perform tc_imp_fijar_limite_km_dia('00000000-0000-0000-0000-0000000000e1', 9999);
+    perform prueba('el admin de otra empresa no puede cambiar el límite', false, true);
+  exception when insufficient_privilege then perform prueba('el admin de otra empresa no puede cambiar el límite', true, true); end;
+end $$;
+update auth_ctx set rol='admin', empresa='00000000-0000-0000-0000-0000000000e1';
+
+-- ── 35. Si cambia la evidencia, la aceptación caduca ──────────────────────
+-- Y la auditoría no se borra: queda la decisión, queda su invalidación y
+-- queda el motivo. Rehacer la cadena no puede hacer desaparecer una
+-- decisión humana ni arrastrarla a una evidencia distinta.
+do $$ declare iv uuid; oe uuid; begin
+  insert into tc_vehiculos (id, empresa_id, tipo_vehiculo_id, matricula, km_actual) values
+    ('00000000-0000-0000-0000-00000000ae01','00000000-0000-0000-0000-0000000000e1','00000000-0000-0000-0000-00000000000a','CADUCA1', 1)
+    on conflict do nothing;
+  perform tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes',
+    lote('2026-01', alb_fk('B2_26/E1','CADUCA1',2,'2026-01-05',700000)), false);
+  perform tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes',
+    lote('2026-05', alb_fk('B2_26/E3','CADUCA1',2,'2026-05-05',1100000)), false);
+  select id, operacion_entrada_id into iv, oe from tc_reconstruccion_montajes
+   where vehiculo_id='00000000-0000-0000-0000-00000000ae01' and estado='cerrado' order by posicion_id limit 1;
+  perform prueba('caduca: el intervalo nace anómalo (400.000 km en 120 días)',
+    (select km_estado from tc_reconstruccion_montajes where id=iv), 'anomalos');
+  perform tc_imp_revisar_intervalo(iv, 'aceptado', 'Revisado con el taller: la lectura es correcta');
+  perform prueba('caduca: aceptado, entra en medias',
+    (select tc_imp_intervalo_en_medias(rm) from tc_reconstruccion_montajes rm where rm.id=iv), true);
+  -- Ahora aparece un albarán BLOQUEADO dentro del intervalo: la evidencia
+  -- del intervalo ya no es la que había cuando se aceptó.
+  perform tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes',
+    lote('2026-03', alb_fk('B2_26/E2','CADUCA1',4,'2026-03-05',900000,'recauchutada')
+      || jsonb_build_object('bloqueante','Uds. = 4 sin saber si son 4 o 16')), false);
+  perform prueba('caduca: la aceptación deja de aplicarse',
+    (select uso_estadistico from tc_reconstruccion_montajes where operacion_entrada_id=oe), 'pendiente');
+  perform prueba('caduca: y el intervalo vuelve a quedar fuera de las medias',
+    (select tc_imp_intervalo_en_medias(rm) from tc_reconstruccion_montajes rm where rm.operacion_entrada_id=oe), false);
+  perform prueba('caduca: el intervalo pide revisión otra vez y lo explica',
+    (select motivo_revision like '%ya no vale: la evidencia del intervalo ha cambiado%'
+       from tc_reconstruccion_montajes where operacion_entrada_id=oe), true);
+  perform prueba('caduca: la aceptación anterior sigue en la auditoría, marcada como invalidada',
+    (select count(*) from tc_reconstruccion_revisiones
+      where operacion_entrada_id=oe and decision='aceptado' and invalidada_at is not null), 1::bigint);
+  perform prueba('caduca: el motivo original de la persona NO se ha borrado',
+    (select motivo from tc_reconstruccion_revisiones where operacion_entrada_id=oe and decision='aceptado'),
+    'Revisado con el taller: la lectura es correcta');
+  perform prueba('caduca: hay constancia de la invalidación, escrita por el sistema',
+    (select count(*) from tc_reconstruccion_revisiones
+      where operacion_entrada_id=oe and decision='invalidada' and usuario_id is null), 1::bigint);
+  perform prueba('caduca: nada se ha borrado de la auditoría',
+    (select count(*) from tc_reconstruccion_revisiones where operacion_entrada_id=oe), 2::bigint);
+  -- Y se puede volver a revisar sobre la evidencia nueva.
+  select id into iv from tc_reconstruccion_montajes where operacion_entrada_id=oe;
+  perform tc_imp_revisar_intervalo(iv, 'aceptado', 'Visto el albarán bloqueado: no hubo montaje, era un pedido anulado');
+  perform prueba('caduca: la revisión nueva sí se aplica',
+    (select uso_estadistico from tc_reconstruccion_montajes where id=iv), 'aceptado');
+  perform prueba('caduca: y la decisión aguanta una reconstrucción que no cambia nada',
+    (select uso_estadistico from tc_reconstruccion_montajes where operacion_entrada_id=oe
+      and (select tc_imp_reconstruir_vehiculo('00000000-0000-0000-0000-00000000ae01')) >= 0), 'aceptado');
+end $$;
+
+-- ── 36. Deshacer: limpio, con revisión humana, y lo que NUNCA se revierte ─
+do $$ declare r jsonb; l uuid; lmay uuid; v uuid; op uuid; obs text; c0 int; c1 int; f0 text; begin
+  -- ── Una revisión humana conserva la intervención ───────────────────────
+  select l2.id into l from tc_importacion_lotes l2 where l2.periodo='2026-02'
+    and exists (select 1 from tc_importacion_intervenciones ii join tc_intervenciones i on i.id=ii.intervencion_id
+                 where ii.lote_id=l2.id and i.origen_doc='B2_26/614|1445HWZ');
+  r := tc_deshacer_importacion(l, '{}', true);
+  perform prueba('deshacer con intervalos revisados a mano: se conserva',
+    (r->'detalle'->0->>'resultado'), 'conservada');
+  perform prueba('deshacer con intervalos revisados a mano: lo dice en el motivo',
+    (r->'detalle'->0->'motivos')::text like '%revisión humana%', true);
+  perform prueba('deshacer con intervalos revisados a mano: la simulación no ha tocado nada',
+    (select count(*) from tc_intervenciones where origen_doc='B2_26/614|1445HWZ'), 1::bigint);
+
+  -- ── Deshacer el lote que CIERRA invalida la decisión del otro lote ─────
+  select l2.id into lmay from tc_importacion_lotes l2 where l2.periodo='2026-05'
+    and exists (select 1 from tc_importacion_intervenciones ii join tc_intervenciones i on i.id=ii.intervencion_id
+                 where ii.lote_id=l2.id and i.origen_doc='B2_26/2334|1445HWZ');
+  perform tc_deshacer_importacion(lmay, '{}', false);
+  perform prueba('deshecho el cierre: los intervalos de febrero vuelven a estar abiertos',
+    (select count(*) from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ad01' and estado='abierto'), 2::bigint);
+  perform prueba('deshecho el cierre: las decisiones humanas caducan (la evidencia ya no es la misma)',
+    (select count(*) from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ad01' and uso_estadistico <> 'pendiente'), 0::bigint);
+  perform prueba('deshecho el cierre: la auditoría de las dos decisiones NO se ha borrado',
+    (select count(*) from tc_reconstruccion_revisiones rv
+      where rv.vehiculo_id='00000000-0000-0000-0000-00000000ad01' and rv.decision in ('aceptado','rechazado')), 2::bigint);
+  perform prueba('deshecho el cierre: las dos quedan marcadas como invalidadas',
+    (select count(*) from tc_reconstruccion_revisiones rv
+      where rv.vehiculo_id='00000000-0000-0000-0000-00000000ad01' and rv.invalidada_at is not null), 2::bigint);
+  perform prueba('deshecho el cierre: el aviso del bloqueado sigue en pie',
+    (select bool_and('B2_26/1590|1445HWZ' = any(continuidad_docs)) from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ad01'), true);
+
+  -- ── Deshacer limpio, y lo que no se revierte ───────────────────────────
+  insert into tc_vehiculos (id, empresa_id, tipo_vehiculo_id, matricula, km_actual) values
+    ('00000000-0000-0000-0000-00000000af01','00000000-0000-0000-0000-0000000000e1','00000000-0000-0000-0000-00000000000a','LIMPIO1', 123456)
+    on conflict do nothing;
+  f0 := foto();
+  c0 := coalesce((select ultimo from tc_contadores_numero_interno where anio = extract(year from now())::int), 0);
+  r := tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes',
+    lote('2026-07', alb_fk('B2_26/L1','LIMPIO1',2,'2026-07-01',800000)
+      || jsonb_build_object('bloqueante', null)), false);
+  select l2.id into l from tc_importacion_lotes l2 where l2.id = (r->>'lote_id')::uuid;
+  c1 := (select ultimo from tc_contadores_numero_interno where anio = extract(year from now())::int);
+  perform prueba('la importación ha emitido números internos', c1 > c0, true);
+
+  -- Una modificación humana posterior NO se tapa al rehacer la cadena.
+  select o.id, o.observaciones into op, obs from operaciones_neumaticos o
+    join tc_intervenciones i on i.id=o.intervencion_id
+   where i.origen_doc='B2_26/L1|LIMPIO1' and o.tipo_operacion='montaje' limit 1;
+  update operaciones_neumaticos set observaciones = 'alguien escribió esto a mano' where id = op;
+  perform tc_imp_reconstruir_vehiculo('00000000-0000-0000-0000-00000000af01');
+  r := tc_deshacer_importacion(l, '{}', true);
+  perform prueba('rehacer la cadena NO actualiza la huella para tapar un cambio ajeno',
+    (r->'detalle'->0->'motivos')::text like '%Modificada después de importarla%', true);
+  perform prueba('y por eso la intervención se conservaría', (r->'detalle'->0->>'resultado'), 'conservada');
+  -- Deshecho el cambio humano, la huella vuelve a cuadrar.
+  update operaciones_neumaticos set observaciones = obs where id = op;
+  perform tc_imp_reconstruir_vehiculo('00000000-0000-0000-0000-00000000af01');
+  r := tc_deshacer_importacion(l, '{}', false);
+  perform prueba('deshacer limpio: se borra, nada conservado',
+    (r->>'borradas')||'/'||(r->>'conservadas')||'/'||(r->>'estado'), '1/0/deshecho');
+  perform prueba('deshacer limpio: no queda intervención',
+    (select count(*) from tc_intervenciones where origen_doc='B2_26/L1|LIMPIO1'), 0::bigint);
+  perform prueba('deshacer limpio: no quedan intervalos del vehículo',
+    (select count(*) from tc_reconstruccion_montajes where vehiculo_id='00000000-0000-0000-0000-00000000af01'), 0::bigint);
+  perform prueba('deshacer limpio: ni fichas de la importación',
+    (select count(*) from tc_neumaticos where importacion_lote_id = l), 0::bigint);
+  perform prueba('deshacer limpio: la fotografía de lo ajeno vuelve a cuadrar', foto(), f0);
+  perform prueba('el contador de números internos NO vuelve atrás: lo emitido no se reutiliza',
+    (select ultimo from tc_contadores_numero_interno where anio = extract(year from now())::int), c1);
+  -- Y la numeración siguiente arranca por encima, sin reutilizar el hueco.
+  perform tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes',
+    lote('2026-07', alb_fk('B2_26/L2','LIMPIO1',2,'2026-07-02',800100)), false);
+  perform prueba('la importación siguiente numera por encima del hueco',
+    (select ultimo from tc_contadores_numero_interno where anio = extract(year from now())::int) > c1, true);
+  perform prueba('el km del vehículo sigue siendo el suyo: la importación no lo toca',
+    (select km_actual::int||'/'||origen_km from tc_vehiculos where id='00000000-0000-0000-0000-00000000af01'), '123456/manual');
+end $$;
+
+-- ── 37. Cobertura de las estadísticas estimadas ───────────────────────────
+-- Ninguna media sin decir sobre cuántos intervalos se calcula, qué ha dejado
+-- fuera y por qué, y sin mezclar unidades con ocupaciones de posición.
+do $$ declare c jsonb; begin
+  c := tc_informes_recorridos_estimados('00000000-0000-0000-0000-0000000000e1', null, null, null);
+  perform prueba('la cobertura dice que es estimado', c->>'nivel', 'estimado');
+  perform prueba('la cobertura avisa de que no es rendimiento confirmado',
+    c->>'aviso' like '%No son rendimiento confirmado%', true);
+  perform prueba('la cobertura publica el periodo analizado',
+    (c->'periodo'->>'desde' is not null) and (c->'periodo'->>'hasta' is not null), true);
+  perform prueba('la cobertura publica la población',
+    (c->'poblacion'->>'intervalos')::int > 0 and (c->'poblacion'->>'vehiculos')::int > 0, true);
+  perform prueba('la cobertura separa identidad respaldada, reconstruida y sin ficha, y suman',
+    (c->'identidad'->>'respaldada')::int + (c->'identidad'->>'reconstruida')::int + (c->'identidad'->>'sin_ficha')::int
+      = (c->'poblacion'->>'intervalos')::int, true);
+  perform prueba('y dice que una ficha reconstruida NO es una unidad identificada',
+    c->'identidad'->>'que_es' like '%NO son unidades identificadas%', true);
+  perform prueba('los incluidos y los excluidos suman la población',
+    (c->'incluidos'->>'n')::int + (c->'excluidos'->>'n')::int = (c->'poblacion'->>'intervalos')::int, true);
+  perform prueba('el recorrido viene separado, nunca en un solo número',
+    (c->'recorrido'->'unidad_identificada' is not null) and (c->'recorrido'->'ocupacion_de_posicion' is not null), true);
+  perform prueba('la ocupación se presenta como lo que es, no como rendimiento de una goma',
+    c->'recorrido'->'ocupacion_de_posicion'->>'que_es' like '%no es el rendimiento de ningún neumático%', true);
+  -- En el banco hay UNA ficha que una persona identificó (sección 16). Esa
+  -- cuenta como unidad identificada; las demás, con ficha reconstruida por la
+  -- importación, cuentan como ocupación de la posición.
+  perform prueba('solo la ficha que una persona identificó cuenta como unidad',
+    (c->'identidad'->>'respaldada')||'/'||(c->'incluidos'->>'identificadas'), '1/1');
+  perform prueba('las fichas reconstruidas por la importación NO cuentan como unidades',
+    (c->'incluidos'->>'ocupaciones')::int = (c->'incluidos'->>'n')::int - 1, true);
+  perform prueba('se avisa de que los motivos se solapan', (c->'excluidos'->>'motivos_se_solapan')::boolean, true);
+  perform prueba('las combinaciones de motivos SÍ suman el total de excluidos',
+    (select sum((x->>'n')::int)::int from jsonb_array_elements(c->'excluidos'->'combinaciones') x), (c->'excluidos'->>'n')::int);
+  perform prueba('los motivos sueltos, en cambio, pueden sumar más (se solapan)',
+    (select sum((x->>'n')::int) from jsonb_array_elements(c->'excluidos'->'motivos') x) >= (c->'excluidos'->>'n')::int, true);
+  perform prueba('entre los motivos está la continuidad pendiente',
+    (select count(*) from jsonb_array_elements(c->'excluidos'->'motivos') x where x->>'motivo'='continuidad_pendiente') = 1, true);
+  perform prueba('y los kilómetros anómalos aparecen como motivo propio',
+    (select count(*) from jsonb_array_elements(c->'excluidos'->'motivos') x where x->>'motivo' like 'km_anomalos%') >= 1, true);
+  perform prueba('el informe de montajes publica la cobertura en el mismo sitio',
+    tc_informes_montajes('00000000-0000-0000-0000-0000000000e1','2026-01-01','2026-12-31')->'recorridos_estimados'->>'nivel', 'estimado');
+  -- Un vehículo concreto
+  c := tc_informes_recorridos_estimados('00000000-0000-0000-0000-0000000000e1', null, null, '00000000-0000-0000-0000-00000000ac01');
+  perform prueba('por vehículo: la media sale de los intervalos que entran, como ocupación de posición',
+    (c->'recorrido'->'ocupacion_de_posicion'->>'n')||'/'||(c->'recorrido'->'ocupacion_de_posicion'->>'media'), '2/180000');
+  perform prueba('por vehículo: y se dice cuántos entran y cuántos no',
+    (c->'incluidos'->>'n')||' de '||(c->'poblacion'->>'intervalos')||', '||(c->'excluidos'->>'n')||' fuera',
+    '2 de 4, 2 fuera');
+  perform prueba('por vehículo: los que quedan fuera dicen por qué (aquí, sin cerrar)',
+    c->'excluidos'->'motivos'->0->>'motivo', 'sin_cierre');
+  perform prueba('por vehículo: no se inventa una media de unidades identificadas si no hay ninguna',
+    c->'recorrido'->'unidad_identificada'->>'media', null);
 end $$;

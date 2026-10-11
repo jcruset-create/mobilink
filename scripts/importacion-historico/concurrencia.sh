@@ -94,4 +94,31 @@ SQL
 wait
 echo "  esperado: identificar espera al deshacer y falla porque la operación ya no existe; nada a medias"
 $P -c "select '  operación X2 existe: '||(select count(*) from operaciones_neumaticos where id='$OP7')||' · fichas huérfanas: '||(select count(*) from tc_neumaticos n where n.importacion_lote_id='$LOTE7')"
-echo "== bloqueos que no se resuelven (fase 2):"; $P -c "select count(*) from pg_locks where not granted"
+echo "== 8. FASE 3: revisar un intervalo mientras se rehace la cadena del vehículo"
+# Una cadena limpia y cerrada para poder revisarla.
+$P -c "select tc_importar_historico('$E','genes',lote('2026-02', alb_n('B2_26/Y1','9005KMR',2,1)),false)" >/dev/null
+$P -c "update tc_intervenciones set fecha='2026-02-10', mecanico_km=100000 where origen_doc='B2_26/Y1|9005KMR'" >/dev/null
+$P -c "update operaciones_neumaticos o set fecha_operacion='2026-02-10', km_vehiculo=100000 from tc_intervenciones i where i.id=o.intervencion_id and i.origen_doc='B2_26/Y1|9005KMR'" >/dev/null
+$P -c "select tc_importar_historico('$E','genes',lote('2026-06', alb_n('B2_26/Y2','9005KMR',2,1)),false)" >/dev/null
+$P -c "update tc_intervenciones set fecha='2026-06-10', mecanico_km=130000 where origen_doc='B2_26/Y2|9005KMR'" >/dev/null
+$P -c "update operaciones_neumaticos o set fecha_operacion='2026-06-10', km_vehiculo=130000 from tc_intervenciones i where i.id=o.intervencion_id and i.origen_doc='B2_26/Y2|9005KMR'" >/dev/null
+VEH8=$($P -c "select id from tc_vehiculos where matricula='9005KMR'")
+$P -c "select tc_imp_reconstruir_vehiculo('$VEH8')" >/dev/null
+IV8=$($P -c "select id from tc_reconstruccion_montajes where vehiculo_id='$VEH8' and estado='cerrado' limit 1")
+if [ -n "$IV8" ]; then
+  # Sesión A rehace la cadena entera y se queda dentro de la transacción;
+  # sesión B intenta revisar ese mismo intervalo.
+  ( $P <<SQL
+begin; select 'reconstruir:'||tc_imp_reconstruir_vehiculo('$VEH8'); select pg_sleep(3); commit;
+SQL
+  ) & sleep 0.5
+  ( $P -c "select 'revisar:'||(tc_imp_revisar_intervalo('$IV8','aceptado','prueba concurrente')->>'uso_estadistico')" 2>&1 | sed 's/^/  /' | head -2 ) &
+  wait
+  echo "  esperado: revisar espera a la reconstrucción; o la decisión queda guardada o falla porque ese intervalo ya no existe, nunca a medias"
+  $P -c "select '  decisiones vivas: '||(select count(*) from tc_reconstruccion_revisiones where invalidada_at is null and decision in ('aceptado','rechazado'))||' · intervalos con uso <> pendiente: '||(select count(*) from tc_reconstruccion_montajes where uso_estadistico <> 'pendiente')"
+  $P -c "select '  ninguna decisión viva sin su intervalo con la misma huella: '||(select coalesce(bool_and(rm.revision_huella = rv.huella_evidencia), true) from tc_reconstruccion_revisiones rv join tc_reconstruccion_montajes rm on rm.operacion_entrada_id = rv.operacion_entrada_id where rv.invalidada_at is null and rv.decision in ('aceptado','rechazado'))"
+else
+  echo "  (sin intervalo cerrado que revisar en esta base)"
+fi
+
+echo "== bloqueos que no se resuelven (fase 3):"; $P -c "select count(*) from pg_locks where not granted"
