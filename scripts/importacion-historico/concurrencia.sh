@@ -112,7 +112,7 @@ if [ -n "$IV8" ]; then
 begin; select 'reconstruir:'||tc_imp_reconstruir_vehiculo('$VEH8'); select pg_sleep(3); commit;
 SQL
   ) & sleep 0.5
-  ( $P -c "select 'revisar:'||(tc_imp_revisar_intervalo('$IV8','aceptado','prueba concurrente')->>'uso_estadistico')" 2>&1 | sed 's/^/  /' | head -2 ) &
+  ( $P -c "select 'revisar:'||(tc_imp_revisar_intervalo('$IV8','kilometros','aceptado','prueba concurrente')->>'uso_estadistico')" 2>&1 | sed 's/^/  /' | head -2 ) &
   wait
   echo "  esperado: revisar espera a la reconstrucción; o la decisión queda guardada o falla porque ese intervalo ya no existe, nunca a medias"
   $P -c "select '  decisiones vivas: '||(select count(*) from tc_reconstruccion_revisiones where invalidada_at is null and decision in ('aceptado','rechazado'))||' · intervalos con uso <> pendiente: '||(select count(*) from tc_reconstruccion_montajes where uso_estadistico <> 'pendiente')"

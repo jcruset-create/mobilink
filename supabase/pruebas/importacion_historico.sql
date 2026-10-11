@@ -1123,21 +1123,42 @@ do $$ begin
   -- Mismo día, salto pequeño (300 km): plausible, y sin dividir entre cero.
   perform tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes', lote('2026-06', alb_fk('B2_26/Z1','CERO001',2,'2026-06-01',500000)), false);
   perform tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes', lote('2026-06', alb_fk('B2_26/Z2','CERO001',2,'2026-06-01',500300)), false);
-  perform prueba('cero días con salto pequeño: utilizable y sin error',
-    (select km_estado||'/'||recorrido_km::int||'/'||dias_intervalo from tc_reconstruccion_montajes
-      where vehiculo_id='00000000-0000-0000-0000-00000000ac03' and estado='cerrado' limit 1), 'utilizables/300/0');
+  perform prueba('cero días con salto pequeño: utilizable, pero con el orden desconocido',
+    (select km_estado||'/'||recorrido_km::int||'/'||dias_intervalo||'/'||orden_desconocido
+       from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ac03' and estado='cerrado' limit 1), 'utilizables/300/0/true');
+  perform prueba('cero días con salto pequeño: tampoco se publica un ritmo',
+    (select ritmo_km_dia is null from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ac03' and estado='cerrado' limit 1), true);
+  perform prueba('cero días con salto pequeño: fuera de las medias hasta revisar el orden',
+    (select array_to_string(tc_imp_intervalo_motivos(rm),',') from tc_reconstruccion_montajes rm
+      where rm.vehiculo_id='00000000-0000-0000-0000-00000000ac03' and rm.estado='cerrado' limit 1),
+    'mismo_dia_orden_desconocido');
   -- Mismo día, salto imposible: anómalo, comparando con el límite de UN día.
   perform tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes', lote('2026-06', alb_fk('B2_26/Z3','CERO002',2,'2026-06-01',500000)), false);
   perform tc_importar_historico('00000000-0000-0000-0000-0000000000e1','genes', lote('2026-06', alb_fk('B2_26/Z4','CERO002',2,'2026-06-01',626290)), false);
-  perform prueba('cero días con salto imposible: anómalo, no colado por no poder dividir',
-    (select km_estado||'/'||recorrido_km::int||'/'||dias_intervalo from tc_reconstruccion_montajes
-      where vehiculo_id='00000000-0000-0000-0000-00000000ac04' and estado='cerrado' limit 1), 'anomalos/126290/0');
-  perform prueba('cero días: el aviso explica que no se divide entre cero',
-    (select motivo_revision like '%no se divide entre cero%' from tc_reconstruccion_montajes
+  perform prueba('cero días con salto grande: el recorrido se conserva y se marca el orden desconocido',
+    (select km_estado||'/'||recorrido_km::int||'/'||dias_intervalo||'/'||orden_desconocido
+       from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ac04' and estado='cerrado' limit 1), 'anomalos/126290/0/true');
+  -- Lo importante: NO se inventa un «km/día» que nadie ha observado.
+  perform prueba('cero días: NO se publica ningún ritmo diario',
+    (select ritmo_km_dia is null from tc_reconstruccion_montajes
       where vehiculo_id='00000000-0000-0000-0000-00000000ac04' and estado='cerrado' limit 1), true);
-  perform prueba('cero días: el ritmo guardado es el recorrido, no una división',
-    (select ritmo_km_dia::int from tc_reconstruccion_montajes
-      where vehiculo_id='00000000-0000-0000-0000-00000000ac04' and estado='cerrado' limit 1), 126290);
+  perform prueba('cero días: el aviso identifica la limitación (ni hora ni orden)',
+    (select motivo_revision like '%No consta la hora ni el orden de los trabajos%'
+         and motivo_revision like '%ni se puede calcular un ritmo diario%'
+       from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ac04' and estado='cerrado' limit 1), true);
+  perform prueba('cero días: la comparación con el límite de un día se presenta como auxiliar',
+    (select motivo_revision like '%Comprobación auxiliar, que no es un ritmo observado%'
+       from tc_reconstruccion_montajes
+      where vehiculo_id='00000000-0000-0000-0000-00000000ac04' and estado='cerrado' limit 1), true);
+  perform prueba('cero días con recorrido positivo: fuera de las medias hasta revisarlo',
+    (select tc_imp_intervalo_en_medias(rm)||'/'||array_to_string(tc_imp_intervalo_motivos(rm),',')
+       from tc_reconstruccion_montajes rm
+      where rm.vehiculo_id='00000000-0000-0000-0000-00000000ac04' and rm.estado='cerrado' limit 1),
+    'false/km_anomalos_pendientes,mismo_dia_orden_desconocido');
   -- Y el kilometraje decreciente sigue siendo incompatible, no anómalo.
   perform prueba('decreciente no se convierte en anómalo',
     (select km_estado from tc_reconstruccion_montajes
@@ -1257,23 +1278,35 @@ do $$ declare iv uuid; r jsonb; begin
    order by posicion_id limit 1;
   -- Motivo obligatorio
   begin
-    perform tc_imp_revisar_intervalo(iv, 'aceptado', '   ');
+    perform tc_imp_revisar_intervalo(iv, 'kilometros', 'aceptado', '   ');
     perform prueba('revisar sin motivo no se puede', false, true);
   exception when invalid_parameter_value then perform prueba('revisar sin motivo no se puede', true, true); end;
   -- Decisión inventada
   begin
-    perform tc_imp_revisar_intervalo(iv, 'quizá', 'porque sí');
+    perform tc_imp_revisar_intervalo(iv, 'kilometros', 'quizá', 'porque sí');
     perform prueba('decisión inventada no se puede', false, true);
   exception when invalid_parameter_value then perform prueba('decisión inventada no se puede', true, true); end;
   -- Aceptar
-  r := tc_imp_revisar_intervalo(iv, 'aceptado', 'Comprobado con el conductor: el cuentakilómetros se cambió en marzo');
-  perform prueba('aceptado: entra en medias', (r->>'en_medias')::boolean, true);
-  perform prueba('aceptado: el aviso dice que sigue siendo estimado',
-    r->>'aviso' like '%No lo convierte en rendimiento confirmado%', true);
+  r := tc_imp_revisar_intervalo(iv, 'kilometros', 'aceptado', 'Comprobado con el conductor: el cuentakilómetros se cambió en marzo');
+  -- NO entra: sus kilómetros están aceptados, pero la continuidad sigue en
+  -- duda por el albarán bloqueado. Aceptar una cosa no resuelve la otra.
+  perform prueba('aceptar los km NO resuelve la continuidad: sigue fuera', (r->>'en_medias')::boolean, false);
+  perform prueba('y lo dice en el motivo que queda', r->'motivos_exclusion'->>0, 'continuidad_pendiente');
+  perform prueba('aceptado: el aviso dice que sigue siendo estimado y que no resuelve la continuidad',
+    (r->>'aviso' like '%No lo convierte en rendimiento confirmado%') and (r->>'aviso' like '%NO resuelve su continuidad%'), true);
   perform prueba('aceptado: la clasificación automática NO cambia', r->>'km_estado', 'anomalos');
   perform prueba('aceptado: el recorrido sigue ahí', (r->>'recorrido_km')::int, 626290);
   perform prueba('aceptado: el nivel sigue siendo estimado',
     (select nivel from tc_reconstruccion_montajes where id=iv), 'estimado');
+  -- Y ahora sí, la continuidad, que es una decisión aparte.
+  r := tc_imp_revisar_intervalo(iv, 'continuidad', 'aceptado', 'Mirado el albarán bloqueado: era un pedido anulado, no hubo montaje');
+  perform prueba('con las DOS decisiones, ya entra en las medias', (r->>'en_medias')::boolean, true);
+  perform prueba('y las dos constan por separado',
+    (r->>'uso_estadistico')||'/'||(r->>'continuidad_decision'), 'aceptado/aceptada');
+  perform prueba('la auditoría guarda cada ámbito por su cuenta',
+    (select string_agg(ambito||':'||decision, ',' order by ambito) from tc_reconstruccion_revisiones
+      where operacion_entrada_id = (select operacion_entrada_id from tc_reconstruccion_montajes where id=iv)
+        and invalidada_at is null), 'continuidad:aceptado,kilometros:aceptado');
   perform prueba('aceptado: queda usuario, fecha y motivo',
     (select (revisado_por is not null)||'/'||(revisado_at is not null)||'/'||(revisado_motivo like '%cuentakilómetros%')
        from tc_reconstruccion_montajes where id=iv), 'true/true/true');
@@ -1289,7 +1322,7 @@ do $$ declare iv uuid; r jsonb; begin
   select id into iv from tc_reconstruccion_montajes
    where vehiculo_id='00000000-0000-0000-0000-00000000ad01' and estado='cerrado'
    order by posicion_id desc limit 1;
-  r := tc_imp_revisar_intervalo(iv, 'rechazado', 'La lectura de febrero no es creíble y no hay forma de confirmarla');
+  r := tc_imp_revisar_intervalo(iv, 'kilometros', 'rechazado', 'La lectura de febrero no es creíble y no hay forma de confirmarla');
   perform prueba('rechazado: no entra en medias', (r->>'en_medias')::boolean, false);
   perform prueba('rechazado: los kilómetros NO pasan a ausentes ni a decrecientes',
     (select km_estado||'/'||recorrido_km::int||'/'||km_montaje::int||'/'||km_desmontaje::int
@@ -1297,11 +1330,19 @@ do $$ declare iv uuid; r jsonb; begin
   perform prueba('rechazado: su motivo de exclusión lo dice',
     (select array_to_string(tc_imp_intervalo_motivos(rm),',') from tc_reconstruccion_montajes rm where rm.id=iv),
     'km_anomalos_rechazados,continuidad_pendiente');
+  -- Aceptar la continuidad de un intervalo con los km rechazados no lo mete
+  -- en las medias: la otra puerta sigue cerrada.
+  perform tc_imp_revisar_intervalo(iv, 'continuidad', 'aceptado', 'El bloqueado no afecta a esta posición');
+  perform prueba('con la continuidad aceptada pero los km rechazados, sigue fuera',
+    (select tc_imp_intervalo_en_medias(rm) from tc_reconstruccion_montajes rm where rm.id=iv), false);
+  perform prueba('y el motivo que queda es el de los kilómetros',
+    (select array_to_string(tc_imp_intervalo_motivos(rm),',') from tc_reconstruccion_montajes rm where rm.id=iv),
+    'km_anomalos_rechazados');
   -- Un intervalo sin recorrido no se puede aceptar ni rechazar
   select id into iv from tc_reconstruccion_montajes
    where vehiculo_id='00000000-0000-0000-0000-00000000ab03' and km_estado='ausentes' limit 1;
   begin
-    perform tc_imp_revisar_intervalo(iv, 'aceptado', 'da igual');
+    perform tc_imp_revisar_intervalo(iv, 'kilometros', 'aceptado', 'da igual');
     perform prueba('sin recorrido no hay nada que aceptar', false, true);
   exception when invalid_parameter_value then perform prueba('sin recorrido no hay nada que aceptar', true, true); end;
 end $$;
@@ -1310,7 +1351,7 @@ update auth_ctx set rol='operador';
 do $$ declare iv uuid; begin
   select id into iv from tc_reconstruccion_montajes where vehiculo_id='00000000-0000-0000-0000-00000000ad01' and estado='cerrado' limit 1;
   begin
-    perform tc_imp_revisar_intervalo(iv, 'aceptado', 'no debería poder');
+    perform tc_imp_revisar_intervalo(iv, 'kilometros', 'aceptado', 'no debería poder');
     perform prueba('un operador no puede revisar', false, true);
   exception when insufficient_privilege then perform prueba('un operador no puede revisar', true, true); end;
 end $$;
@@ -1318,7 +1359,7 @@ update auth_ctx set rol='admin', empresa='00000000-0000-0000-0000-0000000000e2';
 do $$ declare iv uuid; begin
   select id into iv from tc_reconstruccion_montajes where vehiculo_id='00000000-0000-0000-0000-00000000ad01' and estado='cerrado' limit 1;
   begin
-    perform tc_imp_revisar_intervalo(iv, 'aceptado', 'de otra empresa');
+    perform tc_imp_revisar_intervalo(iv, 'kilometros', 'aceptado', 'de otra empresa');
     perform prueba('el admin de otra empresa no puede revisar', false, true);
   exception when insufficient_privilege then perform prueba('el admin de otra empresa no puede revisar', true, true); end;
   begin
@@ -1344,7 +1385,7 @@ do $$ declare iv uuid; oe uuid; begin
    where vehiculo_id='00000000-0000-0000-0000-00000000ae01' and estado='cerrado' order by posicion_id limit 1;
   perform prueba('caduca: el intervalo nace anómalo (400.000 km en 120 días)',
     (select km_estado from tc_reconstruccion_montajes where id=iv), 'anomalos');
-  perform tc_imp_revisar_intervalo(iv, 'aceptado', 'Revisado con el taller: la lectura es correcta');
+  perform tc_imp_revisar_intervalo(iv, 'kilometros', 'aceptado', 'Revisado con el taller: la lectura es correcta');
   perform prueba('caduca: aceptado, entra en medias',
     (select tc_imp_intervalo_en_medias(rm) from tc_reconstruccion_montajes rm where rm.id=iv), true);
   -- Ahora aparece un albarán BLOQUEADO dentro del intervalo: la evidencia
@@ -1362,6 +1403,8 @@ do $$ declare iv uuid; oe uuid; begin
   perform prueba('caduca: la aceptación anterior sigue en la auditoría, marcada como invalidada',
     (select count(*) from tc_reconstruccion_revisiones
       where operacion_entrada_id=oe and decision='aceptado' and invalidada_at is not null), 1::bigint);
+  perform prueba('caduca: la invalidación dice de qué ámbito era',
+    (select ambito from tc_reconstruccion_revisiones where operacion_entrada_id=oe and decision='invalidada'), 'kilometros');
   perform prueba('caduca: el motivo original de la persona NO se ha borrado',
     (select motivo from tc_reconstruccion_revisiones where operacion_entrada_id=oe and decision='aceptado'),
     'Revisado con el taller: la lectura es correcta');
@@ -1372,9 +1415,14 @@ do $$ declare iv uuid; oe uuid; begin
     (select count(*) from tc_reconstruccion_revisiones where operacion_entrada_id=oe), 2::bigint);
   -- Y se puede volver a revisar sobre la evidencia nueva.
   select id into iv from tc_reconstruccion_montajes where operacion_entrada_id=oe;
-  perform tc_imp_revisar_intervalo(iv, 'aceptado', 'Visto el albarán bloqueado: no hubo montaje, era un pedido anulado');
+  perform tc_imp_revisar_intervalo(iv, 'kilometros', 'aceptado', 'Visto el albarán bloqueado: no hubo montaje, era un pedido anulado');
   perform prueba('caduca: la revisión nueva sí se aplica',
     (select uso_estadistico from tc_reconstruccion_montajes where id=iv), 'aceptado');
+  perform prueba('pero con el bloqueado dentro sigue fuera de las medias hasta decidir la continuidad',
+    (select tc_imp_intervalo_en_medias(rm) from tc_reconstruccion_montajes rm where rm.id=iv), false);
+  perform tc_imp_revisar_intervalo(iv, 'continuidad', 'aceptado', 'El albarán bloqueado no trajo montaje');
+  perform prueba('con las dos, ya entra',
+    (select tc_imp_intervalo_en_medias(rm) from tc_reconstruccion_montajes rm where rm.id=iv), true);
   perform prueba('caduca: y la decisión aguanta una reconstrucción que no cambia nada',
     (select uso_estadistico from tc_reconstruccion_montajes where operacion_entrada_id=oe
       and (select tc_imp_reconstruir_vehiculo('00000000-0000-0000-0000-00000000ae01')) >= 0), 'aceptado');
@@ -1405,12 +1453,19 @@ do $$ declare r jsonb; l uuid; lmay uuid; v uuid; op uuid; obs text; c0 int; c1 
   perform prueba('deshecho el cierre: las decisiones humanas caducan (la evidencia ya no es la misma)',
     (select count(*) from tc_reconstruccion_montajes
       where vehiculo_id='00000000-0000-0000-0000-00000000ad01' and uso_estadistico <> 'pendiente'), 0::bigint);
-  perform prueba('deshecho el cierre: la auditoría de las dos decisiones NO se ha borrado',
+  -- Cuatro decisiones: kilómetros y continuidad en cada uno de los dos
+  -- intervalos del eje. Ninguna se borra y todas quedan invalidadas.
+  perform prueba('deshecho el cierre: la auditoría de las decisiones NO se ha borrado',
     (select count(*) from tc_reconstruccion_revisiones rv
-      where rv.vehiculo_id='00000000-0000-0000-0000-00000000ad01' and rv.decision in ('aceptado','rechazado')), 2::bigint);
-  perform prueba('deshecho el cierre: las dos quedan marcadas como invalidadas',
+      where rv.vehiculo_id='00000000-0000-0000-0000-00000000ad01' and rv.decision in ('aceptado','rechazado')), 4::bigint);
+  perform prueba('deshecho el cierre: todas quedan marcadas como invalidadas',
     (select count(*) from tc_reconstruccion_revisiones rv
-      where rv.vehiculo_id='00000000-0000-0000-0000-00000000ad01' and rv.invalidada_at is not null), 2::bigint);
+      where rv.vehiculo_id='00000000-0000-0000-0000-00000000ad01' and rv.invalidada_at is not null), 4::bigint);
+  perform prueba('deshecho el cierre: la auditoría conserva empresa, actor, fecha, motivo y referencias',
+    (select bool_and(empresa_id is not null and vehiculo_id is not null and operacion_entrada_id is not null
+                     and fecha_montaje is not null and creado_at is not null and btrim(motivo) <> ''
+                     and (usuario_id is not null or decision = 'invalidada'))
+       from tc_reconstruccion_revisiones where vehiculo_id='00000000-0000-0000-0000-00000000ad01'), true);
   perform prueba('deshecho el cierre: el aviso del bloqueado sigue en pie',
     (select bool_and('B2_26/1590|1445HWZ' = any(continuidad_docs)) from tc_reconstruccion_montajes
       where vehiculo_id='00000000-0000-0000-0000-00000000ad01'), true);
@@ -1477,21 +1532,29 @@ do $$ declare c jsonb; begin
   perform prueba('la cobertura separa identidad respaldada, reconstruida y sin ficha, y suman',
     (c->'identidad'->>'respaldada')::int + (c->'identidad'->>'reconstruida')::int + (c->'identidad'->>'sin_ficha')::int
       = (c->'poblacion'->>'intervalos')::int, true);
-  perform prueba('y dice que una ficha reconstruida NO es una unidad identificada',
-    c->'identidad'->>'que_es' like '%NO son unidades identificadas%', true);
+  perform prueba('y distingue identificación física de tener ficha',
+    (c->'identidad'->>'que_es' like '%no es lo mismo que «sin ficha»%'), true);
+  perform prueba('publica el embudo: calculables frente a elegibles',
+    (c->'embudo'->>'con_recorrido_aritmetico')::int >= (c->'embudo'->>'elegibles_tras_filtros')::int, true);
+  perform prueba('y los elegibles son los que sostienen la media',
+    (c->'embudo'->>'elegibles_tras_filtros'), (c->'incluidos'->>'n'));
   perform prueba('los incluidos y los excluidos suman la población',
     (c->'incluidos'->>'n')::int + (c->'excluidos'->>'n')::int = (c->'poblacion'->>'intervalos')::int, true);
-  perform prueba('el recorrido viene separado, nunca en un solo número',
-    (c->'recorrido'->'unidad_identificada' is not null) and (c->'recorrido'->'ocupacion_de_posicion' is not null), true);
-  perform prueba('la ocupación se presenta como lo que es, no como rendimiento de una goma',
-    c->'recorrido'->'ocupacion_de_posicion'->>'que_es' like '%no es el rendimiento de ningún neumático%', true);
+  perform prueba('el recorrido viene en tres grupos, nunca en un solo número',
+    (c->'recorrido'->'identidad_respaldada' is not null) and (c->'recorrido'->'ficha_reconstruida' is not null)
+      and (c->'recorrido'->'ocupacion_sin_ficha' is not null), true);
+  perform prueba('la ficha reconstruida se presenta como lo que es',
+    c->'recorrido'->'ficha_reconstruida'->>'que_es' like '%NO demuestra qué neumático estuvo montado%', true);
+  perform prueba('y la ocupación sin ficha, también',
+    c->'recorrido'->'ocupacion_sin_ficha'->>'que_es' like '%No es el rendimiento de ningún neumático%', true);
   -- En el banco hay UNA ficha que una persona identificó (sección 16). Esa
   -- cuenta como unidad identificada; las demás, con ficha reconstruida por la
   -- importación, cuentan como ocupación de la posición.
-  perform prueba('solo la ficha que una persona identificó cuenta como unidad',
-    (c->'identidad'->>'respaldada')||'/'||(c->'incluidos'->>'identificadas'), '1/1');
-  perform prueba('las fichas reconstruidas por la importación NO cuentan como unidades',
-    (c->'incluidos'->>'ocupaciones')::int = (c->'incluidos'->>'n')::int - 1, true);
+  perform prueba('solo la ficha que una persona identificó cuenta como respaldada',
+    (c->'identidad'->>'respaldada')||'/'||(c->'incluidos'->>'respaldada'), '1/1');
+  perform prueba('las fichas reconstruidas van en su propio grupo, ni unidades ni sin ficha',
+    (c->'incluidos'->>'respaldada')::int + (c->'incluidos'->>'reconstruida')::int
+      + (c->'incluidos'->>'sin_ficha')::int = (c->'incluidos'->>'n')::int, true);
   perform prueba('se avisa de que los motivos se solapan', (c->'excluidos'->>'motivos_se_solapan')::boolean, true);
   perform prueba('las combinaciones de motivos SÍ suman el total de excluidos',
     (select sum((x->>'n')::int)::int from jsonb_array_elements(c->'excluidos'->'combinaciones') x), (c->'excluidos'->>'n')::int);
@@ -1505,13 +1568,200 @@ do $$ declare c jsonb; begin
     tc_informes_montajes('00000000-0000-0000-0000-0000000000e1','2026-01-01','2026-12-31')->'recorridos_estimados'->>'nivel', 'estimado');
   -- Un vehículo concreto
   c := tc_informes_recorridos_estimados('00000000-0000-0000-0000-0000000000e1', null, null, '00000000-0000-0000-0000-00000000ac01');
-  perform prueba('por vehículo: la media sale de los intervalos que entran, como ocupación de posición',
-    (c->'recorrido'->'ocupacion_de_posicion'->>'n')||'/'||(c->'recorrido'->'ocupacion_de_posicion'->>'media'), '2/180000');
+  perform prueba('por vehículo: la media sale de los que entran, como ficha reconstruida',
+    (c->'recorrido'->'ficha_reconstruida'->>'n')||'/'||(c->'recorrido'->'ficha_reconstruida'->>'media'), '2/180000');
   perform prueba('por vehículo: y se dice cuántos entran y cuántos no',
     (c->'incluidos'->>'n')||' de '||(c->'poblacion'->>'intervalos')||', '||(c->'excluidos'->>'n')||' fuera',
     '2 de 4, 2 fuera');
   perform prueba('por vehículo: los que quedan fuera dicen por qué (aquí, sin cerrar)',
     c->'excluidos'->'motivos'->0->>'motivo', 'sin_cierre');
-  perform prueba('por vehículo: no se inventa una media de unidades identificadas si no hay ninguna',
-    c->'recorrido'->'unidad_identificada'->>'media', null);
+  perform prueba('por vehículo: no se inventa una media de identidad respaldada si no hay ninguna',
+    c->'recorrido'->'identidad_respaldada'->>'media', null);
+end $$;
+
+-- ── 38. Qué entra REALMENTE en las medias ────────────────────────────────
+-- No se comprueba caso a caso sino como invariante sobre TODOS los intervalos
+-- del banco: si alguno entrara sin cumplir una de las condiciones, aquí se ve.
+do $$ begin
+  perform prueba('nadie entra sin estar cerrado y con recorrido calculable',
+    (select count(*) from tc_reconstruccion_montajes rm where tc_imp_intervalo_en_medias(rm)
+       and (rm.estado <> 'cerrado' or rm.recorrido_km is null
+            or rm.km_estado not in ('utilizables','anomalos'))), 0::bigint);
+  perform prueba('nadie entra con el uso estadístico rechazado',
+    (select count(*) from tc_reconstruccion_montajes rm
+      where tc_imp_intervalo_en_medias(rm) and rm.uso_estadistico = 'rechazado'), 0::bigint);
+  perform prueba('ningún anómalo entra sin aceptación expresa de los kilómetros',
+    (select count(*) from tc_reconstruccion_montajes rm
+      where tc_imp_intervalo_en_medias(rm) and rm.km_estado = 'anomalos'
+        and rm.uso_estadistico <> 'aceptado'), 0::bigint);
+  perform prueba('ninguno del mismo día sin orden conocido entra sin revisar',
+    (select count(*) from tc_reconstruccion_montajes rm
+      where tc_imp_intervalo_en_medias(rm) and rm.orden_desconocido
+        and rm.uso_estadistico <> 'aceptado'), 0::bigint);
+  perform prueba('ninguno con continuidad en duda entra sin aceptarla expresamente',
+    (select count(*) from tc_reconstruccion_montajes rm
+      where tc_imp_intervalo_en_medias(rm) and tc_imp_intervalo_duda_continuidad(rm)
+        and rm.continuidad_decision <> 'aceptada'), 0::bigint);
+  perform prueba('ninguno con la continuidad rechazada entra',
+    (select count(*) from tc_reconstruccion_montajes rm
+      where tc_imp_intervalo_en_medias(rm) and rm.continuidad_decision = 'rechazada'), 0::bigint);
+  -- Una decisión viva tiene que estar tomada sobre la evidencia de AHORA.
+  perform prueba('ninguna decisión viva cuelga de una evidencia distinta de la actual',
+    (select count(*) from tc_reconstruccion_montajes rm
+      where (rm.uso_estadistico <> 'pendiente' and rm.revision_huella is distinct from tc_imp_huella_intervalo(rm.id))
+         or (rm.continuidad_decision <> 'pendiente' and rm.continuidad_huella is distinct from tc_imp_huella_intervalo(rm.id))), 0::bigint);
+  -- Motivos: los que entran no tienen ninguno; los que no, al menos uno.
+  perform prueba('el que entra no tiene motivos de exclusión',
+    (select count(*) from tc_reconstruccion_montajes rm
+      where tc_imp_intervalo_en_medias(rm) and coalesce(array_length(tc_imp_intervalo_motivos(rm),1),0) > 0), 0::bigint);
+  perform prueba('el que no entra tiene al menos uno',
+    (select count(*) from tc_reconstruccion_montajes rm
+      where not tc_imp_intervalo_en_medias(rm) and coalesce(array_length(tc_imp_intervalo_motivos(rm),1),0) = 0), 0::bigint);
+end $$;
+-- Y el recuento publicado tiene que cuadrar con la realidad de la tabla.
+do $$ declare c jsonb; n_real bigint; n_arit bigint; begin
+  c := tc_informes_recorridos_estimados('00000000-0000-0000-0000-0000000000e1', '2000-01-01', '2100-01-01', null);
+  select count(*) into n_real from tc_reconstruccion_montajes rm
+   where rm.empresa_id='00000000-0000-0000-0000-0000000000e1' and tc_imp_intervalo_en_medias(rm);
+  select count(*) into n_arit from tc_reconstruccion_montajes
+   where empresa_id='00000000-0000-0000-0000-0000000000e1' and estado='cerrado'
+     and km_estado in ('utilizables','anomalos') and recorrido_km is not null;
+  perform prueba('el número publicado es el que de verdad entra', (c->'incluidos'->>'n')::bigint, n_real);
+  perform prueba('y el embudo publica también los aritméticamente calculables',
+    (c->'embudo'->>'con_recorrido_aritmetico')::bigint, n_arit);
+  perform prueba('calculables y elegibles NO son lo mismo en este banco', n_arit > n_real, true);
+  perform prueba('las combinaciones de motivos suman el total de excluidos, sin contar dos veces',
+    (select coalesce(sum((x->>'n')::int),0)::int from jsonb_array_elements(c->'excluidos'->'combinaciones') x),
+    (c->'excluidos'->>'n')::int);
+  perform prueba('la suma de motivos sueltos es mayor: se solapan',
+    (select coalesce(sum((x->>'n')::int),0) from jsonb_array_elements(c->'excluidos'->'motivos') x)
+      > (c->'excluidos'->>'n')::int, true);
+  perform prueba('incluidos + excluidos = población, sin huecos',
+    (c->'incluidos'->>'n')::int + (c->'excluidos'->>'n')::int, (c->'poblacion'->>'intervalos')::int);
+end $$;
+
+-- ── 39. Identidad: tres grupos que no se confunden ───────────────────────
+-- Una ficha reconstruida NO es una unidad identificada, pero tampoco es «sin
+-- ficha»: la ficha existe y sirve para enlazar el registro histórico.
+do $$ declare c jsonb; begin
+  c := tc_informes_recorridos_estimados('00000000-0000-0000-0000-0000000000e1', '2000-01-01', '2100-01-01', null);
+  perform prueba('los tres grupos de identidad suman la población',
+    (c->'identidad'->>'respaldada')::int + (c->'identidad'->>'reconstruida')::int
+      + (c->'identidad'->>'sin_ficha')::int, (c->'poblacion'->>'intervalos')::int);
+  perform prueba('hay fichas reconstruidas, y no se cuentan como respaldadas',
+    (c->'identidad'->>'reconstruida')::int > 0 and (c->'identidad'->>'respaldada')::int
+      < (c->'identidad'->>'reconstruida')::int, true);
+  perform prueba('la ficha reconstruida tiene número interno: no es «sin ficha»',
+    (select count(*) from tc_reconstruccion_montajes rm join tc_neumaticos n on n.id = rm.neumatico_id
+      where n.identidad_reconstruida and n.numero_interno is not null) > 0, true);
+  perform prueba('y el texto lo explica sin confundir las dos cosas',
+    c->'identidad'->>'que_es' like '%no es lo mismo que «sin ficha»%', true);
+  perform prueba('ninguna media de fichas reconstruidas se presenta como rendimiento individual',
+    c->'recorrido'->'ficha_reconstruida'->>'que_es' like '%No es rendimiento individual%', true);
+end $$;
+
+-- ── 40. La auditoría es de verdad append-only, y aísla empresas ──────────
+-- Se ejecuta como el rol `authenticated`, no como el dueño: el dueño se salta
+-- la RLS y no probaría nada. Y se le conceden a posta los permisos que en
+-- Supabase da la plataforma, para comprobar que aun con ellos la RLS niega
+-- escribir.
+grant usage on schema public to authenticated, anon;
+grant select on auth_ctx to authenticated;
+grant select, insert, update, delete on tc_reconstruccion_revisiones to authenticated;
+grant select, insert, update, delete on tc_reconstruccion_montajes to authenticated;
+create or replace function tc_puede_ver_empresa(e uuid) returns boolean language sql stable as
+  $$ select e = (select empresa from auth_ctx limit 1) $$;
+do $$ declare n bigint; iv uuid; oe uuid; begin
+  select id, operacion_entrada_id into iv, oe from tc_reconstruccion_revisiones
+    where empresa_id='00000000-0000-0000-0000-0000000000e1' limit 1;
+  set local role authenticated;
+  -- Leer: sí, lo de su empresa.
+  select count(*) into n from tc_reconstruccion_revisiones;
+  perform prueba('un usuario autenticado ve la auditoría de SU empresa', n > 0, true);
+  -- Escribir: no, de ninguna de las tres formas.
+  begin
+    insert into tc_reconstruccion_revisiones (empresa_id, vehiculo_id, operacion_entrada_id, fecha_montaje,
+      ambito, decision, motivo, huella_evidencia)
+    values ('00000000-0000-0000-0000-0000000000e1','00000000-0000-0000-0000-00000000ad01', oe, '2026-01-01',
+            'kilometros','aceptado','decisión falsificada','x');
+    perform prueba('no se puede INSERTAR una decisión a mano', false, true);
+  exception when insufficient_privilege then perform prueba('no se puede INSERTAR una decisión a mano', true, true);
+  end;
+  begin
+    update tc_reconstruccion_revisiones set motivo = 'reescrito' where id = iv;
+    get diagnostics n = row_count;
+    perform prueba('no se puede MODIFICAR una decisión', n, 0::bigint);
+  exception when insufficient_privilege then perform prueba('no se puede MODIFICAR una decisión', true, true);
+  end;
+  begin
+    delete from tc_reconstruccion_revisiones where id = iv;
+    get diagnostics n = row_count;
+    perform prueba('no se puede BORRAR una decisión', n, 0::bigint);
+  exception when insufficient_privilege then perform prueba('no se puede BORRAR una decisión', true, true);
+  end;
+  -- Ni falsificar la decisión escribiendo directamente en el intervalo.
+  begin
+    update tc_reconstruccion_montajes set uso_estadistico = 'aceptado' where uso_estadistico = 'pendiente';
+    get diagnostics n = row_count;
+    perform prueba('no se puede marcar un intervalo como aceptado por escritura directa', n, 0::bigint);
+  exception when insufficient_privilege then
+    perform prueba('no se puede marcar un intervalo como aceptado por escritura directa', true, true);
+  end;
+  reset role;
+end $$;
+-- Aislamiento: el mismo rol, con la empresa de otro, no ve nada.
+update auth_ctx set empresa='00000000-0000-0000-0000-0000000000e2';
+do $$ declare n bigint; begin
+  set local role authenticated;
+  select count(*) into n from tc_reconstruccion_revisiones where empresa_id='00000000-0000-0000-0000-0000000000e1';
+  perform prueba('con otra empresa no se ve la auditoría ajena', n, 0::bigint);
+  select count(*) into n from tc_reconstruccion_montajes where empresa_id='00000000-0000-0000-0000-0000000000e1';
+  perform prueba('ni los intervalos ajenos', n, 0::bigint);
+  reset role;
+end $$;
+update auth_ctx set empresa='00000000-0000-0000-0000-0000000000e1';
+-- Y `anon`, que en el banco no tiene ni permiso de tabla, falla ANTES de la
+-- RLS: es un rechazo distinto y conviene no confundirlos.
+do $$ declare n bigint; begin
+  set local role anon;
+  begin
+    select count(*) into n from tc_reconstruccion_revisiones;
+    perform prueba('anon no puede ni leer la auditoría', false, true);
+  exception when insufficient_privilege then perform prueba('anon no puede ni leer la auditoría', true, true);
+  end;
+  reset role;
+end $$;
+-- Se deja el stub como estaba para no afectar a nada que venga después.
+create or replace function tc_puede_ver_empresa(e uuid) returns boolean language sql stable as $$ select true $$;
+
+-- ── 41. La auditoría sobrevive al deshacer con todo lo necesario ─────────
+do $$ declare l uuid; n bigint; r jsonb; begin
+  select l2.id into l from tc_importacion_lotes l2 where l2.periodo='2026-01'
+    and exists (select 1 from tc_importacion_intervenciones ii join tc_intervenciones i on i.id=ii.intervencion_id
+                 where ii.lote_id=l2.id and i.origen_doc='B2_26/E1|CADUCA1');
+  if l is null then perform prueba('(no hay lote de CADUCA1 que deshacer)', true, true); return; end if;
+  select count(*) into n from tc_reconstruccion_revisiones rv
+   where rv.vehiculo_id='00000000-0000-0000-0000-00000000ae01';
+  perform prueba('CADUCA1 tiene decisiones auditadas antes de deshacer', n > 0, true);
+  r := tc_deshacer_importacion(l, '{}', false);
+  -- Ese lote NO se deshace entero: su intervalo está revisado a mano y las
+  -- decisiones humanas no se revierten en silencio.
+  perform prueba('deshacer conserva la intervención con el intervalo revisado',
+    (r->>'conservadas')::int > 0, true);
+  perform prueba('y dice por qué', (r->'detalle'->0->'motivos')::text like '%revisión humana%', true);
+  perform prueba('tras deshacer, la auditoría sigue entera',
+    (select count(*) from tc_reconstruccion_revisiones rv where rv.vehiculo_id='00000000-0000-0000-0000-00000000ae01'), n);
+  perform prueba('y conserva empresa, actor, fecha, motivo y referencias',
+    (select bool_and(empresa_id is not null and vehiculo_id is not null and operacion_entrada_id is not null
+                     and fecha_montaje is not null and creado_at is not null and btrim(motivo) <> '')
+       from tc_reconstruccion_revisiones where vehiculo_id='00000000-0000-0000-0000-00000000ae01'), true);
+  -- Y si la operación desaparece por fuera (alguien borra a mano, que es el
+  -- único camino que queda), la auditoría tampoco se va con ella: no tiene
+  -- clave ajena hacia la operación a propósito.
+  delete from tc_reconstruccion_montajes where vehiculo_id='00000000-0000-0000-0000-00000000ae01';
+  delete from operaciones_neumaticos where vehiculo_id='00000000-0000-0000-0000-00000000ae01';
+  perform prueba('la auditoría sobrevive aunque la operación ya no exista',
+    (select count(*) from tc_reconstruccion_revisiones rv
+      where rv.vehiculo_id='00000000-0000-0000-0000-00000000ae01'
+        and not exists (select 1 from operaciones_neumaticos o where o.id = rv.operacion_entrada_id)), n);
 end $$;

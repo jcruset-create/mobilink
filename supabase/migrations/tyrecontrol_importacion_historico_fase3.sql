@@ -131,7 +131,17 @@ alter table tc_reconstruccion_montajes
   add column if not exists revisado_motivo  text,
   add column if not exists revision_huella  text,
   add column if not exists continuidad_docs text[] not null default '{}',
-  add column if not exists continuidad_motivo text;
+  add column if not exists continuidad_motivo text,
+  -- La continuidad se decide APARTE de los kilómetros. Aceptar que un
+  -- kilometraje es creíble no dice nada sobre si faltó un montaje por medio.
+  add column if not exists continuidad_decision text not null default 'pendiente',
+  add column if not exists continuidad_revisada_por uuid,
+  add column if not exists continuidad_revisada_at timestamptz,
+  add column if not exists continuidad_motivo_revision text,
+  add column if not exists continuidad_huella text,
+  -- Montaje y desmontaje el MISMO día: no se sabe en qué orden ni cuánto
+  -- tiempo pasó entre los dos, así que tampoco se puede hablar de ritmo.
+  add column if not exists orden_desconocido boolean not null default false;
 
 -- km_estado gana 'anomalos'. La restricción puede venir con el nombre que le
 -- puso `create table` o con el que le pusimos a mano en la fase 2: se quitan
@@ -153,13 +163,21 @@ do $$ begin
   alter table tc_reconstruccion_montajes add constraint ck_recons_uso
     check (uso_estadistico in ('pendiente','aceptado','rechazado'));
 exception when duplicate_object then null; end $$;
+do $$ begin
+  alter table tc_reconstruccion_montajes add constraint ck_recons_continuidad
+    check (continuidad_decision in ('pendiente','aceptada','rechazada'));
+exception when duplicate_object then null; end $$;
 
 comment on column tc_reconstruccion_montajes.km_estado is
   'Clasificación automática, sin opinión humana: utilizables (recorrido calculable y plausible) · anomalos (calculable pero el ritmo diario supera el límite; el recorrido SE CONSERVA) · ausentes (falta un extremo) · incompatibles (kilometraje decreciente; los valores SE CONSERVAN) · sin_cierre. Un dato incompatible nunca se convierte en ausente, y un anómalo nunca se borra.';
 comment on column tc_reconstruccion_montajes.uso_estadistico is
-  'Decisión HUMANA, separada de km_estado: pendiente / aceptado / rechazado. Rechazar no cambia los kilómetros ni el recorrido. Aceptar permite usar el intervalo como ESTIMADO, nunca como rendimiento confirmado.';
+  'Decisión HUMANA sobre los KILÓMETROS, separada de km_estado: pendiente / aceptado / rechazado. Rechazar no cambia los kilómetros ni el recorrido. Aceptar permite usar el intervalo como ESTIMADO, nunca como rendimiento confirmado. NO resuelve la continuidad: eso se decide aparte.';
+comment on column tc_reconstruccion_montajes.continuidad_decision is
+  'Decisión HUMANA sobre la CONTINUIDAD de la cadena, independiente de la de los kilómetros. Un intervalo con continuidad dudosa no entra en las medias aunque sus kilómetros estén aceptados.';
 comment on column tc_reconstruccion_montajes.ritmo_km_dia is
-  'recorrido_km / días del intervalo. Con cero días no se divide: se compara el recorrido con el límite de un día y se dice en el motivo.';
+  'recorrido_km / días del intervalo, SOLO cuando hay al menos un día. Con montaje y desmontaje el mismo día queda a NULL: no se conoce el ritmo diario y no se inventa uno.';
+comment on column tc_reconstruccion_montajes.orden_desconocido is
+  'Montaje y desmontaje el mismo día con recorrido positivo: no consta la hora ni el orden de los trabajos, así que no se puede saber cuánto rodó el vehículo entre los dos. El recorrido se conserva y no se usa en estadísticas sin revisión.';
 comment on column tc_reconstruccion_montajes.continuidad_docs is
   'Albaranes BLOQUEADOS (no importados) con evidencia de un posible montaje dentro del intervalo. Su presencia impide considerar la cadena limpia. No se crean sus operaciones, fichas ni cantidades.';
 comment on column tc_reconstruccion_montajes.revision_huella is
@@ -177,6 +195,10 @@ create table if not exists tc_reconstruccion_revisiones (
   posicion_id          uuid,
   operacion_entrada_id uuid not null,       -- la clave estable del intervalo
   fecha_montaje        date not null,
+  -- Sobre QUÉ se decide. Son dos cosas distintas y se auditan por separado:
+  -- aceptar un kilometraje no dice nada sobre la continuidad de la cadena.
+  ambito               text not null default 'kilometros'
+                       check (ambito in ('kilometros','continuidad')),
   decision             text not null check (decision in ('aceptado','rechazado','invalidada')),
   motivo               text not null check (btrim(motivo) <> ''),
   km_estado            text,
@@ -190,15 +212,30 @@ create table if not exists tc_reconstruccion_revisiones (
   invalidada_at        timestamptz,
   motivo_invalidacion  text
 );
-create index if not exists idx_recons_rev_entrada on tc_reconstruccion_revisiones (operacion_entrada_id, creado_at desc);
+alter table tc_reconstruccion_revisiones add column if not exists ambito text not null default 'kilometros';
+do $$ begin
+  alter table tc_reconstruccion_revisiones add constraint ck_recons_rev_ambito
+    check (ambito in ('kilometros','continuidad'));
+exception when duplicate_object then null; end $$;
+create index if not exists idx_recons_rev_entrada on tc_reconstruccion_revisiones (operacion_entrada_id, ambito, creado_at desc);
 create index if not exists idx_recons_rev_empresa on tc_reconstruccion_revisiones (empresa_id, creado_at desc);
 
 comment on table tc_reconstruccion_revisiones is
   'Auditoría de las decisiones humanas sobre el uso estadístico de un intervalo reconstruido. Append-only y sin FK a operaciones ni intervalos: deshacer una importación no la borra. decision=invalidada la escribe el sistema cuando la evidencia cambia.';
 
+-- Append-only DE VERDAD para los roles de la aplicación. Dos cerrojos, porque
+-- uno solo no basta:
+--   · se revocan insert/update/delete, y
+--   · la RLS queda con política de SELECT y NINGUNA de escritura, así que
+--     aunque alguien devuelva los permisos por su cuenta (en Supabase los
+--     default privileges del esquema public los conceden), la RLS sigue
+--     negando escribir.
+-- Las funciones `security definer` sí escriben: corren como el dueño, que se
+-- salta la RLS. Esa es la única vía para dejar constancia de una decisión.
 alter table tc_reconstruccion_revisiones enable row level security;
 drop policy if exists recons_rev_sel on tc_reconstruccion_revisiones;
 create policy recons_rev_sel on tc_reconstruccion_revisiones for select using ( tc_puede_ver_empresa(empresa_id) );
+revoke insert, update, delete, truncate on tc_reconstruccion_revisiones from authenticated, anon, service_role;
 grant select on tc_reconstruccion_revisiones to authenticated, service_role;
 
 -- ── 5. Albaranes bloqueados: la referencia y el motivo, nada más ────────────
@@ -260,24 +297,42 @@ grant execute on function tc_imp_huella_intervalo(uuid) to authenticated, servic
 
 -- ── 7. ¿Entra este intervalo en las medias de recorrido estimado? ───────────
 --
--- Dos puertas independientes, cada una con su motivo:
---   · los kilómetros tienen que dar un recorrido (utilizables o anómalos);
---   · la cadena tiene que estar limpia (sin continuidad pendiente).
--- Si alguna de las dos pide revisión, hace falta una aceptación humana
--- explícita. Y un rechazo cierra la puerta en cualquier caso.
+-- DOS PUERTAS INDEPENDIENTES, y cada una se abre con su propia llave:
+--
+--   1. KILÓMETROS. Tiene que haber un recorrido calculable, y si hay algo que
+--      revisar —ritmo no plausible, o montaje y desmontaje el mismo día sin
+--      saber el orden— hace falta una aceptación humana explícita del ámbito
+--      «kilometros».
+--   2. CONTINUIDAD. La cadena tiene que estar limpia, o alguien tiene que
+--      haber aceptado explícitamente el ámbito «continuidad».
+--
+-- Y esto es lo importante: ACEPTAR EL KILOMETRAJE NO ABRE LA PUERTA DE LA
+-- CONTINUIDAD. Que una lectura sea creíble no dice nada sobre si entre medias
+-- hubo un montaje que no se ha importado. Un rechazo, en cualquiera de las
+-- dos, cierra la puerta entera.
+create or replace function tc_imp_intervalo_duda_km(p_intervalo tc_reconstruccion_montajes)
+returns boolean language sql immutable set search_path = public as $$
+  select p_intervalo.km_estado = 'anomalos' or p_intervalo.orden_desconocido;
+$$;
+
+create or replace function tc_imp_intervalo_duda_continuidad(p_intervalo tc_reconstruccion_montajes)
+returns boolean language sql immutable set search_path = public as $$
+  select p_intervalo.continuidad_desde is not null
+      or coalesce(array_length(p_intervalo.continuidad_docs, 1), 0) > 0;
+$$;
+
 create or replace function tc_imp_intervalo_en_medias(p_intervalo tc_reconstruccion_montajes)
 returns boolean language sql immutable set search_path = public as $$
   select p_intervalo.estado = 'cerrado'
+     -- recorrido calculable
      and p_intervalo.km_estado in ('utilizables','anomalos')
+     and p_intervalo.recorrido_km is not null
+     -- puerta 1: los kilómetros
      and p_intervalo.uso_estadistico <> 'rechazado'
-     and (
-       -- nada que revisar → entra sola
-       (p_intervalo.km_estado = 'utilizables'
-        and p_intervalo.continuidad_desde is null
-        and coalesce(array_length(p_intervalo.continuidad_docs, 1), 0) = 0)
-       -- algo que revisar → solo si una persona lo ha aceptado
-       or p_intervalo.uso_estadistico = 'aceptado'
-     );
+     and (not tc_imp_intervalo_duda_km(p_intervalo) or p_intervalo.uso_estadistico = 'aceptado')
+     -- puerta 2: la continuidad, con su propia decisión
+     and p_intervalo.continuidad_decision <> 'rechazada'
+     and (not tc_imp_intervalo_duda_continuidad(p_intervalo) or p_intervalo.continuidad_decision = 'aceptada');
 $$;
 
 create or replace function tc_imp_intervalo_motivos(p_intervalo tc_reconstruccion_montajes)
@@ -290,16 +345,21 @@ returns text[] language sql immutable set search_path = public as $$
           and p_intervalo.uso_estadistico = 'pendiente'    then 'km_anomalos_pendientes' end,
     case when p_intervalo.km_estado = 'anomalos'
           and p_intervalo.uso_estadistico = 'rechazado'    then 'km_anomalos_rechazados' end,
+    -- Mismo día: el recorrido existe, pero no se sabe el orden ni cuánto
+    -- tiempo pasó. Es un motivo propio, no un «ritmo no plausible».
+    case when p_intervalo.orden_desconocido
+          and p_intervalo.uso_estadistico = 'pendiente'    then 'mismo_dia_orden_desconocido' end,
     case when p_intervalo.km_estado = 'utilizables'
+          and not p_intervalo.orden_desconocido
           and p_intervalo.uso_estadistico = 'rechazado'    then 'rechazado_a_mano' end,
-    case when (p_intervalo.continuidad_desde is not null
-               or coalesce(array_length(p_intervalo.continuidad_docs, 1), 0) > 0)
-          and p_intervalo.uso_estadistico <> 'aceptado'    then 'continuidad_pendiente' end
+    case when tc_imp_intervalo_duda_continuidad(p_intervalo)
+          and p_intervalo.continuidad_decision = 'pendiente' then 'continuidad_pendiente' end,
+    case when p_intervalo.continuidad_decision = 'rechazada' then 'continuidad_rechazada' end
   ], null);
 $$;
 
 comment on function tc_imp_intervalo_motivos(tc_reconstruccion_montajes) is
-  'Los motivos por los que un intervalo NO entra en las medias. Un intervalo puede tener VARIOS: no son excluyentes y no deben sumarse como si lo fueran.';
+  'Los motivos por los que un intervalo NO entra en las medias. Un intervalo puede tener VARIOS: no son excluyentes y no deben sumarse como si lo fueran. Para sumar están las combinaciones.';
 
 -- ── 7bis. La vista que lee el panel ────────────────────────────────────────
 --
@@ -337,9 +397,9 @@ declare
   v_n int := 0; v_rota boolean; v_desde date;
   v_km numeric; v_km_ok boolean; v_revisar boolean; v_motivo text;
   v_km_estado text; v_recorrido numeric;
-  v_dias int; v_ritmo numeric; v_limite numeric;
+  v_dias int; v_ritmo numeric; v_limite numeric; v_orden_desc boolean;
   v_ident text; v_nivel text; v_mismo_dia boolean;
-  v_empresa uuid; v_huella text; v_texto text;
+  v_empresa uuid; v_huella text; v_texto text; v_ambito text;
 begin
   select empresa_id into v_empresa from tc_vehiculos where id = p_vehiculo;
   if v_empresa is null then return 0; end if;
@@ -440,7 +500,7 @@ begin
         -- si sirven para calcular recorrido, y si el recorrido es plausible.
         v_km := e.km_vehiculo; v_km_ok := e.km_vehiculo is not null;
         v_dias := e.fecha_operacion - o.fecha_montaje;
-        v_ritmo := null;
+        v_ritmo := null; v_orden_desc := false;
         if e.km_vehiculo is null or o.km_montaje is null then
           v_km_estado := 'ausentes'; v_recorrido := null; v_revisar := false;
           v_motivo := 'Kilómetros ausentes en ' ||
@@ -453,11 +513,39 @@ begin
             || to_char(o.fecha_montaje, 'DD/MM/YYYY') || ', albarán ' || coalesce(o.origen_doc_montaje, '—')
             || ') y ' || tc_imp_num(e.km_vehiculo) || ' en el desmontaje ('
             || to_char(e.fecha_operacion, 'DD/MM/YYYY') || ', albarán ' || coalesce(e.doc, '—') || ')';
+        elsif v_dias = 0 then
+          -- MONTAJE Y DESMONTAJE EL MISMO DÍA. El recorrido aritmético se
+          -- conserva, pero NO se puede hablar de ritmo diario: no se sabe en
+          -- qué orden se hicieron los trabajos ni cuánto tiempo pasó entre
+          -- ellos, porque los albaranes no traen hora de trabajo (la
+          -- intervención se importa con hora_desconocida). Así que
+          -- ritmo_km_dia se queda a NULL: no se inventa un «km/día» que
+          -- nadie ha observado.
+          v_recorrido := e.km_vehiculo - o.km_montaje;
+          v_ritmo := null;
+          if v_recorrido = 0 then
+            -- Dos visitas el mismo día sin rodar es lo normal. Un recorrido
+            -- cero NO es una anomalía de kilometraje por sí solo.
+            v_km_estado := 'utilizables'; v_orden_desc := false;
+            v_revisar := false; v_motivo := null;
+          else
+            -- Recorrido positivo dentro del mismo día: hay que mirar el orden
+            -- y la duración antes de usarlo en estadísticas.
+            v_orden_desc := true; v_revisar := true;
+            v_km_estado := case when v_recorrido > v_limite then 'anomalos' else 'utilizables' end;
+            v_motivo := 'Montaje y desmontaje el mismo día (' || to_char(e.fecha_operacion, 'DD/MM/YYYY')
+              || '): ' || tc_imp_num(v_recorrido) || ' km entre ' || tc_imp_num(o.km_montaje)
+              || ' (albarán ' || coalesce(o.origen_doc_montaje, '—') || ') y ' || tc_imp_num(e.km_vehiculo)
+              || ' (albarán ' || coalesce(e.doc, '—') || '). No consta la hora ni el orden de los trabajos, '
+              || 'así que no se sabe cuánto rodó el vehículo entre los dos ni se puede calcular un ritmo diario. '
+              || 'El recorrido se conserva y no se usa en estadísticas sin revisar ese orden.'
+              || case when v_recorrido > v_limite then ' Comprobación auxiliar, que no es un ritmo observado: '
+                   || tc_imp_num(v_recorrido) || ' km superan por sí solos el límite de un día ('
+                   || tc_imp_num(v_limite) || ' km).' else '' end;
+          end if;
         else
           v_recorrido := e.km_vehiculo - o.km_montaje;
-          -- Con CERO días no se divide entre cero: se compara el recorrido
-          -- con el límite de un día y el motivo lo dice.
-          v_ritmo := case when v_dias > 0 then v_recorrido / v_dias else v_recorrido end;
+          v_ritmo := v_recorrido / v_dias;
           if v_ritmo > v_limite then
             v_km_estado := 'anomalos'; v_revisar := true;
             v_motivo := 'Ritmo no plausible: ' || tc_imp_num(v_recorrido) || ' km entre el '
@@ -466,11 +554,10 @@ begin
               || ' (' || tc_imp_num(e.km_vehiculo) || ' km, albarán ' || coalesce(e.doc, '—') || '): '
               || v_dias || ' día(s), ' || tc_imp_num(round(v_ritmo)) || ' km/día, por encima del límite de '
               || tc_imp_num(v_limite) || ' km/día'
-              || case when v_dias = 0 then ' (mismo día: se compara el recorrido con el límite de un día, no se divide entre cero)' else '' end
               || '. Es un aviso para revisar, no una prueba de que el dato sea falso: el recorrido se conserva y queda pendiente de validación.';
           else
             v_km_estado := 'utilizables';
-            if v_recorrido = 0 and v_dias > 0 then
+            if v_recorrido = 0 then
               v_revisar := true;
               v_motivo := 'Mismo kilometraje (' || tc_imp_num(e.km_vehiculo) || ') tras '
                 || v_dias || ' día(s): recorrido cero, conviene comprobarlo';
@@ -485,7 +572,7 @@ begin
           fecha_desmontaje = e.fecha_operacion,
           km_desmontaje = v_km, km_desmontaje_conocido = v_km_ok,
           km_estado = v_km_estado, recorrido_km = v_recorrido,
-          dias_intervalo = v_dias, ritmo_km_dia = v_ritmo,
+          dias_intervalo = v_dias, ritmo_km_dia = v_ritmo, orden_desconocido = v_orden_desc,
           limite_km_dia = case when v_km_estado in ('utilizables','anomalos') then v_limite end,
           lote_desmontaje_id = e.importacion_lote_id, origen_doc_desmontaje = e.doc,
           operacion_salida_id = (select s.id from operaciones_neumaticos s
@@ -562,59 +649,98 @@ begin
        and not (b.origen_doc = any(continuidad_docs));
   end loop;
 
-  -- ── Las decisiones humanas auditadas se vuelven a aplicar ────────────────
+  -- ── Las decisiones humanas auditadas se vuelven a aplicar ────────────
   --
-  -- La auditoría no se toca nunca. Si la evidencia del intervalo ya no es la
-  -- que había cuando se decidió, la decisión NO se arrastra: se invalida con
-  -- constancia y el intervalo vuelve a pedir revisión.
+  -- Las DOS, cada una en su ámbito. La auditoría no se toca nunca. Si la
+  -- evidencia del intervalo ya no es la que había cuando se decidió, la
+  -- decisión NO se arrastra: se invalida con constancia y el intervalo vuelve
+  -- a pedir revisión de ese ámbito.
   for it in select id, operacion_entrada_id from tc_reconstruccion_montajes where vehiculo_id = p_vehiculo loop
-    select * into rv from tc_reconstruccion_revisiones
-      where operacion_entrada_id = it.operacion_entrada_id and invalidada_at is null
-        and decision in ('aceptado','rechazado')
-      order by creado_at desc limit 1;
-    if not found then continue; end if;
     v_huella := tc_imp_huella_intervalo(it.id);
-    if v_huella = rv.huella_evidencia then
-      update tc_reconstruccion_montajes set
-        uso_estadistico = rv.decision, revisado_por = rv.usuario_id, revisado_at = rv.creado_at,
-        revisado_motivo = rv.motivo, revision_huella = v_huella
-       where id = it.id;
-    else
-      update tc_reconstruccion_revisiones set
-        invalidada_at = now(),
-        motivo_invalidacion = 'La evidencia del intervalo ha cambiado después de la decisión: hace falta revisarlo otra vez'
-       where id = rv.id;
-      insert into tc_reconstruccion_revisiones (
-        empresa_id, vehiculo_id, posicion_id, operacion_entrada_id, fecha_montaje,
-        decision, motivo, km_estado, recorrido_km, ritmo_km_dia, limite_km_dia,
-        continuidad_docs, huella_evidencia, usuario_id)
-      select rm.empresa_id, rm.vehiculo_id, rm.posicion_id, rm.operacion_entrada_id, rm.fecha_montaje,
-             'invalidada',
-             'La decisión anterior (' || rv.decision || ') deja de aplicarse: la evidencia del intervalo ha cambiado',
-             rm.km_estado, rm.recorrido_km, rm.ritmo_km_dia, rm.limite_km_dia,
-             rm.continuidad_docs, v_huella, null
-        from tc_reconstruccion_montajes rm where rm.id = it.id;
-      update tc_reconstruccion_montajes set
-        uso_estadistico = 'pendiente', revisado_por = null, revisado_at = null,
-        revisado_motivo = null, revision_huella = null,
-        revisar = true,
-        motivo_revision = nullif(concat_ws(' · ', nullif(motivo_revision, ''),
-          'Había una decisión de uso estadístico (' || rv.decision || ') que ya no vale: la evidencia del intervalo ha cambiado. Hace falta revisarlo otra vez.'), '')
-       where id = it.id;
-    end if;
+    foreach v_ambito in array array['kilometros','continuidad'] loop
+      select * into rv from tc_reconstruccion_revisiones
+        where operacion_entrada_id = it.operacion_entrada_id and ambito = v_ambito
+          and invalidada_at is null and decision in ('aceptado','rechazado')
+        order by creado_at desc limit 1;
+      if not found then continue; end if;
+      if v_huella = rv.huella_evidencia then
+        if v_ambito = 'kilometros' then
+          update tc_reconstruccion_montajes set
+            uso_estadistico = rv.decision, revisado_por = rv.usuario_id, revisado_at = rv.creado_at,
+            revisado_motivo = rv.motivo, revision_huella = v_huella
+           where id = it.id;
+        else
+          update tc_reconstruccion_montajes set
+            continuidad_decision = case rv.decision when 'aceptado' then 'aceptada' else 'rechazada' end,
+            continuidad_revisada_por = rv.usuario_id, continuidad_revisada_at = rv.creado_at,
+            continuidad_motivo_revision = rv.motivo, continuidad_huella = v_huella
+           where id = it.id;
+        end if;
+      else
+        update tc_reconstruccion_revisiones set
+          invalidada_at = now(),
+          motivo_invalidacion = 'La evidencia del intervalo ha cambiado después de la decisión: hace falta revisarlo otra vez'
+         where id = rv.id;
+        insert into tc_reconstruccion_revisiones (
+          empresa_id, vehiculo_id, posicion_id, operacion_entrada_id, fecha_montaje,
+          ambito, decision, motivo, km_estado, recorrido_km, ritmo_km_dia, limite_km_dia,
+          continuidad_docs, huella_evidencia, usuario_id)
+        select rm.empresa_id, rm.vehiculo_id, rm.posicion_id, rm.operacion_entrada_id, rm.fecha_montaje,
+               v_ambito, 'invalidada',
+               'La decisión anterior sobre ' || v_ambito || ' (' || rv.decision || ') deja de aplicarse: la evidencia del intervalo ha cambiado',
+               rm.km_estado, rm.recorrido_km, rm.ritmo_km_dia, rm.limite_km_dia,
+               rm.continuidad_docs, v_huella, null
+          from tc_reconstruccion_montajes rm where rm.id = it.id;
+        if v_ambito = 'kilometros' then
+          update tc_reconstruccion_montajes set
+            uso_estadistico = 'pendiente', revisado_por = null, revisado_at = null,
+            revisado_motivo = null, revision_huella = null
+           where id = it.id;
+        else
+          update tc_reconstruccion_montajes set
+            continuidad_decision = 'pendiente', continuidad_revisada_por = null, continuidad_revisada_at = null,
+            continuidad_motivo_revision = null, continuidad_huella = null
+           where id = it.id;
+        end if;
+        update tc_reconstruccion_montajes set
+          revisar = true,
+          motivo_revision = nullif(concat_ws(' · ', nullif(motivo_revision, ''),
+            'Había una decisión sobre ' || v_ambito || ' (' || rv.decision || ') que ya no vale: la evidencia del intervalo ha cambiado. Hace falta revisarlo otra vez.'), '')
+         where id = it.id;
+      end if;
+    end loop;
   end loop;
 
   return v_n;
 end $$;
 
--- ── 9. Revisar un intervalo: aceptar o rechazar su uso estadístico ──────────
+-- ── 9. Revisar un intervalo: dos ámbitos, dos decisiones ──────────────────
+--
+-- `p_ambito` dice SOBRE QUÉ se decide, y no hay forma de decidir las dos
+-- cosas de una vez a propósito:
+--   · 'kilometros'  → el recorrido es creíble y puede usarse como estimado;
+--   · 'continuidad' → la cadena de esa posición puede darse por limpia pese
+--                     al documento bloqueado que hay dentro.
+-- Aceptar el kilometraje de un intervalo NO resuelve su continuidad.
+--
+-- La firma anterior de esta función, de tres parámetros, se elimina antes de
+-- crear la nueva: `create or replace` con otra lista de parámetros dejaría
+-- DOS funciones con el mismo nombre y PostgREST respondería PGRST203 a todas
+-- las llamadas. Esta función nació en esta misma fase y no está desplegada en
+-- ninguna parte; el drop es por si alguien aplicó una versión anterior en una
+-- base de pruebas.
+drop function if exists tc_imp_revisar_intervalo(uuid, text, text);
+
 create or replace function tc_imp_revisar_intervalo(
-  p_intervalo uuid, p_decision text, p_motivo text
+  p_intervalo uuid, p_ambito text, p_decision text, p_motivo text
 ) returns jsonb language plpgsql security definer set search_path = public as $$
 -- rm es del TIPO de la tabla, no un record: así se puede pasar a las
 -- funciones que reciben la fila entera (un record no se puede convertir).
 declare rm tc_reconstruccion_montajes; v_origen text; v_huella text;
 begin
+  if p_ambito not in ('kilometros','continuidad') then
+    raise exception 'El ámbito tiene que ser «kilometros» o «continuidad»' using errcode = '22023';
+  end if;
   if p_decision not in ('aceptado','rechazado') then
     raise exception 'La decisión tiene que ser «aceptado» o «rechazado»' using errcode = '22023';
   end if;
@@ -634,33 +760,51 @@ begin
   select * into rm from tc_reconstruccion_montajes where id = p_intervalo for update;
   if not found then raise exception 'El intervalo ya no existe; no se ha registrado la revisión' using errcode = '22023'; end if;
 
-  if rm.km_estado not in ('utilizables','anomalos') then
-    raise exception 'Este intervalo no tiene un recorrido que aceptar o rechazar (kilómetros %)', rm.km_estado
-      using errcode = '22023';
+  if p_ambito = 'kilometros' then
+    if rm.km_estado not in ('utilizables','anomalos') or rm.recorrido_km is null then
+      raise exception 'Este intervalo no tiene un recorrido que aceptar o rechazar (kilómetros %)', rm.km_estado
+        using errcode = '22023';
+    end if;
+  else
+    if not tc_imp_intervalo_duda_continuidad(rm) and p_decision = 'aceptado' then
+      raise exception 'La continuidad de este intervalo no está en duda: no hay nada que aceptar'
+        using errcode = '22023';
+    end if;
   end if;
 
   v_huella := tc_imp_huella_intervalo(p_intervalo);
   insert into tc_reconstruccion_revisiones (
     empresa_id, vehiculo_id, posicion_id, operacion_entrada_id, fecha_montaje,
-    decision, motivo, km_estado, recorrido_km, ritmo_km_dia, limite_km_dia,
+    ambito, decision, motivo, km_estado, recorrido_km, ritmo_km_dia, limite_km_dia,
     continuidad_docs, huella_evidencia, usuario_id)
   values (
     rm.empresa_id, rm.vehiculo_id, rm.posicion_id, rm.operacion_entrada_id, rm.fecha_montaje,
-    p_decision, btrim(p_motivo), rm.km_estado, rm.recorrido_km, rm.ritmo_km_dia, rm.limite_km_dia,
+    p_ambito, p_decision, btrim(p_motivo), rm.km_estado, rm.recorrido_km, rm.ritmo_km_dia, rm.limite_km_dia,
     rm.continuidad_docs, v_huella, auth.uid());
 
-  update tc_reconstruccion_montajes set
-    uso_estadistico = p_decision, revisado_por = auth.uid(), revisado_at = now(),
-    revisado_motivo = btrim(p_motivo), revision_huella = v_huella
-   where id = p_intervalo;
+  if p_ambito = 'kilometros' then
+    update tc_reconstruccion_montajes set
+      uso_estadistico = p_decision, revisado_por = auth.uid(), revisado_at = now(),
+      revisado_motivo = btrim(p_motivo), revision_huella = v_huella
+     where id = p_intervalo;
+  else
+    update tc_reconstruccion_montajes set
+      continuidad_decision = case p_decision when 'aceptado' then 'aceptada' else 'rechazada' end,
+      continuidad_revisada_por = auth.uid(), continuidad_revisada_at = now(),
+      continuidad_motivo_revision = btrim(p_motivo), continuidad_huella = v_huella
+     where id = p_intervalo;
+  end if;
 
   select * into rm from tc_reconstruccion_montajes where id = p_intervalo;
   return jsonb_build_object(
-    'intervalo_id', p_intervalo, 'uso_estadistico', rm.uso_estadistico,
+    'intervalo_id', p_intervalo, 'ambito', p_ambito,
+    'uso_estadistico', rm.uso_estadistico, 'continuidad_decision', rm.continuidad_decision,
     'km_estado', rm.km_estado, 'recorrido_km', rm.recorrido_km,
     'en_medias', tc_imp_intervalo_en_medias(rm),
     'motivos_exclusion', to_jsonb(tc_imp_intervalo_motivos(rm)),
-    'aviso', 'Aceptar permite usar este intervalo como ESTIMADO. No lo convierte en rendimiento confirmado.');
+    'aviso', case when p_ambito = 'kilometros'
+      then 'Aceptar los kilómetros permite usar este intervalo como ESTIMADO. No lo convierte en rendimiento confirmado y NO resuelve su continuidad, que se decide aparte.'
+      else 'Aceptar la continuidad dice que la cadena de esta posición puede darse por limpia pese al documento bloqueado. No dice nada sobre si el kilometraje es creíble.' end);
 end $$;
 
 -- ── 10. Importar: igual que la fase 2, anotando los bloqueados ─────────────
@@ -1229,16 +1373,22 @@ create or replace function tc_informes_recorridos_estimados(
                     current_date) as d2
   ),
   pobl as (
-    -- La identidad: una ficha CREADA POR LA IMPORTACIÓN y que nadie ha
-    -- identificado NO es una goma identificada. Para las estadísticas es la
-    -- ocupación de una posición, exactamente igual que si no hubiera ficha.
+    -- TRES identidades distintas, y no se mezclan:
+    --   respaldada   → una persona ha identificado el neumático físico;
+    --   reconstruida → hay FICHA (con su número interno) creada por la
+    --                  importación, pero nadie ha confirmado qué goma era;
+    --   sin_ficha    → no hay ni ficha.
+    -- «Sin identificación física» NO es lo mismo que «sin ficha»: la ficha
+    -- existe, sirve para enlazar el registro histórico, y lo que no demuestra
+    -- es qué neumático estuvo montado todo el intervalo.
     select rm.*,
            tc_imp_intervalo_en_medias(rm) as entra,
            tc_imp_intervalo_motivos(rm)   as motivos,
+           tc_imp_intervalo_duda_km(rm)   as duda_km,
+           tc_imp_intervalo_duda_continuidad(rm) as duda_cont,
            case when rm.neumatico_id is null then 'sin_ficha'
                 when coalesce(n.identidad_reconstruida, true) then 'reconstruida'
-                else 'respaldada' end     as identidad,
-           (rm.neumatico_id is not null and coalesce(n.identidad_reconstruida, true) = false) as identificada
+                else 'respaldada' end     as identidad
       from tc_reconstruccion_montajes rm
       left join tc_neumaticos n on n.id = rm.neumatico_id, rango
      where (p_empresa is null or rm.empresa_id = p_empresa)
@@ -1260,43 +1410,60 @@ create or replace function tc_informes_recorridos_estimados(
       'cerrados',    (select count(*) from pobl where estado = 'cerrado'),
       'abiertos',    (select count(*) from pobl where estado = 'abierto'),
       'interrumpidos', (select count(*) from pobl where estado = 'interrumpido')),
-    -- Identidad de la goma del intervalo, en tres grupos que SÍ suman.
+    -- Tener un recorrido que se puede restar NO es lo mismo que poder usarlo.
+    -- Se publican los dos números para que nadie confunda uno con el otro.
+    'embudo', jsonb_build_object(
+      'con_recorrido_aritmetico', (select count(*) from pobl
+         where estado = 'cerrado' and km_estado in ('utilizables','anomalos') and recorrido_km is not null),
+      'elegibles_tras_filtros',   (select count(*) from dentro),
+      'que_es', 'con_recorrido_aritmetico son los intervalos cuyo recorrido se puede calcular. elegibles_tras_filtros son los que además pasan los filtros de plausibilidad, continuidad y decisión humana. El segundo es el que sostiene la media.'),
     'identidad', jsonb_build_object(
       'respaldada',    (select count(*) from pobl where identidad = 'respaldada'),
       'reconstruida',  (select count(*) from pobl where identidad = 'reconstruida'),
       'sin_ficha',     (select count(*) from pobl where identidad = 'sin_ficha'),
-      'que_es', 'respaldada = una persona ha identificado la goma · reconstruida = ficha creada por la importación que nadie ha identificado · sin_ficha = no hay goma asociada. Las dos últimas NO son unidades identificadas.'),
+      'que_es', 'respaldada = una persona ha identificado el neumático físico · reconstruida = hay ficha de la importación, con su número interno, pero nadie ha confirmado qué goma era · sin_ficha = no hay ficha. Solo la primera es una unidad identificada; «sin identificación física» no es lo mismo que «sin ficha».'),
     'incluidos', jsonb_build_object(
       'n',             (select count(*) from dentro),
-      'identificadas', (select count(*) from dentro where identificada),
-      'ocupaciones',   (select count(*) from dentro where not identificada),
-      'aceptados_a_mano', (select count(*) from dentro where uso_estadistico = 'aceptado')),
-    -- Por lo que de verdad son, nunca en un solo número.
+      'respaldada',    (select count(*) from dentro where identidad = 'respaldada'),
+      'reconstruida',  (select count(*) from dentro where identidad = 'reconstruida'),
+      'sin_ficha',     (select count(*) from dentro where identidad = 'sin_ficha'),
+      'aceptados_km',         (select count(*) from dentro where uso_estadistico = 'aceptado'),
+      'aceptados_continuidad',(select count(*) from dentro where continuidad_decision = 'aceptada')),
+    -- Por identidad, nunca en un solo número.
     'recorrido', jsonb_build_object(
-      'unidad_identificada', (select jsonb_build_object(
+      'identidad_respaldada', (select jsonb_build_object(
           'n', count(*), 'media', round(avg(recorrido_km)),
           'mediana', round(percentile_cont(0.5) within group (order by recorrido_km)),
           'minimo', min(recorrido_km), 'maximo', max(recorrido_km), 'total_km', sum(recorrido_km),
-          'que_es', 'Recorrido estimado de una goma que una persona ha identificado')
-        from dentro where identificada),
-      'ocupacion_de_posicion', (select jsonb_build_object(
+          'que_es', 'Recorrido estimado de un neumático que una persona ha identificado. Lo único que se acerca al rendimiento de una goma, y sigue siendo estimado.')
+        from dentro where identidad = 'respaldada'),
+      'ficha_reconstruida', (select jsonb_build_object(
           'n', count(*), 'media', round(avg(recorrido_km)),
           'mediana', round(percentile_cont(0.5) within group (order by recorrido_km)),
           'minimo', min(recorrido_km), 'maximo', max(recorrido_km), 'total_km', sum(recorrido_km),
-          'que_es', 'Recorrido de la POSICIÓN entre dos fechas. La goma no está identificada: no es el rendimiento de ningún neumático y no se promedia con las identificadas.')
-        from dentro where not identificada)),
+          'que_es', 'Recorrido de la posición con una ficha creada por la importación. El número interno enlaza el registro histórico; NO demuestra qué neumático estuvo montado todo el intervalo. No es rendimiento individual.')
+        from dentro where identidad = 'reconstruida'),
+      'ocupacion_sin_ficha', (select jsonb_build_object(
+          'n', count(*), 'media', round(avg(recorrido_km)),
+          'mediana', round(percentile_cont(0.5) within group (order by recorrido_km)),
+          'minimo', min(recorrido_km), 'maximo', max(recorrido_km), 'total_km', sum(recorrido_km),
+          'que_es', 'Recorrido de la POSICIÓN entre dos fechas, sin ninguna goma asociada. No es el rendimiento de ningún neumático.')
+        from dentro where identidad = 'sin_ficha')),
     'excluidos', jsonb_build_object(
       'n', (select count(*) from fuera),
       'motivos_se_solapan', true,
-      'nota', 'Un intervalo puede tener varios motivos: «motivos» no suma el total. «combinaciones» sí.',
+      'nota', 'Un intervalo puede tener varios motivos: «motivos» no suma el total y sumarlos contaría intervalos dos veces. «combinaciones» sí suma.',
       'motivos', (select coalesce(jsonb_agg(jsonb_build_object('motivo', m, 'n', n) order by n desc, m), '[]'::jsonb)
                   from (select m, count(*) n from fuera, unnest(motivos) m group by m) x),
       'combinaciones', (select coalesce(jsonb_agg(jsonb_build_object('motivos', to_jsonb(motivos), 'n', n) order by n desc), '[]'::jsonb)
                         from (select motivos, count(*) n from fuera group by motivos) y)),
     'revision', jsonb_build_object(
-      'pendientes', (select count(*) from pobl where uso_estadistico = 'pendiente' and revisar),
-      'aceptados',  (select count(*) from pobl where uso_estadistico = 'aceptado'),
-      'rechazados', (select count(*) from pobl where uso_estadistico = 'rechazado')),
+      'km_pendientes',          (select count(*) from pobl where duda_km and uso_estadistico = 'pendiente'),
+      'km_aceptados',           (select count(*) from pobl where uso_estadistico = 'aceptado'),
+      'km_rechazados',          (select count(*) from pobl where uso_estadistico = 'rechazado'),
+      'continuidad_pendientes', (select count(*) from pobl where duda_cont and continuidad_decision = 'pendiente'),
+      'continuidad_aceptadas',  (select count(*) from pobl where continuidad_decision = 'aceptada'),
+      'continuidad_rechazadas', (select count(*) from pobl where continuidad_decision = 'rechazada')),
     'limite_km_dia', (select max(limite_km_dia) from pobl)
   )
 $$;
@@ -1408,13 +1575,15 @@ $$;
 -- ── 14. Permisos ───────────────────────────────────────────────────────────
 revoke all on function tc_imp_limite_km_dia(uuid) from public, anon;
 revoke all on function tc_imp_fijar_limite_km_dia(uuid, numeric) from public, anon;
-revoke all on function tc_imp_revisar_intervalo(uuid, text, text) from public, anon;
+revoke all on function tc_imp_revisar_intervalo(uuid, text, text, text) from public, anon;
 revoke all on function tc_imp_anotar_bloqueado(uuid, uuid, text, jsonb, text) from public, anon;
 revoke all on function tc_informes_recorridos_estimados(uuid, date, date, uuid) from public, anon;
 grant execute on function tc_imp_limite_km_dia(uuid) to authenticated, service_role;
 grant execute on function tc_imp_fijar_limite_km_dia(uuid, numeric) to authenticated, service_role;
-grant execute on function tc_imp_revisar_intervalo(uuid, text, text) to authenticated, service_role;
+grant execute on function tc_imp_revisar_intervalo(uuid, text, text, text) to authenticated, service_role;
 grant execute on function tc_informes_recorridos_estimados(uuid, date, date, uuid) to authenticated, service_role;
 grant execute on function tc_imp_intervalo_en_medias(tc_reconstruccion_montajes) to authenticated, service_role;
 grant execute on function tc_imp_intervalo_motivos(tc_reconstruccion_montajes) to authenticated, service_role;
+grant execute on function tc_imp_intervalo_duda_km(tc_reconstruccion_montajes) to authenticated, service_role;
+grant execute on function tc_imp_intervalo_duda_continuidad(tc_reconstruccion_montajes) to authenticated, service_role;
 grant execute on function tc_imp_num(numeric) to authenticated, service_role;
