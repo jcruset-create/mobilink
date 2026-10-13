@@ -13,10 +13,10 @@
  */
 
 import pool from "../db.ts";
-import { registrarAuditoria } from "../core/auditoria.ts";
+import { registrarAuditoria, registrarAuditoriaEnTransaccion } from "../core/auditoria.ts";
 import type { Denominacion } from "./domain/denominations.ts";
 import { FORMAS_PAGO_SEMILLA } from "./domain/operations.ts";
-import { ErrorCaja, sesionAbierta } from "./repository.ts";
+import { ErrorCaja, enTransaccion, sesionAbierta } from "./repository.ts";
 import { nombreDeCentro } from "./hierarchy.ts";
 import { entidadDeIban, ibanValido, normalizarIban } from "./domain/bankaccount.ts";
 import { BANCOS_SEMILLA, logoDeSemilla } from "./domain/banks.ts";
@@ -2118,6 +2118,53 @@ export async function crearDestino(
     ip: ctx.ip,
   });
   return aDestino({ ...rows[0], usos: 0 });
+}
+
+/**
+ * Elimina un operario o centro de coste dado de alta por error.
+ *
+ * Solo si nada lo usa: ni un pago, ni una liquidación, ni una línea de
+ * liquidación. Con historia se desactiva, porque los pagos y los informes lo
+ * siguen nombrando y borrarlo los dejaría sin a quién se imputó el gasto.
+ */
+export async function borrarDestino(ctx: Contexto, id: number): Promise<void> {
+  await enTransaccion(async (client) => {
+    const { rows } = await client.query(
+      `SELECT * FROM cash_expense_targets WHERE id = $1 AND empresa_id = $2 FOR UPDATE`,
+      [id, ctx.empresaId]
+    );
+    const destino = rows[0];
+    if (!destino) throw new ErrorCaja("DESTINO_NO_ENCONTRADO", "Ese destino no existe.", 404);
+
+    const { rows: usos } = await client.query(
+      `SELECT (SELECT COUNT(*) FROM cash_operations WHERE expense_target_id = $1)::int
+            + (SELECT COUNT(*) FROM cash_expense_claims WHERE expense_target_id = $1)::int
+            + (SELECT COUNT(*) FROM cash_expense_claim_lines WHERE expense_target_id = $1)::int AS n`,
+      [id]
+    );
+    const n = Number(usos[0].n);
+    if (n > 0) {
+      throw new ErrorCaja(
+        "DESTINO_EN_USO",
+        `«${destino.nombre}» ya se ha usado ${n === 1 ? "una vez" : `${n} veces`}: no se puede eliminar, desactívalo.`,
+        409
+      );
+    }
+
+    await client.query(`DELETE FROM cash_expense_targets WHERE id = $1 AND empresa_id = $2`, [
+      id,
+      ctx.empresaId,
+    ]);
+    await registrarAuditoriaEnTransaccion(client, {
+      empresaId: ctx.empresaId,
+      userId: ctx.userId,
+      accion: "cash.expense_target.deleted",
+      entidad: "cash_expense_targets",
+      entidadId: String(id),
+      detalle: { tipo: destino.tipo, codigo: destino.codigo, nombre: destino.nombre },
+      ip: ctx.ip,
+    });
+  });
 }
 
 export async function actualizarDestino(
