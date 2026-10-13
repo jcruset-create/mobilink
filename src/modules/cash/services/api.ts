@@ -1035,6 +1035,10 @@ export const crearDestinoGasto = (datos: { nombre: string; tipo: "PERSONA" | "CE
 export const actualizarDestinoGasto = (id: number, datos: { nombre?: string; activo?: boolean }) =>
   pedir<{ destino: DestinoGasto }>(`/expense-targets/${id}`, { method: "PATCH", body: JSON.stringify(datos) });
 
+/** Solo si no se ha usado nunca: con historia, se desactiva. */
+export const borrarDestinoGasto = (id: number) =>
+  pedir<{ ok: true }>(`/expense-targets/${id}`, { method: "DELETE" });
+
 /**
  * El informe de gasto.
  *

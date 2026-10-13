@@ -2896,6 +2896,11 @@ function ConceptosDeGasto() {
           onAlternar={(d) =>
             void accion(() => api.actualizarDestinoGasto(d.id, { activo: !d.activo }))
           }
+          onEliminar={(d) => {
+            if (window.confirm(`¿Eliminar «${d.nombre}»? No se ha usado nunca, así que no deja rastro.`)) {
+              void accion(() => api.borrarDestinoGasto(d.id));
+            }
+          }}
         />
         <ListaDestinos
           titulo="Centros de coste"
@@ -2906,6 +2911,11 @@ function ConceptosDeGasto() {
           onAlternar={(d) =>
             void accion(() => api.actualizarDestinoGasto(d.id, { activo: !d.activo }))
           }
+          onEliminar={(d) => {
+            if (window.confirm(`¿Eliminar «${d.nombre}»? No se ha usado nunca, así que no deja rastro.`)) {
+              void accion(() => api.borrarDestinoGasto(d.id));
+            }
+          }}
         />
       </div>
     </section>
@@ -2919,6 +2929,7 @@ function ListaDestinos({
   editable,
   ocupado,
   onAlternar,
+  onEliminar,
 }: {
   titulo: string;
   vacio: string;
@@ -2926,6 +2937,8 @@ function ListaDestinos({
   editable: boolean;
   ocupado: boolean;
   onAlternar: (d: DestinoGasto) => void;
+  /** Solo para los que no se han usado nunca: los demás se desactivan. */
+  onEliminar: (d: DestinoGasto) => void;
 }) {
   return (
     <div className="rounded-lg border border-slate-700 bg-slate-800">
@@ -2949,6 +2962,17 @@ function ListaDestinos({
               {editable && (
                 <button className={btnMini} disabled={ocupado} onClick={() => onAlternar(d)}>
                   {d.activo ? "Desactivar" : "Activar"}
+                </button>
+              )}
+              {/* Para lo dado de alta por error: con un solo uso ya no, se desactiva. */}
+              {editable && d.usos === 0 && (
+                <button
+                  className={btnMini}
+                  disabled={ocupado}
+                  onClick={() => onEliminar(d)}
+                  title="No se ha usado nunca: se puede eliminar"
+                >
+                  Eliminar
                 </button>
               )}
             </div>

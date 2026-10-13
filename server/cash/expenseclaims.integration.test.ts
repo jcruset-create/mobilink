@@ -479,6 +479,23 @@ describe.runIf(RUN)("Liquidaciones · identidad, numeración y ámbito", () => {
     });
   });
 
+  it("un operario dado de alta por error se elimina; uno con historia, no", async () => {
+    const error = await config.crearDestino(ctx, { nombre: `Por error ${sufijo}`, tipo: "PERSONA" });
+    await config.borrarDestino(ctx, error.id);
+    const lista = await config.listarDestinos(ctx.empresaId, "PERSONA");
+    expect(lista.some((d) => d.id === error.id)).toBe(false);
+
+    // Con una liquidación ya no: se desactiva, y la liquidación conserva a quién era.
+    const usado = await config.crearDestino(ctx, { nombre: `Con historia ${sufijo}`, tipo: "PERSONA" });
+    await liquidaciones.crearLiquidacion(ctx, { expenseTargetId: usado.id });
+    await expect(config.borrarDestino(ctx, usado.id)).rejects.toMatchObject({ codigo: "DESTINO_EN_USO" });
+
+    // El de otra empresa, «no existe».
+    await expect(
+      config.borrarDestino({ ...ctx, empresaId: "00000000-0000-4000-a000-0000000000ff" }, usado.id)
+    ).rejects.toMatchObject({ codigo: "DESTINO_NO_ENCONTRADO" });
+  });
+
   it("un empleado de baja o inexistente no", async () => {
     const baja = randomUUID();
     await db.query(`INSERT INTO sea_employees (id, nombre, activo) VALUES ($1,'Baja',false)`, [baja]);

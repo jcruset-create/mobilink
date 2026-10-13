@@ -3074,6 +3074,16 @@ export function createCashRouter(): Router {
     })
   );
 
+  /** Solo los que no se han usado nunca: los demás se desactivan. */
+  r.delete(
+    "/expense-targets/:id",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      await config.borrarDestino(contexto(req), enteroPositivo(req.params.id, "id"));
+      res.json({ ok: true });
+    })
+  );
+
   r.get(
     "/sections",
     exigirPermiso("cash.view"),
