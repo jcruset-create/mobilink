@@ -1911,12 +1911,14 @@ function Denominaciones() {
             <tr key={d.id} className={`border-t border-slate-700 ${d.activa ? "" : "opacity-50"}`}>
               <td className={`${tdCls} font-bold tabular-nums`}>{d.etiqueta}</td>
               <td className={tdCls}>
-                <div className="flex items-center gap-1">
+                {/* min-w-max: en el móvil la foto y sus dos botones se montaban
+                    encima de la columna «Tipo»; así la tabla se desplaza. */}
+                <div className="flex min-w-max items-center gap-1">
                   {d.imagenUrl ? (
                     <img
                       src={d.imagenUrl}
                       alt={d.etiqueta}
-                      className="h-8 w-12 rounded object-contain"
+                      className="h-8 w-12 shrink-0 rounded object-contain"
                     />
                   ) : (
                     <span className="flex h-8 w-12 items-center justify-center rounded border border-dashed border-slate-700 text-[9px] text-slate-500">
@@ -2088,7 +2090,8 @@ function DenominacionesSoloLectura() {
         Denominaciones, cartuchos y bolsas
       </h2>
       <Aviso tono="info">
-        El catálogo es de toda la instalación y solo lo puede modificar un administrador.
+        El catálogo es de toda la instalación (todas las empresas usan el mismo) y solo lo puede
+        modificar el superadministrador de Mobilink.
       </Aviso>
       <TableWrap>
         <thead>

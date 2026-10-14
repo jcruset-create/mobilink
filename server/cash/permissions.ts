@@ -40,7 +40,8 @@ export const PERMISOS = [
   /**
    * Catálogo de denominaciones y cartuchos.
    *
-   * Permiso propio y solo de admin porque `cash_denominations` NO tiene
+   * Permiso propio y solo del SUPERADMINISTRADOR (se le quita al admin de
+   * empresa en `cargarPermisosCaja`) porque `cash_denominations` NO tiene
    * empresa: es el catálogo de toda la instalación. Si un responsable de una
    * empresa pudiera desactivar la moneda de 1 c, se la estaría desactivando
    * también a las demás. Con el euro esto rara vez se toca, pero el permiso
@@ -262,9 +263,15 @@ export const cargarPermisosCaja: RequestHandler = async (req, res, next) => {
     const r = await restriccionesDe(ctx.empresaId, ctx.userId, rol, ctx.esSuperadmin);
     // Un responsable al que el admin ha quitado Configuración: sin el permiso,
     // ni el menú la enseña ni sus rutas le contestan.
-    req.cashPermisos = r.sinConfiguracion
-      ? permisosDeRol(rol).filter((p) => p !== "cash.configure")
-      : permisosDeRol(rol);
+    req.cashPermisos = permisosDeRol(rol).filter(
+      (p) =>
+        // Un responsable al que el admin ha quitado Configuración.
+        !(p === "cash.configure" && r.sinConfiguracion) &&
+        // El catálogo de denominaciones es de TODA la instalación (la tabla no
+        // tiene empresa): solo lo toca el superadministrador. El admin de una
+        // empresa lo ve, pero cambiarlo se lo cambiaría a todas las demás.
+        !(p === "cash.denominations.configure" && !ctx.esSuperadmin)
+    );
     req.cashCajas = r.cajas;
     next();
   } catch (e) {
