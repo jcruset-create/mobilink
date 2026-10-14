@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { obtenerKpis, obtenerEstadoFlota, inventarioPor } from "../../services/informes";
-import type { KpisInformes, EstadoFlota, DimensionTotal, FiltrosInformes } from "../../types/informes";
+import { obtenerKpis, obtenerEstadoFlota, inventarioPor, montajesInforme } from "../../services/informes";
+import type { KpisInformes, EstadoFlota, DimensionTotal, FiltrosInformes, MontajesInforme } from "../../types/informes";
 import { KpiCard } from "./KpiCard";
 import { Donut, BarList } from "./charts";
 import { useTyreAuth } from "../../contexts/TyreAuthContext";
@@ -28,14 +28,16 @@ export function DashboardEjecutivo({ filtros }: { filtros: FiltrosInformes }) {
   const [kpis, setKpis] = useState<KpisInformes | null>(null);
   const [flota, setFlota] = useState<EstadoFlota | null>(null);
   const [medidas, setMedidas] = useState<DimensionTotal[]>([]);
+  const [montajes, setMontajes] = useState<MontajesInforme | null>(null);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
     let vivo = true;
     setCargando(true); setError("");
-    Promise.all([obtenerKpis(filtros), obtenerEstadoFlota(filtros), inventarioPor(filtros, "medida")])
-      .then(([k, f, m]) => { if (!vivo) return; setKpis(k); setFlota(f); setMedidas(m); })
+    Promise.all([obtenerKpis(filtros), obtenerEstadoFlota(filtros), inventarioPor(filtros, "medida"),
+                 montajesInforme(filtros, "ambos").catch(() => null)])
+      .then(([k, f, m, mo]) => { if (!vivo) return; setKpis(k); setFlota(f); setMedidas(m); setMontajes(mo); })
       .catch((e) => { if (vivo) setError(e?.message || "No se pudieron cargar los indicadores"); })
       .finally(() => { if (vivo) setCargando(false); });
     return () => { vivo = false; };
@@ -74,13 +76,25 @@ export function DashboardEjecutivo({ filtros }: { filtros: FiltrosInformes }) {
       </Seccion>
 
       <Seccion titulo="Operaciones (periodo)">
+        {/* El Dashboard cuenta el trabajo del TALLER. Si en el periodo caen
+            albaranes del histórico importado, sus montajes se enseñan aparte
+            en vez de sumarse a la tarjeta: son trabajos de hace años, no de
+            este mes. La cifra de siempre (kpis.op_montajes) sigue siendo la
+            suma de las dos. */}
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
-          <KpiCard title="Montajes" value={kpis.op_montajes} />
+          <KpiCard title="Montajes" value={kpis.op_montajes - (montajes?.total_historico ?? 0)} />
           <KpiCard title="Cambios de posición" value={kpis.op_rotaciones} />
           <KpiCard title="Reparaciones" value={kpis.op_reparaciones} />
           <KpiCard title="Sustituciones" value={kpis.op_sustituciones} />
           <KpiCard title="Descartes" value={kpis.op_descartes} />
         </div>
+        {(montajes?.total_historico ?? 0) > 0 && (
+          <button onClick={() => navigate("/tyrecontrol/informes/montajes")}
+            className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-800/60 p-2 text-left text-xs text-slate-300 hover:bg-slate-700/60">
+            Además, <b className="text-slate-100">{montajes?.total_historico}</b> montajes del histórico importado en este
+            periodo, que no son trabajo del taller. Ver el informe de montajes →
+          </button>
+        )}
       </Seccion>
 
       <div className="grid gap-3 lg:grid-cols-2">

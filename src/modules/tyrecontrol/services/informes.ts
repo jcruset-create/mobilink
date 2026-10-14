@@ -6,7 +6,7 @@ import type {
   FiltrosInformes, KpisInformes, EstadoFlota, DimensionTotal, MarcaMedidaTotal, ProfundidadDistribucion, Alerta,
   EconomicoInformes, RankingVehiculo, RankingMarca, CosteKmNeumatico, DesgasteNeumatico,
   PresionNeumatico, ProductividadTecnico, OperacionesInforme, InformeEjecutivo,
-  ControlRevision,
+  ControlRevision, MontajesInforme, OrigenMontajes, InventarioResumen,
 } from "../types/informes";
 
 function params(f: FiltrosInformes) {
@@ -110,4 +110,27 @@ export async function obtenerInformeEjecutivo(f: FiltrosInformes): Promise<Infor
   const { data, error } = await supabase.rpc("tc_informe_ejecutivo", params(f));
   if (error) throw new Error(error.message);
   return data as InformeEjecutivo;
+}
+
+/**
+ * Montajes de neumáticos: cuántas gomas se pusieron, por marca, modelo,
+ * medida, condición, vehículo y periodo. `origen` separa el histórico
+ * importado de las operaciones normales.
+ *
+ * Es una RPC NUEVA, con nombre propio: ni tc_informes_kpis ni
+ * tc_informes_operaciones cambian de firma, así que PostgREST no se
+ * encuentra con dos candidatas para la misma llamada.
+ */
+export async function montajesInforme(f: FiltrosInformes, origen: OrigenMontajes = "ambos"): Promise<MontajesInforme> {
+  const { data, error } = await supabase.rpc("tc_informes_montajes", { ...params(f), p_origen: origen });
+  if (error) throw new Error(error.message);
+  return data as MontajesInforme;
+}
+
+/** Cuántas fichas son de verdad, cuántas vienen de la reconstrucción histórica
+ *  y cuántas unidades históricas siguen sin identificar. */
+export async function inventarioResumen(f: FiltrosInformes): Promise<InventarioResumen> {
+  const { data, error } = await supabase.rpc("tc_informes_inventario_resumen", { p_empresa: f.empresaId ?? null });
+  if (error) throw new Error(error.message);
+  return data as InventarioResumen;
 }

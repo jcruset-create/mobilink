@@ -6,6 +6,8 @@ import {
   enlaceParteInterventionPdf,
 } from "../services/data";
 import type { Intervencion, EstadoHistorialEntry, AuditoriaEntry } from "../services/data";
+import { esHistoricoAlbaran, etiquetaHistorico, textoNeumaticoHistorico, textoPosicionHistorica } from "../../../../shared/historicoAlbaran";
+import { condicionDeOperacion, resumenMontajes } from "../../../../shared/condicionNeumatico";
 import type { OperacionNeumatico, OperacionMovimiento, OperacionAdjunto, CatDestino } from "../types";
 import { TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS } from "../types";
 import PlanoSnapshot from "../components/PlanoSnapshot";
@@ -39,8 +41,9 @@ const fmtHora = (ts?: string | null) =>
 // Cómo se nombra una goma en las tablas del informe: el número interno de
 // TyreControl y, cuando los tiene, el número de serie del fabricante y el DOT
 // al lado. Son los datos que la tablet lee de la foto obligatoria.
-function identidadNeumatico(n: { numero_interno?: string | null; codigo_interno?: string | null; numero_serie?: string | null; dot?: string | null } | null | undefined) {
-  if (!n) return "—";
+function identidadNeumatico(n: { numero_interno?: string | null; codigo_interno?: string | null; numero_serie?: string | null; dot?: string | null } | null | undefined,
+                            historico?: Parameters<typeof textoNeumaticoHistorico>[0]) {
+  if (!n) return historico ? textoNeumaticoHistorico(historico) : "—";
   const partes = [n.numero_interno ?? n.codigo_interno ?? "—"];
   if (n.numero_serie?.trim()) partes.push(`serie ${n.numero_serie.trim()}`);
   if (n.dot?.trim()) partes.push(`DOT ${n.dot.trim()}`);
@@ -117,9 +120,17 @@ export default function InformeIntervencion() {
     const declaradas = ops.filter((o) => !o.is_anulada && esDeclarado(o));
     const activas = ops.filter(
       (o) => !o.is_anulada && o.status === "completada" && !esDeclarado(o));
+    /*
+     * El histórico de albaranes importado va APARTE: no tiene ficha de
+     * neumático ni estado anterior (no se sabe qué llevaba el autobús), así
+     * que no entra en «montados del almacén» ni en «sin control de stock». Se
+     * reconoce por su vínculo con la importación (shared/historicoAlbaran.ts),
+     * nunca por source. Lo demás no cambia.
+     */
+    const historicos = activas.filter((o) => esHistoricoAlbaran(o) && o.tipo_operacion === "montaje");
     const montadosAlmacen = activas.filter((o) =>
       (o.tipo_operacion === "montaje" || o.tipo_operacion === "sustitucion") && o.estado_anterior === "almacen");
-    const esUsado = (o: OperacionNeumatico) => (o.observaciones ?? "").includes("[USADO]");
+    const esUsado = (o: OperacionNeumatico) => condicionDeOperacion(o) !== "nueva";
     const sinControl = activas.filter((o) =>
       (o.tipo_operacion === "montaje" || o.tipo_operacion === "sustitucion")
       && o.estado_anterior !== "almacen" && o.estado_anterior !== "montado"
@@ -130,6 +141,8 @@ export default function InformeIntervencion() {
     return {
       activas,
       declaradas,
+      historicos,
+      historicosPorCondicion: resumenMontajes(historicos).porCondicion,
       montadosAlmacen,
       montadosNuevos: montadosAlmacen.filter((o) => !esUsado(o)),
       montadosUsados: montadosAlmacen.filter(esUsado),
@@ -233,6 +246,14 @@ export default function InformeIntervencion() {
           </div>
         </div>
         {interv.observaciones && <div className="mt-2 text-[12px] text-slate-400">{interv.observaciones}</div>}
+        {esHistoricoAlbaran(interv) && (
+          <div className="mt-2 rounded border border-slate-600 bg-slate-900/60 px-2 py-1 text-[12px] text-slate-300">
+            <b>{etiquetaHistorico(interv)}</b>
+            {interv.hora_desconocida ? " · hora de cierre desconocida (solo consta la fecha del albarán)" : ""}
+            {interv.mecanico_km != null ? ` · ${interv.mecanico_km} km según el albarán` : ""}
+            {" · sin ficha de neumático ni mediciones"}
+          </div>
+        )}
       </div>
 
       {/* ── Por qué: la avería de origen ── */}
@@ -266,6 +287,7 @@ export default function InformeIntervencion() {
         <Chip n={hechos.movidos.length} label="Movidos de posición" tone="text-indigo-300" />
         <Chip n={hechos.reparados.length} label="Reparados" tone="text-purple-300" />
         <Chip n={hechos.pendientes.length} label="Pendientes" tone="text-amber-300" />
+        <Chip n={hechos.historicos.length} label="Montajes históricos" tone="text-slate-300" />
       </div>
 
       {/* ── Esquema del vehículo: antes / después ── */}
@@ -305,6 +327,31 @@ export default function InformeIntervencion() {
         </div>
       )}
 
+      {/* ── Montajes históricos (albarán importado): por condición y referencia ── */}
+      {hechos.historicos.length > 0 && (
+        <div className="mt-3 rounded-lg bg-slate-800 p-3">
+          <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">
+            Montajes históricos · {hechos.historicos.length} neumáticos
+            {" "}({hechos.historicosPorCondicion.nueva} nuevos · {hechos.historicosPorCondicion.usada} usados · {hechos.historicosPorCondicion.recauchutada} recauchutados)
+          </div>
+          <div className="mb-2 text-[11px] text-slate-500">Importados del albarán original; no son ventas ni trabajo nuevo y no generan facturación. Posición solo cuando se ha podido deducir del plano actual del tipo.</div>
+          <table className="w-full text-[12px]">
+            <thead><tr className="text-left text-slate-500"><th className="py-1">Neumático</th><th>Condición</th><th>Posición</th><th>Km</th><th>Observaciones</th></tr></thead>
+            <tbody>
+              {hechos.historicos.map((o) => (
+                <tr key={o.id} className="border-t border-slate-700/60 text-slate-300">
+                  <td className="py-1">{[o.marca_txt, o.modelo_txt, o.medida_txt].filter(Boolean).join(" ") || "sin referencia"}</td>
+                  <td>{o.condicion ?? "—"}</td>
+                  <td>{textoPosicionHistorica(o.posicion_destino?.codigo_posicion, o.posicion_fuente) || "—"}</td>
+                  <td>{o.km_vehiculo ?? "—"}</td>
+                  <td className="text-slate-500">{(o.observaciones ?? "").replace(/\[(USADO|RECAUCHUTADO)\]\s*·?\s*/g, "")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {nivel !== "rapido" && (
         <>
           {/* ── Neumáticos montados, con su ORIGEN ── */}
@@ -319,7 +366,7 @@ export default function InformeIntervencion() {
                 <tbody>
                   {[...hechos.montadosAlmacen, ...hechos.sinControl].map((o) => (
                     <tr key={o.id} className="border-t border-slate-700/60">
-                      <td className={tdCls + " text-slate-200"}>{identidadNeumatico(o.neumatico)}</td>
+                      <td className={tdCls + " text-slate-200"}>{identidadNeumatico(o.neumatico, esHistoricoAlbaran(o) ? o : undefined)}</td>
                       <td className={tdCls + " text-slate-400"}>{o.neumatico?.marca ?? ""} {o.neumatico?.modelo ?? ""} {o.neumatico?.medida ?? ""}</td>
                       <td className={tdCls + " text-slate-400"}>{o.posicion_destino?.nombre ?? o.posicion_destino?.codigo_posicion ?? "—"}</td>
                       <td className={tdCls}>
@@ -372,7 +419,7 @@ export default function InformeIntervencion() {
                 <tbody>
                   {hechos.retirados.map((o) => (
                     <tr key={o.id} className="border-t border-slate-700/60">
-                      <td className={tdCls + " text-slate-200"}>{identidadNeumatico(o.neumatico)}</td>
+                      <td className={tdCls + " text-slate-200"}>{identidadNeumatico(o.neumatico, esHistoricoAlbaran(o) ? o : undefined)}</td>
                       <td className={tdCls + " text-slate-400"}>{o.posicion_origen?.nombre ?? o.posicion_origen?.codigo_posicion ?? "—"}</td>
                       <td className={tdCls + " text-slate-400"}>{o.motivo ? MOTIVO_OPERACION_LABELS[o.motivo] ?? o.motivo : "—"}</td>
                       <td className={tdCls + " text-slate-300"}>{destinoLabel(o.estado_nuevo === "pendiente_reciclaje" ? "reciclaje" : o.destino)}</td>

@@ -98,6 +98,60 @@ export interface OperacionesInforme {
   evolucion: { mes: string; n: number }[];
 }
 
+/** Informe «Montajes de neumáticos»: cuenta UNIDADES QUE ENTRAN. Las salidas
+ *  van aparte y no inflan el recuento (4 sustituciones = 4 montajes). */
+export type OrigenMontajes = "historico" | "normal" | "ambos";
+export interface MontajesInforme {
+  desde: string; hasta: string; origen: OrigenMontajes;
+  total: number; total_historico: number; total_normal: number;
+  desmontajes: number; desmontajes_historico: number; registros: number;
+  por_condicion: { condicion: string; n: number; historico: number; normal: number }[];
+  por_referencia: { marca: string; modelo: string; medida: string; condicion: string; n: number; historico: number; normal: number }[];
+  por_vehiculo: { vehiculo_id: string | null; matricula: string; n: number; nuevas: number; usadas: number; recauchutadas: number }[];
+  evolucion: { mes: string; n: number; historico: number; normal: number }[];
+  por_posicion: { clase: "registrada" | "deducida" | "desconocida"; n: number }[];
+  excluidas: { anuladas: number; correcciones: number; declaradas: number; no_completadas: number };
+  /** Cobertura de las medias de recorrido ESTIMADO del mismo periodo: sobre
+   *  cuántos intervalos salen y qué queda fuera. Una media sin esto no se
+   *  publica. Puede faltar si la base todavía no tiene la fase 3. */
+  recorridos_estimados?: CoberturaRecorridosInforme | null;
+}
+
+/** Lo que devuelve tc_informes_recorridos_estimados. Los motivos de exclusión
+ *  SE SOLAPAN: un intervalo puede tener varios, así que no se suman. Para
+ *  sumar están las combinaciones. */
+export interface CoberturaRecorridosInforme {
+  nivel: "estimado"; aviso: string;
+  periodo: { desde: string; hasta: string; origen: string };
+  poblacion: { intervalos: number; vehiculos: number; posiciones: number;
+               cerrados: number; abiertos: number; interrumpidos: number };
+  /** Tener un recorrido que se puede restar no es lo mismo que poder usarlo:
+   *  se publican los dos números. */
+  embudo: { con_recorrido_aritmetico: number; elegibles_tras_filtros: number; que_es: string };
+  /** Tres grupos que suman la población: identidad respaldada por una
+   *  persona, ficha reconstruida por la importación (tiene número interno,
+   *  pero no demuestra qué goma era) y ocupación sin ficha. «Sin
+   *  identificación física» no es lo mismo que «sin ficha». */
+  identidad: { respaldada: number; reconstruida: number; sin_ficha: number; que_es: string };
+  incluidos: { n: number; respaldada: number; reconstruida: number; sin_ficha: number;
+               aceptados_km: number; aceptados_continuidad: number };
+  recorrido: Record<"identidad_respaldada" | "ficha_reconstruida" | "ocupacion_sin_ficha", {
+    n: number; media: number | null; mediana: number | null;
+    minimo: number | null; maximo: number | null; total_km: number | null; que_es: string }>;
+  excluidos: { n: number; motivos_se_solapan: boolean; nota: string;
+               motivos: { motivo: string; n: number }[];
+               combinaciones: { motivos: string[]; n: number }[] };
+  revision: { km_pendientes: number; km_aceptados: number; km_rechazados: number;
+              continuidad_pendientes: number; continuidad_aceptadas: number; continuidad_rechazadas: number };
+  limite_km_dia: number | null;
+}
+
+export interface InventarioResumen {
+  neumaticos_reales: number;
+  fichas_historicas: number;
+  unidades_sin_ficha: number;
+}
+
 export interface PresionNeumatico {
   neumatico_id: string;
   codigo: string | null;
