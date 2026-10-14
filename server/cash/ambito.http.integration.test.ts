@@ -528,6 +528,7 @@ describe.skipIf(!RUN)("ámbito de caja por HTTP", () => {
     const res = await fetch(`${base}/bootstrap`, {
       headers: { "x-usuario": TODA_A, "x-empresa": EMPRESA_A, "x-superadmin": "1" },
     });
-    expect(((await res.json()).permisos as string[])).toContain("cash.denominations.configure");
+    const cuerpo = (await res.json()) as { permisos: string[] };
+    expect(cuerpo.permisos).toContain("cash.denominations.configure");
   });
 });
