@@ -182,7 +182,8 @@ paralelo que mantener.
 | `consulta` | ver |
 | `cajero` | cobrar, pagar, mover efectivo, arquear, adjuntar justificantes |
 | `responsable` | además abrir/cerrar/reabrir, ajustar, anular, reintentar ERP, dar de alta cajas, pedir cambio al banco y entregar dinero |
-| `admin` | además configurar la integración y el catálogo de denominaciones |
+| `admin` | además configurar la integración |
+| superadministrador | además el catálogo de denominaciones, que es de toda la instalación |
 
 Las liquidaciones de gastos de trabajadores (§7 quaterdecies) tienen sus cuatro
 permisos: `cash.expense_claim.view` (consulta en adelante),
@@ -194,7 +195,10 @@ tampoco tiene `cash.payment.create_manual`.
 separados **porque su alcance es distinto**: las cajas son de la empresa, pero
 `cash_denominations` no tiene columna de empresa — es el catálogo de toda la
 instalación. Si un responsable pudiera desactivar la moneda de 1 c, se la
-estaría desactivando también a las demás empresas. La pantalla lo advierte.
+estaría desactivando también a las demás empresas. La pantalla lo advierte. Por eso
+`cash.denominations.configure` solo lo tiene el **superadministrador**: al
+admin de una empresa se le quita en `cargarPermisosCaja`, y lo ve en solo
+lectura.
 
 Los cobros y pagos distinguen permiso ERP de permiso manual
 (`cash.collection.create` vs `cash.collection.create_manual`), que era lo que

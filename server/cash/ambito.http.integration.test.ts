@@ -33,7 +33,7 @@ vi.mock("../core/auth.ts", async (original) => {
         username: "prueba",
         nombre: "Prueba",
         empresaId: String(req.headers["x-empresa"]),
-        esSuperadmin: false,
+        esSuperadmin: req.headers["x-superadmin"] === "1",
         esAdmin: false,
       };
       next();
@@ -507,5 +507,27 @@ describe.skipIf(!RUN)("ámbito de caja por HTTP", () => {
     expect(de(TODA_A).puedeConfigurar).toBe(true);
     expect(de(CAJERO_T1).puedeConfigurar).toBe(false);
     expect(de(RESP_T1).puedeConfigurar).toBe(true);
+  });
+
+  // ── Catálogo de denominaciones: de toda la instalación ────────────────────
+
+  it("el catálogo de denominaciones solo lo toca el superadministrador", async () => {
+    // Un admin de empresa lo ve, pero no tiene el permiso ni la ruta le contesta.
+    expect(await permisosDe(TODA_A)).not.toContain("cash.denominations.configure");
+    const lista = await pedir(TODA_A, EMPRESA_A, "/denominations");
+    expect(lista.status).toBe(200);
+    const una = lista.body.denominaciones[0];
+    const cambio = await pedir(TODA_A, EMPRESA_A, `/denominations/${una.id}`, {
+      method: "PATCH",
+      body: { activa: una.activa },
+    });
+    expect(cambio.status).toBe(403);
+    expect(cambio.body.code).toBe("PERMISO_DENEGADO");
+
+    // El superadministrador sí.
+    const res = await fetch(`${base}/bootstrap`, {
+      headers: { "x-usuario": TODA_A, "x-empresa": EMPRESA_A, "x-superadmin": "1" },
+    });
+    expect(((await res.json()).permisos as string[])).toContain("cash.denominations.configure");
   });
 });
