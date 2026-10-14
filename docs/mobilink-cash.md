@@ -641,6 +641,13 @@ Decisiones que conviene no reabrir sin pensarlas:
 - El catálogo es **por empresa y configurable** (`cash_sections`), como las
   formas de cobro: mañana puede haber una tercera —tienda, lavadero— sin tocar
   código.
+- **Cada caja tiene sus secciones** (`cash_register_sections`), desde
+  Configuración → Cajas físicas: la de Agro Reus, solo Taller. Una caja sin
+  ninguna marcada tiene todas, que es lo de antes; marcar todas las activas se
+  guarda como «todas». Al cobrar solo salen las de la caja y, con una, no hay
+  selector. El servidor rechaza cobrar o reclasificar en una sección que la
+  caja no tiene (`SECCION_NO_DE_ESTA_CAJA`). Ruta
+  `PUT /api/cash/registers/:id/sections`.
 
 ## 7 octies. El descuadre del arqueo
 
