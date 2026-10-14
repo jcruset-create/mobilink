@@ -65,6 +65,8 @@ type CajaConfig = {
   fondoObjetivoCentimos: number;
   /** Esta caja no se cierra sin haberla cotejado con el ERP. */
   exigirCotejoErp: boolean;
+  /** Las secciones que tiene. Vacío o ausente = todas las de la empresa. */
+  secciones?: number[];
   activa: boolean;
   jornadas: string;
   /*
@@ -995,7 +997,10 @@ function Secciones() {
 // ── Cajas ──────────────────────────────────────────────────────────────────
 
 function Cajas() {
-  const { recargarConfiguracion } = useCash();
+  const { recargarConfiguracion, secciones } = useCash();
+  // Las de la EMPRESA, no las de la caja elegida arriba: aquí se reparten.
+  const seccionesEmpresa = secciones.filter((s) => s.activa);
+  const conSecciones = seccionesEmpresa.length > 1;
   const [cajas, setCajas] = useState<CajaConfig[]>([]);
   const [nombre, setNombre] = useState("");
   const [centro, setCentro] = useState("");
@@ -1132,6 +1137,7 @@ function Cajas() {
             <th className={thCls}>Código</th>
             <th className={`${thCls} text-right`}>Fondo fijo</th>
             <th className={thCls}>Cotejo para cerrar</th>
+            {conSecciones && <th className={thCls}>Secciones</th>}
             <th className={`${thCls} text-right`}>Jornadas</th>
             <th className={thCls}>Estado</th>
             <th className={thCls}></th>
@@ -1243,6 +1249,44 @@ function Cajas() {
                     {c.exigirCotejoErp ? "Obligatorio" : "No se exige"}
                   </label>
                 </td>
+                {conSecciones && (
+                  <td className={tdCls}>
+                    {/*
+                      Qué secciones tiene esta caja. Sin ninguna marcada, todas
+                      (y así una sección nueva sale también aquí). Se guarda al
+                      pulsar: la de Agro Reus, solo Taller.
+                    */}
+                    <div className="flex min-w-max flex-wrap gap-1">
+                      {seccionesEmpresa.map((sec) => {
+                        const suyas = c.secciones ?? [];
+                        const todas = suyas.length === 0;
+                        const marcada = todas || suyas.includes(sec.id);
+                        return (
+                          <button
+                            key={sec.id}
+                            type="button"
+                            disabled={ocupado}
+                            title={marcada ? `Quitar ${sec.nombre} de esta caja` : `Dar ${sec.nombre} a esta caja`}
+                            onClick={() => {
+                              const actuales = todas ? seccionesEmpresa.map((x) => x.id) : suyas;
+                              const nuevas = marcada
+                                ? actuales.filter((x) => x !== sec.id)
+                                : [...actuales, sec.id];
+                              void accion(() => api.fijarSeccionesDeCaja(c.id, nuevas));
+                            }}
+                            className={`rounded-md border px-2 py-0.5 text-[11px] ${
+                              marcada
+                                ? "border-sky-500 bg-sky-500/20 text-sky-100"
+                                : "border-slate-600 text-slate-500 line-through hover:border-slate-400"
+                            }`}
+                          >
+                            {sec.nombre}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </td>
+                )}
                 <td className={`${tdCls} text-right tabular-nums text-slate-400`}>{c.jornadas}</td>
                 <td className={tdCls}>
                   {c.jornadaAbierta ? (

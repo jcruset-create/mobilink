@@ -202,7 +202,9 @@ export default function Cobros() {
    */
 
   useEffect(() => {
-    if (seccionId != null || seccionesActivas.length === 0) return;
+    if (seccionesActivas.length === 0) return;
+    // Una sección que esta caja no tiene (se cambió de caja arriba) no vale.
+    if (seccionId != null && seccionesActivas.some((s) => s.id === seccionId)) return;
     const recordada = Number(localStorage.getItem(MEMORIA_SECCION) || 0);
     const valida = seccionesActivas.find((s) => s.id === recordada);
     setSeccionId(valida?.id ?? seccionesActivas.find((s) => s.porDefecto)?.id ?? seccionesActivas[0].id);

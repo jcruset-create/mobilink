@@ -37,6 +37,8 @@ export type Caja = {
   nombre: string;
   /** Iniciales que abren el número de sus documentos: `TAR1-IB-26-001`. */
   codigo: string;
+  /** Las secciones que tiene la caja. Vacío o ausente = todas las de la empresa. */
+  secciones?: number[];
   /**
    * Fondo fijo del cajón: lo que esta caja tiene que tener SIEMPRE al empezar
    * el día. 0 = sin fondo fijo, y entonces el cierre lo pregunta.
