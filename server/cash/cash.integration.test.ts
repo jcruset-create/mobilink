@@ -3053,6 +3053,44 @@ describe.runIf(RUN)("secciones de negocio", () => {
     expect(gasolinera?.activa).toBe(true);
   });
 
+  it("una caja sin gasolinera no cobra en gasolinera; sin marcar, tiene todas", async () => {
+    const caja = await crearCaja("solo-taller");
+    const taller = await seccion("TALLER");
+    const gasolinera = await seccion("GASOLINERA");
+
+    // Sin marcar: todas, como antes.
+    expect((await config.listarCajas(EMPRESA)).find((c) => c.id === caja)!.secciones).toEqual([]);
+
+    expect(await config.fijarSeccionesDeCaja(ctx, caja, [taller])).toEqual([taller]);
+    expect((await config.listarCajas(EMPRESA)).find((c) => c.id === caja)!.secciones).toEqual([taller]);
+
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO_300 });
+    const cobro = (sectionId: number) =>
+      servicio.registrarCobro(ctx, {
+        sessionId: sesion.id,
+        importeCentimos: 1000,
+        formasPago: [{ forma: "CASH", importe: 1000 }],
+        efectivoRecibido: [{ valor: 1000, cantidad: 1 }],
+        sectionId,
+        partyNombre: "Cliente",
+      });
+    await expect(cobro(gasolinera)).rejects.toMatchObject({ codigo: "SECCION_NO_DE_ESTA_CAJA" });
+    const bueno = await cobro(taller);
+
+    // Tampoco se reclasifica a una sección que la caja no tiene.
+    await expect(servicio.cambiarSeccion(ctx, bueno.operacionId, gasolinera)).rejects.toMatchObject({
+      codigo: "SECCION_NO_DE_ESTA_CAJA",
+    });
+
+    // Ninguna no se puede; todas las activas se guarda como «todas».
+    await expect(config.fijarSeccionesDeCaja(ctx, caja, [])).rejects.toMatchObject({
+      codigo: "ENTRADA_NO_VALIDA",
+    });
+    const activas = (await config.listarSecciones(EMPRESA)).filter((x) => x.activa).map((x) => x.id);
+    expect(await config.fijarSeccionesDeCaja(ctx, caja, activas)).toEqual([]);
+    await cobro(gasolinera);
+  });
+
   it("reparte los cobros por sección sin tocar el arqueo, que sigue siendo uno", async () => {
     const caja = await crearCaja("secciones");
     const { sesion } = await servicio.abrirJornada(ctx, {

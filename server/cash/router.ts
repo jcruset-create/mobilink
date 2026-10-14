@@ -424,7 +424,10 @@ export function createCashRouter(): Router {
         cargarDenominaciones(pool, true),
         config.listarFormasPago(empresaId),
         pool.query(
-          `SELECT id, centro, centro_id AS "centroId", nombre, codigo, fondo_objetivo_centimos
+          `SELECT id, centro, centro_id AS "centroId", nombre, codigo, fondo_objetivo_centimos,
+                  COALESCE((SELECT array_agg(rs.section_id ORDER BY rs.section_id)
+                              FROM cash_register_sections rs WHERE rs.register_id = cash_registers.id), '{}')
+                    AS secciones
              FROM cash_registers
             WHERE empresa_id = $1 AND activa = true
               AND ($2::uuid IS NULL OR centro_id = $2)
@@ -555,6 +558,25 @@ export function createCashRouter(): Router {
         codigo: typeof b.codigo === "string" ? b.codigo : undefined,
       });
       res.status(201).json({ caja });
+    })
+  );
+
+  /** Las secciones de una caja. Lista vacía o todas las activas = todas. */
+  r.put(
+    "/registers/:id/sections",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      if (!Array.isArray(b.secciones)) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "secciones tiene que ser una lista.", 400);
+      }
+      res.json({
+        secciones: await config.fijarSeccionesDeCaja(
+          contexto(req),
+          enteroPositivo(req.params.id, "id"),
+          b.secciones.map((v: unknown, i: number) => enteroPositivo(v, `secciones[${i}]`))
+        ),
+      });
     })
   );
 

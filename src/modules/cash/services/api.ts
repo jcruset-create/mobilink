@@ -188,6 +188,13 @@ export const fijarExigirAsignacion = (exigir: boolean, forzar = false) =>
     method: "PUT",
   });
 
+/** Las secciones de una caja. Lista vacía o todas = todas las de la empresa. */
+export const fijarSeccionesDeCaja = (registerId: number, secciones: number[]) =>
+  pedir<{ secciones: number[] }>(`/registers/${registerId}/sections`, {
+    ...json({ secciones }),
+    method: "PUT",
+  });
+
 export const listarCajas = () =>
   pedir<{
     cajas: (Caja & { activa: boolean; jornadas: string; jornadaAbierta: number | null })[];

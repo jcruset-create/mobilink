@@ -159,7 +159,13 @@ export function CashProvider({ children }: { children: ReactNode }) {
     // ajuste nuevo no se olvide aquí y rompa la pantalla al arrancar.
     ajustes: boot?.ajustes ?? { mixtoImagenUrl: null, correoCentral: null },
     secciones: boot?.secciones ?? [],
-    seccionesActivas: (boot?.secciones ?? []).filter((s) => s.activa),
+    // Las de ESTA caja: la de Agro Reus no tiene gasolinera. Sin secciones
+    // marcadas, todas las de la empresa.
+    seccionesActivas: (boot?.secciones ?? []).filter((s) => {
+      if (!s.activa) return false;
+      const deLaCaja = (boot?.cajas ?? []).find((c) => c.id === cajaId)?.secciones ?? [];
+      return deLaCaja.length === 0 || deLaCaja.includes(s.id);
+    }),
     cajas: boot?.cajas ?? [],
     permisos,
     rol: boot?.rol ?? null,

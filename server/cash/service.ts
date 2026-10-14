@@ -90,6 +90,7 @@ import { conectorPara } from "./erp/registry.ts";
 import { puertaDeCierre } from "./domain/puertaDeCierre.ts";
 import { huellaDeLaJornada, ultimoCotejo } from "./cotejoRegistro.ts";
 import { exigirAmbitoCaja, exigirJornadaPropia } from "./hierarchy.ts";
+import { exigirSeccionDeCaja } from "./config.ts";
 import { autorDeOperacion, exigirOtraPersona } from "./sod.ts";
 import { centroDeCaja, emitirEvento } from "./events/emitter.ts";
 
@@ -710,6 +711,8 @@ export async function registrarOperacion(
           409
         );
       }
+      // Y que sea de esta caja: la de Agro Reus no tiene gasolinera.
+      await exigirSeccionDeCaja(client, sesion.registerId, e.sectionId);
     }
 
     /*
@@ -3294,6 +3297,12 @@ export async function cambiarSeccion(
     // Aquí sí se admite una sección de baja: reclasificar hacia atrás puede
     // necesitar una sección que ya no se usa para cobros nuevos.
     nombre = rows[0].nombre;
+    // Pero no una que la caja no tiene.
+    const { rows: caja } = await pool.query(
+      `SELECT s.register_id FROM cash_operations o JOIN cash_sessions s ON s.id = o.session_id WHERE o.id = $1`,
+      [operationId]
+    );
+    if (caja[0]) await exigirSeccionDeCaja(pool, Number(caja[0].register_id), sectionId);
   }
 
   await pool.query(
