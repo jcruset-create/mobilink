@@ -342,7 +342,7 @@ function DetalleDelDia({ sessionId }: { sessionId: number }) {
         operaciones={cobros}
         formasPago={formasPago}
         secciones={secciones}
-        puedeReclasificar={puede("cash.configure")}
+        puedeReclasificar={puede("cash.operation.reclassify")}
         puedeAdjuntar={puede("cash.document.attach")}
         puedeAnularDocumento={puede("cash.document.void")}
         onSeccion={cambiarSeccion}
@@ -355,7 +355,7 @@ function DetalleDelDia({ sessionId }: { sessionId: number }) {
         operaciones={pagos}
         formasPago={formasPago}
         secciones={secciones}
-        puedeReclasificar={puede("cash.configure")}
+        puedeReclasificar={puede("cash.operation.reclassify")}
         puedeAdjuntar={puede("cash.document.attach")}
         puedeAnularDocumento={puede("cash.document.void")}
         onSeccion={cambiarSeccion}

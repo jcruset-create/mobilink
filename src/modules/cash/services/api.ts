@@ -175,6 +175,13 @@ export const fijarAcceso = (userId: string, centroId: string | null, cajas: numb
     method: "PUT",
   });
 
+/** Da o quita Configuración a un responsable. */
+export const fijarConfiguracionUsuario = (userId: string, puede: boolean) =>
+  pedir<{ usuario: AccesoUsuario }>(`/access/users/${userId}/configuration`, {
+    ...json({ puede }),
+    method: "PUT",
+  });
+
 export const fijarExigirAsignacion = (exigir: boolean, forzar = false) =>
   pedir<Omit<Accesos, "talleres" | "cajas" | "ambitoCentroId">>("/access/enforce", {
     ...json({ exigir, forzar }),

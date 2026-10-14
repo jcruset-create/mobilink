@@ -719,6 +719,8 @@ export type AccesoUsuario = {
   cajas: number[];
   /** Cajero o consulta: con la asignación obligatoria, solo ve sus cajas. */
   limitadoPorCaja: boolean;
+  /** Entra en Configuración. Admin siempre; responsable salvo que se le quite. */
+  puedeConfigurar: boolean;
 };
 
 export type Accesos = {

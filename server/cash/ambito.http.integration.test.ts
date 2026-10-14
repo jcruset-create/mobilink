@@ -449,4 +449,63 @@ describe.skipIf(!RUN)("ámbito de caja por HTTP", () => {
     expect(r.status).toBe(200);
     expect(await cajasDe(CAJERO_T1)).toContain(caja3);
   });
+
+  // ── Configuración por usuario ─────────────────────────────────────────────
+
+  const permisosDe = async (quien: string) =>
+    (await pedir(quien, EMPRESA_A, "/bootstrap")).body.permisos as string[];
+
+  it("un responsable entra en Configuración hasta que el admin se lo quita, y reclasificar lo conserva", async () => {
+    expect(await permisosDe(RESP_T1)).toContain("cash.configure");
+    expect((await pedir(RESP_T1, EMPRESA_A, "/registers")).status).toBe(200);
+
+    const quitar = await pedir(TODA_A, EMPRESA_A, `/access/users/${RESP_T1}/configuration`, {
+      method: "PUT",
+      body: { puede: false },
+    });
+    expect(quitar.status).toBe(200);
+    expect(quitar.body.usuario.puedeConfigurar).toBe(false);
+
+    const permisos = await permisosDe(RESP_T1);
+    expect(permisos).not.toContain("cash.configure");
+    expect(permisos).toContain("cash.operation.reclassify");
+    // Y no es solo el menú: la ruta tampoco le contesta.
+    const rutas = await pedir(RESP_T1, EMPRESA_A, "/registers");
+    expect(rutas.status).toBe(403);
+    expect(rutas.body.code).toBe("PERMISO_DENEGADO");
+
+    const devolver = await pedir(TODA_A, EMPRESA_A, `/access/users/${RESP_T1}/configuration`, {
+      method: "PUT",
+      body: { puede: true },
+    });
+    expect(devolver.body.usuario.puedeConfigurar).toBe(true);
+    expect((await pedir(RESP_T1, EMPRESA_A, "/registers")).status).toBe(200);
+  });
+
+  it("solo se decide para responsables, y solo lo decide un admin", async () => {
+    const aUnAdmin = await pedir(TODA_A, EMPRESA_A, `/access/users/${SOLO_T1}/configuration`, {
+      method: "PUT",
+      body: { puede: false },
+    });
+    expect(aUnAdmin.status).toBe(409);
+    expect(aUnAdmin.body.code).toBe("SOLO_RESPONSABLES");
+
+    const aUnCajero = await pedir(TODA_A, EMPRESA_A, `/access/users/${CAJERO_T1}/configuration`, {
+      method: "PUT",
+      body: { puede: true },
+    });
+    expect(aUnCajero.status).toBe(409);
+
+    const elMismo = await pedir(RESP_T1, EMPRESA_A, `/access/users/${RESP_T1}/configuration`, {
+      method: "PUT",
+      body: { puede: true },
+    });
+    expect(elMismo.status).toBe(403);
+
+    const lista = await pedir(TODA_A, EMPRESA_A, "/access");
+    const de = (id: string) => lista.body.usuarios.find((u: { userId: string }) => u.userId === id);
+    expect(de(TODA_A).puedeConfigurar).toBe(true);
+    expect(de(CAJERO_T1).puedeConfigurar).toBe(false);
+    expect(de(RESP_T1).puedeConfigurar).toBe(true);
+  });
 });
