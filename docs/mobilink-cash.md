@@ -266,6 +266,19 @@ dentro de él, sus **cajas** (`cash_usuario_cajas`). Servidor en
   petición. Cada cambio de asignación queda en la auditoría
   (`cash.access.assigned`), dentro de la misma transacción.
 
+**Quién entra en Configuración.** En la misma pantalla, la columna
+«Configuración»: el admin entra siempre (si se le pudiera quitar, nadie podría
+devolvérselo), cajero y consulta nunca, y cada **responsable** según su
+interruptor. Viene encendido —se guarda la excepción, en
+`cash_usuario_sin_configuracion`— para que al desplegar nadie pierda nada.
+Apagado, el servidor le retira `cash.configure`: el menú no enseña
+Configuración y sus rutas responden 403. Reclasificar la sección de un cobro
+en Jornada actual tiene su propio permiso (`cash.operation.reclassify`) y lo
+conserva. Ruta `PUT /api/cash/access/users/:userId/configuration`.
+
+Las casillas de «pantallas» de Cash en Administración → Usuarios se quitaron:
+no se aplicaban en ningún sitio.
+
 ## 7 bis. Formas de cobro
 
 `cash_payment_methods`, por empresa. Cada fila activa es un botón en Cobros y

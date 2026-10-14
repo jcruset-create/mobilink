@@ -2227,6 +2227,24 @@ export async function initCash(): Promise<void> {
       ON cash_usuario_cajas(empresa_id, user_id);
   `);
 
+  /*
+   * Responsables sin acceso a Configuración.
+   *
+   * Se guarda la EXCEPCIÓN y no el permiso: un responsable sin fila puede
+   * configurar, que es como funcionaba todo antes de esto. Así, al desplegar
+   * nadie pierde nada y el admin se lo quita a quien quiera desde «Usuarios y
+   * cajas». El admin no se puede quitar a sí mismo: entra siempre.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_usuario_sin_configuracion (
+      empresa_id UUID NOT NULL,
+      user_id UUID NOT NULL,
+      quitado_por UUID,
+      quitado_at_ms BIGINT NOT NULL,
+      PRIMARY KEY (empresa_id, user_id)
+    );
+  `);
+
   await asignarCodigosDeCaja();
   await renumerarDocumentos();
 

@@ -501,6 +501,23 @@ export function createCashRouter(): Router {
     })
   );
 
+  /** Da o quita Configuración a un responsable. */
+  r.put(
+    "/access/users/:userId/configuration",
+    exigirPermiso("cash.access.manage"),
+    ruta(async (req, res) => {
+      const userId = String(req.params.userId);
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) {
+        throw new ErrorCaja("USUARIO_NO_ENCONTRADO", "Ese usuario no existe.", 404);
+      }
+      const b = req.body ?? {};
+      if (typeof b.puede !== "boolean") {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "puede tiene que ser sí o no.", 400);
+      }
+      res.json({ usuario: await asignaciones.fijarConfiguracion(contexto(req), userId, b.puede) });
+    })
+  );
+
   /** Enciende o apaga «cajeros y consulta, solo sus cajas». */
   r.put(
     "/access/enforce",
@@ -2457,7 +2474,7 @@ export function createCashRouter(): Router {
    */
   r.patch(
     "/operations/:id/section",
-    exigirPermiso("cash.configure"),
+    exigirPermiso("cash.operation.reclassify"),
     ruta(async (req, res) => {
       const b = req.body ?? {};
       const salida = await servicio.cambiarSeccion(

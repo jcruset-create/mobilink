@@ -83,6 +83,19 @@ export default function AccesoCajas() {
     }
   }
 
+  async function configuracion(u: AccesoUsuario) {
+    setOcupado(`config:${u.userId}`);
+    setError("");
+    try {
+      await api.fijarConfiguracionUsuario(u.userId, !u.puedeConfigurar);
+      await cargar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido cambiar");
+    } finally {
+      setOcupado("");
+    }
+  }
+
   async function interruptor(exigir: boolean, forzar = false) {
     setOcupado("interruptor");
     setError("");
@@ -188,13 +201,14 @@ export default function AccesoCajas() {
             <th className={thCls}>Rol</th>
             <th className={thCls}>Taller</th>
             <th className={thCls}>Cajas</th>
+            <th className={thCls}>Configuración</th>
             <th className={thCls}></th>
           </tr>
         </thead>
         <tbody>
           {datos.usuarios.length === 0 && (
             <tr>
-              <td className={tdCls} colSpan={5}>
+              <td className={tdCls} colSpan={6}>
                 Nadie tiene acceso a Mobilink Cash todavía. Se da desde Administración → Usuarios.
               </td>
             </tr>
@@ -285,6 +299,31 @@ export default function AccesoCajas() {
                   )}
                 </td>
                 <td className={tdCls}>
+                  {u.rol === "admin" ? (
+                    <span className="text-[12px] text-slate-400">Siempre</span>
+                  ) : u.rol === "responsable" ? (
+                    <button
+                      type="button"
+                      disabled={ocupado !== ""}
+                      onClick={() => void configuracion(u)}
+                      title={
+                        u.puedeConfigurar
+                          ? "Puede entrar en Configuración. Pulsa para quitárselo."
+                          : "No entra en Configuración. Pulsa para dárselo."
+                      }
+                      className={`rounded-md border px-2 py-1 text-[12px] ${
+                        u.puedeConfigurar
+                          ? "border-emerald-600 bg-emerald-500/15 text-emerald-200"
+                          : "border-slate-600 text-slate-400 hover:border-slate-400"
+                      }`}
+                    >
+                      {ocupado === `config:${u.userId}` ? "…" : u.puedeConfigurar ? "✓ Puede" : "No"}
+                    </button>
+                  ) : (
+                    <span className="text-[12px] text-slate-500">—</span>
+                  )}
+                </td>
+                <td className={tdCls}>
                   {sucio && (
                     <div className="flex gap-1">
                       <button
@@ -316,7 +355,8 @@ export default function AccesoCajas() {
       </TableWrap>
       <p className="text-[11px] text-slate-500">
         Quién entra en Mobilink Cash y con qué rol se decide en Administración → Usuarios. Aquí, dónde
-        trabaja cada uno.
+        trabaja cada uno y qué responsables entran en Configuración (el admin entra siempre; cajeros y
+        consulta, nunca).
       </p>
     </section>
   );

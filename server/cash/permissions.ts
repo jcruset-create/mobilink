@@ -14,7 +14,7 @@
 
 import type { RequestHandler } from "express";
 import pool from "../db.ts";
-import { limiteDeCajas } from "./asignaciones.ts";
+import { restriccionesDe } from "./asignaciones.ts";
 
 export const PERMISOS = [
   "cash.view",
@@ -114,6 +114,12 @@ export const PERMISOS = [
    * cajas a sí mismo o quitárselas a otro se saltaría la regla que vigila.
    */
   "cash.access.manage",
+  /**
+   * Cambiar la sección de negocio de una operación (taller ↔ gasolinera).
+   * Va aparte de `cash.configure` porque es trabajo del día a día: un
+   * responsable sin Configuración tiene que poder seguir haciéndolo.
+   */
+  "cash.operation.reclassify",
 ] as const;
 
 export type Permiso = (typeof PERMISOS)[number];
@@ -171,6 +177,7 @@ const POR_ROL: Record<RolCaja, readonly Permiso[]> = {
     // Puede dar de alta una caja de su empresa, pero no tocar el catálogo de
     // denominaciones, que es de toda la instalación.
     "cash.configure",
+    "cash.operation.reclassify",
     "cash.treasury.manage",
     "cash.document.attach",
     "cash.document.void",
@@ -252,8 +259,13 @@ export const cargarPermisosCaja: RequestHandler = async (req, res, next) => {
     const { rol, centroId } = await rolDeCaja(ctx.userId, ctx.esSuperadmin);
     req.cashRol = rol;
     req.cashCentroId = centroId;
-    req.cashPermisos = permisosDeRol(rol);
-    req.cashCajas = await limiteDeCajas(ctx.empresaId, ctx.userId, rol, ctx.esSuperadmin);
+    const r = await restriccionesDe(ctx.empresaId, ctx.userId, rol, ctx.esSuperadmin);
+    // Un responsable al que el admin ha quitado Configuración: sin el permiso,
+    // ni el menú la enseña ni sus rutas le contestan.
+    req.cashPermisos = r.sinConfiguracion
+      ? permisosDeRol(rol).filter((p) => p !== "cash.configure")
+      : permisosDeRol(rol);
+    req.cashCajas = r.cajas;
     next();
   } catch (e) {
     console.error("[Mobilink Cash] error cargando permisos:", e);
