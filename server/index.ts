@@ -12,6 +12,7 @@ import nodemailer from "nodemailer";
 import { fileURLToPath } from "url";
 import db, { initDb } from "./db.ts";
 import { supabase, supabaseAnonAuth, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_BUCKET } from "./supabase.ts";
+import { firmarEnFilas, firmarUrls } from "./core/fotosFirmadas.ts";
 import {
   autorizacionParaTaller,
   puedeMarcarSinSeguimiento,
@@ -5645,7 +5646,17 @@ app.get("/api/roadside-assistances", exigirCredencial(authenticate), async (req,
       params
     );
 
-    res.json(result.rows.map(normalizeRoadsideAssistanceRow));
+    /*
+     * La tira de miniaturas de cada tarjeta, firmada. Se firman todas de una
+     * sola llamada para las doscientas asistencias del listado, no una por
+     * foto: esta lista se refresca sola cada pocos segundos.
+     */
+    const asistencias = result.rows.map(normalizeRoadsideAssistanceRow);
+    await firmarEnFilas(
+      asistencias.flatMap((a: any) => (Array.isArray(a.fotosMiniaturas) ? a.fotosMiniaturas : []))
+    );
+
+    res.json(asistencias);
   } catch (error) {
     console.error("GET /api/roadside-assistances error:", error);
     res.status(500).json({ error: "Error obteniendo asistencias" });
@@ -5973,7 +5984,8 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
         status: e.status,
         createdAtMs: Number(e.createdAtMs),
       })),
-      files: filesResult.rows.map((f: any) => ({
+      // Las del seguimiento también firmadas: es la página que ve el cliente.
+      files: (await firmarEnFilas(filesResult.rows)).map((f: any) => ({
         id: Number(f.id),
         kind: f.kind,
         url: f.url,
@@ -7460,10 +7472,16 @@ app.get(
            ORDER BY ts ASC`,
           [ids]
         );
+        /*
+         * Firmadas aquí, no en la APK: así las fotos vuelven en los móviles
+         * que ya están instalados, sin publicar una APK nueva.
+         */
+        const firmadas = await firmarUrls(photos.rows.map((p: any) => p.url));
         const byJob = new Map<number, string[]>();
         for (const p of photos.rows) {
           const arr = byJob.get(Number(p.jid)) ?? [];
-          if (p.url && !arr.includes(p.url)) arr.push(p.url);
+          const url = p.url ? (firmadas[p.url] ?? p.url) : null;
+          if (url && !arr.includes(url)) arr.push(url);
           byJob.set(Number(p.jid), arr);
         }
         for (const r of rows) r.photoUrls = byJob.get(r.id) ?? [];
@@ -7609,8 +7627,12 @@ app.get(
       );
       const imageUrls: string[] = [];
       const videoUrls: string[] = [];
+      const firmadasCaptura = await firmarUrls(
+        msgResult.rows.map((m: any) => m.media_stored_url || m.media_url)
+      );
       for (const m of msgResult.rows) {
-        const url = (m.media_stored_url || m.media_url) as string;
+        const guardada = (m.media_stored_url || m.media_url) as string;
+        const url = firmadasCaptura[guardada] ?? guardada;
         if (m.message_type === "video") videoUrls.push(url);
         else imageUrls.push(url);
       }
@@ -9395,7 +9417,8 @@ app.get("/api/roadside-assistances/:id/files", exigirCredencial(authenticate), a
         ORDER BY f."createdAtMs" ASC`,
       [id]
     );
-    res.json(result.rows);
+    // Enlaces firmados en el momento: ver server/core/fotosFirmadas.ts.
+    res.json(await firmarEnFilas(result.rows));
   } catch (error) {
     console.error("GET /api/roadside-assistances/:id/files error:", error);
     res.status(500).json({ error: "Error cargando archivos" });
@@ -16989,6 +17012,9 @@ app.get("/api/whatsapp-capture/by-job/:jobId", requireAdminRole, async (req, res
       latitude: m.latitude != null ? Number(m.latitude) : null,
       longitude: m.longitude != null ? Number(m.longitude) : null,
     }));
+    // La copia en Supabase, con enlace firmado; la de Twilio se deja como
+    // está, que el navegador no la puede abrir igualmente.
+    await firmarEnFilas(messages, ["media_stored_url"]);
     return res.json({ ...session, messages });
   } catch (error) {
     console.error("GET /api/whatsapp-capture/by-job error:", error);
