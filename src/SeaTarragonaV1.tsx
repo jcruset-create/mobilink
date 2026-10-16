@@ -4574,6 +4574,7 @@ if (view === "pantalla" && canView("pantalla")) {
   techs={visibleTechs}
   scheduledJobs={agenda.visibleScheduledJobs}
   quickTemplates={visibleQuickTemplates}
+  workshopName={selectedWorkshop.shortName}
   onBack={() => setView("operativo")}
 />
   );
