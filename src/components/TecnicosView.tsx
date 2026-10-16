@@ -436,7 +436,7 @@ export default function TecnicosView({
                 >
                   {WORKSHOPS.map((w) => (
                     <option key={w.id} value={w.id}>
-                      {w.name}
+                      {w.shortName}
                     </option>
                   ))}
                 </select>
