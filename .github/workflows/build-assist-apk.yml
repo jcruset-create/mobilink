@@ -173,14 +173,23 @@ jobs:
         with:
           tag: assist-v${{ steps.ver.outputs.version }}
           nombre: Mobilink Assist ${{ steps.ver.outputs.version }}
+          # Sin avisos de instalación a propósito.
+          #
+          # Aquí ponía que era «la primera versión firmada con la clave de
+          # Mobilink» y que había que DESINSTALAR la anterior. Fue verdad una
+          # vez, el día del cambio de clave, y desde entonces se repetía en
+          # cada release: la 169 lo seguía diciendo.
+          #
+          # Y no era un texto inofensivo. Desinstalar se lleva por delante la
+          # cola de cambios pendientes de enviar del operario —fotos y cambios
+          # de estado que todavía no han subido—, así que quien lo leyera y
+          # obedeciera perdía trabajo hecho, sin ninguna necesidad: desde
+          # aquel cambio, cada APK se instala encima de la anterior.
+          #
+          # Si algún día vuelve a cambiar la clave de firma, el aviso vuelve
+          # ESE día y se quita al siguiente.
           cuerpo: |
             APK de Mobilink Assist generada por CI desde ${{ github.sha }}.
-
-            AVISO: primera versión firmada con la clave de Mobilink. Las
-            instaladas hasta ahora llevaban la clave de depuración, así que
-            Android NO deja instalar ésta encima. Hay que desinstalar la
-            anterior, y al hacerlo se pierde la cola de cambios pendientes de
-            enviar: sincronizar antes de desinstalar.
           ficheros: flutter_app/build/app/outputs/flutter-apk/mobilink-assist-*.apk
           token: ${{ secrets.GITHUB_TOKEN }}
 
