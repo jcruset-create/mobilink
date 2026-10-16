@@ -91,3 +91,36 @@ describe("proponerVinculos", () => {
     expect(proponerVinculos(["José"], [])[0].certeza).toBe("sin_candidato");
   });
 });
+
+describe("proponerVinculos con el nombre entero en «nombre»", () => {
+  const plantilla = [
+    { id: "a", nombre: "Albert Belles Bertran", apellidos: null },
+    { id: "b", nombre: "Anthony David Costa Figueira", apellidos: null },
+    { id: "c", nombre: "David Beltran Banegas", apellidos: null },
+    { id: "d", nombre: "Ivan Rosa Perez", apellidos: null },
+    { id: "e", nombre: "Jose Herrera Pascua", apellidos: null },
+    { id: "f", nombre: "Jose Antonio Ruiz", apellidos: null },
+  ];
+
+  it("empareja por la primera palabra cuando es única", () => {
+    const [albert, david, ivan] = proponerVinculos(["Albert", "David", "Iván"], plantilla);
+    expect(albert).toMatchObject({ employeeId: "a", certeza: "unica" });
+    expect(david).toMatchObject({ employeeId: "c", certeza: "unica" });
+    expect(ivan).toMatchObject({ employeeId: "d", certeza: "unica" });
+  });
+
+  it("una letra de diferencia en un nombre largo: «parecida»", () => {
+    expect(proponerVinculos(["Anthoni"], plantilla)[0]).toMatchObject({
+      employeeId: "b",
+      certeza: "parecida",
+    });
+  });
+
+  it("dos José: ambigua, no se elige solo", () => {
+    expect(proponerVinculos(["José"], plantilla)[0].certeza).toBe("ambigua");
+  });
+
+  it("con nombres cortos una letra no basta", () => {
+    expect(proponerVinculos(["Ivet"], plantilla)[0].certeza).toBe("sin_candidato");
+  });
+});

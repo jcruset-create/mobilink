@@ -6,7 +6,7 @@
  * sin que alguien pulse «Guardar».
  */
 
-export type Certeza = "exacta" | "unica" | "ambigua" | "sin_candidato";
+export type Certeza = "exacta" | "unica" | "parecida" | "ambigua" | "sin_candidato";
 
 export type PropuestaVinculo = {
   tech: string;
@@ -57,6 +57,8 @@ export function etiquetaDeCerteza(p: PropuestaVinculo): { texto: string; clase: 
       return { texto: "Propuesta: nombre completo", clase: "bg-sky-100 text-sky-800" };
     case "unica":
       return { texto: "Propuesta: nombre de pila", clase: "bg-sky-100 text-sky-800" };
+    case "parecida":
+      return { texto: "Propuesta: nombre parecido, revísalo", clase: "bg-amber-100 text-amber-800" };
     case "ambigua":
       return { texto: "Varios posibles: elige", clase: "bg-amber-100 text-amber-800" };
     default:
