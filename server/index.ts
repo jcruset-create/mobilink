@@ -2628,7 +2628,7 @@ app.get("/api/techs", exigirCredencial(requirePanelRole), async (_req, res) => {
     const result = await db.query(`
       SELECT name, status, blocked, "currentJobId", competencies, priorities, avatar,
              "roadsideCapable", "compartidoCentral", "currentRoadsideAssistanceId", phone,
-             "statusChangedAtMs", "statusTotals", activo, employee_id
+             "statusChangedAtMs", "statusTotals", activo, employee_id, "workshopId"
       FROM techs
       ORDER BY id ASC
     `);
@@ -2672,7 +2672,7 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
       protectedStatuses.has(normalizedStatus) || Boolean(blocked);
 
     const existingResult = await db.query(
-      `SELECT "roadsideCapable", "workshopId" FROM techs WHERE name = $1`,
+      `SELECT "roadsideCapable", "workshopId", phone FROM techs WHERE name = $1`,
       [name]
     );
 
@@ -2734,7 +2734,10 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
         statusChangedAtMs ?? Date.now(),
         JSON.stringify(statusTotals ?? {}),
         normalizedRoadsideCapable,
-        phone != null ? String(phone).trim() || null : null,
+        // Igual que el taller: sin teléfono en el cuerpo se conserva el que había.
+        phone === undefined
+          ? existingResult.rows[0]?.phone ?? null
+          : phone != null ? String(phone).trim() || null : null,
         normalizedWorkshopId,
       ]
     );

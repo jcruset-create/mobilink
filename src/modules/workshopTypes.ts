@@ -87,6 +87,8 @@ export type Tech = {
   roadsideCapable?: boolean;
   currentRoadsideAssistanceId?: number | null;
   phone?: string | null;
+  /** Empleado de Core vinculado (sea_employees.id). null = sin vincular. */
+  employeeId?: string | null;
 };
 
 export type SavedTechConfig = {
