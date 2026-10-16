@@ -13,6 +13,7 @@ import { fileURLToPath } from "url";
 import db, { initDb } from "./db.ts";
 import { supabase, supabaseAnonAuth, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_BUCKET } from "./supabase.ts";
 import { firmarEnFilas, firmarUrls } from "./core/fotosFirmadas.ts";
+import { guardarCodigoErp, SISTEMAS_NO_ERP } from "./clientes/codigoErp.ts";
 import {
   autorizacionParaTaller,
   puedeMarcarSinSeguimiento,
@@ -11484,17 +11485,33 @@ app.get("/api/clientes-facturacion", requireSupervisorRole, async (req, res) => 
               COALESCE(m.sync_status, 'not_synced') AS "erpSyncStatus",
               m.last_sync_at_ms AS "erpLastSyncAtMs", m.last_sync_error AS "erpLastSyncError"
          FROM connect_clients c
+         /*
+          * El enlace del ERP, nombrando el sistema.
+          *
+          * Aquí se cogía «el mapeo más reciente de este cliente, sea de donde
+          * sea», y en esa tabla conviven los de todos los sistemas: un cliente
+          * con correspondencia de TyreControl enseñaba el identificador de TC
+          * como si fuera su número de ERP, con su estado de sincronización.
+          */
          LEFT JOIN LATERAL (
            SELECT * FROM integration_mappings im
             WHERE im.entity_type = 'customer' AND im.mobilink_id = c.id::text
+              AND NOT (im.system = ANY($2::text[]))
             ORDER BY im.updated_at_ms DESC LIMIT 1
          ) m ON true
         WHERE ($1 = '' OR c.name ILIKE '%' || $1 || '%'
                        OR c."legalName" ILIKE '%' || $1 || '%'
                        OR c."taxId" ILIKE '%' || $1 || '%'
-                       OR c.city ILIKE '%' || $1 || '%')
+                       OR c.city ILIKE '%' || $1 || '%'
+                       OR EXISTS (
+                            SELECT 1 FROM integration_mappings b
+                             WHERE b.entity_type = 'customer'
+                               AND b.mobilink_id = c.id::text
+                               AND NOT (b.system = ANY($2::text[]))
+                               AND b.external_code ILIKE '%' || $1 || '%'
+                          ))
         ORDER BY c.name`,
-      [q],
+      [q, SISTEMAS_NO_ERP],
     );
     res.json({ data: r.rows });
   } catch (e: any) {
@@ -11587,6 +11604,21 @@ app.patch("/api/clientes-facturacion/:id", requireAdminRole, async (req, res) =>
        typeof b.active === "boolean" ? b.active : null, b.notes ?? null, Date.now()],
     );
     if (!r.rows[0]) return res.status(404).json({ error: "Cliente no encontrado" });
+
+    /*
+     * El número de cliente del ERP no es una columna de la ficha: vive en
+     * `integration_mappings`, que es donde están los enlaces con los demás
+     * sistemas. Ver server/clientes/codigoErp.ts.
+     *
+     * Solo se toca si viene en la petición: así una pantalla que guarde la
+     * ficha sin enviarlo no lo borra sin querer. Y si viene vacío, se quita,
+     * que es la única forma de deshacer un número puesto por error.
+     */
+    if (Object.prototype.hasOwnProperty.call(b, "erpCode")) {
+      const enlace = await guardarCodigoErp(Number(req.params.id), b.erpCode);
+      if (enlace.ok === false) return res.status(409).json({ error: enlace.error });
+    }
+
     res.json(r.rows[0]);
   } catch (e: any) {
     console.error("PATCH /api/clientes-facturacion/:id error:", e?.message);
