@@ -361,3 +361,15 @@ describe("aniosConDatos", () => {
     expect(aniosConDatos(estados, 2026)).toEqual([2027, 2026, 2024]);
   });
 });
+
+describe("resumenPorTecnico sin los de fuera de la lista", () => {
+  it("con anadirFueraDeLista=false solo salen los de la lista", () => {
+    const estados = [
+      { id: "1", techName: "Viejo", status: "vacaciones", startDate: "2026-03-02", endDate: "2026-03-03" },
+    ] as any;
+    const config = { modo: "naturales", diasPorDefecto: 30, diasPorTecnico: {} } as any;
+    const agenda = CONFIG;
+    expect(resumenPorTecnico(estados, ["José"], 2026, config, agenda, "2026-10-16").map((r) => r.techName)).toEqual(["José", "Viejo"]);
+    expect(resumenPorTecnico(estados, ["José"], 2026, config, agenda, "2026-10-16", false).map((r) => r.techName)).toEqual(["José"]);
+  });
+});

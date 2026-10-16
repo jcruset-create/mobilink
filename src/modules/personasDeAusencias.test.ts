@@ -74,3 +74,22 @@ describe("personasDeAusencias", () => {
     ]);
   });
 });
+
+describe("dados de baja", () => {
+  it("por defecto no salen; con incluirBajas, al final y marcados", () => {
+    const fichas2 = [
+      { name: "José", workshopId: "sea-tarragona" },
+      { name: "Viejo", activo: false, workshopId: "sea-tarragona" },
+      { name: "Antiguo Reus", activo: false, workshopId: "sea-reus" },
+    ];
+    expect(personasDelTaller(fichas2, [], "sea-tarragona").map((p) => p.nombre)).toEqual(["José"]);
+    const con = personasDelTaller(fichas2, [], "sea-tarragona", { incluirBajas: true });
+    expect(con.map((p) => [p.nombre, !!p.deBaja])).toEqual([
+      ["José", false],
+      ["Viejo", true],
+    ]);
+    expect(
+      personasDelTaller(fichas2, [], "todos", { incluirBajas: true }).filter((p) => p.deBaja)
+    ).toHaveLength(2);
+  });
+});

@@ -80,6 +80,24 @@ export default function PlanningAusenciasPage() {
   const [anio, setAnio] = useState<number>(() => Number(hoy.slice(0, 4)));
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
+  // Los dados de baja en la empresa no salen salvo que se pida. Se recuerda
+  // por navegador; si el almacenamiento falla, vuelve a «solo de alta».
+  const [verBajas, setVerBajas] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem("sea-ausencias-ver-bajas") === "1";
+    } catch {
+      return false;
+    }
+  });
+  function cambiarVerBajas(valor: boolean) {
+    setVerBajas(valor);
+    try {
+      window.localStorage.setItem("sea-ausencias-ver-bajas", valor ? "1" : "0");
+    } catch {
+      /* sin almacenamiento se queda solo en esta visita */
+    }
+  }
+
   const cargar = useCallback(async () => {
     setCargando(true);
     setError("");
@@ -113,7 +131,10 @@ export default function PlanningAusenciasPage() {
   const dias = useMemo(() => diasDelAnio(anio, configAgenda, hoy), [anio, configAgenda, hoy]);
 
   // Los que tuvieron ausencias este año aunque ya no estén en la lista.
-  const delTaller = useMemo(() => personasDelTaller(fichas, empleados, workshopId), [fichas, empleados, workshopId]);
+  const delTaller = useMemo(
+    () => personasDelTaller(fichas, empleados, workshopId, { incluirBajas: verBajas }),
+    [fichas, empleados, workshopId, verBajas]
+  );
 
   /*
    * Los que tuvieron ausencias este año aunque ya no estén en la lista del
@@ -121,17 +142,19 @@ export default function PlanningAusenciasPage() {
    * dice de dónde eran. Perderlos sería perder el histórico.
    */
   const nombres = useMemo(() => {
-    const lista = delTaller.map((t) => ({ nombre: t.nombre, taller: t.taller }));
+    const lista = delTaller.map((t) => ({ nombre: t.nombre, taller: t.taller, deBaja: !!t.deBaja }));
     const vistos = new Set(lista.map((t) => t.nombre));
+    // Solo de alta: no se añade a nadie que no esté en la lista.
+    if (!verBajas) return lista;
 
     for (const e of estadosDelTaller) {
       if (e.startDate?.startsWith(String(anio)) && !vistos.has(e.techName) && !esTecnicoDePrueba(e.techName)) {
-        lista.push({ nombre: e.techName, taller: "" });
+        lista.push({ nombre: e.techName, taller: "", deBaja: true });
         vistos.add(e.techName);
       }
     }
     return lista;
-  }, [delTaller, estadosDelTaller, anio]);
+  }, [delTaller, estadosDelTaller, anio, verBajas]);
 
   const filas = useMemo(
     () => nombres.map((t) => ({ ...t, celdas: filaDeTecnico(t.nombre, estadosDelTaller, dias, hoy) })),
@@ -183,7 +206,7 @@ export default function PlanningAusenciasPage() {
         <div>
           <h1 className="text-xl font-bold">Planning anual de ausencias</h1>
           <p className="text-xs text-slate-400">
-            Todos los técnicos del taller, día a día. Los datos son los de la agenda y su calendario. Hoy: {formatoFecha(hoy)}.
+            Todo el personal del taller, día a día. Los datos son los de la agenda y su calendario. Hoy: {formatoFecha(hoy)}.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -202,6 +225,18 @@ export default function PlanningAusenciasPage() {
           >
             {anios.map((a) => <option key={a} value={a}>{a}</option>)}
           </select>
+          <button
+            type="button"
+            onClick={() => cambiarVerBajas(!verBajas)}
+            title="Trabajadores dados de baja en la empresa (no las bajas médicas)"
+            className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+              verBajas
+                ? "border-sky-500 bg-sky-500/20 text-sky-200"
+                : "border-slate-600 bg-slate-800 text-slate-300 hover:bg-slate-700"
+            }`}
+          >
+            {verBajas ? "Altas y bajas" : "Solo de alta"}
+          </button>
           <button
             type="button"
             onClick={() => void cargar()}
@@ -280,6 +315,11 @@ export default function PlanningAusenciasPage() {
                     <td className="sticky left-0 z-10 border-b border-r-2 border-slate-600 bg-slate-800 px-2">
                       <b className="block text-xs">
                         {f.nombre}
+                        {f.deBaja && (
+                          <span className="ml-1 rounded bg-slate-600 px-1 py-0.5 text-[9px] font-semibold text-slate-300">
+                            DE BAJA
+                          </span>
+                        )}
                         {workshopId === TODOS_LOS_TALLERES && f.taller && (
                           <span className="ml-1 rounded bg-slate-700 px-1 py-0.5 text-[9px] font-semibold text-slate-300">
                             {f.taller}

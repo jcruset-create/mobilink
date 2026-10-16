@@ -259,7 +259,12 @@ export function resumenPorTecnico(
   anio: number,
   configVacaciones: ConfigVacaciones,
   configAgenda: AgendaConfig,
-  hoy: string
+  hoy: string,
+  /**
+   * Añadir a quien tuvo ausencias este año aunque no esté en la lista (los
+   * dados de baja). En la pantalla solo cuando se pide ver también las bajas.
+   */
+  anadirFueraDeLista = true
 ): ResumenTecnico[] {
   const porNombre = new Map<string, ScheduledTechStatus[]>();
 
@@ -278,6 +283,7 @@ export function resumenPorTecnico(
   // Los que tuvieron ausencias este año aunque ya no estén en la lista; los de
   // prueba no, aunque alguien les programara algo trasteando.
   for (const nombre of porNombre.keys()) {
+    if (!anadirFueraDeLista) break;
     if (!nombres.includes(nombre) && !esTecnicoDePrueba(nombre)) nombres.push(nombre);
   }
 
