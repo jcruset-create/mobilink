@@ -36,7 +36,11 @@ type FichaDeTecnico = {
   employeeId?: string | null;
 };
 
-export type PersonaConTaller = TecnicoConTaller & { esTecnico: boolean };
+export type PersonaConTaller = TecnicoConTaller & {
+  esTecnico: boolean;
+  /** Dado de baja en la empresa (ficha desactivada). Solo sale si se pide. */
+  deBaja?: boolean;
+};
 
 export function normalizarNombre(valor: unknown): string {
   return String(valor ?? "")
@@ -77,11 +81,17 @@ export function empleadosSinFicha(
   return salida;
 }
 
-/** Técnicos del taller y, detrás, el resto de empleados de Core. */
+/**
+ * Técnicos del taller y, detrás, el resto de empleados de Core.
+ *
+ * Por defecto solo los de alta. Con `incluirBajas`, al final se añaden los
+ * técnicos dados de baja de ese taller, marcados.
+ */
 export function personasDelTaller(
   fichas: FichaDeTecnico[],
   empleados: EmpleadoCore[],
-  tallerId: string
+  tallerId: string,
+  { incluirBajas = false }: { incluirBajas?: boolean } = {}
 ): PersonaConTaller[] {
   const tecnicos = tecnicosDelTaller(fichas, tallerId).map((t) => ({ ...t, esTecnico: true }));
   const resto = empleadosSinFicha(fichas, empleados)
@@ -96,5 +106,20 @@ export function personasDelTaller(
       taller: e.workshopId ? getWorkshopById(e.workshopId).shortName : "—",
       esTecnico: false,
     }));
-  return [...tecnicos, ...resto];
+  if (!incluirBajas) return [...tecnicos, ...resto];
+
+  const deBaja = fichas
+    .filter((t) => t?.name && t.activo === false && !esTecnicoDePrueba(t.name))
+    .filter(
+      (t) =>
+        tallerId === TODOS_LOS_TALLERES ||
+        normalizeWorkshopId(t.workshopId) === normalizeWorkshopId(tallerId)
+    )
+    .map((t) => ({
+      nombre: String(t.name),
+      taller: getWorkshopById(normalizeWorkshopId(t.workshopId)).shortName,
+      esTecnico: true,
+      deBaja: true,
+    }));
+  return [...tecnicos, ...resto, ...deBaja];
 }
