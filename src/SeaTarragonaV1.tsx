@@ -5257,7 +5257,7 @@ return (
   >
     {WORKSHOPS.filter((workshop) => workshop.active).map((workshop) => (
       <option key={workshop.id} value={workshop.id}>
-        {workshop.name}
+        {workshop.shortName}
       </option>
     ))}
   </select>
