@@ -2895,6 +2895,35 @@ app.get("/api/techs/vinculo-core", requireAdminRole, async (_req, res) => {
   }
 });
 
+// Empleados activos de Core, para Ausencias, Planning y el selector de estado
+// de la agenda: ahí entran todos, no solo los que tienen ficha de técnico.
+// `techName` es el técnico vinculado, si lo hay: sus ausencias van por ese
+// nombre. Si Core no está en esta base, lista vacía y las pantallas siguen
+// con los técnicos de siempre.
+app.get("/api/empleados-core", requireAdminRole, async (_req, res) => {
+  try {
+    const r = await db.query(
+      `SELECT e.id, e.nombre, e.apellidos, c.nombre AS centro, t.name AS tech_name
+         FROM sea_employees e
+         LEFT JOIN sea_work_centers c ON c.id = e.work_center_id
+         LEFT JOIN techs t ON t.employee_id = e.id
+        WHERE e.activo = true
+        ORDER BY e.nombre, e.apellidos`
+    );
+    res.json(
+      r.rows.map((e: any) => ({
+        id: String(e.id),
+        nombre: [e.nombre, e.apellidos].filter(Boolean).join(" ").trim(),
+        centro: e.centro ?? null,
+        techName: e.tech_name ?? null,
+      }))
+    );
+  } catch (error) {
+    console.error("GET /api/empleados-core error:", error);
+    res.json([]);
+  }
+});
+
 // Confirma (o deshace, con employeeId null) el vínculo de un técnico.
 app.put("/api/techs/:name/vinculo-core", requireAdminRole, async (req, res) => {
   try {

@@ -11,11 +11,17 @@ import { DEFAULT_WORKSHOP_ID, WORKSHOPS, normalizeWorkshopId } from "../workshop
 import {
   TODOS_LOS_TALLERES,
   estadoCuentaEnTaller,
-  tecnicosDelTaller,
 } from "../tecnicosPorTaller";
+import { personasDelTaller, type EmpleadoCore } from "../personasDeAusencias";
+import { cargarEmpleadosCore } from "../empleadosCoreApi";
 
 /** La ficha del técnico tal como la devuelve el servidor. */
-type FichaTecnico = { name?: string | null; activo?: boolean; workshopId?: unknown };
+type FichaTecnico = {
+  name?: string | null;
+  activo?: boolean;
+  workshopId?: unknown;
+  employeeId?: string | null;
+};
 import {
   diasDelAnio,
   faltanPorDia,
@@ -58,6 +64,8 @@ function formatoFecha(fecha: string) {
 export default function PlanningAusenciasPage() {
   const [estados, setEstados] = useState<ScheduledTechStatus[]>([]);
   const [fichas, setFichas] = useState<FichaTecnico[]>([]);
+  // Todos los empleados entran, no solo los técnicos.
+  const [empleados, setEmpleados] = useState<EmpleadoCore[]>([]);
   const [configAgenda, setConfigAgenda] = useState<AgendaConfig>(DEFAULT_AGENDA_CONFIG);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
@@ -76,13 +84,15 @@ export default function PlanningAusenciasPage() {
     setCargando(true);
     setError("");
     try {
-      const [listaEstados, listaTecnicos, agenda] = await Promise.all([
+      const [listaEstados, listaTecnicos, listaEmpleados, agenda] = await Promise.all([
         loadScheduledTechStatusesFromBackend(),
         loadTechsFromBackend().catch(() => []),
+        cargarEmpleadosCore(),
         loadAgendaConfig().catch(() => DEFAULT_AGENDA_CONFIG),
       ]);
       setEstados(listaEstados);
       setFichas(listaTecnicos as FichaTecnico[]);
+      setEmpleados(listaEmpleados);
       setConfigAgenda(agenda);
     } catch (e: any) {
       setError(e?.message || "Error cargando el planning.");
@@ -103,7 +113,7 @@ export default function PlanningAusenciasPage() {
   const dias = useMemo(() => diasDelAnio(anio, configAgenda, hoy), [anio, configAgenda, hoy]);
 
   // Los que tuvieron ausencias este año aunque ya no estén en la lista.
-  const delTaller = useMemo(() => tecnicosDelTaller(fichas, workshopId), [fichas, workshopId]);
+  const delTaller = useMemo(() => personasDelTaller(fichas, empleados, workshopId), [fichas, empleados, workshopId]);
 
   /*
    * Los que tuvieron ausencias este año aunque ya no estén en la lista del
