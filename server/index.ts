@@ -13,6 +13,7 @@ import { fileURLToPath } from "url";
 import db, { initDb } from "./db.ts";
 import { supabase, supabaseAnonAuth, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_BUCKET } from "./supabase.ts";
 import { fallaAlFirmar, firmarEnFilas, firmarUrls } from "./core/fotosFirmadas.ts";
+import { descargarMedioTwilio, rescatarMedioDeTwilio } from "./core/medioTwilio.ts";
 import { guardarCodigoErp, SISTEMAS_NO_ERP } from "./clientes/codigoErp.ts";
 import {
   autorizacionParaTaller,
@@ -16347,63 +16348,6 @@ Devuelve SOLO el JSON sin texto adicional:
   } catch (e) {
     console.error("extractAssistanceFromMessage error:", e);
     return { data: {}, confidence: "low" };
-  }
-}
-
-/**
- * Descarga un medio de WhatsApp con las credenciales de la cuenta de Twilio.
- *
- * La URL viene del cuerpo del webhook, así que la elige quien manda el
- * mensaje. Por eso pasa por `fetchSeguro` con la lista de hosts de Twilio: sin
- * eso, poner `MediaUrl0=https://atacante.tld/x` hacía que el servidor enviara
- * la cabecera `Authorization: Basic <SID>:<AUTH_TOKEN>` al atacante. Estaba
- * repetido en tres sitios; ahora la credencial se construye en uno.
- */
-async function descargarMedioTwilio(url: string) {
-  return fetchSeguro(url, {
-    hostsPermitidos: HOSTS_TWILIO,
-    cabeceras: {
-      Authorization:
-        "Basic " +
-        Buffer.from(
-          `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
-        ).toString("base64"),
-    },
-    maxBytes: 25 * 1024 * 1024,
-    timeoutMs: 20_000,
-  });
-}
-
-/**
- * Baja un adjunto de Twilio y lo deja en nuestro almacén.
- *
- * Es el mismo trabajo que hace el webhook al recibir el mensaje; existe aparte
- * porque allí se traga el fallo para no perder el mensaje, y entonces hace
- * falta poder reintentarlo después. Devuelve la URL de la copia, o `null` si
- * tampoco esta vez se ha podido.
- */
-async function rescatarMedioDeTwilio(jobId: number, urlTwilio: string): Promise<string | null> {
-  try {
-    const medio = await descargarMedioTwilio(urlTwilio);
-    if (!medio.ok) {
-      console.warn(`[captura] Twilio contesta ${medio.status} al rescatar el adjunto`);
-      return null;
-    }
-    const contentType = medio.contentType || "application/octet-stream";
-    const ext = contentType.split("/")[1]?.split(";")[0] ?? "bin";
-    const ruta = `roadside/${jobId}/whatsapp_rescate_${Date.now()}.${ext}`;
-    const { error } = await supabase.storage
-      .from(SUPABASE_ROADSIDE_BUCKET)
-      .upload(ruta, medio.cuerpo, { contentType, upsert: false });
-    if (error) {
-      console.warn(`[captura] no se ha podido guardar el adjunto rescatado: ${error.message}`);
-      return null;
-    }
-    const { data } = supabase.storage.from(SUPABASE_ROADSIDE_BUCKET).getPublicUrl(ruta);
-    return data.publicUrl ?? null;
-  } catch (e: any) {
-    console.warn(`[captura] rescate del adjunto fallido: ${e?.message ?? e}`);
-    return null;
   }
 }
 
