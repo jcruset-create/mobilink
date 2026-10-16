@@ -4687,6 +4687,7 @@ if (view === "tecnicos" && canView("tecnicos")) {
           }
         }
       }}
+      onVinculoCoreGuardado={() => void reloadTechsFromBackend()}
       onBack={() => setView("operativo")}
     />
   );

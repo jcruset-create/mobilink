@@ -1,6 +1,7 @@
 import { type ChangeEvent, useState } from "react";
 import { WORKSHOPS, DEFAULT_WORKSHOP_ID } from "../modules/workshops";
-import { Pencil, Phone, Plus, X } from "lucide-react";
+import { Link2, Pencil, Phone, Plus, X } from "lucide-react";
+import VinculoCoreModal from "./VinculoCoreModal";
 import type {
   AreaKey,
   AssignmentRole,
@@ -41,6 +42,8 @@ type Props = {
   }) => void;
   onToggleRoadsideCapable: (name: string, value: boolean) => void;
   onBack: () => void;
+  /** Tras vincular con Core, para recargar los técnicos. */
+  onVinculoCoreGuardado?: () => void;
 };
 
 const COMPETENCY_KEYS: { key: CompetencyKey; label: string }[] = [
@@ -90,8 +93,10 @@ export default function TecnicosView({
   onSaveTech,
   onToggleRoadsideCapable,
   onBack,
+  onVinculoCoreGuardado,
 }: Props) {
   const [modal, setModal] = useState<ModalState | null>(null);
+  const [vinculoAbierto, setVinculoAbierto] = useState(false);
 
   function openNew() {
     const placeholder = "__new__";
@@ -196,6 +201,14 @@ export default function TecnicosView({
           <div className="flex gap-2">
             <button
               type="button"
+              onClick={() => setVinculoAbierto(true)}
+              className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-50"
+            >
+              <Link2 className="h-4 w-4" />
+              Vincular con Core
+            </button>
+            <button
+              type="button"
               onClick={openNew}
               className="inline-flex items-center gap-2 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white hover:bg-slate-700"
             >
@@ -228,7 +241,17 @@ export default function TecnicosView({
                       className="h-12 w-12 rounded-full border object-cover"
                     />
                     <div>
-                      <div className="text-lg font-black">{tech.name}</div>
+                      <div className="flex items-center gap-2 text-lg font-black">
+                        {tech.name}
+                        {tech.employeeId && (
+                          <span
+                            title="Vinculado con su ficha de empleado de Core"
+                            className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-800"
+                          >
+                            🔗 Core
+                          </span>
+                        )}
+                      </div>
                       <div className="text-xs font-semibold text-slate-500">
                         {tech.status}
                       </div>
@@ -329,6 +352,13 @@ export default function TecnicosView({
           </div>
         </section>
       </div>
+
+      {vinculoAbierto && (
+        <VinculoCoreModal
+          onCerrar={() => setVinculoAbierto(false)}
+          onGuardado={onVinculoCoreGuardado}
+        />
+      )}
 
       {/* ── Modal ficha técnico ── */}
       {modal && (
