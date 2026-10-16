@@ -100,38 +100,38 @@ export default function VinculoCoreModal({ onCerrar, onGuardado }: Props) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="flex max-h-full w-full max-w-3xl flex-col rounded-3xl bg-white p-6 text-slate-900 shadow-2xl">
+      <div className="flex max-h-full w-full max-w-3xl flex-col rounded-3xl bg-slate-800 p-6 text-slate-100 shadow-2xl">
         <div className="flex items-start justify-between gap-3">
           <div>
             <h3 className="flex items-center gap-2 text-xl font-black">
               <Link2 className="h-5 w-5" /> Vincular con empleados de Core
             </h3>
-            <p className="mt-1 text-sm text-slate-500">
+            <p className="mt-1 text-sm text-slate-400">
               Cada técnico con su ficha de Core. No cambia su nombre, ni su PIN, ni su
               histórico: solo se apunta quién es. Las propuestas se confirman al guardar.
             </p>
           </div>
           {!cargando && (
-            <span className="shrink-0 rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">
+            <span className="shrink-0 rounded-full bg-slate-700 px-3 py-1 text-xs font-bold text-slate-300">
               {vinculados}/{propuestas.length} vinculados
             </span>
           )}
         </div>
 
         {error && (
-          <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+          <div className="mt-3 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
             {error}
           </div>
         )}
         {aviso && (
-          <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+          <div className="mt-3 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
             {aviso}
           </div>
         )}
 
         <div className="mt-4 min-h-0 flex-1 overflow-auto">
           {cargando ? (
-            <div className="flex items-center gap-2 py-8 text-sm text-slate-500">
+            <div className="flex items-center gap-2 py-8 text-sm text-slate-400">
               <Loader2 className="h-4 w-4 animate-spin" /> Cargando empleados de Core…
             </div>
           ) : (
@@ -144,7 +144,7 @@ export default function VinculoCoreModal({ onCerrar, onGuardado }: Props) {
                   <div
                     key={p.tech}
                     className={`flex flex-wrap items-center gap-2 rounded-2xl border p-3 ${
-                      repetido ? "border-rose-300 bg-rose-50" : "border-slate-200"
+                      repetido ? "border-rose-500/50 bg-rose-500/10" : "border-slate-700"
                     }`}
                   >
                     <div className="min-w-[120px] font-bold">{p.tech}</div>
@@ -154,7 +154,7 @@ export default function VinculoCoreModal({ onCerrar, onGuardado }: Props) {
                     <select
                       value={valor}
                       onChange={(e) => setEleccion((prev) => ({ ...prev, [p.tech]: e.target.value }))}
-                      className="ml-auto min-w-[220px] rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm"
+                      className="ml-auto min-w-[220px] rounded-xl border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
                     >
                       <option value="">— Sin vincular —</option>
                       {p.candidatos.length > 0 && (
@@ -171,7 +171,7 @@ export default function VinculoCoreModal({ onCerrar, onGuardado }: Props) {
                       </optgroup>
                     </select>
                     {repetido && (
-                      <div className="w-full text-xs font-semibold text-rose-700">
+                      <div className="w-full text-xs font-semibold text-rose-300">
                         Ese empleado está elegido para otro técnico.
                       </div>
                     )}
@@ -183,13 +183,13 @@ export default function VinculoCoreModal({ onCerrar, onGuardado }: Props) {
         </div>
 
         <div className="mt-5 flex items-center justify-end gap-2">
-          <span className="mr-auto text-xs text-slate-500">
+          <span className="mr-auto text-xs text-slate-400">
             {cambios.length > 0 ? `${cambios.length} cambio(s) por guardar` : "Sin cambios"}
           </span>
           <button
             type="button"
             onClick={onCerrar}
-            className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold"
+            className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold"
           >
             Cerrar
           </button>
@@ -197,7 +197,7 @@ export default function VinculoCoreModal({ onCerrar, onGuardado }: Props) {
             type="button"
             disabled={guardando || cargando || cambios.length === 0 || repetidos.size > 0}
             onClick={() => void guardar()}
-            className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
+            className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
           >
             {guardando ? "Guardando…" : "Guardar"}
           </button>
