@@ -51,17 +51,17 @@ export function empleadosRepetidos(
 }
 
 export function etiquetaDeCerteza(p: PropuestaVinculo): { texto: string; clase: string } {
-  if (p.vinculadoA) return { texto: "Vinculado", clase: "bg-emerald-100 text-emerald-800" };
+  if (p.vinculadoA) return { texto: "Vinculado", clase: "bg-emerald-500/20 text-emerald-300" };
   switch (p.certeza) {
     case "exacta":
-      return { texto: "Propuesta: nombre completo", clase: "bg-sky-100 text-sky-800" };
+      return { texto: "Propuesta: nombre completo", clase: "bg-sky-500/20 text-sky-300" };
     case "unica":
-      return { texto: "Propuesta: nombre de pila", clase: "bg-sky-100 text-sky-800" };
+      return { texto: "Propuesta: nombre de pila", clase: "bg-sky-500/20 text-sky-300" };
     case "parecida":
-      return { texto: "Propuesta: nombre parecido, revísalo", clase: "bg-amber-100 text-amber-800" };
+      return { texto: "Propuesta: nombre parecido, revísalo", clase: "bg-amber-500/20 text-amber-300" };
     case "ambigua":
-      return { texto: "Varios posibles: elige", clase: "bg-amber-100 text-amber-800" };
+      return { texto: "Varios posibles: elige", clase: "bg-amber-500/20 text-amber-300" };
     default:
-      return { texto: "Sin candidato", clase: "bg-slate-100 text-slate-600" };
+      return { texto: "Sin candidato", clase: "bg-slate-700 text-slate-300" };
   }
 }
