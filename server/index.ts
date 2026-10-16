@@ -2872,6 +2872,12 @@ app.get("/api/techs/vinculo-core", requireAdminRole, async (_req, res) => {
 
     res.json({
       propuestas,
+      // Lista completa para elegir a mano cuando la propuesta es ambigua o no
+      // hay candidato. Solo id y nombre: lo demás de la ficha no hace falta.
+      empleados: empleados.rows.map((e: any) => ({
+        id: String(e.id),
+        nombre: [e.nombre, e.apellidos].filter(Boolean).join(" ").trim(),
+      })),
       resumen: {
         total: propuestas.length,
         yaVinculados: yaVinculados.size,
