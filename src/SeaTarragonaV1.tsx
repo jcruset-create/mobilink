@@ -1670,6 +1670,11 @@ blocked: isUnavailableTechStatus(
         ? pendingRoadsideCapableRef.current.get(baseTech.name)!
         : (found.roadsideCapable ?? baseTech.roadsideCapable ?? false),
       currentRoadsideAssistanceId: found.currentRoadsideAssistanceId ?? null,
+      // Sin copiarlos, el siguiente guardado de estado los mandaba a null y el
+      // técnico perdía su taller y su teléfono.
+      workshopId: found.workshopId ?? null,
+      phone: found.phone ?? null,
+      employeeId: found.employeeId ?? null,
     }
   : baseTech;
       });
@@ -4092,6 +4097,11 @@ async function resetAllSystem() {
         ? pendingRoadsideCapableRef.current.get(baseTech.name)!
         : (found.roadsideCapable ?? baseTech.roadsideCapable ?? false),
       currentRoadsideAssistanceId: found.currentRoadsideAssistanceId ?? null,
+      // Sin copiarlos, el siguiente guardado de estado los mandaba a null y el
+      // técnico perdía su taller y su teléfono.
+      workshopId: found.workshopId ?? null,
+      phone: found.phone ?? null,
+      employeeId: found.employeeId ?? null,
     }
   : baseTech;
       });
