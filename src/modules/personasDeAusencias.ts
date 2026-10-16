@@ -27,6 +27,8 @@ export type EmpleadoCore = {
   centro?: string | null;
   /** Técnico vinculado, si lo hay. */
   techName?: string | null;
+  /** Técnico que casa por nombre aunque nadie lo haya vinculado todavía. */
+  techPropuesto?: string | null;
 };
 
 type FichaDeTecnico = {
@@ -72,7 +74,7 @@ export function empleadosSinFicha(
   for (const e of empleados) {
     const nombre = String(e?.nombre ?? "").trim();
     if (!nombre || esTecnicoDePrueba(nombre)) continue;
-    if (e.techName || idsVinculados.has(e.id)) continue;
+    if (e.techName || e.techPropuesto || idsVinculados.has(e.id)) continue;
     const clave = normalizarNombre(nombre);
     if (nombresDeTecnico.has(clave) || vistos.has(clave)) continue;
     vistos.add(clave);

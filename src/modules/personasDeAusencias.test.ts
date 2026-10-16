@@ -93,3 +93,16 @@ describe("dados de baja", () => {
     ).toHaveLength(2);
   });
 });
+
+describe("propuesta del servidor", () => {
+  it("el empleado con técnico propuesto no sale duplicado", () => {
+    const r = empleadosSinFicha(
+      [{ name: "Albert" }],
+      [
+        { id: "a", nombre: "Albert Belles Bertran", techPropuesto: "Albert" },
+        { id: "m", nombre: "Marta Puig" },
+      ]
+    );
+    expect(r.map((e) => e.nombre)).toEqual(["Marta Puig"]);
+  });
+});

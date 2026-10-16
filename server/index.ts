@@ -2902,20 +2902,43 @@ app.get("/api/techs/vinculo-core", requireAdminRole, async (_req, res) => {
 // con los técnicos de siempre.
 app.get("/api/empleados-core", requireAdminRole, async (_req, res) => {
   try {
-    const r = await db.query(
-      `SELECT e.id, e.nombre, e.apellidos, c.nombre AS centro, t.name AS tech_name
-         FROM sea_employees e
-         LEFT JOIN sea_work_centers c ON c.id = e.work_center_id
-         LEFT JOIN techs t ON t.employee_id = e.id
-        WHERE e.activo = true
-        ORDER BY e.nombre, e.apellidos`
-    );
+    const [r, sinVincular] = await Promise.all([
+      db.query(
+        `SELECT e.id, e.nombre, e.apellidos, c.nombre AS centro, t.name AS tech_name
+           FROM sea_employees e
+           LEFT JOIN sea_work_centers c ON c.id = e.work_center_id
+           LEFT JOIN techs t ON t.employee_id = e.id
+          WHERE e.activo = true
+          ORDER BY e.nombre, e.apellidos`
+      ),
+      db.query(
+        `SELECT name FROM techs WHERE employee_id IS NULL AND activo IS NOT FALSE ORDER BY name`
+      ),
+    ]);
+
+    // Técnicos aún sin vincular: si la propuesta por nombre es fiable, se
+    // dice quién sería, para que Ausencias y Planning no saquen a la misma
+    // persona dos veces («Albert» y «Albert Belles Bertran»). No se guarda
+    // nada: el vínculo de verdad se confirma en Personal.
+    const libres = r.rows.filter((e: any) => !e.tech_name) as EmpleadoCore[];
+    const propuesto = new Map<string, string>();
+    for (const p of proponerVinculos(
+      sinVincular.rows.map((t: any) => String(t.name)),
+      libres
+    )) {
+      const id = p.employeeId ? String(p.employeeId) : "";
+      if (id && p.certeza !== "ambigua" && !propuesto.has(id)) {
+        propuesto.set(id, p.tech);
+      }
+    }
+
     res.json(
       r.rows.map((e: any) => ({
         id: String(e.id),
         nombre: [e.nombre, e.apellidos].filter(Boolean).join(" ").trim(),
         centro: e.centro ?? null,
         techName: e.tech_name ?? null,
+        techPropuesto: e.tech_name ? null : propuesto.get(String(e.id)) ?? null,
       }))
     );
   } catch (error) {
