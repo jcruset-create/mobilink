@@ -15,6 +15,8 @@ import {
   recepcionesQueSiguenEsperando,
 } from "../modules/recepcionVehiculo";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { empleadosSinFicha, type EmpleadoCore } from "../modules/personasDeAusencias";
+import { cargarEmpleadosCore } from "../modules/empleadosCoreApi";
 import type { Dispatch, SetStateAction } from "react";
 
 import {
@@ -686,6 +688,31 @@ export default function AgendaView({
   );
   const safeSelectedWorkshopId = normalizeWorkshopId(selectedWorkshopId);
   const selectedWorkshop = getWorkshopById(safeSelectedWorkshopId);
+
+  /*
+   * El resto de empleados de Core (oficina, almacén…), para poder programarles
+   * vacaciones o bajas igual que a un técnico. Solo en el selector de estado:
+   * no se les asigna trabajo. Solo se piden si quien mira puede programar
+   * estados, que es para lo único que se usan.
+   */
+  const [empleadosCore, setEmpleadosCore] = useState<EmpleadoCore[]>([]);
+  useEffect(() => {
+    if (!puedeEditarEstadoTecnico) return;
+    let activo = true;
+    void cargarEmpleadosCore().then((lista) => {
+      if (activo) setEmpleadosCore(lista);
+    });
+    return () => {
+      activo = false;
+    };
+  }, [puedeEditarEstadoTecnico]);
+  const otrosEmpleados = useMemo(
+    () =>
+      empleadosSinFicha(techs, empleadosCore)
+        .filter((e) => e.workshopId === null || e.workshopId === safeSelectedWorkshopId)
+        .map((e) => e.nombre),
+    [techs, empleadosCore, safeSelectedWorkshopId]
+  );
 
   // ── Tema "chrome" oscuro estilo Operativo 2 (solo Agenda 2) ──────────────
   // La ruta clara (dark=false) devuelve exactamente las clases originales, de
@@ -2960,6 +2987,15 @@ appendLog(
                       {tech.name}
                     </option>
                   ))}
+                  {otrosEmpleados.length > 0 && (
+                    <optgroup label="Otros empleados">
+                      {otrosEmpleados.map((nombre) => (
+                        <option key={`core-${nombre}`} value={nombre}>
+                          {nombre}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
                 </select>
               </div>
 

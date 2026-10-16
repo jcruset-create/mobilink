@@ -17,11 +17,17 @@ import { loadTechsFromBackend } from "../workshopApi";
 import {
   TODOS_LOS_TALLERES,
   estadoCuentaEnTaller,
-  tecnicosDelTaller,
 } from "../tecnicosPorTaller";
+import { personasDelTaller, type EmpleadoCore } from "../personasDeAusencias";
+import { cargarEmpleadosCore } from "../empleadosCoreApi";
 
 /** La ficha del técnico tal como la devuelve el servidor. */
-type FichaTecnico = { name?: string | null; activo?: boolean; workshopId?: unknown };
+type FichaTecnico = {
+  name?: string | null;
+  activo?: boolean;
+  workshopId?: unknown;
+  employeeId?: string | null;
+};
 import { DEFAULT_AGENDA_CONFIG, type AgendaConfig } from "../agendaConfig";
 import { getTodayDateValue, type ScheduledTechStatus } from "../techStatusScheduleHelpers";
 import { DEFAULT_WORKSHOP_ID, WORKSHOPS, normalizeWorkshopId } from "../workshops";
@@ -66,6 +72,8 @@ function formatoFecha(fecha: string) {
 export default function AusenciasTecnicosPage() {
   const [estados, setEstados] = useState<ScheduledTechStatus[]>([]);
   const [fichas, setFichas] = useState<FichaTecnico[]>([]);
+  // Todos los empleados entran, no solo los técnicos.
+  const [empleados, setEmpleados] = useState<EmpleadoCore[]>([]);
   const [configAgenda, setConfigAgenda] = useState<AgendaConfig>(DEFAULT_AGENDA_CONFIG);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
@@ -93,9 +101,10 @@ export default function AusenciasTecnicosPage() {
     setError("");
 
     try {
-      const [listaEstados, listaTecnicos, agenda, vacaciones] = await Promise.all([
+      const [listaEstados, listaTecnicos, listaEmpleados, agenda, vacaciones] = await Promise.all([
         loadScheduledTechStatusesFromBackend(),
         loadTechsFromBackend().catch(() => []),
+        cargarEmpleadosCore(),
         loadAgendaConfig().catch(() => DEFAULT_AGENDA_CONFIG),
         cargarConfigVacaciones(anio, workshopId),
       ]);
@@ -105,6 +114,7 @@ export default function AusenciasTecnicosPage() {
       // Los técnicos dados de baja no se listan, pero si tuvieron ausencias este
       // año el resumen los añade igualmente para no perder su histórico.
       setFichas(listaTecnicos as FichaTecnico[]);
+      setEmpleados(listaEmpleados);
 
       setConfigAgenda(agenda);
       setConfig({
@@ -131,8 +141,8 @@ export default function AusenciasTecnicosPage() {
 
   // Solo los del taller que se mira; con «Todos», los de todos.
   const tecnicos = useMemo(
-    () => tecnicosDelTaller(fichas, workshopId).map((t) => t.nombre),
-    [fichas, workshopId]
+    () => personasDelTaller(fichas, empleados, workshopId).map((t) => t.nombre),
+    [fichas, empleados, workshopId]
   );
 
   const resumenes = useMemo(
