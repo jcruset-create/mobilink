@@ -3904,8 +3904,17 @@ app.get("/api/jobs/:id/files", exigirCredencial(requirePanelRole), async (req, r
       [id]
     );
 
+    /*
+     * Enlace firmado, como el resto de fotos desde #436: la URL guardada es la
+     * pública del día que se subió el fichero, y solo sirve mientras el bucket
+     * siga marcado como público —una casilla del panel de Supabase que no
+     * controla este repositorio—. Sin esto la galería del histórico enseñaría
+     * marcos rotos y nadie sabría por qué.
+     */
+    const filas = await firmarEnFilas(result.rows);
+
     res.json(
-      result.rows.map((r: any) => ({
+      filas.map((r: any) => ({
         id: Number(r.id),
         url: r.url,
         fileName: r.fileName ?? null,

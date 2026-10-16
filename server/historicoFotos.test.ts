@@ -32,6 +32,15 @@ describe("fotos del histórico", () => {
     expect(SERVIDOR).toContain('"/api/taller-operator/jobs/:id/files",');
   });
 
+  it("las fotos van con enlace firmado, como el resto desde #436", () => {
+    // La URL guardada es la pública del día que se subió, y solo sirve
+    // mientras el bucket siga público: una casilla de Supabase que este
+    // repositorio no controla. Sin firmar, la galería enseña marcos rotos.
+    const i = SERVIDOR.indexOf('app.get("/api/jobs/:id/files"');
+    const j = SERVIDOR.indexOf("\napp.", i + 10);
+    expect(SERVIDOR.slice(i, j)).toContain("firmarEnFilas(");
+  });
+
   it("la pantalla solo pide las fotos, y al abrir la ficha", () => {
     expect(PAGINA).toContain("/files`");
     expect(PAGINA).not.toMatch(/method:\s*"(POST|PUT|DELETE)"/);

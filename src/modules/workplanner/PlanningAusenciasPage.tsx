@@ -9,6 +9,14 @@ import { DEFAULT_AGENDA_CONFIG, type AgendaConfig } from "../agendaConfig";
 import { getTodayDateValue, type ScheduledTechStatus } from "../techStatusScheduleHelpers";
 import { DEFAULT_WORKSHOP_ID, WORKSHOPS, normalizeWorkshopId } from "../workshops";
 import {
+  TODOS_LOS_TALLERES,
+  estadoCuentaEnTaller,
+  tecnicosDelTaller,
+} from "../tecnicosPorTaller";
+
+/** La ficha del técnico tal como la devuelve el servidor. */
+type FichaTecnico = { name?: string | null; activo?: boolean; workshopId?: unknown };
+import {
   diasDelAnio,
   faltanPorDia,
   filaDeTecnico,
@@ -49,7 +57,7 @@ function formatoFecha(fecha: string) {
 
 export default function PlanningAusenciasPage() {
   const [estados, setEstados] = useState<ScheduledTechStatus[]>([]);
-  const [tecnicos, setTecnicos] = useState<string[]>([]);
+  const [fichas, setFichas] = useState<FichaTecnico[]>([]);
   const [configAgenda, setConfigAgenda] = useState<AgendaConfig>(DEFAULT_AGENDA_CONFIG);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
@@ -57,7 +65,7 @@ export default function PlanningAusenciasPage() {
 
   const [workshopId, setWorkshopId] = useState<string>(() => {
     const guardado = window.localStorage.getItem("sea-selected-workshop");
-    return normalizeWorkshopId(guardado ?? DEFAULT_WORKSHOP_ID);
+    return normalizeWorkshopId(guardado ?? DEFAULT_WORKSHOP_ID) as string;
   });
 
   const hoy = getTodayDateValue();
@@ -74,11 +82,7 @@ export default function PlanningAusenciasPage() {
         loadAgendaConfig().catch(() => DEFAULT_AGENDA_CONFIG),
       ]);
       setEstados(listaEstados);
-      setTecnicos(
-        (listaTecnicos as { name?: string; activo?: boolean }[])
-          .filter((t) => t?.name && t.activo !== false && !esTecnicoDePrueba(t.name))
-          .map((t) => String(t.name))
-      );
+      setFichas(listaTecnicos as FichaTecnico[]);
       setConfigAgenda(agenda);
     } catch (e: any) {
       setError(e?.message || "Error cargando el planning.");
@@ -91,7 +95,7 @@ export default function PlanningAusenciasPage() {
 
   // Los estados de un taller no cuentan en el de otro, como en Ausencias.
   const estadosDelTaller = useMemo(
-    () => estados.filter((e) => !e.workshopId || normalizeWorkshopId(e.workshopId) === workshopId),
+    () => estados.filter((e) => estadoCuentaEnTaller(e, workshopId)),
     [estados, workshopId]
   );
 
@@ -99,18 +103,28 @@ export default function PlanningAusenciasPage() {
   const dias = useMemo(() => diasDelAnio(anio, configAgenda, hoy), [anio, configAgenda, hoy]);
 
   // Los que tuvieron ausencias este año aunque ya no estén en la lista.
+  const delTaller = useMemo(() => tecnicosDelTaller(fichas, workshopId), [fichas, workshopId]);
+
+  /*
+   * Los que tuvieron ausencias este año aunque ya no estén en la lista del
+   * taller: se añaden al final y sin taller conocido, porque su ficha ya no
+   * dice de dónde eran. Perderlos sería perder el histórico.
+   */
   const nombres = useMemo(() => {
-    const lista = [...tecnicos];
+    const lista = delTaller.map((t) => ({ nombre: t.nombre, taller: t.taller }));
+    const vistos = new Set(lista.map((t) => t.nombre));
+
     for (const e of estadosDelTaller) {
-      if (e.startDate?.startsWith(String(anio)) && !lista.includes(e.techName) && !esTecnicoDePrueba(e.techName)) {
-        lista.push(e.techName);
+      if (e.startDate?.startsWith(String(anio)) && !vistos.has(e.techName) && !esTecnicoDePrueba(e.techName)) {
+        lista.push({ nombre: e.techName, taller: "" });
+        vistos.add(e.techName);
       }
     }
     return lista;
-  }, [tecnicos, estadosDelTaller, anio]);
+  }, [delTaller, estadosDelTaller, anio]);
 
   const filas = useMemo(
-    () => nombres.map((n) => ({ nombre: n, celdas: filaDeTecnico(n, estadosDelTaller, dias, hoy) })),
+    () => nombres.map((t) => ({ ...t, celdas: filaDeTecnico(t.nombre, estadosDelTaller, dias, hoy) })),
     [nombres, estadosDelTaller, dias, hoy]
   );
   const faltan = useMemo(() => faltanPorDia(filas.map((f) => f.celdas), dias.length), [filas, dias.length]);
@@ -165,10 +179,11 @@ export default function PlanningAusenciasPage() {
         <div className="flex flex-wrap items-center gap-2">
           <select
             value={workshopId}
-            onChange={(e) => setWorkshopId(normalizeWorkshopId(e.target.value))}
+            onChange={(e) => setWorkshopId(e.target.value)}
             className="rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
           >
             {WORKSHOPS.map((w) => <option key={w.id} value={w.id}>{w.shortName}</option>)}
+            <option value={TODOS_LOS_TALLERES}>Todos los talleres</option>
           </select>
           <select
             value={anio}
@@ -253,7 +268,14 @@ export default function PlanningAusenciasPage() {
                 return (
                   <tr key={f.nombre}>
                     <td className="sticky left-0 z-10 border-b border-r-2 border-slate-600 bg-slate-800 px-2">
-                      <b className="block text-xs">{f.nombre}</b>
+                      <b className="block text-xs">
+                        {f.nombre}
+                        {workshopId === TODOS_LOS_TALLERES && f.taller && (
+                          <span className="ml-1 rounded bg-slate-700 px-1 py-0.5 text-[9px] font-semibold text-slate-300">
+                            {f.taller}
+                          </span>
+                        )}
+                      </b>
                       <span className="block font-mono text-[10px] text-slate-400">vac {vac} · prog {prog}</span>
                     </td>
                     {f.celdas.map((c, i) => (

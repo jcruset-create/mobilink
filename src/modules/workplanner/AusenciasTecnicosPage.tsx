@@ -14,7 +14,14 @@ import { loadScheduledTechStatusesFromBackend } from "../scheduledTechStatusApi"
 import { cargarConfigVacaciones, guardarConfigVacaciones } from "../vacacionesConfigApi";
 import { loadAgendaConfig } from "../agendaConfigApi";
 import { loadTechsFromBackend } from "../workshopApi";
-import { esTecnicoDePrueba } from "../tecnicosDePrueba";
+import {
+  TODOS_LOS_TALLERES,
+  estadoCuentaEnTaller,
+  tecnicosDelTaller,
+} from "../tecnicosPorTaller";
+
+/** La ficha del técnico tal como la devuelve el servidor. */
+type FichaTecnico = { name?: string | null; activo?: boolean; workshopId?: unknown };
 import { DEFAULT_AGENDA_CONFIG, type AgendaConfig } from "../agendaConfig";
 import { getTodayDateValue, type ScheduledTechStatus } from "../techStatusScheduleHelpers";
 import { DEFAULT_WORKSHOP_ID, WORKSHOPS, normalizeWorkshopId } from "../workshops";
@@ -58,14 +65,14 @@ function formatoFecha(fecha: string) {
 
 export default function AusenciasTecnicosPage() {
   const [estados, setEstados] = useState<ScheduledTechStatus[]>([]);
-  const [tecnicos, setTecnicos] = useState<string[]>([]);
+  const [fichas, setFichas] = useState<FichaTecnico[]>([]);
   const [configAgenda, setConfigAgenda] = useState<AgendaConfig>(DEFAULT_AGENDA_CONFIG);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
 
   const [workshopId, setWorkshopId] = useState<string>(() => {
     const guardado = window.localStorage.getItem("sea-selected-workshop");
-    return normalizeWorkshopId(guardado ?? DEFAULT_WORKSHOP_ID);
+    return normalizeWorkshopId(guardado ?? DEFAULT_WORKSHOP_ID) as string;
   });
 
   const hoy = getTodayDateValue();
@@ -97,11 +104,7 @@ export default function AusenciasTecnicosPage() {
 
       // Los técnicos dados de baja no se listan, pero si tuvieron ausencias este
       // año el resumen los añade igualmente para no perder su histórico.
-      setTecnicos(
-        (listaTecnicos as { name?: string; activo?: boolean }[])
-          .filter((t) => t?.name && t.activo !== false && !esTecnicoDePrueba(t.name))
-          .map((t) => String(t.name))
-      );
+      setFichas(listaTecnicos as FichaTecnico[]);
 
       setConfigAgenda(agenda);
       setConfig({
@@ -122,10 +125,14 @@ export default function AusenciasTecnicosPage() {
   // resto de la agenda. Los guardados sin taller se consideran del actual.
   const estadosDelTaller = useMemo(
     () =>
-      estados.filter(
-        (e) => !e.workshopId || normalizeWorkshopId(e.workshopId) === workshopId
-      ),
+      estados.filter((e) => estadoCuentaEnTaller(e, workshopId)),
     [estados, workshopId]
+  );
+
+  // Solo los del taller que se mira; con «Todos», los de todos.
+  const tecnicos = useMemo(
+    () => tecnicosDelTaller(fichas, workshopId).map((t) => t.nombre),
+    [fichas, workshopId]
   );
 
   const resumenes = useMemo(
@@ -222,12 +229,13 @@ export default function AusenciasTecnicosPage() {
           <div className="flex flex-wrap items-center gap-2">
             <select
               value={workshopId}
-              onChange={(e) => setWorkshopId(normalizeWorkshopId(e.target.value))}
+              onChange={(e) => setWorkshopId(e.target.value)}
               className="rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
             >
               {WORKSHOPS.map((w) => (
                 <option key={w.id} value={w.id}>{w.shortName}</option>
               ))}
+              <option value={TODOS_LOS_TALLERES}>Todos los talleres</option>
             </select>
 
             <select
