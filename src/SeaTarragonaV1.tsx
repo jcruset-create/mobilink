@@ -11,6 +11,7 @@ import QuickTemplateEditor from "./components/QuickTemplateEditor";
 import Operativo2View from "./components/Operativo2View";
 import { useEsAdministrador } from "./modules/esAdministrador";
 import { camposDeOperacion, propuestosQueSiguenValiendo } from "./modules/cambiarOperacion";
+import { puedeAbrirVistaIncrustada } from "./modules/vistasDelModulo";
 import { useRecepcionesPendientes } from "./modules/useRecepcionesPendientes";
 import { idsDeCitasYaRecibidas } from "./modules/recepcionVehiculo";
 import { esTecnicoDePrueba } from "./modules/tecnicosDePrueba";
@@ -4578,6 +4579,40 @@ if (view === "pantalla" && canView("pantalla")) {
   );
 }
 
+
+/*
+ * ── Dentro de WorkPlanner, sin permiso se DICE ──────────────────────────────
+ *
+ * El menú del módulo ofrece Agenda, Pantalla técnicos y Personal a todo el
+ * mundo, pero son pantallas del panel y el panel las protege con su permiso.
+ * Sin él, la rama de abajo no entraba y la ejecución seguía hasta la pantalla
+ * operativa: salía el bloque de entradas rápidas y nada más, sin un solo
+ * mensaje. Parecía la agenda rota, y era un permiso que faltaba.
+ */
+if (embebido && !puedeAbrirVistaIncrustada(view, canView)) {
+  return (
+    <div className="flex min-h-[60vh] items-center justify-center p-6">
+      <div className="max-w-md rounded-2xl border border-slate-700 bg-slate-800 p-8 text-center text-slate-100">
+        <h2 className="text-base font-bold">No tienes acceso a esta pantalla</h2>
+        <p className="mt-2 text-sm text-slate-400">
+          Tu usuario no tiene activada esta pantalla del panel de taller. Lo
+          puede activar un administrador desde Personal, en la ficha de tu
+          usuario.
+        </p>
+        <button
+          type="button"
+          onClick={() => {
+            if (onVolverModulo) onVolverModulo();
+            else setView("operativo");
+          }}
+          className="mt-4 rounded-xl bg-sky-700 px-4 py-2 text-sm font-bold text-white hover:bg-sky-800"
+        >
+          Volver a Operativo 2
+        </button>
+      </div>
+    </div>
+  );
+}
 
 if (view === "tecnicos" && canView("tecnicos")) {
   return (

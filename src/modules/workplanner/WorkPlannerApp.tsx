@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Routes, Route, Navigate, NavLink, useNavigate } from "react-router-dom";
 import {
   Home,
@@ -29,6 +29,7 @@ import PartesTrabajoPage from "./PartesTrabajoPage";
 import RecepcionesPage from "./RecepcionesPage";
 import { supabase } from "../administracion/services/supabase";
 import { useEsAdministrador } from "../esAdministrador";
+import { seccionVisible } from "../vistasDelModulo";
 import VersionDesplegada from "../../components/VersionDesplegada";
 
 /** Clave del módulo en app_licencias / app_usuario_modulos. */
@@ -36,6 +37,17 @@ export const MODULO_WORKPLANNER = "workplanner";
 
 // Menú del módulo. Estadísticas y Configuración quedan preparadas como
 // placeholders ("Próximamente") para las próximas fases.
+/**
+ * Qué vista del panel abre cada sección, para no ofrecer en el menú lo que el
+ * usuario no puede abrir. Las que no abren una vista del panel —Recepción,
+ * Partes, Pedidos, Plantillas…— no llevan entrada y se ven siempre.
+ */
+const VISTA_DE_LA_SECCION: Record<string, string> = {
+  agenda: "agenda2",
+  tecnicos: "operarios",
+  personal: "tecnicos",
+};
+
 const SECCIONES = [
   { key: "operativo2", label: "Operativo 2", icon: ClipboardList, proximamente: false },
   { key: "agenda", label: "Agenda", icon: CalendarDays, proximamente: false },
@@ -167,6 +179,20 @@ export default function WorkPlannerApp() {
   const navigate = useNavigate();
   const permitido = useAccesoWorkplanner();
   const esAdmin = useEsAdministrador();
+
+  /*
+   * Las vistas que tiene activadas este usuario, del mismo sitio del que las
+   * lee el panel. Sin lista —un administrador— no se esconde nada.
+   */
+  const vistasPermitidas = useMemo<string[] | null>(() => {
+    try {
+      const crudo = localStorage.getItem("sea-allowed-views");
+      const lista = crudo ? JSON.parse(crudo) : null;
+      return Array.isArray(lista) && lista.length > 0 ? lista.map(String) : null;
+    } catch {
+      return null;
+    }
+  }, []);
   /*
    * Commit que está corriendo en el servidor. Se pregunta una vez al abrir:
    * es lo que permite responder «¿está desplegado el arreglo?» sin depender
@@ -213,7 +239,9 @@ export default function WorkPlannerApp() {
           </div>
           {permitido && (
             <nav className="flex items-center gap-1">
-              {SECCIONES.filter((s) => !("soloAdmin" in s && s.soloAdmin) || esAdmin).map((s) => {
+              {SECCIONES.filter((s) => !("soloAdmin" in s && s.soloAdmin) || esAdmin)
+                .filter((s) => seccionVisible(VISTA_DE_LA_SECCION[s.key] ?? null, vistasPermitidas))
+                .map((s) => {
                 const Icon = s.icon;
                 return (
                   <NavLink
