@@ -324,12 +324,21 @@ export default function ProveedoresPage() {
                       <div>
                         <div className="mb-2 flex items-center gap-2">
                           <h3 className="text-sm font-black uppercase tracking-wide text-slate-300">Talleres / centros</h3>
+                          {/* Botón, no un enlace gris: es el alta que hay que
+                              hacer para poder subcontratar a este proveedor, y
+                              como texto pequeño al lado del título se pasaba
+                              por alto. */}
                           <button
                             onClick={() => setTallerEdit({ id: null, datos: { name: "", open24h: "false", active: "true" } })}
-                            className="text-xs text-slate-400 hover:text-orange-400">+ añadir</button>
+                            className="rounded-lg border border-orange-500/40 bg-orange-500/15 px-2 py-1 text-xs font-bold text-orange-300 hover:bg-orange-500/25">
+                            + Nuevo taller
+                          </button>
                         </div>
                         {talleres.length === 0 && !tallerEdit && (
-                          <p className="text-[13px] text-slate-500">Este proveedor no tiene talleres todavía.</p>
+                          <p className="text-[13px] text-amber-300">
+                            Este proveedor no tiene talleres todavía, así que no se le puede
+                            subcontratar: en la asistencia saldría sin ningún centro que elegir.
+                          </p>
                         )}
                         <ul className="space-y-1">
                           {talleres.map((t) => (

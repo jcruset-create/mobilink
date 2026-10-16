@@ -81,6 +81,25 @@ export function rutaEnBucket(url: unknown, bucket = SUPABASE_ROADSIDE_BUCKET): s
  * ayer, y romper el listado entero por no poder firmar sería peor que el
  * problema que esto viene a arreglar.
  */
+/**
+ * El último motivo por el que no se pudo firmar, para poder CONTARLO.
+ *
+ * Cuando las fotos no se ven, el motivo iba solo al log del servidor, y un log
+ * que no se puede mirar no sirve de nada a quien tiene la pantalla delante:
+ * ve huecos y no sabe si falta la foto, falta el permiso o se cayó algo. Esto
+ * permite que el motivo llegue a donde está el problema.
+ *
+ * Es el último y no uno por fichero a propósito: cuando esto falla, falla para
+ * todas a la vez —son credenciales o es el bucket—, y guardar N copias del
+ * mismo mensaje no añade nada.
+ */
+let ultimoFalloAlFirmar: string | null = null;
+
+/** El motivo del último fallo al firmar, o `null` si la última vez fue bien. */
+export function fallaAlFirmar(): string | null {
+  return ultimoFalloAlFirmar;
+}
+
 export async function firmarUrls(
   urls: Array<string | null | undefined>,
   caducidadS = CADUCIDAD_FOTO_S
@@ -107,10 +126,22 @@ export async function firmarUrls(
     for (const fila of data ?? []) {
       // `path` vuelve tal y como se pidió; si viene vacío no hay a qué atarlo.
       const originales = fila.path ? porRuta.get(fila.path) : undefined;
-      if (!originales || !fila.signedUrl) continue;
+      if (!originales) continue;
+      if (!fila.signedUrl) {
+        /*
+         * Supabase firma de golpe y contesta fichero a fichero: uno que no
+         * exista no tumba a los demás, pero sí trae su propio error. Es el caso
+         * de una foto cuya subida falló el día que se recibió: la fila existe
+         * en la base y el objeto no está en el bucket.
+         */
+        ultimoFalloAlFirmar = String((fila as any).error ?? "el fichero no está en el almacén");
+        continue;
+      }
       for (const original of originales) firmadas[original] = fila.signedUrl;
     }
+    if (Object.keys(firmadas).length > 0) ultimoFalloAlFirmar = null;
   } catch (e: any) {
+    ultimoFalloAlFirmar = String(e?.message ?? e);
     /*
      * Queda en el log con el número de fotos afectadas: si esto empieza a
      * aparecer, es que las credenciales de Supabase ya no valen, y ése es un
