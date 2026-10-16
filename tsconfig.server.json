@@ -73,9 +73,13 @@
     // mismo agujero que dejó `recepcionVehiculos` tres entregas sin mirar y el
     // integration-hub entero sin mirar nunca.
     "server/index.ts",
-    // La herramienta del lote de calibración de Therefore. Va aquí porque es
-    // lo único de scripts/ que importa código de server/ y conviene que un
-    // error de tipos salga en la CI y no al ejecutarla con el buzón delante.
-    "scripts/therefore-anonimizar.ts"
+    // La herramienta del lote de calibración de Therefore. Va aquí porque
+    // importa código de server/ y conviene que un error de tipos salga en la
+    // CI y no al ejecutarla con el buzón delante.
+    "scripts/therefore-anonimizar.ts",
+    // Y el reparador de las fotos que apuntaban a Twilio, por lo mismo: se
+    // ejecuta a mano contra producción, que es el peor momento para descubrir
+    // que una propiedad se llamaba de otra manera.
+    "scripts/reparar-fotos-twilio.ts"
   ]
 }

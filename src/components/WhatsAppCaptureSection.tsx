@@ -1,4 +1,5 @@
 import { apiFetch } from "../modules/apiFetch";
+import { adjuntoVisible } from "../modules/adjuntoWhatsapp";
 import { useState, useEffect, useCallback, useRef } from "react";
 import type {
   WhatsAppCaptureSessionWithMessages,
@@ -51,7 +52,13 @@ function MessageRow({
   jobId: number;
   onSaved?: (msgId: number) => void;
 }) {
-  const mediaUrl = msg.media_stored_url || msg.media_url;
+  /*
+   * La copia nuestra, nunca el original de Twilio: ése pide usuario y
+   * contraseña y el navegador acaba enseñando un cartel de inicio de sesión de
+   * api.twilio.com a quien no tiene esas credenciales. Ver
+   * `modules/adjuntoWhatsapp.ts`.
+   */
+  const { url: mediaUrl, motivo: sinCopia } = adjuntoVisible(msg);
   const hasMedia = !!mediaUrl && MEDIA_TYPES.has(msg.message_type);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -69,7 +76,10 @@ function MessageRow({
       a.click();
       URL.revokeObjectURL(a.href);
     } catch {
-      window.open(mediaUrl, "_blank");
+      // Antes se abría la URL en una pestaña. Si era la de Twilio, el
+      // navegador pedía sus credenciales; `mediaUrl` ya no puede serlo, pero
+      // una descarga fallida tampoco se arregla abriéndola otra vez.
+      setSaveError("No se ha podido descargar el adjunto.");
     }
   }
 
@@ -153,6 +163,11 @@ function MessageRow({
         {msg.message_type === "contact" && (msg.contact_name || msg.contact_phone) && (
           <p className="mt-1 text-slate-700">
             {msg.contact_name} {msg.contact_phone ? `· ${msg.contact_phone}` : ""}
+          </p>
+        )}
+        {sinCopia && MEDIA_TYPES.has(msg.message_type) && (
+          <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
+            {sinCopia}
           </p>
         )}
         {mediaUrl && msg.message_type === "image" && (
@@ -491,8 +506,15 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
 
   const isActive = session?.status === "ACTIVE";
   const isClosed = session?.status === "CLOSED";
+  /*
+   * Solo los que tienen copia nuestra. Los que se quedaron únicamente con el
+   * original de Twilio no se pueden guardar: el endpoint que los baja lo hace
+   * SIN credenciales, así que contestaría 401. Antes entraban en la cuenta de
+   * «Guardar todos los archivos (N)» y el N prometía más de lo que se podía
+   * cumplir.
+   */
   const mediaMessages = messages.filter(
-    (m) => MEDIA_TYPES.has(m.message_type) && (m.media_stored_url || m.media_url)
+    (m) => MEDIA_TYPES.has(m.message_type) && adjuntoVisible(m).url
   );
   const pendingMedia = mediaMessages.filter((m) => !savedMsgIds.has(m.id));
 
@@ -504,7 +526,7 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
     let ok = 0;
     let fail = 0;
     for (const m of pendingMedia) {
-      const mediaUrl = m.media_stored_url || m.media_url;
+      const mediaUrl = adjuntoVisible(m).url;
       if (!mediaUrl) continue;
       try {
         const res = await apiFetch(`${API_BASE}/api/roadside-assistances/${jobId}/files-from-url`, {

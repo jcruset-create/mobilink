@@ -34,6 +34,32 @@ function sinComentarios(texto: string): string {
 
 const CODIGO = sinComentarios(INDEX);
 
+/**
+ * Todo el código del servidor, fichero a fichero, sin las pruebas.
+ *
+ * Hace falta para los guardas que no pueden mirar solo `index.ts`: lo que se
+ * vigila es que algo NO exista en ninguna parte, y para eso hay que mirar
+ * todas las partes.
+ */
+const FUENTES_DEL_SERVIDOR: [string, string][] = (() => {
+  const { readdirSync, statSync } = require("node:fs") as typeof import("node:fs");
+  const raiz = new URL(".", import.meta.url).pathname;
+  const salida: [string, string][] = [];
+  const recorrer = (dir: string, prefijo: string) => {
+    for (const nombre of readdirSync(dir)) {
+      if (nombre === "node_modules") continue;
+      const completo = `${dir}/${nombre}`;
+      if (statSync(completo).isDirectory()) {
+        recorrer(completo, `${prefijo}${nombre}/`);
+      } else if (nombre.endsWith(".ts") && !nombre.includes(".test.")) {
+        salida.push([`${prefijo}${nombre}`, readFileSync(completo, "utf8")]);
+      }
+    }
+  };
+  recorrer(raiz.replace(/\/$/, ""), "server/");
+  return salida;
+})();
+
 /** El trozo de una ruta, desde su declaración hasta la siguiente. */
 function ruta(patron: string, largo = 3000): string {
   const i = INDEX.indexOf(patron);
@@ -104,13 +130,27 @@ describe("SEC-007 · el webhook de WhatsApp", () => {
   });
 
   it("no queda ningún fetch con las credenciales de Twilio hacia una URL de fuera", () => {
-    // La cabecera Basic con SID:AUTH_TOKEN se construía tres veces, cada una
-    // hacia la URL que trajera el mensaje. Ahora hay un solo sitio y pasa por
-    // la lista blanca de hosts.
-    expect(CODIGO.match(/"Basic " \+/g) ?? []).toHaveLength(1);
-    expect(CODIGO).toContain("async function descargarMedioTwilio");
-    const i = CODIGO.indexOf("async function descargarMedioTwilio");
-    expect(CODIGO.slice(i, i + 600)).toContain("HOSTS_TWILIO");
+    /*
+     * La cabecera Basic con SID:AUTH_TOKEN se construía tres veces, cada una
+     * hacia la URL que trajera el mensaje. Tiene que haber UN solo sitio, y
+     * pasar por la lista blanca de hosts.
+     *
+     * Se mira TODO el servidor y no solo `index.ts`: la función se sacó a
+     * `core/medioTwilio.ts` para que el script que repara las fotos no tuviera
+     * que llevar su propia copia, y un guarda que solo mirase un fichero no
+     * habría visto nada —ni el que se fue, ni una copia nueva en otro sitio—.
+     */
+    const credenciales = FUENTES_DEL_SERVIDOR.flatMap(([ruta, texto]) =>
+      (sinComentarios(texto).match(/"Basic " \+/g) ?? []).map(() => ruta)
+    );
+    expect(credenciales, `la credencial de Twilio se construye en: ${credenciales.join(", ")}`)
+      .toHaveLength(1);
+
+    const [, medio] = FUENTES_DEL_SERVIDOR.find(([r]) => r === credenciales[0])!;
+    const codigo = sinComentarios(medio);
+    expect(codigo).toContain("async function descargarMedioTwilio");
+    const i = codigo.indexOf("async function descargarMedioTwilio");
+    expect(codigo.slice(i, i + 600)).toContain("HOSTS_TWILIO");
   });
 });
 

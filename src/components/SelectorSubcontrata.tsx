@@ -55,6 +55,12 @@ export default function SelectorSubcontrata({ valor, onChange }: {
   const [proveedores, setProveedores] = useState<Proveedor[]>([]);
   const [talleres, setTalleres] = useState<Taller[]>([]);
   const [contactos, setContactos] = useState<Contacto[]>([]);
+  /*
+   * Mientras se piden los talleres no se dice «no tiene ninguno»: un aviso que
+   * aparece y desaparece solo en cada cambio de proveedor es peor que no
+   * avisar, porque enseña a no hacerle caso.
+   */
+  const [cargandoTalleres, setCargandoTalleres] = useState(false);
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [error, setError] = useState("");
 
@@ -73,14 +79,16 @@ export default function SelectorSubcontrata({ valor, onChange }: {
   }, []);
 
   const cargarTalleres = useCallback((proveedorId: number) => {
+    setCargandoTalleres(true);
     pedir(`/api/proveedores/${proveedorId}/talleres?soloActivos=true`)
       .then((d) => setTalleres(d.data))
-      .catch((e) => setError(e.message));
+      .catch((e) => setError(e.message))
+      .finally(() => setCargandoTalleres(false));
   }, []);
 
   useEffect(() => {
     if (valor.proveedorId) cargarTalleres(valor.proveedorId);
-    else setTalleres([]);
+    else { setTalleres([]); setCargandoTalleres(false); }
   }, [valor.proveedorId, cargarTalleres]);
 
   useEffect(() => {
@@ -138,6 +146,27 @@ export default function SelectorSubcontrata({ valor, onChange }: {
             </option>
           ))}
         </select>
+
+        {/*
+          El callejón sin salida: proveedor elegido y ningún taller que elegir.
+          El desplegable se quedaba vacío sin decir nada, y desde aquí no hay
+          forma de adivinar que los talleres se dan de alta en la ficha del
+          proveedor. Se dice, y se lleva.
+        */}
+        {valor.proveedorId && !cargandoTalleres && talleres.length === 0 && (
+          <p className="text-[11px] text-amber-300">
+            Este proveedor no tiene ningún taller activo.{" "}
+            <a
+              href="/asistencias/proveedores"
+              target="_blank"
+              rel="noreferrer"
+              className="underline hover:text-amber-200"
+            >
+              Añádele uno en su ficha
+            </a>{" "}
+            y vuelve a abrir este desplegable.
+          </p>
+        )}
 
         <select
           value={valor.proveedorContactoId ?? ""}

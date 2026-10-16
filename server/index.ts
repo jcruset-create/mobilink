@@ -12,7 +12,8 @@ import nodemailer from "nodemailer";
 import { fileURLToPath } from "url";
 import db, { initDb } from "./db.ts";
 import { supabase, supabaseAnonAuth, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_BUCKET } from "./supabase.ts";
-import { firmarEnFilas, firmarUrls } from "./core/fotosFirmadas.ts";
+import { fallaAlFirmar, firmarEnFilas, firmarUrls } from "./core/fotosFirmadas.ts";
+import { descargarMedioTwilio, rescatarMedioDeTwilio } from "./core/medioTwilio.ts";
 import { guardarCodigoErp, SISTEMAS_NO_ERP } from "./clientes/codigoErp.ts";
 import {
   autorizacionParaTaller,
@@ -9489,7 +9490,18 @@ app.get("/api/roadside-assistances/:id/files", exigirCredencial(authenticate), a
       [id]
     );
     // Enlaces firmados en el momento: ver server/core/fotosFirmadas.ts.
-    res.json(await firmarEnFilas(result.rows));
+    const archivos = await firmarEnFilas(result.rows);
+
+    /*
+     * Si no se han podido firmar, se dice POR QUÉ y se dice aquí.
+     *
+     * Antes el motivo iba solo al log del servidor, y quien tiene la pantalla
+     * delante veía huecos sin saber si falta la foto, falta el permiso o se ha
+     * caído el almacén. Con el motivo en la respuesta, el panel lo enseña y
+     * deja de hacer falta entrar a mirar logs para saber qué pasa.
+     */
+    const fallo = fallaAlFirmar();
+    res.json(fallo ? { data: archivos, fotosError: fallo } : archivos);
   } catch (error) {
     console.error("GET /api/roadside-assistances/:id/files error:", error);
     res.status(500).json({ error: "Error cargando archivos" });
@@ -16339,30 +16351,6 @@ Devuelve SOLO el JSON sin texto adicional:
   }
 }
 
-/**
- * Descarga un medio de WhatsApp con las credenciales de la cuenta de Twilio.
- *
- * La URL viene del cuerpo del webhook, así que la elige quien manda el
- * mensaje. Por eso pasa por `fetchSeguro` con la lista de hosts de Twilio: sin
- * eso, poner `MediaUrl0=https://atacante.tld/x` hacía que el servidor enviara
- * la cabecera `Authorization: Basic <SID>:<AUTH_TOKEN>` al atacante. Estaba
- * repetido en tres sitios; ahora la credencial se construye en uno.
- */
-async function descargarMedioTwilio(url: string) {
-  return fetchSeguro(url, {
-    hostsPermitidos: HOSTS_TWILIO,
-    cabeceras: {
-      Authorization:
-        "Basic " +
-        Buffer.from(
-          `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
-        ).toString("base64"),
-    },
-    maxBytes: 25 * 1024 * 1024,
-    timeoutMs: 20_000,
-  });
-}
-
 // Twilio sends form-encoded bodies for webhooks
 app.post(
   "/api/whatsapp/inbound",
@@ -17224,7 +17212,40 @@ app.post("/api/whatsapp-capture/sessions/:id/close", requireAdminRole, async (re
     const noteLines: string[] = [];
     for (const msg of msgs.rows) {
       if ((msg.message_type === "image" || msg.message_type === "video" || msg.message_type === "audio" || msg.message_type === "document") && (msg.media_stored_url || msg.media_url)) {
-        const url = msg.media_stored_url || msg.media_url;
+        /*
+         * ── La URL que se guarda tiene que poder abrirse ──────────────────
+         *
+         * Aquí se guardaba «la copia, y si no hay, la de Twilio». La de Twilio
+         * exige usuario y contraseña —las del SERVIDOR—, así que esa fila
+         * quedaba en la ficha como una foto que ningún navegador puede abrir:
+         * salía rota, y al pulsarla el panel pedía las credenciales de Twilio a
+         * quien estaba delante.
+         *
+         * La copia falta cuando la subida falló al recibir el mensaje, que es
+         * un fallo que se traga a propósito para no perder el mensaje entero.
+         * Pero el servidor SÍ puede bajarla: tiene las credenciales. Así que se
+         * reintenta aquí, que es la segunda y última oportunidad de conservar
+         * esa foto antes de que la sesión se cierre.
+         *
+         * Si tampoco se puede, no se inserta nada: una fila con una URL que no
+         * abre es peor que no tener la fila, porque parece una foto perdida.
+         */
+        let url = msg.media_stored_url;
+        if (!url && msg.media_url) {
+          url = await rescatarMedioDeTwilio(jobId, msg.media_url).catch(() => null);
+          if (url) {
+            await db.query(
+              `UPDATE whatsapp_capture_messages SET media_stored_url = $2 WHERE id = $1`,
+              [msg.id, url]
+            ).catch(() => {});
+          }
+        }
+        if (!url) {
+          console.warn(
+            `[captura] adjunto ${msg.id} sin copia y sin rescate: no se guarda en la ficha`
+          );
+          continue;
+        }
         // Evitar duplicados al reabrir y volver a cerrar la sesión: solo insertar si esa URL aún no está guardada
         const nombreWa = `WhatsApp ${msg.message_type} ${new Date(Number(msg.received_at)).toLocaleTimeString("es-ES")}`;
         const guardado = await db.query(
