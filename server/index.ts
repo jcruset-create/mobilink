@@ -136,6 +136,7 @@ import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
 import { AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "./core/ai.ts";
 import { makeSecret, safeEquals, verifySecretWithLegacy } from "./core/credentials.ts";
 import { proponerVinculos, type EmpleadoCore } from "./core/vinculoTecnicos.ts";
+import { resolverRolDelPanel, type RolResuelto } from "./core/rolDelPanel.ts";
 import { siguienteReferencia } from "./cobros/referencias.ts";
 import { saveCaptureAnalysis, reconcileCaptureAiStatus } from "./core/whatsappCapture.ts";
 import { aE164, clienteTwilio, numeroWhatsAppEmisor } from "./core/twilio.ts";
@@ -11808,6 +11809,59 @@ async function findDbUserByPassword(password: string | undefined): Promise<DbApp
   return users.find((u) => u.password && u.password === password) ?? null;
 }
 
+/*
+ * Rol del panel para quien entra con su usuario de Core. La regla está en
+ * server/core/rolDelPanel.ts; aquí solo se reúnen los datos. Se guarda un
+ * minuto por usuario porque se consulta en cada petición del panel.
+ */
+const cacheRolDelPanel = new Map<string, { hasta: number; valor: RolResuelto | null }>();
+
+async function rolDelPanelParaUsuario(userId: string): Promise<RolResuelto | null> {
+  const enCache = cacheRolDelPanel.get(userId);
+  if (enCache && enCache.hasta > Date.now()) return enCache.valor;
+
+  const consultaCompleta = `SELECT a.username, a.nombre, a.activo, a.es_superadmin,
+            coalesce((SELECT rol = 'admin' FROM adm_usuarios WHERE id = a.id AND activo), false) AS adm_admin,
+            (SELECT t.name FROM techs t
+              WHERE a.employee_id IS NOT NULL AND t.employee_id = a.employee_id
+              LIMIT 1) AS tech_name,
+            (SELECT m.pantallas FROM app_usuario_modulos m
+              WHERE m.user_id = a.id AND m.modulo = 'workplanner' LIMIT 1) AS wp_pantallas,
+            EXISTS (SELECT 1 FROM app_usuario_modulos m
+              WHERE m.user_id = a.id AND m.modulo = 'workplanner') AS wp
+       FROM app_usuarios a WHERE a.id = $1`;
+  let r;
+  try {
+    r = await db.query(consultaCompleta, [userId]);
+  } catch (e) {
+    // Base sin vínculo de empleado o sin módulos: la regla de siempre (nombre).
+    console.error("rolDelPanelParaUsuario: consulta completa falló, se usa la básica:", e);
+    r = await db.query(
+      `SELECT a.username, a.nombre, a.activo, a.es_superadmin,
+              coalesce((SELECT rol = 'admin' FROM adm_usuarios WHERE id = a.id AND activo), false) AS adm_admin
+         FROM app_usuarios a WHERE a.id = $1`,
+      [userId]
+    );
+  }
+  const u = r.rows[0];
+  let valor: RolResuelto | null = null;
+  if (u && u.activo) {
+    valor = resolverRolDelPanel(
+      {
+        username: u.username ?? null,
+        nombre: u.nombre ?? null,
+        esSuperadmin: Boolean(u.es_superadmin),
+        admAdmin: Boolean(u.adm_admin),
+        techName: u.tech_name ?? null,
+        workplanner: u.wp ? { pantallas: Array.isArray(u.wp_pantallas) ? u.wp_pantallas : null } : null,
+      },
+      await listDbAppUsers()
+    );
+  }
+  cacheRolDelPanel.set(userId, { hasta: Date.now() + 60_000, valor });
+  return valor;
+}
+
 async function getRoleFromRequestAsync(req: express.Request): Promise<UserRole | null> {
   // 1) Sesión unificada (Supabase) con licencia vigente del módulo taller.
   //    Es la vía preferente; las vías legacy quedan bloqueadas en strict.
@@ -11821,11 +11875,9 @@ async function getRoleFromRequestAsync(req: express.Request): Promise<UserRole |
           return null; // empresa sin licencia del panel de taller
         }
         if (ctx.esSuperadmin) return "admin";
-        // Usuario del panel con el mismo nombre (mismo criterio que login-sso)
-        const users = await listDbAppUsers();
-        const objetivo = [ctx.username.toLowerCase(), ctx.nombre.toLowerCase()];
-        const panelUser = users.find((p) => objetivo.includes(p.name.toLowerCase()));
-        if (panelUser) return panelUser.role;
+        // La misma regla que login-sso (server/core/rolDelPanel.ts).
+        const resuelto = await rolDelPanelParaUsuario(ctx.userId);
+        if (resuelto) return resuelto.role;
       }
     } catch (e) {
       console.error("getRoleFromRequestAsync (bearer) error:", e);
@@ -14542,30 +14594,14 @@ app.post("/api/login-sso", async (req, res) => {
      * Regla que queda: ninguna respuesta de la API devuelve una contraseña.
      */
 
-    // 1) Usuario del panel con el mismo nombre (username o nombre completo)
-    try {
-      const users = await listDbAppUsers();
-      const objetivo = [String(u.username).toLowerCase(), String(u.nombre).toLowerCase()];
-      const panelUser = users.find((p) => objetivo.includes(p.name.toLowerCase()));
-      if (panelUser) {
-        return res.json({
-          ok: true,
-          role: panelUser.role,
-          name: panelUser.name,
-          allowedViews: panelUser.allowedViews,
-        });
-      }
-    } catch (e) {
-      console.error("login-sso db users error:", e);
-    }
-
-    // 2) Superadmin / admin de administración → admin del panel
-    if (u.es_superadmin || u.adm_admin) {
+    // Misma regla que getRoleFromRequestAsync: server/core/rolDelPanel.ts.
+    const resuelto = await rolDelPanelParaUsuario(data.user.id);
+    if (resuelto) {
       return res.json({
         ok: true,
-        role: "admin",
-        name: u.nombre,
-        allowedViews: null,
+        role: resuelto.role,
+        name: resuelto.name,
+        allowedViews: resuelto.allowedViews,
       });
     }
 
