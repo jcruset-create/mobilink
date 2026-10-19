@@ -46,6 +46,7 @@ import {
 
 import { getTechStatusLabel } from "../modules/techStatus";
 import { buildScheduledJobV2FieldsFromTemplate } from "../modules/scheduledJobV2Helpers";
+import { minutosDeLaCita } from "../modules/duracionDeCita";
 import { getAgendaWhatsappV2Description } from "../modules/agendaWhatsappV2Helpers";
 
 import ScheduledJobQuantityBox from "./ScheduledJobQuantityBox";
@@ -1673,9 +1674,11 @@ function getEstimatedMinutesWithIncludedTasks(
   includedTasks,
 });
 
-const safeEstimatedMinutes = Math.max(
-  15,
-  normalizeMinutes(v2Fields.estimatedMinutes, DEFAULT_ESTIMATED_MINUTES)
+// Lo tecleado en «Duración prevista» manda sobre la plantilla: ver duracionDeCita.ts.
+const safeEstimatedMinutes = minutosDeLaCita(
+  draft.estimatedMinutes,
+  v2Fields.estimatedMinutes,
+  DEFAULT_ESTIMATED_MINUTES
 );
 
     const nextData = {
