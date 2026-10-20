@@ -1096,6 +1096,15 @@ export async function initDb() {
     -- 'relation "whatsapp_capture_messages" does not exist'. Lo destapo el
     -- contenedor de PostgreSQL de las pruebas de integracion.
     ALTER TABLE whatsapp_capture_messages ALTER COLUMN job_id DROP NOT NULL;
+
+    -- Por qué NO se guardó la copia de un adjunto, cuando no se guardó.
+    --
+    -- Hasta ahora el fallo iba al log del servidor y nada más, y el log no lo
+    -- mira nadie hasta que las fotos llevan días sin verse. Con el motivo en
+    -- la fila, el panel lo enseña donde iría la foto y quien lo ve sabe si es
+    -- Twilio, es el almacén o es otra cosa, sin tener que entrar a ningún log.
+    ALTER TABLE whatsapp_capture_messages
+      ADD COLUMN IF NOT EXISTS media_error TEXT;
   `);
 
   await pool.query(`

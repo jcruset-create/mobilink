@@ -31,6 +31,8 @@ export function esDeTwilio(url: unknown): boolean {
 export type AdjuntoDelMensaje = {
   media_stored_url?: string | null;
   media_url?: string | null;
+  /** Por qué no se guardó la copia, cuando el servidor lo sabe. */
+  media_error?: string | null;
 };
 
 /**
@@ -51,11 +53,14 @@ export function adjuntoVisible(msg: AdjuntoDelMensaje): {
   if (!original) return { url: null, motivo: null };
 
   if (esDeTwilio(original)) {
+    // Con el motivo que anotó el servidor delante: «no se guardó copia» dice
+    // que falta; «Almacén (Supabase): …» dice dónde hay que mirar.
+    const porQue = String(msg?.media_error ?? "").trim();
     return {
       url: null,
       motivo:
-        "No se guardó copia de este adjunto, y el original de WhatsApp no se " +
-        "puede abrir desde aquí. Sigue en la conversación de WhatsApp.",
+        (porQue ? `No se guardó copia de este adjunto — ${porQue}. ` : "No se guardó copia de este adjunto, y ") +
+        "el original de WhatsApp no se puede abrir desde aquí. Sigue en la conversación de WhatsApp.",
     };
   }
 

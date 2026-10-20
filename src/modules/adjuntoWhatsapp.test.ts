@@ -52,6 +52,16 @@ describe("qué se le enseña al navegador", () => {
     expect(r.motivo).toContain("No se guardó copia");
   });
 
+  it("si el servidor anotó por qué, se enseña el porqué", () => {
+    // «No se guardó copia» dice que falta; «Almacén (Supabase): …» dice dónde
+    // hay que mirar. Es la diferencia entre un hueco y un diagnóstico.
+    const r = adjuntoVisible({
+      media_url: TWILIO,
+      media_error: "Almacén (Supabase): The resource already exists",
+    });
+    expect(r.motivo).toContain("Almacén (Supabase): The resource already exists");
+  });
+
   it("y se dice dónde sigue estando, que es lo que hace falta saber", () => {
     const r = adjuntoVisible({ media_url: TWILIO });
     expect(r.motivo).toContain("WhatsApp");
