@@ -4,6 +4,8 @@ import CoreLayout from "../layouts/CoreLayout";
 import { supabase } from "../../almacen-neumaticos/services/supabase";
 import { apiFetch } from "../../apiFetch";
 import AccesoEmpleado from "../components/AccesoEmpleado";
+import HorarioEmpleado from "../components/HorarioEmpleado";
+import { useEsSuperadmin } from "../../esSuperadmin";
 
 type Empleado = {
   id: string; nombre: string; apellidos: string | null;
@@ -19,6 +21,8 @@ type Empleado = {
 };
 
 const TABS = ["Datos personales", "Competencias", "Certificaciones", "Autorizaciones", "Formación", "Vestuario", "Acceso"];
+// Solo el superadministrador ve y edita el horario; va al final para no mover el resto.
+const TAB_HORARIO = TABS.length;
 
 const ROL_BADGE: Record<string, string> = {
   admin: "bg-red-500/20 text-red-800", responsable: "bg-orange-100 text-orange-800",
@@ -42,6 +46,8 @@ export default function EmpleadoDetalle() {
   const [empleado, setEmpleado] = useState<Empleado | null>(null);
   const [tabActiva, setTabActiva] = useState(0);
   const [cargando, setCargando] = useState(true);
+  const esSuperadmin = useEsSuperadmin();
+  const tabs = esSuperadmin ? [...TABS, "Horario"] : TABS;
 
   // Sub-data
   const [competencias, setCompetencias] = useState<any[]>([]);
@@ -436,7 +442,7 @@ export default function EmpleadoDetalle() {
 
       {/* Tabs */}
       <div className="border-b border-slate-700 flex gap-0 overflow-x-auto">
-        {TABS.map((tab, i) => (
+        {tabs.map((tab, i) => (
           <button key={tab} onClick={() => setTabActiva(i)}
             className={`px-4 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 transition-colors ${
               tabActiva === i ? "border-slate-700 text-slate-100" : "border-transparent text-slate-400 hover:text-slate-200"
@@ -876,6 +882,9 @@ export default function EmpleadoDetalle() {
         </div>
       )}
       {tabActiva === 6 && <AccesoEmpleado empleado={empleado} />}
+      {tabActiva === TAB_HORARIO && esSuperadmin && empleado && (
+        <HorarioEmpleado empleadoId={empleado.id} nombre={[empleado.nombre, empleado.apellidos].filter(Boolean).join(" ")} />
+      )}
 
     </CoreLayout>
   );
