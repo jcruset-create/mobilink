@@ -32,6 +32,26 @@ export async function descargarMedioTwilio(url: string) {
     },
     maxBytes: 25 * 1024 * 1024,
     timeoutMs: 20_000,
+    /*
+     * ── Las redirecciones son OBLIGATORIAS aquí, no un extra ────────────
+     *
+     * Twilio no sirve el adjunto desde «api.twilio.com»: contesta con un 307
+     * hacia su CDN («media.twiliocdn.com»), y es de ahí de donde baja el
+     * fichero. Por eso `HOSTS_TWILIO` lleva los dos nombres.
+     *
+     * `fetchSeguro` deja las redirecciones a CERO por defecto —la opción
+     * segura para una URL que elige un desconocido— y aquí se quedó en cero
+     * sin querer. Resultado: cada descarga revienta en la primera
+     * redirección con «demasiadas_redirecciones», el fallo se traga para no
+     * perder el mensaje, y NINGÚN adjunto de WhatsApp tuvo copia desde el
+     * endurecimiento de la Fase 0. Se vio como «fotos que no se ven», y costó
+     * tres arreglos equivocados antes de llegar aquí.
+     *
+     * Cada salto vuelve a pasar por la lista blanca, así que la credencial
+     * solo puede ir a un host de Twilio: seguir la redirección no abre lo que
+     * el endurecimiento cerró.
+     */
+    maxRedirecciones: 2,
   });
 }
 
