@@ -1167,10 +1167,25 @@ export async function bloquearAlbaran(empresaId: string, id: string, cliente: Ej
 
 export async function albaranesDePedido(empresaId: string, pedidoId: string, ejecutor?: Ejecutor): Promise<Albaran[]> {
   const { rows } = await db(ejecutor).query(
-    `${SELECT_ALBARAN} WHERE a.empresa_id = $1 AND a.pedido_id = $2 ORDER BY a.created_at`,
+    // También los que cuelgan de otro pedido pero le sirven líneas: un
+    // albarán que agrupa varios pedidos se ve en la ficha de cada uno.
+    `${SELECT_ALBARAN} WHERE a.empresa_id = $1 AND (a.pedido_id = $2 OR EXISTS (
+        SELECT 1 FROM rcp_albaran_lineas al JOIN rcp_pedido_lineas pl ON pl.id = al.pedido_linea_id
+         WHERE al.albaran_id = a.id AND pl.pedido_id = $2))
+      ORDER BY a.created_at`,
     [empresaId, pedidoId]
   );
   return rows.map(aAlbaran);
+}
+
+/** Los pedidos a los que sirven las líneas de un albarán. */
+export async function pedidosDeLineasDeAlbaran(empresaId: string, albaranId: string, ejecutor?: Ejecutor): Promise<string[]> {
+  const { rows } = await db(ejecutor).query<{ pedido_id: string }>(
+    `SELECT DISTINCT pl.pedido_id FROM rcp_albaran_lineas al JOIN rcp_pedido_lineas pl ON pl.id = al.pedido_linea_id
+      WHERE al.empresa_id = $1 AND al.albaran_id = $2`,
+    [empresaId, albaranId]
+  );
+  return rows.map((r) => r.pedido_id);
 }
 
 export type FiltroAlbaranes = {

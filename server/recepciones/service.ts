@@ -465,6 +465,13 @@ export type AlbaranEntrante = {
   externalMessageId?: string | null;
   sourceReceivedAt?: string | null;
   enlacePdfProveedor?: string | null;
+  /**
+   * Otros pedidos del MISMO proveedor que este albarán también sirve. Soledad
+   * agrupa: un papel, una entrega, y líneas de varios pedidos. El albarán
+   * cuelga del pedido principal —un papel es una recepción en el muelle—, y
+   * cada línea apunta a la línea del pedido que le toca, sea cual sea.
+   */
+  pedidosAdicionales?: string[];
 };
 
 /**
@@ -621,6 +628,14 @@ export async function crearAlbaran(ctx: Contexto, pedidoId: string, datos: Albar
     if (pedido.estado === "CANCELADO") throw new ErrorRecepciones("PEDIDO_CANCELADO", "El pedido está cancelado.", 409);
 
     const lineasPedido = await repo.lineasDePedido(ctx.empresaId, pedidoId, c, true);
+    const adicionales = [...new Set((datos.pedidosAdicionales ?? []).filter((id) => id && id !== pedidoId))];
+    for (const id of adicionales) {
+      const otro = await repo.bloquearPedido(ctx.empresaId, id, c);
+      if (!otro) throw new ErrorRecepciones("PEDIDO_NO_ENCONTRADO", "Uno de los pedidos del albarán no existe.", 404);
+      if (otro.proveedorId !== pedido.proveedorId) throw new ErrorRecepciones("PEDIDO_DE_OTRO_PROVEEDOR", "Un albarán no puede servir pedidos de dos proveedores.");
+      if (otro.estado === "CANCELADO") throw new ErrorRecepciones("PEDIDO_CANCELADO", `El pedido ${otro.numeroProveedor} está cancelado.`, 409);
+      lineasPedido.push(...(await repo.lineasDePedido(ctx.empresaId, id, c, true)));
+    }
     const porId = new Map(lineasPedido.map((l) => [l.id, l]));
 
     let albaran: repo.Albaran;
@@ -689,6 +704,7 @@ export async function crearAlbaran(ctx: Contexto, pedidoId: string, datos: Albar
     }
 
     await recalcularEstadoPedido(ctx.empresaId, pedidoId, c);
+    for (const id of adicionales) await recalcularEstadoPedido(ctx.empresaId, id, c);
 
     await repo.anotarEvento(
       ctx.empresaId,
@@ -986,7 +1002,7 @@ export async function cerrarRecepcion(ctx: Contexto, albaranId: string, datos: C
       { conIncidencia, cerrado: Boolean(albaran.cerradoAt) }
     );
     await repo.fijarEstadoAlbaran(ctx.empresaId, albaranId, nuevoEstado, c);
-    await recalcularEstadoPedido(ctx.empresaId, albaran.pedidoId, c);
+    await recalcularPedidosDelAlbaran(ctx.empresaId, albaran, c);
 
     // 7. Histórico y auditoría, dentro de la transacción: o consta entero o no consta.
     await repo.anotarEvento(
@@ -1171,7 +1187,7 @@ export async function rectificarRecepcion(ctx: Contexto, recepcionId: string, da
       { conIncidencia, cerrado: Boolean(albaran.cerradoAt) }
     );
     await repo.fijarEstadoAlbaran(ctx.empresaId, albaran.id, nuevoEstado, c);
-    await recalcularEstadoPedido(ctx.empresaId, albaran.pedidoId, c);
+    await recalcularPedidosDelAlbaran(ctx.empresaId, albaran, c);
 
     await repo.anotarEvento(
       ctx.empresaId,
@@ -1275,7 +1291,7 @@ export async function cerrarAlbaranConDiferencia(ctx: Contexto, albaranId: strin
       { conIncidencia: true, cerrado: true }
     );
     await repo.fijarEstadoAlbaran(ctx.empresaId, albaranId, nuevoEstado, c);
-    await recalcularEstadoPedido(ctx.empresaId, albaran.pedidoId, c);
+    await recalcularPedidosDelAlbaran(ctx.empresaId, albaran, c);
     await repo.anotarEvento(
       ctx.empresaId,
       {
@@ -1525,6 +1541,13 @@ export async function releerLineasDelOriginal(ctx: Contexto, albaranId: string):
     const pedido = await repo.bloquearPedido(ctx.empresaId, albaran.pedidoId, c);
     if (!pedido) throw new ErrorRecepciones("PEDIDO_NO_ENCONTRADO", "Pedido no encontrado.", 404);
 
+    // Un albarán que agrupa varios pedidos no se relee: sus líneas apuntan a
+    // pedidos distintos y releerlas contra el principal soltaría las demás.
+    const otros = (await repo.pedidosDeLineasDeAlbaran(ctx.empresaId, albaranId, c)).filter((id) => id !== albaran.pedidoId);
+    if (otros.length > 0) {
+      throw new ErrorRecepciones("ALBARAN_AGRUPADO", "Este albarán sirve a varios pedidos: sus líneas no se releen del PDF.", 409);
+    }
+
     const antes = await repo.lineasDeAlbaran(ctx.empresaId, albaranId, c, true);
     resultado.lineasAntes = antes.length;
     await repo.borrarLineasDeAlbaran(ctx.empresaId, albaranId, c);
@@ -1634,7 +1657,7 @@ export async function releerLineasDelOriginal(ctx: Contexto, albaranId: string):
       );
     }
 
-    await recalcularEstadoPedido(ctx.empresaId, albaran.pedidoId, c);
+    await recalcularPedidosDelAlbaran(ctx.empresaId, albaran, c);
 
     await repo.anotarEvento(
       ctx.empresaId,
@@ -1710,6 +1733,15 @@ async function enlaceGuardado(empresaId: string, albaranId: string): Promise<str
 function usuarioObligatorio(ctx: Contexto): string {
   if (!ctx.userId) throw new ErrorRecepciones("USUARIO_REQUERIDO", "Esta operación necesita un usuario autenticado.", 401);
   return ctx.userId;
+}
+
+/**
+ * Recalcula todos los pedidos que toca un albarán: el suyo y, si agrupa, los
+ * de las líneas que sirven a otros pedidos.
+ */
+async function recalcularPedidosDelAlbaran(empresaId: string, albaran: { id: string; pedidoId: string }, c: repo.Ejecutor): Promise<void> {
+  const pedidos = new Set([albaran.pedidoId, ...(await repo.pedidosDeLineasDeAlbaran(empresaId, albaran.id, c))]);
+  for (const id of pedidos) await recalcularEstadoPedido(empresaId, id, c);
 }
 
 /**
