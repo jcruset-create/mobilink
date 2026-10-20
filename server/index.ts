@@ -16637,12 +16637,23 @@ app.post(
           }
         }
 
-        // Try to store media in Supabase if it's an image/audio/video/document
+        /*
+         * Guardar la copia del adjunto en nuestro almacén.
+         *
+         * Si no se puede, el mensaje se guarda igual —perderlo entero por una
+         * foto sería peor— pero el MOTIVO se guarda con él. Antes solo iba al
+         * log, y las fotos llevaban días sin verse antes de que nadie mirara
+         * el log: con el motivo en la fila, el panel lo enseña donde iría la
+         * foto y se sabe al momento si es Twilio, el almacén u otra cosa.
+         */
         let storedUrl: string | null = null;
+        let mediaError: string | null = null;
         if (mediaUrl0 && ["image","audio","video","document"].includes(msgType)) {
           try {
             const mediaResp = await descargarMedioTwilio(mediaUrl0);
-            if (mediaResp.ok) {
+            if (!mediaResp.ok) {
+              mediaError = `Twilio contesta ${mediaResp.status} al descargar el adjunto`;
+            } else {
               const contentType = mediaResp.contentType;
               const ext = contentType.split("/")[1]?.split(";")[0] ?? "bin";
               const buffer = mediaResp.cuerpo;
@@ -16650,16 +16661,20 @@ app.post(
               const { error: upErr } = await supabase.storage
                 .from(process.env.SUPABASE_ROADSIDE_BUCKET || "roadside")
                 .upload(storagePath, buffer, { contentType, upsert: false });
-              if (!upErr) {
+              if (upErr) {
+                mediaError = `Almacén (Supabase): ${upErr.message}`;
+              } else {
                 const { data: pub } = supabase.storage
                   .from(process.env.SUPABASE_ROADSIDE_BUCKET || "roadside")
                   .getPublicUrl(storagePath);
                 storedUrl = pub.publicUrl ?? null;
+                if (!storedUrl) mediaError = "El almacén no ha devuelto dirección para la copia";
               }
             }
-          } catch (mediaErr) {
-            console.warn("Could not store WhatsApp media:", mediaErr);
+          } catch (mediaErr: any) {
+            mediaError = String(mediaErr?.message ?? mediaErr);
           }
+          if (mediaError) console.warn(`[captura] adjunto sin copia: ${mediaError}`);
         }
 
         // Detect Google Maps URL in text messages and extract coordinates
@@ -16768,8 +16783,8 @@ app.post(
              text_content, media_url, media_stored_url,
              latitude, longitude, address, contact_name, contact_phone,
              raw_payload, received_at,
-             transcript_status)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+             transcript_status, media_error)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
            RETURNING id`,
           [
             sessionId, jobId, MessageSid, From, effectiveMsgType,
@@ -16784,6 +16799,7 @@ app.post(
             JSON.stringify(req.body),
             Date.now(),
             effectiveMsgType === "audio" ? "pending" : "none",
+            mediaError,
           ]
         );
         console.log(`WhatsApp capture: message ${MessageSid} routed to session #${sessionId} (job ${jobId})`);

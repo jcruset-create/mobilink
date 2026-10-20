@@ -41,6 +41,8 @@ export type WhatsAppCaptureMessage = {
   contact_phone: string | null;
   transcript: string | null;
   transcript_status: "none" | "pending" | "done" | "error" | null;
+  /** Por qué no se guardó la copia del adjunto, cuando el servidor lo sabe. */
+  media_error?: string | null;
   received_at: number;
   processed: boolean;
 };
