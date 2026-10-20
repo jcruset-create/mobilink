@@ -1450,6 +1450,36 @@ export async function initDb() {
       console.error("No se pudo aplicar la migración del módulo workplanner:", error);
     });
 
+  // ── Horarios y turnos de los empleados (Core) ─────────────────────────
+  // Equivale a supabase/migrations/011_horarios_turnos.sql. Sin clave foránea
+  // contra sea_employees por el mismo motivo que techs.employee_id: esa tabla
+  // la crean las migraciones de Supabase y en la base de la CI no existe. La
+  // FK va en la migración manual.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sea_turnos (
+      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      nombre      TEXT NOT NULL,
+      tramos      JSONB NOT NULL DEFAULT '[]'::jsonb,
+      dias        INTEGER[] NOT NULL DEFAULT '{1,2,3,4,5}',
+      activo      BOOLEAN NOT NULL DEFAULT true,
+      orden       INTEGER NOT NULL DEFAULT 0,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS sea_horarios_empleado (
+      id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      employee_id    UUID NOT NULL,
+      tipo           TEXT NOT NULL CHECK (tipo IN ('fijo','rotativo')),
+      turno_ids      TEXT[] NOT NULL,
+      semana_inicio  DATE,
+      vigente_desde  DATE NOT NULL,
+      created_by     UUID,
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (employee_id, vigente_desde)
+    );
+    CREATE INDEX IF NOT EXISTS idx_sea_horarios_empleado_emp ON sea_horarios_empleado (employee_id);
+  `);
+
   console.log("PostgreSQL/Supabase inicializado correctamente");
 }
 

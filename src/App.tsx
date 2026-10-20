@@ -95,6 +95,7 @@ import Empresas from "./modules/sea-core/pages/Empresas";
 import CentrosTrabajo from "./modules/sea-core/pages/CentrosTrabajo";
 import CoreCompetencias from "./modules/sea-core/pages/Competencias";
 import CoreAutorizaciones from "./modules/sea-core/pages/Autorizaciones";
+import CoreHorarios from "./modules/sea-core/pages/Horarios";
 
 const TyreControlApp = lazy(() => import("./modules/tyrecontrol/TyreControlApp"));
 const AdministracionApp = lazy(() => import("./modules/administracion/AdministracionApp"));
@@ -395,6 +396,7 @@ export default function App() {
       <Route path="/core/centros" element={<Protegida><CentrosTrabajo /></Protegida>} />
       <Route path="/core/competencias" element={<Protegida><CoreCompetencias /></Protegida>} />
       <Route path="/core/autorizaciones" element={<Protegida><CoreAutorizaciones /></Protegida>} />
+      <Route path="/core/horarios" element={<Protegida><CoreHorarios /></Protegida>} />
       {/* Redirects legacy del renombrado profundo (B2) */}
       <Route path="/sea-core" element={<RedirectSeaCore />} />
       <Route path="/sea-core/*" element={<RedirectSeaCore />} />

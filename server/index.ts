@@ -2903,6 +2903,225 @@ app.get("/api/techs/vinculo-core", requireAdminRole, async (_req, res) => {
 // `techName` es el técnico vinculado, si lo hay: sus ausencias van por ese
 // nombre. Si Core no está en esta base, lista vacía y las pantallas siguen
 // con los técnicos de siempre.
+/* =========================================================
+   HORARIOS Y TURNOS (Core, solo superadministrador)
+   La regla de qué le toca a cada uno está en src/modules/horariosTurnos.ts;
+   aquí solo se guardan turnos y asignaciones y se reúnen los datos de una
+   semana. Todo lo decide el superadministrador: es control, no operación.
+========================================================= */
+
+async function requireSuperadminApp(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) {
+  const admin = await verificarAdminApp(req);
+  if (!admin.ok) return res.status(401).json({ error: admin.error });
+  if (!admin.esSuperadmin) {
+    return res.status(403).json({ error: "Solo el superadministrador gestiona los horarios" });
+  }
+  (req as any).adminApp = admin;
+  next();
+}
+
+function filaTurno(t: any) {
+  return {
+    id: String(t.id),
+    nombre: String(t.nombre ?? ""),
+    tramos: Array.isArray(t.tramos) ? t.tramos : [],
+    dias: Array.isArray(t.dias) ? t.dias.map(Number) : [1, 2, 3, 4, 5],
+    activo: t.activo !== false,
+    orden: Number(t.orden ?? 0),
+  };
+}
+
+function filaAsignacion(a: any) {
+  const fecha = (v: unknown) => (v ? String(v instanceof Date ? v.toISOString() : v).slice(0, 10) : "");
+  return {
+    id: String(a.id),
+    employeeId: String(a.employee_id),
+    tipo: a.tipo === "rotativo" ? "rotativo" : "fijo",
+    turnoIds: Array.isArray(a.turno_ids) ? a.turno_ids.map(String) : [],
+    semanaInicio: fecha(a.semana_inicio),
+    vigenteDesde: fecha(a.vigente_desde),
+  };
+}
+
+const HORA = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+
+app.get("/api/horarios/turnos", requireSuperadminApp, async (_req, res) => {
+  try {
+    const r = await db.query(`SELECT * FROM sea_turnos ORDER BY orden, nombre`);
+    res.json(r.rows.map(filaTurno));
+  } catch (error) {
+    console.error("GET /api/horarios/turnos error:", error);
+    res.status(500).json({ error: "Error cargando los turnos" });
+  }
+});
+
+app.put("/api/horarios/turnos", requireSuperadminApp, async (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const nombre = String(b.nombre ?? "").trim();
+    const tramos = (Array.isArray(b.tramos) ? b.tramos : [])
+      .map((t: any) => ({ inicio: String(t?.inicio ?? "").trim(), fin: String(t?.fin ?? "").trim() }))
+      .filter((t: any) => t.inicio || t.fin);
+    const dias = (Array.isArray(b.dias) ? b.dias : [1, 2, 3, 4, 5]).map(Number).filter((d: number) => d >= 1 && d <= 7);
+    if (!nombre) return res.status(400).json({ error: "El turno necesita un nombre" });
+    if (tramos.length === 0 || tramos.length > 2) {
+      return res.status(400).json({ error: "Un turno lleva uno o dos tramos" });
+    }
+    if (tramos.some((t: any) => !HORA.test(t.inicio) || !HORA.test(t.fin) || t.inicio === t.fin)) {
+      return res.status(400).json({ error: "Tramo con hora no válida" });
+    }
+    const activo = b.activo !== false;
+    const orden = Number.isFinite(Number(b.orden)) ? Number(b.orden) : 0;
+    const id = b.id ? String(b.id) : null;
+
+    const r = id
+      ? await db.query(
+          `UPDATE sea_turnos SET nombre = $2, tramos = $3::jsonb, dias = $4, activo = $5, orden = $6
+            WHERE id = $1 RETURNING *`,
+          [id, nombre, JSON.stringify(tramos), dias, activo, orden]
+        )
+      : await db.query(
+          `INSERT INTO sea_turnos (nombre, tramos, dias, activo, orden)
+           VALUES ($1, $2::jsonb, $3, $4, $5) RETURNING *`,
+          [nombre, JSON.stringify(tramos), dias, activo, orden]
+        );
+    if (r.rows.length === 0) return res.status(404).json({ error: "Turno no encontrado" });
+    res.json(filaTurno(r.rows[0]));
+  } catch (error) {
+    console.error("PUT /api/horarios/turnos error:", error);
+    res.status(500).json({ error: "Error guardando el turno" });
+  }
+});
+
+app.get("/api/horarios/asignaciones", requireSuperadminApp, async (req, res) => {
+  try {
+    const employeeId = String(req.query.employeeId ?? "").trim();
+    const r = employeeId
+      ? await db.query(
+          `SELECT * FROM sea_horarios_empleado WHERE employee_id = $1 ORDER BY vigente_desde DESC`,
+          [employeeId]
+        )
+      : await db.query(`SELECT * FROM sea_horarios_empleado ORDER BY vigente_desde DESC`);
+    res.json(r.rows.map(filaAsignacion));
+  } catch (error) {
+    console.error("GET /api/horarios/asignaciones error:", error);
+    res.status(500).json({ error: "Error cargando los horarios" });
+  }
+});
+
+app.post("/api/horarios/asignaciones", requireSuperadminApp, async (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const employeeId = String(b.employeeId ?? "").trim();
+    const tipo = b.tipo === "rotativo" ? "rotativo" : "fijo";
+    const turnoIds = (Array.isArray(b.turnoIds) ? b.turnoIds : []).map(String).filter(Boolean);
+    const vigenteDesde = String(b.vigenteDesde ?? "").slice(0, 10);
+    const semanaInicio = String(b.semanaInicio ?? "").slice(0, 10) || null;
+    if (!employeeId) return res.status(400).json({ error: "Falta el empleado" });
+    if (turnoIds.length === 0) return res.status(400).json({ error: "Elige al menos un turno" });
+    if (tipo === "rotativo" && turnoIds.length < 2) {
+      return res.status(400).json({ error: "Un horario rotativo necesita dos turnos o más" });
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(vigenteDesde)) return res.status(400).json({ error: "Falta la fecha desde la que vale" });
+    if (tipo === "rotativo" && !semanaInicio) {
+      return res.status(400).json({ error: "Falta la semana en la que empieza por el primer turno" });
+    }
+    const existe = await db.query(`SELECT id FROM sea_employees WHERE id = $1`, [employeeId]);
+    if (existe.rows.length === 0) return res.status(404).json({ error: "Ese empleado no existe" });
+
+    // El mismo empleado y el mismo «desde» se sobreescriben: es corregir, no duplicar.
+    const r = await db.query(
+      `INSERT INTO sea_horarios_empleado (employee_id, tipo, turno_ids, semana_inicio, vigente_desde, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (employee_id, vigente_desde) DO UPDATE
+         SET tipo = EXCLUDED.tipo, turno_ids = EXCLUDED.turno_ids,
+             semana_inicio = EXCLUDED.semana_inicio, created_by = EXCLUDED.created_by
+       RETURNING *`,
+      [employeeId, tipo, turnoIds, semanaInicio, vigenteDesde, (req as any).adminApp?.userId ?? null]
+    );
+    res.json(filaAsignacion(r.rows[0]));
+  } catch (error) {
+    console.error("POST /api/horarios/asignaciones error:", error);
+    res.status(500).json({ error: "Error guardando el horario" });
+  }
+});
+
+app.delete("/api/horarios/asignaciones/:id", requireSuperadminApp, async (req, res) => {
+  try {
+    const r = await db.query(`DELETE FROM sea_horarios_empleado WHERE id = $1 RETURNING id`, [
+      String(req.params.id),
+    ]);
+    if (r.rows.length === 0) return res.status(404).json({ error: "Horario no encontrado" });
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("DELETE /api/horarios/asignaciones error:", error);
+    res.status(500).json({ error: "Error borrando el horario" });
+  }
+});
+
+/*
+ * Todo lo que hace falta para pintar una semana: empleados activos con su
+ * centro y su técnico vinculado, turnos, asignaciones y las ausencias de la
+ * agenda que tocan esa semana. El cálculo de cada celda lo hace la pantalla
+ * con src/modules/horariosTurnos.ts.
+ */
+app.get("/api/horarios/semana", requireSuperadminApp, async (req, res) => {
+  try {
+    const fecha = String(req.query.fecha ?? "").slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return res.status(400).json({ error: "Fecha no válida" });
+    const [y, m, d] = fecha.split("-").map(Number);
+    const base = new Date(Date.UTC(y, m - 1, d));
+    const idx = (base.getUTCDay() + 6) % 7;
+    const lunes = new Date(base.getTime() - idx * 86_400_000).toISOString().slice(0, 10);
+    const domingo = new Date(base.getTime() + (6 - idx) * 86_400_000).toISOString().slice(0, 10);
+
+    const [empleados, turnos, asignaciones, ausencias] = await Promise.all([
+      db.query(
+        `SELECT e.id, e.nombre, e.apellidos, c.nombre AS centro, t.name AS tech_name
+           FROM sea_employees e
+           LEFT JOIN sea_work_centers c ON c.id = e.work_center_id
+           LEFT JOIN techs t ON t.employee_id = e.id
+          WHERE e.activo = true
+          ORDER BY c.nombre NULLS LAST, e.nombre, e.apellidos`
+      ),
+      db.query(`SELECT * FROM sea_turnos ORDER BY orden, nombre`),
+      db.query(`SELECT * FROM sea_horarios_empleado WHERE vigente_desde <= $1 ORDER BY vigente_desde`, [domingo]),
+      db.query(
+        `SELECT "techName", status, "startDate", "endDate"
+           FROM scheduled_tech_statuses
+          WHERE "startDate" <= $2 AND "endDate" >= $1`,
+        [lunes, domingo]
+      ).catch(() => ({ rows: [] as any[] })),
+    ]);
+
+    res.json({
+      lunes,
+      domingo,
+      empleados: empleados.rows.map((e: any) => ({
+        id: String(e.id),
+        nombre: [e.nombre, e.apellidos].filter(Boolean).join(" ").trim(),
+        centro: e.centro ?? null,
+        techName: e.tech_name ?? null,
+      })),
+      turnos: turnos.rows.map(filaTurno),
+      asignaciones: asignaciones.rows.map(filaAsignacion),
+      ausencias: ausencias.rows.map((a: any) => ({
+        nombre: String(a.techName ?? ""),
+        estado: String(a.status ?? ""),
+        desde: String(a.startDate ?? "").slice(0, 10),
+        hasta: String(a.endDate ?? "").slice(0, 10),
+      })),
+    });
+  } catch (error) {
+    console.error("GET /api/horarios/semana error:", error);
+    res.status(500).json({ error: "Error cargando la semana" });
+  }
+});
+
 app.get("/api/empleados-core", requireAdminRole, async (_req, res) => {
   try {
     const [r, sinVincular] = await Promise.all([

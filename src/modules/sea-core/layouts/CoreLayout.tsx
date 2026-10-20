@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
+import { useEsSuperadmin } from "../../esSuperadmin";
 import { NavLink, useNavigate } from "react-router-dom";
-import { Menu, Home, LayoutDashboard, Users, Building2, MapPin, Target, KeyRound } from "lucide-react";
+import { Menu, Home, LayoutDashboard, Users, Building2, MapPin, Target, KeyRound, CalendarDays } from "lucide-react";
 
 const NAV = [
   { to: "/core", label: "Dashboard", icon: LayoutDashboard, end: true },
@@ -11,11 +12,18 @@ const NAV = [
   { to: "/core/autorizaciones", label: "Autorizaciones", icon: KeyRound, end: false },
 ];
 
+// Solo para el superadministrador: horarios y turnos de toda la empresa.
+const NAV_SUPERADMIN = [
+  { to: "/core/horarios", label: "Horarios", icon: CalendarDays, end: false },
+];
+
 // Shell del módulo Mobilink Core con el mismo estilo que Mobilink TyreControl:
 // topbar oscuro + sidebar izquierda (activo en sky-600) sobre fondo slate.
 export default function CoreLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  const esSuperadmin = useEsSuperadmin();
+  const nav = esSuperadmin ? [...NAV, ...NAV_SUPERADMIN] : NAV;
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100">
@@ -41,7 +49,7 @@ export default function CoreLayout({ children }: { children: ReactNode }) {
         {/* Sidebar */}
         <aside className={`${open ? "block" : "hidden"} w-52 shrink-0 border-r border-slate-700 bg-slate-900 p-2 md:block`}>
           <nav className="flex flex-col gap-1">
-            {NAV.map((item) => {
+            {nav.map((item) => {
               const Icon = item.icon;
               return (
                 <NavLink
