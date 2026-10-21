@@ -57,3 +57,15 @@ export function seccionVisible(
   const exigidas = VISTAS_INCRUSTADAS[vistaDeLaSeccion] ?? [vistaDeLaSeccion];
   return exigidas.some((v) => vistasPermitidas.includes(v));
 }
+
+/**
+ * ¿La sección está marcada en Core (Administración → Usuarios → WorkPlanner)?
+ *
+ * Es la segunda cerradura del menú, además de las vistas del panel: lo que se
+ * desmarca allí desaparece de aquí. Sin lista (null o vacía) está todo marcado,
+ * que es lo que Core guarda cuando se marcan todas las pantallas.
+ */
+export function seccionMarcadaEnCore(key: string, pantallas: string[] | null | undefined): boolean {
+  if (!pantallas || pantallas.length === 0) return true;
+  return pantallas.includes(key);
+}

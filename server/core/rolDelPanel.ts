@@ -20,6 +20,12 @@
  *     contraseña para lo mismo. Las pantallas de administrador siguen siendo
  *     solo de administradores.
  *
+ * En 2 y 3, si además tiene el módulo WorkPlanner, las pantallas marcadas en
+ * Core SE SUMAN a las del usuario del panel. Si no, pasaba esto: a Neus le
+ * marcaban «Agenda» en Administración → Usuarios y la agenda le decía que no
+ * tenía permiso, porque mandaba la lista vieja del usuario del panel. Lo que
+ * se marca en Core tiene que verse en la pantalla.
+ *
  * Login (`/api/login-sso`) y servidor (`getRoleFromRequestAsync`) usan esta
  * misma función: si discrepan, la pantalla deja pasar y luego todo da 403.
  */
@@ -69,6 +75,19 @@ export function vistasDeWorkplanner(pantallas: string[] | null | undefined): str
   return [...vistas];
 }
 
+/** Vistas del usuario del panel más las que le dan en Core. null = todas. */
+function sumarVistas(
+  delPanel: string[] | null | undefined,
+  workplanner: DatosDeSesion["workplanner"]
+): string[] | null {
+  const base = delPanel?.length ? delPanel : null;
+  if (!workplanner) return base;
+  const deCore = vistasDeWorkplanner(workplanner.pantallas);
+  // Cualquiera de los dos sin lista = todas.
+  if (!base || !deCore) return null;
+  return [...new Set([...base, ...deCore])];
+}
+
 const igual = (a: unknown, b: unknown) =>
   String(a ?? "").trim().toLowerCase() !== "" &&
   String(a ?? "").trim().toLowerCase() === String(b ?? "").trim().toLowerCase();
@@ -90,7 +109,7 @@ export function resolverRolDelPanel(
     return {
       role: porNombre.role,
       name: porNombre.name,
-      allowedViews: porNombre.allowedViews?.length ? porNombre.allowedViews : null,
+      allowedViews: sumarVistas(porNombre.allowedViews, datos.workplanner),
       via: "nombre",
     };
   }
@@ -101,7 +120,7 @@ export function resolverRolDelPanel(
       return {
         role: porTecnico.role,
         name: porTecnico.name,
-        allowedViews: porTecnico.allowedViews?.length ? porTecnico.allowedViews : null,
+        allowedViews: sumarVistas(porTecnico.allowedViews, datos.workplanner),
         via: "tecnico",
       };
     }
