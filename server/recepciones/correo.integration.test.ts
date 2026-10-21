@@ -512,31 +512,21 @@ describe.skipIf(!RUN)("Recepciones · correos de Soledad contra PostgreSQL", () 
     const texto = ALBARAN_REAL.replace("tu pedido 5687439 ha sido emitido", "tus pedidos (5690526,5690999) han sido emitidos");
     const asunto = "Fwd: Emisión de Albarán B /2028452141 con fecha 15/09/2026.";
 
-    it("espera al pedido que falta y, cuando está, se reparte solo entre los dos", async () => {
-      const alta = await api("/pedidos", {
-        method: "POST",
-        body: { proveedorId, numeroProveedor: "5690526", centroNombre: "TARRAGONA", lineas: [{ descripcionProveedor: "385/65X22.5 SAILUN STR1+ 164K", cantidadPedida: 10 }] },
-      });
-      expect(alta.status, JSON.stringify(alta.body)).toBe(201);
-      const r = await importarEml((await mensaje({ asunto, texto })).source);
-      expect(r.body.resultado).toBe("revision");
-      expect(r.body.error).toContain("5690999 todavía no ha llegado");
-      expect((await api(`/pedidos/${alta.body.pedido.id}`)).body.albaranes).toHaveLength(0);
-
-      // Llega el que faltaba: con todos sus pedidos, se reparte solo, cada
-      // línea al pedido que la pidió.
-      const primero = alta.body.pedido;
+    it("con todos sus pedidos, se reparte solo: cada línea al pedido que la pidió", async () => {
+      const primero = (
+        await api("/pedidos", {
+          method: "POST",
+          body: { proveedorId, numeroProveedor: "5690526", centroNombre: "TARRAGONA", lineas: [{ descripcionProveedor: "385/65X22.5 SAILUN STR1+ 164K", cantidadPedida: 10 }] },
+        })
+      ).body.pedido;
       const segundo = await api("/pedidos", {
         method: "POST",
         body: { proveedorId, numeroProveedor: "5690999", centroNombre: "TARRAGONA", lineas: [{ descripcionProveedor: "245/70X17.5 HANKOOK AH35 136M", cantidadPedida: 2 }] },
       });
       expect(segundo.status, JSON.stringify(segundo.body)).toBe(201);
 
-      const correos = await api("/correo?resultado=PENDIENTE_REVISION");
-      const correo = correos.body.correos.find((c: { asunto: string }) => c.asunto.includes("2028452141"));
-      const otra = await api(`/correo/${correo.id}/reprocesar`, { method: "POST", body: {} });
-      expect(otra.body.resultado, JSON.stringify(otra.body)).toBe("PROCESADO");
-      expect(otra.body.motivo).toContain("repartido entre 2 pedidos");
+      const r = await importarEml((await mensaje({ asunto, texto })).source);
+      expect(r.body.resultado, JSON.stringify(r.body)).toBe("procesado");
 
       // Un solo albarán, visible desde los dos pedidos…
       const fichaSegundo = (await api(`/pedidos/${segundo.body.pedido.id}`)).body;
@@ -545,6 +535,35 @@ describe.skipIf(!RUN)("Recepciones · correos de Soledad contra PostgreSQL", () 
       // …y lo que trae lo ha expedido el pedido que lo pidió, no el primero.
       expect(fichaSegundo.lineas[0].cantidadExpedida).toBe(2);
       expect(fichaSegundo.pedido.estado).toBe("EXPEDIDO");
+    });
+
+    it("si falta uno, entra igual: lo que no es de los que están deduce el que falta", async () => {
+      const primero = (
+        await api("/pedidos", {
+          method: "POST",
+          body: { proveedorId, numeroProveedor: "5690526", centroNombre: "TARRAGONA", lineas: [{ descripcionProveedor: "385/65X22.5 SAILUN STR1+ 164K", cantidadPedida: 10 }] },
+        })
+      ).body.pedido;
+
+      const r = await importarEml((await mensaje({ asunto, texto })).source);
+      expect(r.body.resultado, JSON.stringify(r.body)).toBe("procesado");
+
+      const deducido = (await api("/pedidos?q=5690999")).body.pedidos;
+      expect(deducido).toHaveLength(1);
+      const ficha = (await api(`/pedidos/${deducido[0].id}`)).body;
+      expect(ficha.pedido.derivadoDeAlbaran).toBe(true);
+      expect(ficha.lineas.map((l: { descripcionProveedor: string; cantidadExpedida: number }) => [l.descripcionProveedor, l.cantidadExpedida])).toEqual([
+        ["245/70X17.5 HANKOOK AH35 136M", 2],
+      ]);
+      // El albarán, recepcionable, cuelga del que sí estaba y se ve desde los dos.
+      expect(ficha.albaranes).toHaveLength(1);
+      expect((await api(`/pedidos/${primero.id}`)).body.albaranes).toHaveLength(1);
+    });
+
+    it("si no está ninguno, entra igual deduciendo el primero", async () => {
+      const r = await importarEml((await mensaje({ asunto, texto })).source);
+      expect(r.body.resultado, JSON.stringify(r.body)).toBe("procesado");
+      expect((await api("/pedidos?q=5690526")).body.pedidos).toHaveLength(1);
     });
   });
 
