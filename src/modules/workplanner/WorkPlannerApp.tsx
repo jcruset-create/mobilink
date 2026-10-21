@@ -29,7 +29,7 @@ import PartesTrabajoPage from "./PartesTrabajoPage";
 import RecepcionesPage from "./RecepcionesPage";
 import { supabase } from "../administracion/services/supabase";
 import { useEsAdministrador } from "../esAdministrador";
-import { seccionVisible } from "../vistasDelModulo";
+import { seccionMarcadaEnCore, seccionVisible } from "../vistasDelModulo";
 import VersionDesplegada from "../../components/VersionDesplegada";
 
 /** Clave del módulo en app_licencias / app_usuario_modulos. */
@@ -119,8 +119,10 @@ function SinLicencia() {
  *
  * Devuelve null mientras carga, true/false una vez resuelto.
  */
-function useAccesoWorkplanner() {
+function useAccesoWorkplanner(): { permitido: boolean | null; pantallas: string[] | null } {
   const [permitido, setPermitido] = useState<boolean | null>(null);
+  // Pantallas marcadas en Core para este módulo. null = todas.
+  const [pantallas, setPantallas] = useState<string[] | null>(null);
 
   useEffect(() => {
     let activo = true;
@@ -143,8 +145,11 @@ function useAccesoWorkplanner() {
       try {
         const { data: rows, error } = await supabase.rpc("app_mis_modulos");
         if (error) throw error;
-        const ok = (rows ?? []).some((r: { modulo: string }) => r.modulo === MODULO_WORKPLANNER);
-        if (activo) setPermitido(ok);
+        const mio = (rows ?? []).find((r: { modulo: string }) => r.modulo === MODULO_WORKPLANNER);
+        if (activo) {
+          setPermitido(Boolean(mio));
+          setPantallas(Array.isArray(mio?.pantallas) && mio.pantallas.length ? mio.pantallas.map(String) : null);
+        }
         return;
       } catch { /* migración SaaS no aplicada: fallback */ }
 
@@ -153,10 +158,13 @@ function useAccesoWorkplanner() {
       try {
         const { data: rows } = await supabase
           .from("app_usuario_modulos")
-          .select("modulo")
+          .select("modulo, pantallas")
           .eq("user_id", user.id);
-        const ok = (rows ?? []).some((r) => r.modulo === MODULO_WORKPLANNER);
-        if (activo) setPermitido(ok);
+        const mio = (rows ?? []).find((r) => r.modulo === MODULO_WORKPLANNER);
+        if (activo) {
+          setPermitido(Boolean(mio));
+          setPantallas(Array.isArray(mio?.pantallas) && mio.pantallas.length ? mio.pantallas.map(String) : null);
+        }
       } catch {
         // Entorno sin las tablas SaaS: no bloqueamos el módulo.
         if (activo) setPermitido(true);
@@ -165,7 +173,7 @@ function useAccesoWorkplanner() {
     return () => { activo = false; };
   }, []);
 
-  return permitido;
+  return { permitido, pantallas };
 }
 
 /**
@@ -177,7 +185,7 @@ function useAccesoWorkplanner() {
  */
 export default function WorkPlannerApp() {
   const navigate = useNavigate();
-  const permitido = useAccesoWorkplanner();
+  const { permitido, pantallas: pantallasDeCore } = useAccesoWorkplanner();
   const esAdmin = useEsAdministrador();
 
   /*
@@ -241,6 +249,8 @@ export default function WorkPlannerApp() {
             <nav className="flex items-center gap-1">
               {SECCIONES.filter((s) => !("soloAdmin" in s && s.soloAdmin) || esAdmin)
                 .filter((s) => seccionVisible(VISTA_DE_LA_SECCION[s.key] ?? null, vistasPermitidas))
+                // Y lo marcado en Core → Usuarios → WorkPlanner: segunda cerradura.
+                .filter((s) => seccionMarcadaEnCore(s.key, pantallasDeCore))
                 .map((s) => {
                 const Icon = s.icon;
                 return (

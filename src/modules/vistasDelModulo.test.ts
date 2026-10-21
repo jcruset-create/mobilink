@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { puedeAbrirVistaIncrustada, seccionVisible } from "./vistasDelModulo";
+import { puedeAbrirVistaIncrustada, seccionVisible, seccionMarcadaEnCore } from "./vistasDelModulo";
 import type { AppView } from "./permissions";
 
 const con = (permitidas: string[]) => (v: AppView) => permitidas.includes(v);
@@ -40,5 +40,14 @@ describe("seccionVisible", () => {
 
   it("una sección que no abre vista del panel no se esconde nunca", () => {
     expect(seccionVisible(null, ["operativo2"])).toBe(true);
+  });
+});
+
+describe("seccionMarcadaEnCore", () => {
+  it("sin lista, todo marcado; con lista, solo lo que está", () => {
+    expect(seccionMarcadaEnCore("recepciones", null)).toBe(true);
+    expect(seccionMarcadaEnCore("recepciones", [])).toBe(true);
+    expect(seccionMarcadaEnCore("recepciones", ["operativo2", "agenda"])).toBe(false);
+    expect(seccionMarcadaEnCore("agenda", ["operativo2", "agenda"])).toBe(true);
   });
 });

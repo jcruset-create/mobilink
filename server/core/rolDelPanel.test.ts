@@ -42,6 +42,25 @@ describe("resolverRolDelPanel", () => {
     ).toMatchObject({ role: "supervisor", allowedViews: ["operativo2", "agenda2", "agenda"], via: "workplanner" });
   });
 
+  it("el caso de Neus: la Agenda marcada en Core se suma a las vistas del usuario del panel", () => {
+    const r = resolverRolDelPanel(
+      sesion({ username: "neus", workplanner: { pantallas: ["operativo2", "agenda", "partes"] } }),
+      [{ name: "Neus", role: "supervisor", allowedViews: ["operativo2"] }]
+    );
+    expect(r?.via).toBe("nombre");
+    expect(r?.allowedViews).toEqual(["operativo2", "agenda2", "agenda"]);
+  });
+
+  it("si el usuario del panel ya lo ve todo, o Core no limita, se queda en «todas»", () => {
+    const panelTodo = [{ name: "Neus", role: "supervisor" as const }];
+    expect(resolverRolDelPanel(sesion({ username: "neus", workplanner: { pantallas: ["agenda"] } }), panelTodo)?.allowedViews).toBeNull();
+    expect(resolverRolDelPanel(sesion({ username: "neus", workplanner: { pantallas: null } }), [{ name: "Neus", role: "supervisor", allowedViews: ["operativo2"] }])?.allowedViews).toBeNull();
+  });
+
+  it("sin el módulo, las vistas del usuario del panel se quedan como están", () => {
+    expect(resolverRolDelPanel(sesion({ username: "neus" }), [{ name: "Neus", role: "supervisor", allowedViews: ["operativo2"] }])?.allowedViews).toEqual(["operativo2"]);
+  });
+
   it("el usuario del panel manda sobre el módulo", () => {
     expect(
       resolverRolDelPanel(sesion({ techName: "Albert", workplanner: { pantallas: null } }), panel)?.via

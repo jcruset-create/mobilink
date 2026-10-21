@@ -332,7 +332,11 @@ export const MODULOS_APP: ModuloApp[] = [
       { key: "operativo2", label: "Operativo 2" },
       { key: "agenda", label: "Agenda" },
       { key: "tecnicos", label: "Pantalla técnicos" },
+      // Las claves son las del menú de WorkPlanner (SECCIONES en
+      // WorkPlannerApp.tsx): lo que se desmarca aquí desaparece de allí.
+      { key: "recepciones", label: "Recepción vehículos" },
       { key: "partes", label: "Partes de trabajo" },
+      { key: "pedidos", label: "Pedidos ERP" },
       { key: "plantillas", label: "Plantillas de checklist" },
       { key: "personal", label: "Personal (fichas y bajas)" },
       { key: "ausencias", label: "Ausencias y vacaciones" },
