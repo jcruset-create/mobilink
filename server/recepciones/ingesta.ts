@@ -535,24 +535,60 @@ export async function reprocesar(ctx: { empresaId: string }, correoId: string, a
       // en el orden en que los nombra. Para eso tienen que estar todos: si
       // falta alguno, el correo espera a ése y se reprocesa solo cuando llega.
       const adicionales: repo.Pedido[] = [];
+      let principal: repo.Pedido | null = null;
+      const faltan: string[] = [];
+      let deducidoDeLosQueFaltan: repo.Pedido | null = null;
       if (distintos.length > 1 && !entrega) {
+        // El albarán tiene que poder recepcionarse SIEMPRE, falte el pedido
+        // que falte. Los que están se llevan sus líneas; lo que sobra es de
+        // los que faltan, y con ello se deduce el primero de ellos, como se
+        // hace con el albarán que llega antes que su único pedido. Si faltan
+        // varios no se sabe qué línea es de cuál: van todas al primero, y la
+        // nota lo dice para que se vea.
+        const literales = new Map(a.numerosPedido.map((n) => [normalizarNumero(n), n]));
         const encontrados: repo.Pedido[] = [];
         for (const n of distintos) {
           const p = await repo.pedidoPorNumero(ctx.empresaId, proveedor.id, n!);
-          if (!p) {
-            return terminar(
-              {
-                resultado: "PENDIENTE_REVISION",
-                motivo: `El albarán ${a.numeroAlbaran} sirve a varios pedidos (${a.numerosPedido.join(", ")}) y el ${n} todavía no ha llegado: se repartirá solo cuando llegue.`,
-                avisos: leido.avisos,
-              },
-              // Se espera al que falta: su llegada despierta este correo.
-              { ...baseA, datosExtraidos: { ...datos, pedidoNormalizado: n } }
-            );
-          }
-          encontrados.push(p);
+          if (p) encontrados.push(p);
+          else faltan.push(literales.get(n) ?? n!);
         }
-        adicionales.push(...encontrados.slice(1));
+        if (encontrados.length > 0) {
+          principal = encontrados[0];
+          adicionales.push(...encontrados.slice(1));
+          if (faltan.length > 0) {
+            const existentes: repo.PedidoLinea[] = [];
+            for (const x of encontrados) existentes.push(...(await repo.lineasDePedido(ctx.empresaId, x.id)));
+            const sobran = lineasDelAlbaran(a, existentes, false).filter((l) => !l.pedidoLineaId && l.descripcionProveedor);
+            if (sobran.length > 0) {
+              const centroF = await centroDe(ctx.empresaId, a.destinoLocalidad);
+              const ficha = await servicio.crearPedido(ctxSistema, {
+                proveedorId: proveedor.id,
+                numeroProveedor: faltan[0],
+                fechaPedido: null,
+                centroId: centroF?.id ?? null,
+                centroNombre: centroF?.nombre ?? a.destinoLocalidad ?? "",
+                transportista: a.transportista,
+                destinoTexto: a.destino,
+                clienteProveedor: a.cliente,
+                observaciones: null,
+                lineas: sobran.map((l) => ({
+                  descripcionProveedor: l.descripcionProveedor!,
+                  referenciaProveedor: l.referenciaProveedor ?? null,
+                  cantidadPedida: Number(l.cantidadExpedida),
+                  precioUnitarioCentimos: a.lineas.find((x) => x.descripcion === l.descripcionProveedor)?.precioCentimos ?? null,
+                })),
+                origen: "CORREO",
+                externalMessageId: null,
+                sourceReceivedAt: correo.fecha,
+                derivadoDeAlbaran: true,
+              });
+              deducidoDeLosQueFaltan = ficha.pedido;
+              adicionales.push(ficha.pedido);
+            }
+          }
+        }
+        // Si no está ninguno, sigue el camino de siempre: se deduce el primero
+        // con todas las líneas.
       }
 
       // El albarán entra SIEMPRE. Si su pedido no está, se deduce del propio
@@ -560,7 +596,7 @@ export async function reprocesar(ctx: { empresaId: string }, correoId: string, a
       // sabe de lo pedido, y queda marcado como deducido para que se vea que
       // la cantidad pedida es provisional. Cuando llegue el correo del pedido,
       // lo confirma.
-      let pedido = await repo.pedidoPorNumero(ctx.empresaId, proveedor.id, pedidoNormalizado);
+      let pedido = principal ?? (await repo.pedidoPorNumero(ctx.empresaId, proveedor.id, pedidoNormalizado));
       let deducido = false;
       if (!pedido) {
         const mercancia = a.lineas.filter((l) => l.descripcion && l.cantidad && l.cantidad > 0);
@@ -657,8 +693,16 @@ export async function reprocesar(ctx: { empresaId: string }, correoId: string, a
       if (avisoPdf) await servicio.avisarDeAlbaranSinPdf(ctxSistema, albaran.id);
       const nota = deducido
         ? `El pedido ${pedido.numeroProveedor} no existía: se ha deducido de este albarán y las cantidades pedidas son provisionales.`
-        : adicionales.length > 0
-          ? `Albarán repartido entre ${adicionales.length + 1} pedidos: ${[pedido, ...adicionales].map((x) => x.numeroProveedor).join(", ")}.`
+        : adicionales.length > 0 || faltan.length > 0
+          ? [
+              `Albarán repartido entre ${adicionales.length + 1} pedidos: ${[pedido, ...adicionales].map((x) => x.numeroProveedor).join(", ")}.`,
+              deducidoDeLosQueFaltan
+                ? `El pedido ${deducidoDeLosQueFaltan.numeroProveedor} no existía: se ha deducido con las líneas que no eran de los demás, y sus cantidades son provisionales.`
+                : null,
+              faltan.length > 1 ? `Faltaban los pedidos ${faltan.join(", ")}: lo que no era de los que están se ha puesto en el primero; repártelo si hace falta cuando lleguen.` : null,
+            ]
+              .filter(Boolean)
+              .join(" ")
           : null;
       return terminar(
         {
