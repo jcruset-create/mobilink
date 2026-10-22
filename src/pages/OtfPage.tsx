@@ -112,7 +112,15 @@ export default function OtfPage() {
                 >
                   <div className="flex items-center justify-between">
                     <span className="font-black text-slate-100">{o.clientName || "Sin cliente"}</span>
-                    <span className={`rounded-full border px-2 py-0.5 text-[11px] font-bold ${STATUS_OTF[o.status] ?? ""}`}>{o.status}</span>
+                    {/* Pendiente detrás de una asistencia: lo que se ve es eso,
+                        no «planificada», que parece que ya puede empezar. */}
+                    {o.enEspera ? (
+                      <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-bold text-amber-300">
+                        pendiente · tras #{o.esperaAsistenciaId}
+                      </span>
+                    ) : (
+                      <span className={`rounded-full border px-2 py-0.5 text-[11px] font-bold ${STATUS_OTF[o.status] ?? ""}`}>{o.status}</span>
+                    )}
                   </div>
                   <div className="mt-1 text-xs text-slate-400">{o.baseName || o.direccion || "—"}</div>
                   <div className="mt-1 text-xs font-bold text-slate-300">
@@ -474,7 +482,13 @@ function OtfDetail({ otf, plantillas, onChange }: { otf: any; plantillas: OtfPla
           <div className="text-sm text-slate-400">{otf.baseName || otf.direccion || "—"}{otf.assignedTechName ? ` · ${otf.assignedTechName}` : ""}</div>
         </div>
         <div className="text-right">
-          <span className={`rounded-full border px-2 py-0.5 text-xs font-bold ${STATUS_OTF[otf.status] ?? ""}`}>{otf.status}</span>
+          {otf.enEspera ? (
+            <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-xs font-bold text-amber-300">
+              Pendiente · empieza al cerrar la asistencia #{otf.esperaAsistenciaId}
+            </span>
+          ) : (
+            <span className={`rounded-full border px-2 py-0.5 text-xs font-bold ${STATUS_OTF[otf.status] ?? ""}`}>{otf.status}</span>
+          )}
           <div className="mt-1 text-sm font-black text-orange-400">{otf.progreso?.hechos ?? 0} / {otf.progreso?.total ?? 0}</div>
           <button
             onClick={() => {

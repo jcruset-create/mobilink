@@ -15,6 +15,7 @@ import { supabase, supabaseAnonAuth, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_
 import { fallaAlFirmar, firmarEnFilas, firmarUrls } from "./core/fotosFirmadas.ts";
 import { descargarMedioTwilio, rescatarMedioDeTwilio } from "./core/medioTwilio.ts";
 import { guardarCodigoErp, SISTEMAS_NO_ERP } from "./clientes/codigoErp.ts";
+import { OTF_EN_ESPERA_SQL } from "./otf/espera.ts";
 import {
   autorizacionParaTaller,
   puedeMarcarSinSeguimiento,
@@ -15739,9 +15740,12 @@ async function reconcileTechRoadsideOccupation() {
 async function checkOtfBaseArrival() {
   try {
     const r = await db.query(`
-      SELECT id, "webfleetVehicleId", lat, lng FROM otf
-      WHERE status = 'planificada' AND "arrivedAtBaseMs" IS NULL
-        AND "webfleetVehicleId" IS NOT NULL AND lat IS NOT NULL AND lng IS NOT NULL
+      SELECT o.id, o."webfleetVehicleId", o.lat, o.lng FROM otf o
+      WHERE o.status = 'planificada' AND o."arrivedAtBaseMs" IS NULL
+        AND o."webfleetVehicleId" IS NOT NULL AND o.lat IS NOT NULL AND o.lng IS NOT NULL
+        -- La furgoneta puede pasar por la base de la OTF pendiente mientras
+        -- sigue con la asistencia: eso no es empezar la OTF.
+        AND NOT ${OTF_EN_ESPERA_SQL}
     `);
     for (const o of r.rows) {
       try {
@@ -17971,6 +17975,10 @@ function normalizeOtf(row: any) {
     firmanteNombre: row.firmanteNombre ?? null,
     firmanteDni: row.firmanteDni ?? null,
     createdAtMs: Number(row.createdAtMs ?? Date.now()),
+    // La asistencia por la que espera, y si de verdad sigue esperando (solo
+    // viene calculado en las consultas que lo piden con OTF_EN_ESPERA_SQL).
+    esperaAsistenciaId: row.esperaAsistenciaId != null ? Number(row.esperaAsistenciaId) : null,
+    enEspera: row.enEspera === true,
     updatedAtMs: Number(row.updatedAtMs ?? Date.now()),
   };
 }
@@ -18001,7 +18009,7 @@ function combineTrabajo(plantilla?: string | null, manual?: string | null): stri
 }
 
 async function otfWithDetails(id: number) {
-  const h = await db.query(`SELECT * FROM otf WHERE id = $1`, [id]);
+  const h = await db.query(`SELECT o.*, ${OTF_EN_ESPERA_SQL} AS "enEspera" FROM otf o WHERE o.id = $1`, [id]);
   if (!h.rows[0]) return null;
   const t = await db.query(`SELECT * FROM otf_trabajos WHERE "otfId" = $1 ORDER BY id ASC`, [id]);
   const f = await db.query(`SELECT * FROM otf_trabajo_files WHERE "otfId" = $1 ORDER BY id ASC`, [id]);
@@ -18024,7 +18032,11 @@ app.get("/api/otf", requireAdminRole, async (req, res) => {
     const params: any[] = [];
     const where = status ? `WHERE status = $1` : "";
     if (status) params.push(status);
-    const r = await db.query(`SELECT * FROM otf ${where} ORDER BY "createdAtMs" DESC LIMIT 200`, params);
+    const r = await db.query(
+      `SELECT o.*, ${OTF_EN_ESPERA_SQL} AS "enEspera" FROM otf o ${where.replace("status", "o.status")}
+        ORDER BY o."createdAtMs" DESC LIMIT 200`,
+      params
+    );
     // progreso por OTF en una sola consulta
     const ids = r.rows.map((x: any) => Number(x.id));
     const prog = new Map<number, { hechos: number; total: number }>();
@@ -18066,21 +18078,27 @@ async function checkTechDisponibleParaOtf(
   techName: string | null | undefined,
   knownPlaceId: number | null,
   excludeOtfId?: number
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; esperaAsistenciaId?: number | null }> {
   const name = String(techName ?? "").trim();
-  if (!name) return { ok: true };
+  if (!name) return { ok: true, esperaAsistenciaId: null };
 
-  // ¿Está en una asistencia de carretera?
+  /*
+   * ¿Está en una asistencia de carretera? Antes eso RECHAZABA la OTF —«no se
+   * le puede asignar otra OTF hasta que termine»— y había que acordarse de
+   * volver a crearla más tarde. Ahora se crea igual y queda PENDIENTE detrás
+   * de esa asistencia: entra sola cuando el operario la cierra.
+   *
+   * La regla de abajo (una OTF abierta en otra base) sí sigue rechazando: dos
+   * OTF a la vez en sitios distintos no es «la siguiente», es un error.
+   */
   const tech = await db.query(
     `SELECT "currentRoadsideAssistanceId" FROM techs WHERE name = $1`,
     [name]
   );
-  if (tech.rows.length && tech.rows[0].currentRoadsideAssistanceId != null) {
-    return {
-      ok: false,
-      error: `${name} está en una asistencia en carretera (nº ${tech.rows[0].currentRoadsideAssistanceId}). No se le puede asignar otra OTF hasta que termine.`,
-    };
-  }
+  const esperaAsistenciaId =
+    tech.rows.length && tech.rows[0].currentRoadsideAssistanceId != null
+      ? Number(tech.rows[0].currentRoadsideAssistanceId)
+      : null;
 
   // ¿Tiene ya una OTF abierta?
   const abierta = await db.query(
@@ -18090,14 +18108,14 @@ async function checkTechDisponibleParaOtf(
      ORDER BY "createdAtMs" DESC LIMIT 1`,
     [name, excludeOtfId ?? null]
   );
-  if (!abierta.rows.length) return { ok: true };
+  if (!abierta.rows.length) return { ok: true, esperaAsistenciaId };
 
   const actual = abierta.rows[0];
   const mismaBase =
     knownPlaceId != null &&
     actual.knownPlaceId != null &&
     Number(actual.knownPlaceId) === Number(knownPlaceId);
-  if (mismaBase) return { ok: true }; // ampliación del trabajo en su base actual
+  if (mismaBase) return { ok: true, esperaAsistenciaId }; // ampliación del trabajo en su base actual
 
   return {
     ok: false,
@@ -18242,17 +18260,18 @@ app.post("/api/otf", requireSupervisorRole, async (req, res) => {
     if (!disp.ok) return res.status(409).json({ error: disp.error, code: "TECH_OCUPADO" });
     const r = await db.query(
       `INSERT INTO otf ("workshopId","clientName","clientId","knownPlaceId","baseName",direccion,lat,lng,
-        "fechaProgramadaMs",status,"assignedTechName","assignedVehicleName","webfleetVehicleId",notas,"createdAtMs","updatedAtMs")
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'planificada',$10,$11,$12,$13,$14,$14) RETURNING *`,
+        "fechaProgramadaMs",status,"assignedTechName","assignedVehicleName","webfleetVehicleId",notas,"createdAtMs","updatedAtMs",
+        "esperaAsistenciaId")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'planificada',$10,$11,$12,$13,$14,$14,$15) RETURNING *`,
       [
         b.workshopId ?? null, String(b.clientName ?? "").trim(), b.clientId ?? null, b.knownPlaceId ?? null,
         b.baseName ?? null, b.direccion ?? null,
         b.lat != null ? Number(b.lat) : null, b.lng != null ? Number(b.lng) : null,
         b.fechaProgramadaMs ?? null, b.assignedTechName ?? null, b.assignedVehicleName ?? null,
-        b.webfleetVehicleId ?? null, b.notas ?? null, now,
+        b.webfleetVehicleId ?? null, b.notas ?? null, now, disp.esperaAsistenciaId ?? null,
       ]
     );
-    res.json(normalizeOtf(r.rows[0]));
+    res.json({ ...normalizeOtf(r.rows[0]), enEspera: disp.esperaAsistenciaId != null });
   } catch (e) {
     console.error("POST /api/otf error:", e);
     res.status(500).json({ error: "Error creando OTF" });
@@ -18292,6 +18311,11 @@ app.put("/api/otf/:id", requireSupervisorRole, async (req, res) => {
         id
       );
       if (!disp.ok) return res.status(409).json({ error: disp.error, code: "TECH_OCUPADO" });
+      // Cambiar de operario cambia detrás de qué espera: se recalcula.
+      await db.query(`UPDATE otf SET "esperaAsistenciaId" = $2 WHERE id = $1`, [
+        id,
+        disp.esperaAsistenciaId ?? null,
+      ]);
     }
 
     await db.query(
@@ -18374,8 +18398,9 @@ app.get("/api/roadside-operator/otf", requireRoadsideOperator, async (req, res) 
   try {
     const operator = (req as any).roadsideOperator as { techName: string };
     const r = await db.query(
-      `SELECT * FROM otf WHERE "assignedTechName" = $1 AND status NOT IN ('finalizada','cancelada')
-       ORDER BY "createdAtMs" DESC LIMIT 100`,
+      `SELECT o.*, ${OTF_EN_ESPERA_SQL} AS "enEspera" FROM otf o
+        WHERE o."assignedTechName" = $1 AND o.status NOT IN ('finalizada','cancelada')
+        ORDER BY o."createdAtMs" DESC LIMIT 100`,
       [operator.techName]
     );
     const ids = r.rows.map((x: any) => Number(x.id));
@@ -18410,6 +18435,20 @@ app.post("/api/roadside-operator/otf/:id/checkin", requireRoadsideOperator, asyn
   try {
     const id = Number(req.params.id);
     const now = Date.now();
+    /*
+     * Mientras espera, no arranca. Lo decide el servidor y no la APK, para que
+     * valga para los móviles que ya están instalados sin publicar otra.
+     */
+    const espera = await db.query(
+      `SELECT o."esperaAsistenciaId" AS tras FROM otf o WHERE o.id = $1 AND ${OTF_EN_ESPERA_SQL}`,
+      [id]
+    );
+    if (espera.rows[0]) {
+      return res.status(409).json({
+        error: `Esta OTF está pendiente: empieza cuando cierres la asistencia #${espera.rows[0].tras}.`,
+        code: "OTF_EN_ESPERA",
+      });
+    }
     await db.query(
       `UPDATE otf SET status = CASE WHEN status = 'planificada' THEN 'en_curso' ELSE status END,
          "arrivedAtBaseMs" = COALESCE("arrivedAtBaseMs", $2), "updatedAtMs" = $2
