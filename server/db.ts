@@ -801,6 +801,17 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS otf_status_idx ON otf(status);
     CREATE INDEX IF NOT EXISTS otf_tech_idx ON otf("assignedTechName");
 
+    -- Detrás de QUÉ asistencia de carretera espera esta OTF.
+    --
+    -- Una OTF para un operario que está en una asistencia ya no se rechaza:
+    -- se crea y queda pendiente hasta que la cierre. Lo que se guarda es el
+    -- enlace, no un «en espera» de sí o no: la OTF espera mientras esa
+    -- asistencia siga abierta, y deja de esperar sola en cuanto se cierra,
+    -- sin depender de que nada la apague. Mismo criterio que la cola de
+    -- asistencias (src/modules/colaEspera.ts). Sin REFERENCES: las tablas de
+    -- asistencias y OTF las crean módulos distintos y en otro orden.
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "esperaAsistenciaId" INTEGER;
+
     CREATE TABLE IF NOT EXISTS otf_trabajos (
       id SERIAL PRIMARY KEY,
       "otfId" INTEGER NOT NULL REFERENCES otf(id) ON DELETE CASCADE,
