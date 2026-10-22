@@ -394,6 +394,15 @@ El escáner del mostrador saca un PDF y ese PDF se cuelga del cobro o del pago
 día: portada con el cierre y el arqueo, listado de operaciones, y **los
 escaneados detrás**.
 
+**Las anulaciones en el cierre.** Anular una operación la deja en `REVERSED` y
+asienta una reversión del mismo tipo, `CONFIRMED`, con el importe en positivo
+y `reversa_de_id`. Los totales de la jornada (`resumenJornada`: cobros, por
+forma de pago, por sección) y el cotejo con el ERP cuentan solo lo **vivo**:
+ni la anulada ni su reversión. Antes la reversión se contaba como un cobro más
+y un cobro anulado seguía saliendo en el cierre. Lo anulado sale en su propia
+sección del informe, **«Anulaciones»**: número, reversión, importe, cliente y
+motivo.
+
 - **El fichero no va en la base de datos**: vive en un bucket de Supabase
   Storage y aquí solo queda la ruta. La URL tampoco se guarda: se firma al
   pedirla y caduca a los 15 minutos.
