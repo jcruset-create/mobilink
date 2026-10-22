@@ -377,6 +377,32 @@ describe.runIf(RUN)("Mobilink Cash sin ERP: escenario completo del encargo", () 
     );
     expect(enlace[0].reversa_de_id).toBe(cobro.operacionId);
     expect(enlace[0].motivo_reversa).toBe("Cobro duplicado");
+
+    // Un cobro vivo de 20 €, para ver que los totales cuentan solo lo vivo.
+    await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 2000,
+      formasPago: [{ forma: "CASH", importe: 2000 }],
+      efectivoRecibido: [{ valor: 2000, cantidad: 1 }],
+    });
+
+    // El resumen (la pantalla y el informe de cierre): la reversión NO suma
+    // como un cobro más, y la anulación sale aparte con su motivo.
+    const resumen = await servicio.resumenJornada(sesion.id);
+    expect(resumen.cobros.totalCentimos).toBe(2000);
+    expect(resumen.porFormaPago).toEqual([{ forma: "CASH", importeCentimos: 2000 }]);
+    expect(resumen.anulaciones).toEqual([
+      expect.objectContaining({
+        numero: cobro.numero,
+        tipo: "COLLECTION",
+        importeCentimos: 5000,
+        reversionNumero: reversa.numero,
+        motivo: "Cobro duplicado",
+      }),
+    ]);
+
+    const pdf = await informe.informeCierre(EMPRESA, sesion.id, { conJustificantes: false });
+    expect(pdf.subarray(0, 4).toString()).toBe("%PDF");
   });
 
   it("una caja no puede tener dos jornadas abiertas", async () => {

@@ -88,6 +88,9 @@ export async function leerJornada(
       WHERE o.session_id = $1
         AND s.empresa_id = $2
         AND o.estado = 'CONFIRMED'
+        -- La reversión de una anulación tampoco: es del mismo tipo y en
+        -- positivo, y el cobro anulado volvía a salir en el cotejo.
+        AND o.reversa_de_id IS NULL
         AND o.tipo IN ('COLLECTION','REFUND','PAYMENT')
       ORDER BY o.id, p.id`,
     [sessionId, empresaId]

@@ -419,6 +419,41 @@ async function construirPortada(d: {
     }
   }
 
+  /*
+   * Lo anulado en la jornada, cada cosa con la reversión que la deshizo. Los
+   * totales de arriba ya no la cuentan; sin esta sección, un cobro anulado
+   * desaparecía del papel sin dejar dicho que existió.
+   */
+  if (detalle.anulaciones.length > 0) {
+    titulo("Anulaciones");
+    const NOMBRE_TIPO: Record<string, string> = {
+      COLLECTION: "Cobro",
+      REFUND: "Abono",
+      PAYMENT: "Pago",
+      MANUAL_IN: "Entrada",
+      MANUAL_OUT: "Salida",
+      CASH_DELIVERY: "Entrega",
+      EXCHANGE: "Cambio",
+      ADJUSTMENT: "Ajuste",
+    };
+    for (const a of detalle.anulaciones) {
+      fila(
+        `${NOMBRE_TIPO[a.tipo] ?? a.tipo} ${a.numero} anulado · reversión ${a.reversionNumero}`,
+        `−${eur(a.importeCentimos)}`
+      );
+      const detalleAnulacion = [a.partyNombre, a.motivo ? `Motivo: ${a.motivo}` : null]
+        .filter(Boolean)
+        .join(" · ");
+      if (detalleAnulacion) {
+        doc.font("Helvetica").fontSize(8).fillColor(GRIS).text(detalleAnulacion, M + 8, doc.y - 2, {
+          width: ancho - 8,
+        });
+        doc.fontSize(10);
+        doc.moveDown(0.3);
+      }
+    }
+  }
+
   // ── Arqueo y cierre ──
   titulo("Arqueo");
   if (s.contadoCentimos == null) {
