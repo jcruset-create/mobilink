@@ -1,5 +1,11 @@
 import { supabase } from "./administracion/services/supabase";
-import { guardarTokenSesion, tokenSesionActual } from "./sesionToken";
+import {
+  anunciarCargaSesion,
+  esperarSesion,
+  guardarTokenSesion,
+  sesionCargada,
+  tokenSesionActual,
+} from "./sesionToken";
 
 /**
  * fetch con la sesión unificada (fase 1 SaaS): añade Authorization Bearer
@@ -14,16 +20,27 @@ import { guardarTokenSesion, tokenSesionActual } from "./sesionToken";
  * El token vive en `sesionToken.ts`, que no importa nada. Aquí se alimenta, que
  * es lo que requiere tener el cliente de Supabase delante.
  */
-void supabase.auth.getSession().then(({ data }) => {
-  guardarTokenSesion(data.session?.access_token ?? null);
-});
+// Se anuncia ANTES de pedirla, para que las peticiones que salgan mientras
+// tanto la esperen en vez de irse sin credencial. Ver sesionToken.ts.
+anunciarCargaSesion();
+void supabase.auth
+  .getSession()
+  .then(({ data }) => {
+    guardarTokenSesion(data.session?.access_token ?? null);
+  })
+  .catch(() => {
+    /* sin sesión: se sigue con lo que haya */
+  })
+  .finally(() => sesionCargada());
 supabase.auth.onAuthStateChange((_event, session) => {
   guardarTokenSesion(session?.access_token ?? null);
 });
 
 export { tokenSesionActual };
 
-export function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  // Nada más abrir una pantalla el token puede no haber llegado todavía.
+  await esperarSesion();
   const accessToken = tokenSesionActual();
   if (!accessToken) return fetch(input, init);
   const headers = new Headers(init?.headers);

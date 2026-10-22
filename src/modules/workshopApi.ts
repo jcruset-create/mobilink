@@ -9,18 +9,37 @@ import {
 } from "./techStatus";
 
 import { nowMs } from "./time";
-import { tokenSesionActual } from "./sesionToken";
+import { esperarSesion, tokenSesionActual } from "./sesionToken";
 export async function fetchWithTimeout(
   url: string,
   options?: RequestInit,
   timeoutMs = 8000
 ) {
+  /*
+   * Las cabeceras ya vienen hechas por quien llama —`getAdminHeaders()` se
+   * evalúa antes de entrar aquí—, y si se hicieron nada más abrir la pantalla
+   * pueden haber salido sin el token de la sesión, que aún no había llegado.
+   * Se espera a la sesión y, si ahora sí hay token y la petición no lleva
+   * ninguno, se le pone. Así no hay que tocar cada pantalla que carga datos al
+   * abrirse: la de OTF dejaba las furgonetas vacías por esto.
+   */
+  await esperarSesion();
+  const sesion = tokenSesionActual();
+  let opciones = options;
+  if (sesion) {
+    const cabeceras = new Headers(options?.headers);
+    if (!cabeceras.has("Authorization")) {
+      cabeceras.set("Authorization", `Bearer ${sesion}`);
+      opciones = { ...options, headers: cabeceras };
+    }
+  }
+
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const response = await fetch(url, {
-      ...options,
+      ...opciones,
       signal: controller.signal,
     });
 
