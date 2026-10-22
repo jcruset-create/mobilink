@@ -33,7 +33,7 @@ vi.mock("node:dns/promises", () => ({
 }));
 
 const API = "https://api.twilio.com/2010-04-01/Accounts/AC1/Messages/MM1/Media/ME1";
-const CDN = "https://media.twiliocdn.com/AC1/ME1?Signature=abc";
+const CDN = "https://mms.twiliocdn.com/AC1/ME1?Signature=abc";
 const BYTES = Buffer.from("foto-de-prueba");
 
 type Llamada = { url: string; authorization: string | undefined };
@@ -73,7 +73,7 @@ describe("descargarMedioTwilio", () => {
     vi.unstubAllGlobals();
   });
 
-  it("sigue el 307 de api.twilio.com a media.twiliocdn.com y baja el fichero", async () => {
+  it("sigue el 307 de api.twilio.com a mms.twiliocdn.com y baja el fichero", async () => {
     const { llamadas, fn } = fetchFingido(CDN);
     vi.stubGlobal("fetch", fn);
 
@@ -85,6 +85,21 @@ describe("descargarMedioTwilio", () => {
     expect(Buffer.compare(r.cuerpo, BYTES)).toBe(0);
     expect(r.urlFinal).toBe(CDN);
     expect(llamadas.map((l) => l.url)).toEqual([API, CDN]);
+  });
+
+  it("también desde cualquier otro nombre del CDN de Twilio", async () => {
+    // Producción decía «Host no permitido: mms.twiliocdn.com» con la lista
+    // fijada a «media.twiliocdn.com». El CDN cambia de nombre; el dominio no.
+    const { fn } = fetchFingido("https://media.twiliocdn.com/AC1/ME1");
+    vi.stubGlobal("fetch", fn);
+    expect((await descargarMedioTwilio(API)).ok).toBe(true);
+  });
+
+  it("un dominio que solo IMITA al CDN se rechaza", async () => {
+    const { llamadas, fn } = fetchFingido("https://twiliocdn.com.atacante.tld/x");
+    vi.stubGlobal("fetch", fn);
+    await expect(descargarMedioTwilio(API)).rejects.toThrow();
+    expect(llamadas).toHaveLength(1);
   });
 
   it("la primera petición lleva las credenciales de la cuenta de Twilio", async () => {

@@ -300,8 +300,18 @@ async function leerConTope(respuesta: Response, maxBytes: number): Promise<Buffe
 // Van aquí y no repartidas por el código para que se vea de un vistazo a qué
 // sitios sale este servidor con datos que vienen de fuera.
 
-/** Medios de WhatsApp. Es donde Twilio sirve lo que manda un cliente. */
-export const HOSTS_TWILIO = ["api.twilio.com", "media.twiliocdn.com"] as const;
+/**
+ * Medios de WhatsApp. Es donde Twilio sirve lo que manda un cliente.
+ *
+ * «api.twilio.com» contesta con una redirección a su CDN, y el CDN NO es un
+ * solo nombre: aquí estaba «media.twiliocdn.com», y los adjuntos de WhatsApp
+ * llegan desde «mms.twiliocdn.com». La descarga moría con «Host no
+ * permitido» y ningún adjunto tenía copia. Se permite el dominio del CDN
+ * entero —`hostPermitido` acepta sus subdominios—, que es de Twilio igual
+ * que «api.twilio.com», en vez de ir añadiendo nombres cada vez que Twilio
+ * estrene uno.
+ */
+export const HOSTS_TWILIO = ["api.twilio.com", "twiliocdn.com"] as const;
 
 /** Enlaces de mapa que un cliente manda por WhatsApp para decir dónde está. */
 export const HOSTS_MAPAS = [
