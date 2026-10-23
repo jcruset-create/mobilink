@@ -6,6 +6,7 @@ import type { Empresa, OperacionNeumatico, TipoOperacion, Vehiculo, EstadoOperac
 import { TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS, ESTADO_OPERACION_BADGE, PRIORIDAD_OPERACION_LABELS } from "../types";
 import { TableWrap, tdCls, thCls, inputCls, Modal, Field } from "../components/ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
+import { esHistoricoAlbaran, textoNeumaticoHistorico, textoPosicionHistorica, textoRetirado } from "../../../../shared/historicoAlbaran";
 
 // Acciones de estado disponibles según el estado actual (transiciones simples).
 // El grafo también vive en la base de datos (trg_op_valida_transicion): esto
@@ -333,8 +334,18 @@ export default function Operaciones() {
                 {o.status ? <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${ESTADO_OPERACION_BADGE[o.status]}`}>{ESTADO_OPERACION_LABELS[o.status]}</span> : "—"}
                 {o.prioridad && o.prioridad !== "normal" && <span className="ml-1 text-[10px] uppercase text-amber-300">{PRIORIDAD_OPERACION_LABELS[o.prioridad]}</span>}
               </td>
-              <td className={tdCls + " text-slate-400"}>{o.neumatico?.numero_interno ?? o.neumatico?.codigo_interno ?? "—"}</td>
-              <td className={tdCls + " text-slate-400"}>{o.posicion_origen?.codigo_posicion ?? ""}{o.posicion_origen && o.posicion_destino ? " → " : ""}{o.posicion_destino?.codigo_posicion ?? ""}</td>
+              {/* Un neumático histórico (albarán importado) no tiene ficha: se
+                  enseña lo que decía el albarán, y se dice que es histórico. */}
+              <td className={tdCls + " text-slate-400"}>
+                {esHistoricoAlbaran(o)
+                  ? <span title="Histórico importado de albarán, sin ficha de neumático">{o.tipo_operacion === "desmontaje" ? textoRetirado(o) : textoNeumaticoHistorico(o)} <span className="rounded bg-slate-700 px-1 text-[10px] uppercase text-slate-300">histórico</span></span>
+                  : (o.neumatico?.numero_interno ?? o.neumatico?.codigo_interno ?? "—")}
+              </td>
+              <td className={tdCls + " text-slate-400"}>
+                {esHistoricoAlbaran(o)
+                  ? textoPosicionHistorica(o.posicion_destino?.codigo_posicion, o.posicion_fuente)
+                  : <>{o.posicion_origen?.codigo_posicion ?? ""}{o.posicion_origen && o.posicion_destino ? " → " : ""}{o.posicion_destino?.codigo_posicion ?? ""}</>}
+              </td>
               <td className={tdCls + " text-slate-400"}>{o.km_vehiculo ?? "—"}</td>
               <td className={tdCls + " text-slate-400"}>{o.motivo ? MOTIVO_OPERACION_LABELS[o.motivo] : "—"}</td>
               <td className={tdCls + " text-slate-400"}>{o.destino ?? "—"}</td>
