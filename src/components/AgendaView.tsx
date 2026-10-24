@@ -45,6 +45,7 @@ import {
 } from "../modules/techStatusScheduleHelpers";
 
 import { getTechStatusLabel } from "../modules/techStatus";
+import { barraDeEstado, barrasARecolocar, estadosSinBarra } from "../modules/barrasDeEstadoEnAgenda";
 import { buildScheduledJobV2FieldsFromTemplate } from "../modules/scheduledJobV2Helpers";
 import { minutosDeLaCita } from "../modules/duracionDeCita";
 import { getAgendaWhatsappV2Description } from "../modules/agendaWhatsappV2Helpers";
@@ -952,6 +953,25 @@ function guardarRecordatorioEnBackend(reminder: DateReminder) {
     appendLog("Error guardando el recordatorio de agenda.");
   });
 }
+
+/*
+ * Manda el estado programado: si hay vacaciones o bajas sin su barra de
+ * «Todo el día» (ver barrasDeEstadoEnAgenda.ts), se reconstruyen al cargar y
+ * se guardan, para que la agenda enseñe lo mismo que el Planning.
+ */
+useEffect(() => {
+  if (!dateRemindersLoaded) return;
+  const faltan = estadosSinBarra(dateReminders as any, scheduledTechStatuses);
+  const recolocadas = barrasARecolocar(dateReminders as any, scheduledTechStatuses, normalizeWorkshopId) as DateReminder[];
+  if (faltan.length === 0 && recolocadas.length === 0) return;
+  const nuevas = faltan.map((e, i) => barraDeEstado(e, createDateReminderId() + i) as DateReminder);
+  setDateReminders((prev) => [
+    ...prev.map((b) => recolocadas.find((r) => r.id === b.id) ?? b),
+    ...nuevas,
+  ]);
+  for (const barra of [...recolocadas, ...nuevas]) guardarRecordatorioEnBackend(barra);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [dateRemindersLoaded, scheduledTechStatuses]);
 
   const [draft, setDraft] = useState({
   templateKey: quickTemplates[0]?.key ?? "",
