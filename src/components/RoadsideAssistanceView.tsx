@@ -343,14 +343,30 @@ function getActionLabel(status: RoadsideAssistanceStatus) {
   if (status === "asignada") return "En camino";
   if (status === "en_camino") return "Llegada";
   if (status === "en_punto") return "Finalizar";
+  if (status === "inicio_reparacion") return "Finalizar";
   if (status === "finalizada") return "Taller";
   return "";
 }
+
+/*
+ * Desde dónde la oficina puede dar la asistencia por llegada al taller sin
+ * esperar al GPS. La geocerca a veces no salta —la furgoneta aparca fuera del
+ * radio, o Webfleet no manda posición— y la asistencia se quedaba en «A
+ * taller» con el operario ocupado. Antes de «en_punto» no tiene sentido: aún
+ * no se ha hecho el trabajo.
+ */
+const ESTADOS_FORZAR_TALLER: ReadonlySet<RoadsideAssistanceStatus> = new Set([
+  "en_punto",
+  "inicio_reparacion",
+  "finalizada",
+  "en_camino_base",
+]);
 
 function getActionIcon(status: RoadsideAssistanceStatus) {
   if (status === "asignada") return Navigation;
   if (status === "en_camino") return MapPin;
   if (status === "en_punto") return CheckCircle2;
+  if (status === "inicio_reparacion") return CheckCircle2;
   if (status === "finalizada") return Home;
   return Send;
 }
@@ -1150,6 +1166,34 @@ export default function RoadsideAssistanceView({
 
     try {
       await onStatusChange(assistance, status);
+    } finally {
+      setChangingId(null);
+    }
+  }
+
+  /*
+   * Pasa por «finalizada» si aún no lo estaba, y luego a «llegada_taller»: los
+   * dos con el mismo cambio de estado de siempre, para que se ejecuten el
+   * informe, el expediente y la liberación del operario como si lo hubiera
+   * hecho la APK o el GPS.
+   */
+  async function handleForzarLlegadaTaller(assistance: RoadsideAssistance) {
+    const sinFinalizar =
+      assistance.status === "en_punto" || assistance.status === "inicio_reparacion";
+    const quien = assistance.plate || assistance.customerName || `#${assistance.id}`;
+    const pregunta = sinFinalizar
+      ? `¿Finalizar ${quien} y darla por llegada al taller?`
+      : `¿Dar ${quien} por llegada al taller sin esperar al GPS?`;
+    if (!window.confirm(pregunta)) return;
+
+    setChangingId(assistance.id);
+    try {
+      if (sinFinalizar) await onStatusChange(assistance, "finalizada");
+      await onStatusChange(assistance, "llegada_taller");
+    } catch (err) {
+      setLocalError(
+        err instanceof Error ? err.message : "No se pudo forzar la llegada al taller."
+      );
     } finally {
       setChangingId(null);
     }
@@ -2892,7 +2936,7 @@ export default function RoadsideAssistanceView({
                           : "Enviar WhatsApp"}
                       </button>
 
-                      {nextStatus && (
+                      {nextStatus && nextStatus !== "llegada_taller" && (
                         assistance.status === "asignada" ? (
                           <button
                             type="button"
@@ -2928,6 +2972,21 @@ export default function RoadsideAssistanceView({
                             {getActionLabel(assistance.status)}
                           </button>
                         )
+                      )}
+
+                      {ESTADOS_FORZAR_TALLER.has(assistance.status) && (
+                        <button
+                          type="button"
+                          onClick={() => handleForzarLlegadaTaller(assistance)}
+                          disabled={changingId === assistance.id}
+                          title="Para cuando el GPS no detecta la llegada de la furgoneta al taller"
+                          className="inline-flex items-center gap-2 rounded-lg border border-slate-400/40 bg-slate-500/20 px-3 py-2 text-sm font-bold text-slate-200 hover:bg-slate-500/30 disabled:opacity-60"
+                        >
+                          <Home className="h-4 w-4" />
+                          {assistance.status === "en_punto" || assistance.status === "inicio_reparacion"
+                            ? "Finalizar y llegada a taller"
+                            : "Forzar llegada a taller"}
+                        </button>
                       )}
 
                       <button
