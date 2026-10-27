@@ -5,6 +5,7 @@ import { formatoEntradaParte, resumenTarjeta } from "../modules/tarjetaTrabajo";
 import PuntoEnCola from "./PuntoEnCola";
 import SeguimientoAsistenciaCard from "./SeguimientoAsistenciaCard";
 import { tieneSeguimiento } from "../modules/seguimientoEnTarjeta";
+import { matriculaDeFurgoneta, type FurgonetaConocida } from "../modules/furgonetaDelTrabajo";
 import {
   chipDeSituacion,
   claseDeSituacion,
@@ -36,6 +37,8 @@ type JobForOperarios = {
   pausedAtMs?: number | string | null;
   linkedGroupId?: string | null;
   linkedOrder?: 1 | 2 | null;
+  /** Furgoneta del trabajo móvil, para ponerla al lado del operario. */
+  assignedVehicleId?: number | null;
   dependsOnJobId?: number | null;
   blockedReason?: string | null;
   includedTasks?: {
@@ -76,6 +79,8 @@ type RoadsideAssistanceForOperarios = {
   /** Con token se pinta el seguimiento (aviso, mapa y pasos) dentro de la tarjeta. */
   trackingToken?: string | null;
   sinSeguimiento?: boolean | null;
+  /** Furgoneta con la que ha salido, para ponerla al lado del operario. */
+  assignedVehicleName?: string | null;
 };
 
 const ROADSIDE_STATUS_LABELS: Record<string, string> = {
@@ -94,6 +99,8 @@ type Props = {
   jobs: JobForOperarios[];
   techs: TechForOperarios[];
   roadsideAssistances?: RoadsideAssistanceForOperarios[];
+  /** Las furgonetas del taller, para pasar de id o nombre a matrícula. */
+  vehicles?: FurgonetaConocida[];
   finishJob: (jobId: number) => void;
   moveJobToStandBy: (jobId: number) => void;
   getOperationLabel: (job: OperationLabelJob) => string;
@@ -345,6 +352,20 @@ function getAssignedMaintenanceStatusClass(
   if (status === "interrumpida") return "bg-sky-100 text-sky-700";
 
   return "bg-amber-100 text-amber-700";
+}
+
+/** La matrícula de la furgoneta, al lado del nombre. Sin furgoneta no pinta nada. */
+function ChipFurgoneta({ matricula }: { matricula: string | null }) {
+  if (!matricula) return null;
+  return (
+    <span
+      title="Furgoneta"
+      className="inline-flex items-center gap-1 rounded-xl border border-slate-300 bg-slate-100 px-2 py-1 font-mono text-sm font-bold tracking-wide text-slate-800"
+    >
+      <img src="/van-icon.png" alt="" className="h-4 w-auto" />
+      {matricula}
+    </span>
+  );
 }
 
 function TechAvatar({
@@ -649,6 +670,7 @@ export default function OperariosTVView({
   jobs,
   techs,
   roadsideAssistances = [],
+  vehicles = [],
   finishJob,
   moveJobToStandBy,
   getOperationLabel,
@@ -1317,6 +1339,7 @@ export default function OperariosTVView({
                       <div className="flex items-center gap-3 rounded-2xl bg-white px-3 py-2 shadow-sm">
                         <TechAvatar tech={tech} size="large" />
                         <div className="text-2xl font-black">{a.assignedTechName}</div>
+                        <ChipFurgoneta matricula={matriculaDeFurgoneta(a, vehicles)} />
                       </div>
                     </div>
                     <div className="mb-1 flex items-center gap-2">
@@ -1366,6 +1389,7 @@ export default function OperariosTVView({
                             >
                               <TechAvatar tech={tech} size="large" />
                               <div className="text-2xl font-black">{name}</div>
+                              <ChipFurgoneta matricula={matriculaDeFurgoneta(job, vehicles)} />
                             </div>
                           );
                         })
