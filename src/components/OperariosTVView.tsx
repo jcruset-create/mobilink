@@ -354,17 +354,21 @@ function getAssignedMaintenanceStatusClass(
   return "bg-amber-100 text-amber-700";
 }
 
-/** La matrícula de la furgoneta, al lado del nombre. Sin furgoneta no pinta nada. */
+/**
+ * La matrícula de la furgoneta, en una etiqueta propia al lado de la del
+ * operario: misma caja blanca y mismo tamaño de letra que el nombre, para
+ * que desde la TV se lean igual. Sin furgoneta no pinta nada.
+ */
 function ChipFurgoneta({ matricula }: { matricula: string | null }) {
   if (!matricula) return null;
   return (
-    <span
+    <div
       title="Furgoneta"
-      className="inline-flex items-center gap-1 rounded-xl border border-slate-300 bg-slate-100 px-2 py-1 font-mono text-sm font-bold tracking-wide text-slate-800"
+      className="flex items-center gap-3 rounded-2xl bg-white px-3 py-2 shadow-sm"
     >
-      <img src="/van-icon.png" alt="" className="h-4 w-auto" />
-      {matricula}
-    </span>
+      <img src="/van-icon.png" alt="" className="h-8 w-auto" />
+      <div className="font-mono text-2xl font-black tracking-wide">{matricula}</div>
+    </div>
   );
 }
 
@@ -1339,8 +1343,8 @@ export default function OperariosTVView({
                       <div className="flex items-center gap-3 rounded-2xl bg-white px-3 py-2 shadow-sm">
                         <TechAvatar tech={tech} size="large" />
                         <div className="text-2xl font-black">{a.assignedTechName}</div>
-                        <ChipFurgoneta matricula={matriculaDeFurgoneta(a, vehicles)} />
                       </div>
+                      <ChipFurgoneta matricula={matriculaDeFurgoneta(a, vehicles)} />
                     </div>
                     <div className="mb-1 flex items-center gap-2">
                       <span className="rounded-full bg-emerald-200 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-900">
@@ -1389,7 +1393,6 @@ export default function OperariosTVView({
                             >
                               <TechAvatar tech={tech} size="large" />
                               <div className="text-2xl font-black">{name}</div>
-                              <ChipFurgoneta matricula={matriculaDeFurgoneta(job, vehicles)} />
                             </div>
                           );
                         })
@@ -1398,6 +1401,7 @@ export default function OperariosTVView({
                           Sin técnicos asignados
                         </div>
                       )}
+                      <ChipFurgoneta matricula={matriculaDeFurgoneta(job, vehicles)} />
                     </div>
 
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
