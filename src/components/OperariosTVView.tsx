@@ -3,6 +3,8 @@ import { apiFetch } from "../modules/apiFetch";
 import { useEffect, useState } from "react";
 import { formatoEntradaParte, resumenTarjeta } from "../modules/tarjetaTrabajo";
 import PuntoEnCola from "./PuntoEnCola";
+import SeguimientoAsistenciaCard from "./SeguimientoAsistenciaCard";
+import { tieneSeguimiento } from "../modules/seguimientoEnTarjeta";
 import {
   claseDeSituacion,
   emojiDeSituacion,
@@ -70,6 +72,9 @@ type RoadsideAssistanceForOperarios = {
   assignedTechName?: string | null;
   etaMinutos?: number | null;
   etaKm?: string | null;
+  /** Con token se pinta el seguimiento (aviso, mapa y pasos) dentro de la tarjeta. */
+  trackingToken?: string | null;
+  sinSeguimiento?: boolean | null;
 };
 
 const ROADSIDE_STATUS_LABELS: Record<string, string> = {
@@ -1324,6 +1329,14 @@ export default function OperariosTVView({
                     <div className="text-3xl font-black text-slate-950">{a.plate || "—"}</div>
                     {a.customerName && (
                       <div className="text-sm font-semibold text-emerald-900">{a.customerName}</div>
+                    )}
+                    {tieneSeguimiento(a) && (
+                      <SeguimientoAsistenciaCard
+                        trackingToken={String(a.trackingToken)}
+                        status={a.status}
+                        etaMinutos={a.etaMinutos}
+                        etaKm={a.etaKm}
+                      />
                     )}
                   </div>
                 );
