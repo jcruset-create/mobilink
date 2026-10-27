@@ -15,6 +15,7 @@ import {
   type SituacionTecnico,
 } from "../modules/colorEstadoTecnico";
 import { horaDeRecepcion, type RecepcionVehiculo } from "../modules/recepcionVehiculo";
+import { ETIQUETA_ASISTENCIA_EN_CURSO } from "../modules/asistenciaEnCurso";
 
 type AreaKey = "camion" | "movil" | "tacografo" | "turismo" | "mecanica";
 
