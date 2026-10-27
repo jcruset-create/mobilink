@@ -29,7 +29,7 @@ export type BarraEstado = {
   title: string;
   startDate: string;
   endDate: string;
-  color: "red" | "orange" | "blue" | "green" | "slate";
+  color: "red" | "orange" | "blue" | "green" | "slate" | "sky";
   notes?: string;
   techStatusId?: string;
   techName?: string;
@@ -68,6 +68,8 @@ export function colorDeEstado(status: TechStatus): BarraEstado["color"] {
       return "slate";
     case "disponible":
       return "green";
+    case "formacion":
+      return "sky";
     default:
       return "orange";
   }

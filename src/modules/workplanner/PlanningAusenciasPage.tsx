@@ -54,6 +54,7 @@ const COLOR: Record<EstadoDia, string> = {
   permiso: "bg-yellow-400",
   otro_taller: "bg-blue-500",
   nodisponible: "bg-violet-500",
+  formacion: "bg-sky-300",
 };
 
 function formatoFecha(fecha: string) {

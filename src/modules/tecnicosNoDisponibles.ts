@@ -17,6 +17,7 @@ export const ETIQUETA_NO_DISPONIBLE: Record<string, string> = {
   otro_taller: "En otro taller",
   en_otro_taller: "En otro taller",
   "en otro taller": "En otro taller",
+  formacion: "Formación",
 };
 
 export type TecnicoNoDisponible = {

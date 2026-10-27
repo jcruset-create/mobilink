@@ -30,6 +30,7 @@ const ABSENCE_STATUS_LABELS: Record<string, string> = {
   permiso: "Permiso",
   nodisponible: "No disponible",
   otro_taller: "Otro taller",
+  formacion: "Formación",
 };
 
 const ABSENCE_STATUS_COLORS: Record<string, string> = {
@@ -38,6 +39,7 @@ const ABSENCE_STATUS_COLORS: Record<string, string> = {
   permiso: "bg-amber-100 text-amber-700",
   nodisponible: "bg-slate-200 text-slate-600",
   otro_taller: "bg-violet-100 text-violet-700",
+  formacion: "bg-sky-100 text-sky-700",
 };
 
 function isAbsenceStatus(status: string): boolean {

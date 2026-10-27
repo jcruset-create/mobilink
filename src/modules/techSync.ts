@@ -8,7 +8,8 @@ export function isManualUnavailableStatus(status: string) {
     status === "baja" ||
     status === "otro_taller" ||
     status === "en_otro_taller" ||
-    status === "en otro taller"
+    status === "en otro taller" ||
+    status === "formacion"
   );
 }
 

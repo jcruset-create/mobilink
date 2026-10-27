@@ -10,7 +10,9 @@ export type TechStatus =
   | "vacaciones"
   | "baja"
   | "permiso"
-  | "otro_taller";
+  | "otro_taller"
+  /** En un curso: ausente y no disponible, con fechas, como vacaciones. */
+  | "formacion";
 
 export type AreaKey = "camion" | "movil" | "tacografo" | "turismo" | "mecanica";
 

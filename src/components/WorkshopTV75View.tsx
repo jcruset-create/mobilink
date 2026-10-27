@@ -107,6 +107,7 @@ function getTechStatusLabel(status: string) {
   if (normalized === "otro_taller") return "EN OTRO TALLER";
   if (normalized === "en_otro_taller") return "EN OTRO TALLER";
   if (normalized === "nodisponible") return "NO DISPONIBLE";
+  if (normalized === "formacion") return "FORMACIÓN";
 
   return (status || "-").toUpperCase();
 }

@@ -6,6 +6,7 @@ import PuntoEnCola from "./PuntoEnCola";
 import SeguimientoAsistenciaCard from "./SeguimientoAsistenciaCard";
 import { tieneSeguimiento } from "../modules/seguimientoEnTarjeta";
 import {
+  chipDeSituacion,
   claseDeSituacion,
   emojiDeSituacion,
   situacionDeTecnico,
@@ -272,6 +273,7 @@ function getTechStatusLabel(status: string) {
   if (normalized === "permiso") return "PERMISO";
   if (normalized === "supervisor") return "SUPERVISOR";
   if (normalized === "refuerzo") return "REFUERZO";
+  if (normalized === "formacion") return "FORMACIÓN";
 
   return (status || "-").toUpperCase();
 }
@@ -1829,7 +1831,7 @@ export default function OperariosTVView({
                     </div>
 
                     <div className="flex items-center gap-1 shrink-0">
-                      <span className="rounded-full border border-white/80 bg-white/80 px-2 py-1 text-[10px] font-black">
+                      <span className={`rounded-full px-2.5 py-1 text-[10px] font-black ${chipDeSituacion(situacion)}`}>
                         {activeRoadsideAssistance
                           ? "CARRETERA"
                           : pendingOutsideMaintenanceTask

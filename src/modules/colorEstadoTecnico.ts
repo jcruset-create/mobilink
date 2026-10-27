@@ -1,12 +1,16 @@
 /**
  * El color de la tarjeta de un técnico en la pantalla de TV.
  *
- * La pantalla se mira desde lejos: el color tiene que decir, sin leer, si
- * alguien puede coger trabajo. Por eso el libre es GRIS, no verde —verde
- * parecía «todo bien» y en realidad es «no está haciendo nada»— y el que
- * trabaja es verde. Rojo es baja, naranja vacaciones o permiso, azul está en
- * otro taller o en un mantenimiento fuera; una asistencia en carretera es
- * trabajar, y va en verde.
+ * La pantalla se mira desde lejos: el color tiene que decir, sin leer, qué
+ * está haciendo cada uno. Lo eligió el taller: VERDE es libre, ROJO es
+ * trabajando (una asistencia en carretera también), y la BAJA es rojo fuerte
+ * con la fila entera maciza, para que no se confunda con trabajar aunque sea
+ * el mismo color. Amarillo son vacaciones y permiso, azul está en otro
+ * taller o en un mantenimiento fuera, azul claro es formación (en un curso)
+ * y gris lo que no encaja en nada de lo anterior.
+ *
+ * Los chips (`chipDeSituacion`) van macizos con letras blancas; solo el
+ * amarillo las lleva oscuras, porque en amarillo el blanco no se lee.
  */
 export type SituacionTecnico =
   | "libre"
@@ -14,6 +18,7 @@ export type SituacionTecnico =
   | "baja"
   | "ausente"
   | "fuera"
+  | "formacion"
   | "reservado"
   | "otro";
 
@@ -47,6 +52,8 @@ export function situacionDeTecnico(
     case "otro_taller":
     case "en_otro_taller":
       return "fuera";
+    case "formacion":
+      return "formacion";
     case "disponible":
     case "supervisor":
       return "libre";
@@ -75,6 +82,8 @@ export function emojiDeSituacion(s: SituacionTecnico): string {
       return "🌴";
     case "fuera":
       return "🚐";
+    case "formacion":
+      return "📚";
     case "reservado":
       return "⏳";
     default:
@@ -85,18 +94,42 @@ export function emojiDeSituacion(s: SituacionTecnico): string {
 export function claseDeSituacion(s: SituacionTecnico): string {
   switch (s) {
     case "libre":
-      return "border-slate-300 bg-slate-200 text-slate-800";
-    case "trabajando":
       return "border-green-300 bg-green-200 text-green-950";
+    case "trabajando":
+      return "border-red-300 bg-red-100 text-red-950";
     case "baja":
-      return "border-red-300 bg-red-200 text-red-950";
+      return "border-red-700 bg-red-600 text-white";
     case "ausente":
-      return "border-orange-300 bg-orange-200 text-orange-950";
+      return "border-yellow-300 bg-yellow-200 text-yellow-950";
     case "fuera":
       return "border-blue-300 bg-blue-200 text-blue-950";
+    case "formacion":
+      return "border-sky-300 bg-sky-100 text-sky-950";
     case "reservado":
       return "border-violet-300 bg-violet-200 text-violet-950";
     default:
       return "border-slate-300 bg-slate-100 text-slate-700";
+  }
+}
+
+/** El chip de estado de la tarjeta: macizo, letras blancas salvo en amarillo. */
+export function chipDeSituacion(s: SituacionTecnico): string {
+  switch (s) {
+    case "libre":
+      return "bg-green-600 text-white";
+    case "trabajando":
+      return "bg-red-600 text-white";
+    case "baja":
+      return "bg-red-900 text-white";
+    case "ausente":
+      return "bg-yellow-400 text-slate-900";
+    case "fuera":
+      return "bg-blue-600 text-white";
+    case "formacion":
+      return "bg-sky-500 text-white";
+    case "reservado":
+      return "bg-violet-600 text-white";
+    default:
+      return "bg-slate-600 text-white";
   }
 }

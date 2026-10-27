@@ -18,6 +18,7 @@ export const SCHEDULED_TECH_STATUS_OPTIONS: TechStatus[] = [
   "vacaciones",
   "baja",
   "permiso",
+  "formacion",
   "nodisponible",
   "otro_taller",
   "disponible",
@@ -120,7 +121,8 @@ export function isEstadoDeAusencia(status?: string | null): boolean {
     valor === "nodisponible" ||
     valor === "no_disponible" ||
     valor === "otro_taller" ||
-    valor === "en_otro_taller"
+    valor === "en_otro_taller" ||
+    valor === "formacion"
   );
 }
 
@@ -160,7 +162,8 @@ export function applyScheduledStatusesToTechs({
       scheduled.status === "baja" ||
       scheduled.status === "permiso" ||
       scheduled.status === "nodisponible" ||
-      scheduled.status === "otro_taller";
+      scheduled.status === "otro_taller" ||
+      scheduled.status === "formacion";
 
     return {
       ...tech,
