@@ -84,12 +84,8 @@ type RoadsideAssistanceForOperarios = {
   assignedVehicleName?: string | null;
 };
 
-const ROADSIDE_STATUS_LABELS: Record<string, string> = {
-  asignada: "Asignada",
-  en_camino: "En camino",
-  en_punto: "En el punto",
-  inicio_reparacion: "Reparando",
-};
+// Qué asistencias siguen en curso y cómo se llaman: src/modules/asistenciaEnCurso.ts.
+const ROADSIDE_STATUS_LABELS = ETIQUETA_ASISTENCIA_EN_CURSO;
 
 type OperationLabelJob = Pick<
   JobForOperarios,
