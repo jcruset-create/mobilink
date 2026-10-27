@@ -6,6 +6,7 @@ import PuntoEnCola from "./PuntoEnCola";
 import SeguimientoAsistenciaCard from "./SeguimientoAsistenciaCard";
 import { tieneSeguimiento } from "../modules/seguimientoEnTarjeta";
 import { matriculaDeFurgoneta, type FurgonetaConocida } from "../modules/furgonetaDelTrabajo";
+import { nombreConPapel, papelDelOperario } from "../modules/papelDelOperario";
 import {
   chipDeSituacion,
   claseDeSituacion,
@@ -83,12 +84,8 @@ type RoadsideAssistanceForOperarios = {
   assignedVehicleName?: string | null;
 };
 
-const ROADSIDE_STATUS_LABELS: Record<string, string> = {
-  asignada: "Asignada",
-  en_camino: "En camino",
-  en_punto: "En el punto",
-  inicio_reparacion: "Reparando",
-};
+// Qué asistencias siguen en curso y cómo se llaman: src/modules/asistenciaEnCurso.ts.
+const ROADSIDE_STATUS_LABELS = ETIQUETA_ASISTENCIA_EN_CURSO;
 
 type OperationLabelJob = Pick<
   JobForOperarios,
@@ -1342,7 +1339,7 @@ export default function OperariosTVView({
                     <div className="mb-3 flex flex-wrap gap-3">
                       <div className="flex items-center gap-3 rounded-2xl bg-white px-3 py-2 shadow-sm">
                         <TechAvatar tech={tech} size="large" />
-                        <div className="text-2xl font-black">{a.assignedTechName}</div>
+                        <div className="text-2xl font-black">{nombreConPapel(String(a.assignedTechName), "responsable")}</div>
                       </div>
                       <ChipFurgoneta matricula={matriculaDeFurgoneta(a, vehicles)} />
                     </div>
@@ -1392,7 +1389,7 @@ export default function OperariosTVView({
                               className="flex items-center gap-3 rounded-2xl bg-white px-3 py-2 shadow-sm"
                             >
                               <TechAvatar tech={tech} size="large" />
-                              <div className="text-2xl font-black">{name}</div>
+                              <div className="text-2xl font-black">{nombreConPapel(name, papelDelOperario(name, assignedNames))}</div>
                             </div>
                           );
                         })
@@ -1807,12 +1804,19 @@ export default function OperariosTVView({
 
               // Una sola lectura de la situación: la usan el color de la
               // tarjeta y la cara de la redonda, y así no pueden discrepar.
+              // Responsable o apoyo en su trabajo: decide el rojo y el texto del nombre.
+              const papel = currentJob
+                ? papelDelOperario(tech.name, currentJob.assignedNames)
+                : activeRoadsideAssistance
+                  ? "responsable"
+                  : null;
               const situacion = situacionDeTecnico(normalizeTechStatus(tech.status), {
                 enAsistencia: Boolean(activeRoadsideAssistance),
                 mantenimientoFuera: Boolean(pendingOutsideMaintenanceTask),
                 mantenimientoEnTaller: Boolean(pendingWorkshopMaintenanceTask),
                 reservadoParaValidar: Boolean(isReservedForValidation),
                 trabajando: Boolean(currentJob),
+                apoyo: papel === "apoyo",
               });
 
               return (
@@ -1826,7 +1830,7 @@ export default function OperariosTVView({
 
                       <div className="min-w-0">
                         <div className="truncate text-lg font-black">
-                          {tech.name}
+                          {nombreConPapel(tech.name, papel)}
                         </div>
 
                         <div className="truncate text-xs font-semibold opacity-80">

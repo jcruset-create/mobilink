@@ -5,11 +5,14 @@ describe("situacionDeTecnico", () => {
   it("libre es verde", () => {
     expect(claseDeSituacion(situacionDeTecnico("disponible"))).toContain("bg-green-200");
   });
-  it("trabajando es rojo claro, con el chip rojo macizo y letras blancas", () => {
-    expect(claseDeSituacion(situacionDeTecnico("ocupado"))).toContain("bg-red-100");
-    expect(claseDeSituacion(situacionDeTecnico("refuerzo"))).toContain("bg-red-100");
-    expect(claseDeSituacion(situacionDeTecnico("disponible", { mantenimientoEnTaller: true }))).toContain("bg-red-100");
-    expect(chipDeSituacion("trabajando")).toBe("bg-red-600 text-white");
+  it("trabajando como responsable es rojo subido; como apoyo, rojo claro", () => {
+    expect(claseDeSituacion(situacionDeTecnico("ocupado"))).toContain("bg-red-400");
+    expect(claseDeSituacion(situacionDeTecnico("refuerzo"))).toContain("bg-red-400");
+    expect(claseDeSituacion(situacionDeTecnico("disponible", { mantenimientoEnTaller: true }))).toContain("bg-red-400");
+    expect(situacionDeTecnico("ocupado", { trabajando: true, apoyo: true })).toBe("apoyo");
+    expect(claseDeSituacion("apoyo")).toContain("bg-red-100");
+    expect(chipDeSituacion("trabajando")).toBe("bg-red-900 text-white");
+    expect(chipDeSituacion("apoyo")).toBe("bg-red-600 text-white");
   });
   it("baja es rojo fuerte con la fila entera maciza y letras blancas", () => {
     expect(claseDeSituacion(situacionDeTecnico("baja"))).toContain("bg-red-600");
@@ -21,7 +24,7 @@ describe("situacionDeTecnico", () => {
     expect(chipDeSituacion("ausente")).toContain("text-slate-900");
   });
   it("todos los chips macizos llevan letras blancas salvo el amarillo", () => {
-    for (const s of ["libre", "trabajando", "baja", "fuera", "formacion", "reservado", "otro"] as const) {
+    for (const s of ["libre", "trabajando", "apoyo", "baja", "fuera", "formacion", "reservado", "otro"] as const) {
       expect(chipDeSituacion(s), s).toContain("text-white");
     }
   });
@@ -29,8 +32,8 @@ describe("situacionDeTecnico", () => {
     expect(claseDeSituacion(situacionDeTecnico("otro_taller"))).toContain("bg-blue-200");
     expect(claseDeSituacion(situacionDeTecnico("disponible", { mantenimientoFuera: true }))).toContain("bg-blue-200");
   });
-  it("una asistencia en carretera es trabajar: rojo claro, como un camión en el foso", () => {
-    expect(claseDeSituacion(situacionDeTecnico("disponible", { enAsistencia: true }))).toContain("bg-red-100");
+  it("una asistencia en carretera es trabajar de responsable: rojo subido", () => {
+    expect(claseDeSituacion(situacionDeTecnico("disponible", { enAsistencia: true }))).toContain("bg-red-400");
   });
   it("un trabajo activo manda sobre una ficha que diga «disponible»", () => {
     expect(situacionDeTecnico("disponible", { trabajando: true })).toBe("trabajando");
