@@ -4704,6 +4704,7 @@ if (view === "operarios" && canView("operarios")) {
         return (agenda.dueScheduledJobs ?? []).filter((s) => !recibidas.has(Number(s.id)));
       })()}
       roadsideAssistances={roadside.roadsideAssistances}
+      vehicles={roadside.roadsideVehicles}
       finishJob={finishJob}
       moveJobToStandBy={pauseJob}
       getOperationLabel={getOperationLabel}

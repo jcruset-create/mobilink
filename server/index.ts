@@ -2670,6 +2670,7 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
       "baja",
       "permiso",
       "otro_taller",
+      "formacion",
     ]);
 
     const normalizedBlocked =

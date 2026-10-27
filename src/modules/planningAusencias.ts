@@ -17,7 +17,7 @@ import { ESTADOS_CONTADOS } from "./ausenciasTecnicos";
  * jornadas especiales). Esta pantalla solo los pone uno al lado del otro.
  */
 
-export type EstadoDia = "vacaciones" | "baja" | "permiso" | "otro_taller" | "nodisponible";
+export type EstadoDia = "vacaciones" | "baja" | "permiso" | "otro_taller" | "nodisponible" | "formacion";
 
 export type CeldaDia = {
   fecha: string;

@@ -45,7 +45,7 @@ import {
 } from "../modules/techStatusScheduleHelpers";
 
 import { getTechStatusLabel } from "../modules/techStatus";
-import { barraDeEstado, barrasARecolocar, estadosSinBarra } from "../modules/barrasDeEstadoEnAgenda";
+import { barraDeEstado, barrasARecolocar, colorDeEstado, estadosSinBarra } from "../modules/barrasDeEstadoEnAgenda";
 import { buildScheduledJobV2FieldsFromTemplate } from "../modules/scheduledJobV2Helpers";
 import { minutosDeLaCita } from "../modules/duracionDeCita";
 import { getAgendaWhatsappV2Description } from "../modules/agendaWhatsappV2Helpers";
@@ -202,7 +202,7 @@ export type ScheduledJob = {
   totalPrice?: number | null;
 };
 
-type DateReminderColor = "red" | "orange" | "blue" | "green" | "slate";
+type DateReminderColor = "red" | "orange" | "blue" | "green" | "slate" | "sky";
 
 type DateReminderKind = "normal" | "tech_status";
 
@@ -1033,6 +1033,7 @@ useEffect(() => {
     if (color === "blue") return "bg-blue-600 border-blue-700 text-white";
     if (color === "green") return "bg-emerald-600 border-emerald-700 text-white";
     if (color === "slate") return "bg-slate-600 border-slate-700 text-white";
+    if (color === "sky") return "bg-sky-400 border-sky-500 text-slate-900";
 
     return "bg-red-600 border-red-700 text-white";
   }
@@ -1179,7 +1180,9 @@ function saveDateReminder() {
       title: title.toUpperCase(),
       startDate: reminderDraft.startDate,
       endDate: reminderDraft.endDate,
-      color: reminderDraft.color || "orange",
+      // El color lo dice el estado (baja roja, formación azul…), no el
+      // selector: así la barra sale igual que si la reconstruye la agenda.
+      color: colorDeEstado(reminderDraft.techStatus),
       notes: reminderDraft.notes.trim(),
       techStatusId: scheduledStatus.id,
       techName,

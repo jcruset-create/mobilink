@@ -39,6 +39,7 @@ const ESTADO_AUSENCIA: Record<string, { texto: string; clase: string }> = {
   permiso: { texto: "Permiso", clase: "bg-yellow-400 text-slate-900 border-yellow-400" },
   otro_taller: { texto: "Otro taller", clase: "bg-blue-500 text-white border-blue-500" },
   nodisponible: { texto: "No disponible", clase: "bg-violet-500 text-white border-violet-500" },
+  formacion: { texto: "Formación", clase: "bg-sky-300 text-slate-900 border-sky-300" },
 };
 
 function fechaCorta(fecha: string) {

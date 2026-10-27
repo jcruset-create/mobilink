@@ -7,7 +7,8 @@ export type ValidationTechStatus =
   | "vacaciones"
   | "baja"
   | "permiso"
-  | "otro_taller";
+  | "otro_taller"
+  | "formacion";
 
 export type ValidationJobStatus =
   | "espera"
@@ -58,6 +59,7 @@ export function isUnavailableTechStatus(status: ValidationTechStatus) {
     "baja",
     "permiso",
     "otro_taller",
+    "formacion",
   ].includes(status);
 }
 

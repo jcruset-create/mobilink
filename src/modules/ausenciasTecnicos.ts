@@ -38,6 +38,7 @@ export const ESTADOS_CONTADOS: TechStatus[] = [
   "vacaciones",
   "baja",
   "permiso",
+  "formacion",
   "nodisponible",
   "otro_taller",
 ];
@@ -48,6 +49,7 @@ export const ETIQUETA_ESTADO: Record<string, string> = {
   permiso: "Permiso",
   nodisponible: "No disponible",
   otro_taller: "Otro taller",
+  formacion: "Formación",
   disponible: "Disponible",
 };
 

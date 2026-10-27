@@ -338,7 +338,9 @@ export default function Operativo2View({
         ? "text-amber-700 dark:text-amber-300"
         : status === "permiso"
           ? "text-violet-700 dark:text-violet-300"
-          : "text-slate-700 dark:text-slate-300";
+          : status === "formacion"
+            ? "text-sky-700 dark:text-sky-300"
+            : "text-slate-700 dark:text-slate-300";
 
   const fechaCorta = (fecha?: string) => {
     const m = /^\d{4}-(\d{2})-(\d{2})$/.exec(String(fecha || ""));
