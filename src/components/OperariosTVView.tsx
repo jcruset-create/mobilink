@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { formatoEntradaParte, resumenTarjeta } from "../modules/tarjetaTrabajo";
 import PuntoEnCola from "./PuntoEnCola";
 import SeguimientoAsistenciaCard from "./SeguimientoAsistenciaCard";
+import SeguimientoOtfCard from "./SeguimientoOtfCard";
 import { tieneSeguimiento } from "../modules/seguimientoEnTarjeta";
 import { matriculaDeFurgoneta, type FurgonetaConocida } from "../modules/furgonetaDelTrabajo";
 import { nombreConPapel, papelDelOperario } from "../modules/papelDelOperario";
@@ -1387,6 +1388,7 @@ export default function OperariosTVView({
                     <div className="text-xl font-black leading-tight text-slate-950">{o.clientName || "Cliente"}</div>
                     <div className="text-sm font-semibold text-amber-900">{o.baseName || o.direccion || ""}</div>
                     {progresoDeOtf(o) && <div className="mt-1 text-xs font-bold text-amber-800">{progresoDeOtf(o)}</div>}
+                    <SeguimientoOtfCard otfId={o.id} apiBase={API_BASE} otf={o} />
                   </div>
                 );
               })}

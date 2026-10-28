@@ -10,12 +10,14 @@ describe("otfsEnCurso", () => {
     const lista = [
       otf({ id: 1 }),
       otf({ id: 2, status: "planificada" }),
-      otf({ id: 3, status: "finalizada" }),
+      otf({ id: 3, status: "finalizada", arrivedAtWorkshopMs: 9 }),
       otf({ id: 4, status: "cancelada" }),
       otf({ id: 5, assignedTechName: null }),
       otf({ id: 6, status: "planificada", enEspera: true }),
+      // Finalizada pero todavía sin entrar en el taller: sigue en la TV.
+      otf({ id: 7, status: "finalizada", finishedAtMs: 8 }),
     ];
-    expect(otfsEnCurso(lista).map((o) => o.id)).toEqual([1, 2]);
+    expect(otfsEnCurso(lista).map((o) => o.id)).toEqual([1, 2, 7]);
   });
 });
 
@@ -24,7 +26,8 @@ describe("otfDelTecnico", () => {
     expect(otfDelTecnico([otf({})], "David")?.id).toBe(1);
     expect(otfDelTecnico([otf({ status: "planificada" })], "David")?.id).toBe(1);
     expect(otfDelTecnico([otf({ status: "planificada", enEspera: true })], "David")).toBeNull();
-    expect(otfDelTecnico([otf({ status: "finalizada" })], "David")).toBeNull();
+    expect(otfDelTecnico([otf({ status: "finalizada", arrivedAtWorkshopMs: 9 })], "David")).toBeNull();
+    expect(otfDelTecnico([otf({ status: "finalizada" })], "David")?.id).toBe(1);
     expect(otfDelTecnico([otf({})], "Iván")).toBeNull();
   });
 });

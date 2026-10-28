@@ -824,6 +824,13 @@ export async function initDb() {
     -- asistencias y OTF las crean módulos distintos y en otro orden.
     ALTER TABLE otf ADD COLUMN IF NOT EXISTS "esperaAsistenciaId" INTEGER;
 
+    -- Seguimiento como el de una asistencia (src/modules/seguimientoOtf.ts):
+    -- salida del taller, vuelta y llegada, las tres por GPS de la furgoneta.
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "departedAtMs" BIGINT;
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "enCaminoBaseAtMs" BIGINT;
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "arrivedAtWorkshopMs" BIGINT;
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "salidaArmada" BOOLEAN NOT NULL DEFAULT false;
+
     CREATE TABLE IF NOT EXISTS otf_trabajos (
       id SERIAL PRIMARY KEY,
       "otfId" INTEGER NOT NULL REFERENCES otf(id) ON DELETE CASCADE,
