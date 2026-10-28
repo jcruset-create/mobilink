@@ -29,6 +29,7 @@ import {
 } from "../salidasTaller";
 import SeguimientoAsistenciaCard from "../../components/SeguimientoAsistenciaCard";
 import LocationPickerModal from "../../components/LocationPickerModal";
+import KnownPlaceMapModal from "../../components/KnownPlaceMapModal";
 
 /**
  * Salidas de taller: un operario sale con una furgoneta a repartir neumáticos,
@@ -161,6 +162,8 @@ export default function SalidasPage() {
           input={input}
           btn={btn}
           onCancelar={() => setVista("lista")}
+          // Un lugar creado desde aquí entra en la lista sin recargar, como en Assist.
+          onLugarCreado={(p) => setLugares((prev) => [p, ...prev.filter((x) => x.id !== p.id)])}
           onCreada={async (a) => {
             setVista("lista");
             setAviso(`Salida creada: ${a.assignedTechName} → ${destinoDeSalida(a)}.`);
@@ -240,7 +243,7 @@ export default function SalidasPage() {
 /* ── Nueva salida ───────────────────────────────────────────────────────── */
 
 function NuevaSalida({
-  workshopId, tecnicos, furgonetas, lugares, input, btn, onCancelar, onCreada,
+  workshopId, tecnicos, furgonetas, lugares, input, btn, onCancelar, onLugarCreado, onCreada,
 }: {
   workshopId: string;
   tecnicos: { name: string }[];
@@ -249,6 +252,7 @@ function NuevaSalida({
   input: string;
   btn: string;
   onCancelar: () => void;
+  onLugarCreado: (p: KnownPlace) => void;
   onCreada: (a: RoadsideAssistance) => void | Promise<void>;
 }) {
   const [motivo, setMotivo] = useState<MotivoSalida>("repartir_neumaticos");
@@ -257,6 +261,7 @@ function NuevaSalida({
   const [direccion, setDireccion] = useState("");
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [mapaAbierto, setMapaAbierto] = useState(false);
+  const [nuevoLugarAbierto, setNuevoLugarAbierto] = useState(false);
   const [tecnico, setTecnico] = useState("");
   const [furgonetaId, setFurgonetaId] = useState<string>("");
   const [notas, setNotas] = useState("");
@@ -359,11 +364,14 @@ function NuevaSalida({
             </div>
             {modoDestino === "lugar" && (
               <>
-                <select id="salida-lugar" value={lugarId} onChange={(e) => setLugarId(e.target.value)} className={`w-full ${input}`}>
-                  <option value="">— elige un lugar —</option>
-                  {lugares.map((p) => <option key={p.id} value={p.id}>{p.nombre}{p.direccion ? ` · ${p.direccion}` : ""}</option>)}
-                </select>
-                <p className="mt-1 text-[11px] text-slate-400">Los mismos lugares que Assist. Se gestionan en Lugares.</p>
+                <div className="flex gap-2">
+                  <select id="salida-lugar" value={lugarId} onChange={(e) => setLugarId(e.target.value)} className={`min-w-0 flex-1 ${input}`}>
+                    <option value="">— elige un lugar —</option>
+                    {lugares.map((p) => <option key={p.id} value={p.id}>{p.nombre}{p.direccion ? ` · ${p.direccion}` : ""}</option>)}
+                  </select>
+                  <button type="button" className={`${btn} shrink-0`} onClick={() => setNuevoLugarAbierto(true)}><Plus className="h-4 w-4" /> Nuevo lugar</button>
+                </div>
+                <p className="mt-1 text-[11px] text-slate-400">Los mismos lugares que Assist. Un lugar nuevo se guarda para las dos pantallas.</p>
               </>
             )}
             {modoDestino === "direccion" && (
@@ -406,6 +414,18 @@ function NuevaSalida({
           <button type="button" onClick={onCancelar} className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold">Cancelar</button>
         </div>
       </div>
+
+      {nuevoLugarAbierto && (
+        <KnownPlaceMapModal
+          onClose={() => setNuevoLugarAbierto(false)}
+          onSaved={(p) => {
+            onLugarCreado(p);
+            setModoDestino("lugar");
+            setLugarId(String(p.id));
+            setNuevoLugarAbierto(false);
+          }}
+        />
+      )}
 
       {mapaAbierto && (
         <LocationPickerModal
