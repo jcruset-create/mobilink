@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FLUJO_SALIDA, destinoDeSalida, esMotivoDeSalida, esSalida, etiquetaDeMotivo, pasoDeSalida, siguientePasoForzable, validarSalida } from "./salidasTaller";
+import { FLUJO_SALIDA, destinoDeSalida, esMotivoDeSalida, esSalida, etiquetaDeMotivo, pasoDeSalida, siguientePasoForzable, ultimosDestinos, validarSalida } from "./salidasTaller";
 
 describe("pasoDeSalida: en camino → en el punto", () => {
   it("dentro del radio y parada: llega", () => {
@@ -70,5 +70,24 @@ describe("pantalla", () => {
     expect(siguientePasoForzable("cancelada")).toBeNull();
     expect(esSalida({ tipo: "salida" })).toBe(true);
     expect(esSalida({ tipo: "asistencia" })).toBe(false);
+  });
+});
+
+describe("ultimosDestinos", () => {
+  const s = (address: string, lat: number, lng: number, ms: number, status = "llegada_taller") => ({ address, latitude: lat, longitude: lng, createdAtMs: ms, status });
+  it("los tres más recientes, sin repetir el mismo sitio y sin las canceladas", () => {
+    const r = ultimosDestinos([
+      s("Transbrugent", 41.15, 1.17, 100),
+      s("Recanvis Enric", 41.15, 1.10, 300),
+      s("Transbrugent · nave 12", 41.15001, 1.17001, 400),
+      s("Autorecanvis", 41.12, 1.25, 200),
+      s("Plana", 41.13, 1.26, 500, "cancelada"),
+      s("Michelin", 41.20, 1.30, 50),
+    ]);
+    expect(r.map((d) => d.address)).toEqual(["Transbrugent · nave 12", "Recanvis Enric", "Autorecanvis"]);
+    expect(r[0].veces).toBe(2);
+  });
+  it("sin coordenadas no cuenta", () => {
+    expect(ultimosDestinos([{ address: "x", createdAtMs: 1 }])).toEqual([]);
   });
 });

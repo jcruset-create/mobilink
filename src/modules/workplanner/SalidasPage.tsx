@@ -24,7 +24,9 @@ import {
   esSalida,
   etiquetaDeMotivo,
   siguientePasoForzable,
+  ultimosDestinos,
   validarSalida,
+  type DestinoReciente,
   type MotivoSalida,
 } from "../salidasTaller";
 import SeguimientoAsistenciaCard from "../../components/SeguimientoAsistenciaCard";
@@ -159,6 +161,7 @@ export default function SalidasPage() {
           tecnicos={tecnicos}
           furgonetas={furgonetas}
           lugares={lugares}
+          recientes={ultimosDestinos(salidas, 3)}
           input={input}
           btn={btn}
           onCancelar={() => setVista("lista")}
@@ -243,12 +246,14 @@ export default function SalidasPage() {
 /* ── Nueva salida ───────────────────────────────────────────────────────── */
 
 function NuevaSalida({
-  workshopId, tecnicos, furgonetas, lugares, input, btn, onCancelar, onLugarCreado, onCreada,
+  workshopId, tecnicos, furgonetas, lugares, recientes, input, btn, onCancelar, onLugarCreado, onCreada,
 }: {
   workshopId: string;
   tecnicos: { name: string }[];
   furgonetas: RoadsideVehicle[];
   lugares: KnownPlace[];
+  /** Los últimos destinos usados, para repetirlos con un clic. */
+  recientes: DestinoReciente[];
   input: string;
   btn: string;
   onCancelar: () => void;
@@ -256,7 +261,8 @@ function NuevaSalida({
   onCreada: (a: RoadsideAssistance) => void | Promise<void>;
 }) {
   const [motivo, setMotivo] = useState<MotivoSalida>("repartir_neumaticos");
-  const [modoDestino, setModoDestino] = useState<"lugar" | "direccion" | "mapa">("lugar");
+  const [modoDestino, setModoDestino] = useState<"lugar" | "recientes" | "direccion" | "mapa">("lugar");
+  const [recienteIdx, setRecienteIdx] = useState<number>(-1);
   const [lugarId, setLugarId] = useState<string>("");
   const [direccion, setDireccion] = useState("");
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
@@ -283,6 +289,10 @@ function NuevaSalida({
         if (!lugar) return setErrores(["Elige un lugar conocido."]);
         address = [lugar.nombre, lugar.direccion].filter(Boolean).join(" · ");
         latitude = lugar.lat; longitude = lugar.lng; knownPlaceId = lugar.id;
+      } else if (modoDestino === "recientes") {
+        const r = recientes[recienteIdx];
+        if (!r) return setErrores(["Elige uno de los últimos destinos."]);
+        address = r.address; latitude = r.latitude; longitude = r.longitude;
       } else if (modoDestino === "direccion") {
         if (!direccion.trim()) return setErrores(["Escribe la dirección."]);
         setGuardando(true);
@@ -355,10 +365,10 @@ function NuevaSalida({
           <div className="text-xs font-medium text-slate-300">Destino</div>
           <div className="mt-1 rounded-xl border border-slate-700 bg-slate-900/60 p-3">
             <div className="mb-2 flex gap-1.5 text-xs">
-              {(["lugar", "direccion", "mapa"] as const).map((m) => (
+              {(["lugar", "recientes", "direccion", "mapa"] as const).map((m) => (
                 <button key={m} type="button" onClick={() => setModoDestino(m)}
                   className={`rounded-md border px-2.5 py-1 ${modoDestino === m ? "border-slate-500 bg-slate-700 font-bold text-white" : "border-slate-700 text-slate-400"}`}>
-                  {m === "lugar" ? "Lugar conocido" : m === "direccion" ? "Dirección" : "En el mapa"}
+                  {m === "lugar" ? "Lugar conocido" : m === "recientes" ? "Últimos 3 lugares" : m === "direccion" ? "Dirección" : "En el mapa"}
                 </button>
               ))}
             </div>
@@ -373,6 +383,21 @@ function NuevaSalida({
                 </div>
                 <p className="mt-1 text-[11px] text-slate-400">Los mismos lugares que Assist. Un lugar nuevo se guarda para las dos pantallas.</p>
               </>
+            )}
+            {modoDestino === "recientes" && (
+              recientes.length === 0 ? (
+                <p className="text-sm text-slate-400">Todavía no hay salidas en este taller: los últimos destinos saldrán aquí.</p>
+              ) : (
+                <div className="grid gap-1.5">
+                  {recientes.map((r, i) => (
+                    <button key={`${r.latitude},${r.longitude}`} type="button" onClick={() => setRecienteIdx(i)}
+                      className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left text-sm ${recienteIdx === i ? "border-sky-500 bg-sky-600/20 font-bold text-white" : "border-slate-700 text-slate-200 hover:bg-slate-800"}`}>
+                      <span className="min-w-0 truncate">📍 {r.address}</span>
+                      <span className="shrink-0 font-mono text-[11px] text-slate-400">{r.veces > 1 ? `${r.veces} veces` : "1 vez"}</span>
+                    </button>
+                  ))}
+                </div>
+              )
             )}
             {modoDestino === "direccion" && (
               <input id="salida-direccion" value={direccion} onChange={(e) => setDireccion(e.target.value)} placeholder="Calle, número, población" className={`w-full ${input}`} />
