@@ -138,7 +138,7 @@ import { AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "./core/ai.ts";
 import { makeSecret, safeEquals, verifySecretWithLegacy } from "./core/credentials.ts";
 import { proponerVinculos, type EmpleadoCore } from "./core/vinculoTecnicos.ts";
 import { resolverRolDelPanel, type RolResuelto } from "./core/rolDelPanel.ts";
-import { TIPO_SALIDA, esMotivoDeSalida, pasoDeSalida, validarSalida, RADIO_DESTINO_M } from "./core/salidasTaller.ts";
+import { TIPO_SALIDA, esMotivoDeSalida, pasoDeSalida, validarSalida, RADIO_DESTINO_M } from "../src/modules/salidasTaller.ts";
 import { siguienteReferencia } from "./cobros/referencias.ts";
 import { saveCaptureAnalysis, reconcileCaptureAiStatus } from "./core/whatsappCapture.ts";
 import { aE164, clienteTwilio, numeroWhatsAppEmisor } from "./core/twilio.ts";

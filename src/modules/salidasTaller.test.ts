@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FLUJO_SALIDA, esMotivoDeSalida, etiquetaDeMotivo, pasoDeSalida, validarSalida } from "./salidasTaller";
+import { FLUJO_SALIDA, destinoDeSalida, esMotivoDeSalida, esSalida, etiquetaDeMotivo, pasoDeSalida, siguientePasoForzable, validarSalida } from "./salidasTaller";
 
 describe("pasoDeSalida: en camino → en el punto", () => {
   it("dentro del radio y parada: llega", () => {
@@ -56,5 +56,19 @@ describe("validarSalida", () => {
     expect(validarSalida({ motivo: "gestion", assignedTechName: "Albert", address: "Pol. Ind. Constantí" })).toEqual([]);
     expect(validarSalida({ motivo: "gestion", assignedTechName: "Albert", latitude: 41.1, longitude: 1.2 })).toEqual([]);
     expect(validarSalida({ motivo: "gestion", assignedTechName: "Albert", knownPlaceId: 3 })).toEqual([]);
+  });
+});
+
+describe("pantalla", () => {
+  it("destino y paso siguiente", () => {
+    expect(destinoDeSalida({ address: " Pol. Ind. Constantí " })).toBe("Pol. Ind. Constantí");
+    expect(destinoDeSalida({ latitude: 41.12345678, longitude: 1.2 })).toBe("41.12346, 1.20000");
+    expect(destinoDeSalida({})).toBe("Sin destino");
+    expect(siguientePasoForzable("asignada")).toBe("en_camino");
+    expect(siguientePasoForzable("en_punto")).toBe("en_camino_base");
+    expect(siguientePasoForzable("llegada_taller")).toBeNull();
+    expect(siguientePasoForzable("cancelada")).toBeNull();
+    expect(esSalida({ tipo: "salida" })).toBe(true);
+    expect(esSalida({ tipo: "asistencia" })).toBe(false);
   });
 });

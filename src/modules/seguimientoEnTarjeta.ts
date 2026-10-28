@@ -59,11 +59,13 @@ export type Paso = {
 /** Los pasos del seguimiento, en el orden del flujo, con el actual marcado. */
 export function pasosDeSeguimiento(
   assistance: RoadsideAssistance,
-  events: EventoSeguimiento[] = []
+  events: EventoSeguimiento[] = [],
+  /** Una salida de taller tiene menos pasos que una asistencia. */
+  flujo: readonly RoadsideAssistanceStatus[] = ROADSIDE_ASSISTANCE_STATUS_FLOW
 ): Paso[] {
-  const i = ROADSIDE_ASSISTANCE_STATUS_FLOW.indexOf(assistance.status);
+  const i = flujo.indexOf(assistance.status);
   const actual = i === -1 ? 0 : i;
-  return ROADSIDE_ASSISTANCE_STATUS_FLOW.map((status, idx) => ({
+  return flujo.map((status, idx) => ({
     status,
     etiqueta: ROADSIDE_ASSISTANCE_STATUS_LABELS[status],
     estado: idx < actual ? "hecho" : idx === actual ? "actual" : "pendiente",

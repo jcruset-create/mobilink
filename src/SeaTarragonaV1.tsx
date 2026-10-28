@@ -5020,7 +5020,8 @@ if (view === "agenda2" && (canView("agenda2") || canView("agenda"))) {
 if (view === "asistencias" && canView("asistencias")) {
   return (
     <RoadsideAssistanceView
-      assistances={roadside.visibleRoadsideAssistances}
+      // Las salidas de taller tienen su pestaña; en Assist solo asistencias.
+      assistances={roadside.visibleRoadsideAssistances.filter((a) => a.tipo !== "salida")}
       techs={roadside.visibleRoadsideTechs}
       vehicles={roadside.visibleRoadsideVehicles}
       tecnicosOcupadosEnTaller={tecnicosOcupadosEnTaller}

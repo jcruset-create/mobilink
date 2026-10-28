@@ -17,6 +17,7 @@ import {
   Users,
   FileScan,
   CarFront,
+  Truck,
 } from "lucide-react";
 import logoMobilink from "../../assets/logo-mobilink.png";
 import SeaTarragonaV1 from "../../SeaTarragonaV1";
@@ -27,6 +28,7 @@ import PlanningAusenciasPage from "./PlanningAusenciasPage";
 import AnalisisPage from "./AnalisisPage";
 import PartesTrabajoPage from "./PartesTrabajoPage";
 import RecepcionesPage from "./RecepcionesPage";
+import SalidasPage from "./SalidasPage";
 import { supabase } from "../administracion/services/supabase";
 import { useEsAdministrador } from "../esAdministrador";
 import { seccionMarcadaEnCore, seccionVisible } from "../vistasDelModulo";
@@ -58,6 +60,9 @@ const SECCIONES = [
   // Vehículos recibidos en el patio desde la APK, a la espera de que alguien
   // los convierta en trabajo. La captura propone; una persona valida.
   { key: "recepciones", label: "Recepción vehículos", icon: CarFront, proximamente: false },
+  // Un operario sale con una furgoneta a repartir o a buscar recambios y
+  // vuelve; se sigue por el GPS de la furgoneta, como una asistencia.
+  { key: "salidas", label: "Salidas", icon: Truck, proximamente: false },
   { key: "partes", label: "Partes de trabajo", icon: FileScan, proximamente: false },
   { key: "pedidos", label: "Pedidos ERP", icon: FileInput, proximamente: false },
   { key: "plantillas", label: "Plantillas", icon: ListChecks, proximamente: false },
@@ -347,6 +352,7 @@ export default function WorkPlannerApp() {
             }
           />
           <Route path="recepciones" element={<RecepcionesPage />} />
+          <Route path="salidas" element={<SalidasPage />} />
           <Route path="partes" element={<PartesTrabajoPage />} />
           <Route path="plantillas" element={<PlantillasChecklistPage />} />
           <Route
