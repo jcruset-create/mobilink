@@ -7,6 +7,8 @@
  * cuentan como trabajo en curso, de quién son y cómo se escriben.
  */
 
+import { otfSigueEnCurso } from "./seguimientoOtf";
+
 export type OtfEnPantalla = {
   id: number;
   clientName?: string | null;
@@ -16,7 +18,13 @@ export type OtfEnPantalla = {
   assignedTechName?: string | null;
   assignedVehicleName?: string | null;
   fechaProgramadaMs?: number | null;
+  createdAtMs?: number | null;
+  departedAtMs?: number | null;
   arrivedAtBaseMs?: number | null;
+  primerTrabajoMs?: number | null;
+  finishedAtMs?: number | null;
+  enCaminoBaseAtMs?: number | null;
+  arrivedAtWorkshopMs?: number | null;
   enEspera?: boolean;
   progreso?: { hechos: number; total: number } | null;
 };
@@ -28,11 +36,13 @@ export const ETIQUETA_OTF: Record<string, string> = {
   cancelada: "Cancelada",
 };
 
-/** Las que salen en «Trabajos asignados»: con operario y sin terminar, y no a la espera de otra. */
+/**
+ * Las que salen en «Trabajos asignados»: con operario, no a la espera de otra
+ * y sin haber vuelto al taller (una finalizada sigue hasta que la furgoneta
+ * entra en el taller, como una asistencia).
+ */
 export function otfsEnCurso(lista: OtfEnPantalla[]): OtfEnPantalla[] {
-  return lista.filter(
-    (o) => o.assignedTechName && (o.status === "planificada" || o.status === "en_curso") && !o.enEspera
-  );
+  return lista.filter((o) => o.assignedTechName && otfSigueEnCurso(o) && !o.enEspera);
 }
 
 /**

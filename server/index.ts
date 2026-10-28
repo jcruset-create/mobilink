@@ -139,6 +139,7 @@ import { makeSecret, safeEquals, verifySecretWithLegacy } from "./core/credentia
 import { proponerVinculos, type EmpleadoCore } from "./core/vinculoTecnicos.ts";
 import { resolverRolDelPanel, type RolResuelto } from "./core/rolDelPanel.ts";
 import { TIPO_SALIDA, esMotivoDeSalida, pasoDeSalida, validarSalida, RADIO_DESTINO_M } from "../src/modules/salidasTaller.ts";
+import { pasoDeOtfGps, otfSigueEnCurso } from "../src/modules/seguimientoOtf.ts";
 import { siguienteReferencia } from "./cobros/referencias.ts";
 import { saveCaptureAnalysis, reconcileCaptureAiStatus } from "./core/whatsappCapture.ts";
 import { aE164, clienteTwilio, numeroWhatsAppEmisor } from "./core/twilio.ts";
@@ -15873,6 +15874,87 @@ async function vigilarSalidas() {
 setInterval(() => void vigilarSalidas(), 60 * 1000);
 void vigilarSalidas();
 
+/*
+ * OTF: salida del taller, vuelta y llegada, por GPS.
+ *
+ * La llegada a la base ya la pone checkOtfBaseArrival; esto completa el
+ * recorrido para que la tarjeta de Pantalla técnicos lleve la misma tira que
+ * una asistencia. La decisión es pura (src/modules/seguimientoOtf.ts).
+ */
+let vigilarOtfsRunning = false;
+async function vigilarOtfs() {
+  if (vigilarOtfsRunning) return;
+  vigilarOtfsRunning = true;
+  try {
+    const r = await db.query(
+      `SELECT o.id, o.status, o."workshopId", o."webfleetVehicleId", o.lat, o.lng,
+              o."departedAtMs", o."enCaminoBaseAtMs", o."arrivedAtWorkshopMs", o."salidaArmada"
+         FROM otf o
+        WHERE o."webfleetVehicleId" IS NOT NULL
+          AND ((o.status = 'planificada' AND o."departedAtMs" IS NULL AND NOT ${OTF_EN_ESPERA_SQL})
+            OR (o.status = 'finalizada' AND o."arrivedAtWorkshopMs" IS NULL
+                AND COALESCE(o."finishedAtMs", o."updatedAtMs") > $1))`,
+      [Date.now() - 12 * 60 * 60 * 1000]
+    );
+    for (const o of r.rows) {
+      try {
+        const cfg = await getWorkshopConfig(o.workshopId ?? null);
+        const tlat = parseFloat(cfg.taller_lat);
+        const tlng = parseFloat(cfg.taller_lng);
+        if (!Number.isFinite(tlat) || !Number.isFinite(tlng)) continue;
+        const pos = await getWebfleetVehiclePosition(o.webfleetVehicleId);
+        const distTallerM = haversineDistanceM(pos.lat, pos.lng, tlat, tlng);
+        const distBaseM =
+          o.lat != null && o.lng != null ? haversineDistanceM(pos.lat, pos.lng, Number(o.lat), Number(o.lng)) : null;
+        const now = Date.now();
+        const cambio = pasoDeOtfGps(
+          {
+            status: String(o.status),
+            departedAtMs: o.departedAtMs != null ? Number(o.departedAtMs) : null,
+            enCaminoBaseAtMs: o.enCaminoBaseAtMs != null ? Number(o.enCaminoBaseAtMs) : null,
+            arrivedAtWorkshopMs: o.arrivedAtWorkshopMs != null ? Number(o.arrivedAtWorkshopMs) : null,
+            salidaArmada: o.salidaArmada === true,
+          },
+          {
+            distTallerM,
+            distBaseM,
+            radioTallerM: parseFloat(cfg.taller_radio_m) || 300,
+            radioBaseM: KNOWN_PLACE_RADIUS_M,
+          },
+          now
+        );
+        if (cambio.salidaArmada) {
+          await db.query(`UPDATE otf SET "salidaArmada" = true WHERE id = $1`, [o.id]);
+        } else if (cambio.departedAtMs) {
+          await db.query(
+            `UPDATE otf SET "departedAtMs" = COALESCE("departedAtMs", $2), "updatedAtMs" = $2 WHERE id = $1`,
+            [o.id, now]
+          );
+        } else if (cambio.enCaminoBaseAtMs) {
+          await db.query(
+            `UPDATE otf SET "enCaminoBaseAtMs" = COALESCE("enCaminoBaseAtMs", $2), "updatedAtMs" = $2 WHERE id = $1`,
+            [o.id, now]
+          );
+        } else if (cambio.arrivedAtWorkshopMs) {
+          await db.query(
+            `UPDATE otf SET "arrivedAtWorkshopMs" = COALESCE("arrivedAtWorkshopMs", $2), "updatedAtMs" = $2 WHERE id = $1`,
+            [o.id, now]
+          );
+        }
+        if (cambio.nota) console.log(`✓ OTF #${o.id}: ${cambio.nota} (${Math.round(distTallerM)} m del taller)`);
+      } catch (err) {
+        console.warn(`vigilarOtfs error #${o.id}:`, err);
+      }
+    }
+  } catch (e) {
+    console.error("vigilarOtfs error:", e);
+  } finally {
+    vigilarOtfsRunning = false;
+  }
+}
+setInterval(() => void vigilarOtfs(), 60 * 1000);
+void vigilarOtfs();
+
 // Comprobar cada 2 minutos
 setInterval(() => {
   void checkWebfleetWorkshopArrival();
@@ -18076,6 +18158,10 @@ function normalizeOtf(row: any) {
     notas: row.notas ?? null,
     arrivedAtBaseMs: row.arrivedAtBaseMs != null ? Number(row.arrivedAtBaseMs) : null,
     finishedAtMs: row.finishedAtMs != null ? Number(row.finishedAtMs) : null,
+    departedAtMs: row.departedAtMs != null ? Number(row.departedAtMs) : null,
+    enCaminoBaseAtMs: row.enCaminoBaseAtMs != null ? Number(row.enCaminoBaseAtMs) : null,
+    arrivedAtWorkshopMs: row.arrivedAtWorkshopMs != null ? Number(row.arrivedAtWorkshopMs) : null,
+    salidaArmada: row.salidaArmada === true,
     firmaUrl: row.firmaUrl ?? null,
     firmanteNombre: row.firmanteNombre ?? null,
     firmanteDni: row.firmanteDni ?? null,
@@ -18172,21 +18258,32 @@ app.get("/api/otf-en-curso", exigirCredencial(requirePanelRole), async (_req, re
     const r = await db.query(
       `SELECT o.id, o."workshopId", o."clientName", o."baseName", o.direccion, o.status,
               o."assignedTechName", o."assignedVehicleName", o."fechaProgramadaMs", o."arrivedAtBaseMs",
+              o."createdAtMs", o."departedAtMs", o."finishedAtMs", o."enCaminoBaseAtMs", o."arrivedAtWorkshopMs",
               ${OTF_EN_ESPERA_SQL} AS "enEspera"
          FROM otf o
-        WHERE o.status IN ('planificada', 'en_curso') AND o."assignedTechName" IS NOT NULL
-        ORDER BY o."createdAtMs" DESC LIMIT 100`
+        WHERE o."assignedTechName" IS NOT NULL
+          AND (o.status IN ('planificada', 'en_curso')
+            -- Finalizada sigue en la TV hasta que la furgoneta entra en el taller.
+            OR (o.status = 'finalizada' AND o."arrivedAtWorkshopMs" IS NULL
+                AND COALESCE(o."finishedAtMs", o."updatedAtMs") > $1))
+        ORDER BY o."createdAtMs" DESC LIMIT 100`,
+      [Date.now() - 12 * 60 * 60 * 1000]
     );
     const ids = r.rows.map((x: any) => Number(x.id));
     const prog = new Map<number, { hechos: number; total: number }>();
+    const primer = new Map<number, number>();
     if (ids.length) {
       const p = await db.query(
         `SELECT "otfId", COUNT(*) AS total,
-                COUNT(*) FILTER (WHERE status IN ('finalizado','no_realizado')) AS hechos
+                COUNT(*) FILTER (WHERE status IN ('finalizado','no_realizado')) AS hechos,
+                MIN("updatedAtMs") FILTER (WHERE status <> 'pendiente') AS "primerTrabajoMs"
            FROM otf_trabajos WHERE "otfId" = ANY($1) GROUP BY "otfId"`,
         [ids]
       );
-      for (const row of p.rows) prog.set(Number(row.otfId), { hechos: Number(row.hechos), total: Number(row.total) });
+      for (const row of p.rows) {
+        prog.set(Number(row.otfId), { hechos: Number(row.hechos), total: Number(row.total) });
+        if (row.primerTrabajoMs != null) primer.set(Number(row.otfId), Number(row.primerTrabajoMs));
+      }
     }
     res.json(
       r.rows.map((x: any) => ({
@@ -18200,6 +18297,12 @@ app.get("/api/otf-en-curso", exigirCredencial(requirePanelRole), async (_req, re
         assignedVehicleName: x.assignedVehicleName ?? null,
         fechaProgramadaMs: x.fechaProgramadaMs != null ? Number(x.fechaProgramadaMs) : null,
         arrivedAtBaseMs: x.arrivedAtBaseMs != null ? Number(x.arrivedAtBaseMs) : null,
+        createdAtMs: x.createdAtMs != null ? Number(x.createdAtMs) : null,
+        departedAtMs: x.departedAtMs != null ? Number(x.departedAtMs) : null,
+        primerTrabajoMs: primer.get(Number(x.id)) ?? null,
+        finishedAtMs: x.finishedAtMs != null ? Number(x.finishedAtMs) : null,
+        enCaminoBaseAtMs: x.enCaminoBaseAtMs != null ? Number(x.enCaminoBaseAtMs) : null,
+        arrivedAtWorkshopMs: x.arrivedAtWorkshopMs != null ? Number(x.arrivedAtWorkshopMs) : null,
         enEspera: x.enEspera === true,
         progreso: prog.get(Number(x.id)) ?? { hechos: 0, total: 0 },
       }))
@@ -18207,6 +18310,80 @@ app.get("/api/otf-en-curso", exigirCredencial(requirePanelRole), async (_req, re
   } catch (e) {
     console.error("GET /api/otf-en-curso error:", e);
     res.json([]);
+  }
+});
+
+/*
+ * Seguimiento de una OTF para la tarjeta de Pantalla técnicos: lo mismo que
+ * /api/roadside-tracking para una asistencia (posición de la furgoneta, ETA,
+ * taller), pero sin token: lo lee cualquier rol del panel.
+ */
+app.get("/api/otf/:id/seguimiento", exigirCredencial(requirePanelRole), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "OTF no válida" });
+    const r = await db.query(`SELECT * FROM otf WHERE id = $1`, [id]);
+    if (!r.rows[0]) return res.status(404).json({ error: "OTF no encontrada" });
+    const otf = normalizeOtf(r.rows[0]);
+    const t = await db.query(
+      `SELECT MIN("updatedAtMs") AS "primerTrabajoMs" FROM otf_trabajos WHERE "otfId" = $1 AND status <> 'pendiente'`,
+      [id]
+    );
+    const primerTrabajoMs = t.rows[0]?.primerTrabajoMs != null ? Number(t.rows[0].primerTrabajoMs) : null;
+
+    let workshop: { lat: number; lng: number } | null = null;
+    try {
+      const wcfg = await getWorkshopConfig(otf.workshopId);
+      const wlat = parseFloat(wcfg.taller_lat);
+      const wlng = parseFloat(wcfg.taller_lng);
+      if (Number.isFinite(wlat) && Number.isFinite(wlng)) workshop = { lat: wlat, lng: wlng };
+    } catch { /* sin config */ }
+
+    let vehiclePosition: { lat: number; lng: number; speedKmh: number | null; moving: boolean | null } | null = null;
+    let eta: { minutos: number; km: string } | null = null;
+    const sigue = otfSigueEnCurso(otf);
+    if (sigue && otf.webfleetVehicleId) {
+      try {
+        const pos = await getWebfleetVehiclePosition(otf.webfleetVehicleId);
+        vehiclePosition = { lat: pos.lat, lng: pos.lng, speedKmh: pos.speedKmh, moving: pos.moving };
+        // Ida: hacia la base hasta que llega; vuelta: hacia el taller.
+        const destino =
+          otf.status === "finalizada"
+            ? otf.enCaminoBaseAtMs != null ? workshop : null
+            : otf.arrivedAtBaseMs == null && otf.lat != null && otf.lng != null
+              ? { lat: otf.lat, lng: otf.lng }
+              : null;
+        if (destino) {
+          try {
+            const e = await calcularETA({ lat: pos.lat, lng: pos.lng }, destino);
+            eta = { minutos: e.minutos, km: e.kilometros };
+          } catch { /* sin ETA */ }
+        }
+      } catch { /* sin posición */ }
+    }
+
+    let vanPlate: string | null = null;
+    try {
+      const vp = otf.webfleetVehicleId
+        ? await db.query(`SELECT plate FROM roadside_vehicles WHERE "webfleetVehicleId" = $1 LIMIT 1`, [otf.webfleetVehicleId])
+        : otf.assignedVehicleName
+          ? await db.query(`SELECT plate FROM roadside_vehicles WHERE name = $1 LIMIT 1`, [otf.assignedVehicleName])
+          : null;
+      vanPlate = vp?.rows[0]?.plate ?? null;
+    } catch { /* sin furgoneta */ }
+
+    res.json({
+      otf: { ...otf, primerTrabajoMs },
+      vehiclePosition,
+      eta,
+      workshop,
+      vanPlate,
+      actualizadoMs: Date.now(),
+      expired: !sigue,
+    });
+  } catch (e) {
+    console.error("GET /api/otf/:id/seguimiento error:", e);
+    res.status(500).json({ error: "Error obteniendo seguimiento" });
   }
 });
 
