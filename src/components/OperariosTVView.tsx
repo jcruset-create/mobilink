@@ -16,6 +16,7 @@ import {
 } from "../modules/colorEstadoTecnico";
 import { horaDeRecepcion, type RecepcionVehiculo } from "../modules/recepcionVehiculo";
 import { ETIQUETA_ASISTENCIA_EN_CURSO } from "../modules/asistenciaEnCurso";
+import { FLUJO_SALIDA, destinoDeSalida, esSalida, etiquetaDeMotivo } from "../modules/salidasTaller";
 
 type AreaKey = "camion" | "movil" | "tacografo" | "turismo" | "mecanica";
 
@@ -83,6 +84,12 @@ type RoadsideAssistanceForOperarios = {
   sinSeguimiento?: boolean | null;
   /** Furgoneta con la que ha salido, para ponerla al lado del operario. */
   assignedVehicleName?: string | null;
+  /** Salida de taller (repartir, buscar recambios…) en vez de asistencia. */
+  tipo?: string | null;
+  motivo?: string | null;
+  address?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
 };
 
 // Qué asistencias siguen en curso y cómo se llaman: src/modules/asistenciaEnCurso.ts.
@@ -1346,16 +1353,22 @@ export default function OperariosTVView({
                     </div>
                     <div className="mb-1 flex items-center gap-2">
                       <span className="rounded-full bg-emerald-200 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-900">
-                        Asistencia carretera
+                        {esSalida(a) ? `Salida · ${etiquetaDeMotivo(a.motivo)}` : "Asistencia carretera"}
                       </span>
                       <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-emerald-800">
                         {ROADSIDE_STATUS_LABELS[a.status] ?? a.status}
                         {a.etaMinutos != null ? ` · ETA ${a.etaMinutos} min` : ""}
                       </span>
                     </div>
-                    <div className="text-3xl font-black text-slate-950">{a.plate || "—"}</div>
-                    {a.customerName && (
-                      <div className="text-sm font-semibold text-emerald-900">{a.customerName}</div>
+                    {esSalida(a) ? (
+                      <div className="text-xl font-black leading-tight text-slate-950">{destinoDeSalida(a)}</div>
+                    ) : (
+                      <>
+                        <div className="text-3xl font-black text-slate-950">{a.plate || "—"}</div>
+                        {a.customerName && (
+                          <div className="text-sm font-semibold text-emerald-900">{a.customerName}</div>
+                        )}
+                      </>
                     )}
                     {tieneSeguimiento(a) && (
                       <SeguimientoAsistenciaCard
@@ -1363,6 +1376,7 @@ export default function OperariosTVView({
                         status={a.status}
                         etaMinutos={a.etaMinutos}
                         etaKm={a.etaKm}
+                        flujo={esSalida(a) ? FLUJO_SALIDA : undefined}
                       />
                     )}
                   </div>

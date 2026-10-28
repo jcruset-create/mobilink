@@ -111,3 +111,36 @@ export function validarSalida(b: {
   }
   return errores;
 }
+
+/* ── Lo que usa la pantalla ─────────────────────────────────────────────── */
+
+export function esSalida(a: { tipo?: string | null } | null | undefined): boolean {
+  return a?.tipo === TIPO_SALIDA;
+}
+
+/** Texto del destino para listas y tarjetas: la dirección o, sin ella, las coordenadas. */
+export function destinoDeSalida(a: {
+  address?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+}): string {
+  const dir = String(a.address ?? "").trim();
+  if (dir) return dir;
+  if (a.latitude != null && a.longitude != null) return `${a.latitude.toFixed(5)}, ${a.longitude.toFixed(5)}`;
+  return "Sin destino";
+}
+
+export const ETIQUETA_PASO_SALIDA: Record<(typeof FLUJO_SALIDA)[number], string> = {
+  asignada: "Asignada",
+  en_camino: "En camino",
+  en_punto: "En el punto",
+  en_camino_base: "Vuelve al taller",
+  llegada_taller: "En el taller",
+};
+
+/** El paso siguiente que se puede forzar a mano, o null si ya ha terminado. */
+export function siguientePasoForzable(status: string): (typeof FLUJO_SALIDA)[number] | null {
+  const i = (FLUJO_SALIDA as readonly string[]).indexOf(status);
+  if (i < 0 || i >= FLUJO_SALIDA.length - 1) return null;
+  return FLUJO_SALIDA[i + 1];
+}

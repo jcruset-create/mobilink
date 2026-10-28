@@ -335,6 +335,7 @@ export const MODULOS_APP: ModuloApp[] = [
       // Las claves son las del menú de WorkPlanner (SECCIONES en
       // WorkPlannerApp.tsx): lo que se desmarca aquí desaparece de allí.
       { key: "recepciones", label: "Recepción vehículos" },
+      { key: "salidas", label: "Salidas de taller" },
       { key: "partes", label: "Partes de trabajo" },
       { key: "pedidos", label: "Pedidos ERP" },
       { key: "plantillas", label: "Plantillas de checklist" },

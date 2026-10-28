@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { CheckCircle2, Clock3 } from "lucide-react";
 import { loadRoadsideTrackingFromBackend } from "../modules/roadsideAssistanceApi";
-import type { RoadsideTrackingResponse } from "../modules/roadsideAssistanceTypes";
+import type { RoadsideAssistanceStatus, RoadsideTrackingResponse } from "../modules/roadsideAssistanceTypes";
 import {
   avisoDeSeguimiento,
   horaConSegundos,
@@ -26,11 +26,13 @@ type Props = {
   status: string;
   etaMinutos?: number | null;
   etaKm?: string | null;
+  /** Pasos a pintar; por defecto los de una asistencia. */
+  flujo?: readonly RoadsideAssistanceStatus[];
 };
 
 const CADA_MS = 20_000;
 
-export default function SeguimientoAsistenciaCard({ trackingToken, status, etaMinutos, etaKm }: Props) {
+export default function SeguimientoAsistenciaCard({ trackingToken, status, etaMinutos, etaKm, flujo }: Props) {
   const [data, setData] = useState<RoadsideTrackingResponse | null>(null);
 
   useEffect(() => {
@@ -55,7 +57,7 @@ export default function SeguimientoAsistenciaCard({ trackingToken, status, etaMi
   const aviso = avisoDeSeguimiento(
     a ?? { status, etaMinutos, etaKm }
   );
-  const pasos = a ? pasosDeSeguimiento(a, data?.events ?? []) : [];
+  const pasos = a ? pasosDeSeguimiento(a, data?.events ?? [], flujo) : [];
 
   if (data?.expired) return null;
 
