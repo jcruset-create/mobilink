@@ -144,3 +144,36 @@ export function siguientePasoForzable(status: string): (typeof FLUJO_SALIDA)[num
   if (i < 0 || i >= FLUJO_SALIDA.length - 1) return null;
   return FLUJO_SALIDA[i + 1];
 }
+
+export type DestinoReciente = { address: string; latitude: number; longitude: number; veces: number };
+
+/**
+ * Los últimos destinos usados, para repetirlos con un clic. Se agrupan por
+ * coordenadas (dos salidas al mismo sitio son el mismo destino aunque la
+ * dirección se escribiera distinto) y se ordenan por la salida más reciente.
+ */
+export function ultimosDestinos(
+  salidas: { address?: string | null; latitude?: number | null; longitude?: number | null; createdAtMs?: number | null; status?: string }[],
+  cuantos = 3
+): DestinoReciente[] {
+  const porClave = new Map<string, DestinoReciente & { ultimoMs: number }>();
+  for (const s of salidas) {
+    if (s.latitude == null || s.longitude == null || s.status === "cancelada") continue;
+    const clave = `${s.latitude.toFixed(4)},${s.longitude.toFixed(4)}`;
+    const ms = Number(s.createdAtMs ?? 0);
+    const actual = porClave.get(clave);
+    if (!actual) {
+      porClave.set(clave, { address: destinoDeSalida(s), latitude: s.latitude, longitude: s.longitude, veces: 1, ultimoMs: ms });
+    } else {
+      actual.veces += 1;
+      if (ms > actual.ultimoMs) {
+        actual.ultimoMs = ms;
+        actual.address = destinoDeSalida(s);
+      }
+    }
+  }
+  return [...porClave.values()]
+    .sort((a, b) => b.ultimoMs - a.ultimoMs)
+    .slice(0, cuantos)
+    .map(({ ultimoMs: _u, ...d }) => d);
+}
