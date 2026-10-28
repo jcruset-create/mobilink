@@ -18162,6 +18162,54 @@ app.get("/api/otf", requireAdminRole, async (req, res) => {
   }
 });
 
+/*
+ * Las OTF en curso para Pantalla técnicos. La lista completa es de
+ * administrador; esto es lo mínimo para que la TV sepa quién está de servicio
+ * en la base de un cliente, y lo puede leer cualquier rol del panel.
+ */
+app.get("/api/otf-en-curso", exigirCredencial(requirePanelRole), async (_req, res) => {
+  try {
+    const r = await db.query(
+      `SELECT o.id, o."workshopId", o."clientName", o."baseName", o.direccion, o.status,
+              o."assignedTechName", o."assignedVehicleName", o."fechaProgramadaMs", o."arrivedAtBaseMs",
+              ${OTF_EN_ESPERA_SQL} AS "enEspera"
+         FROM otf o
+        WHERE o.status IN ('planificada', 'en_curso') AND o."assignedTechName" IS NOT NULL
+        ORDER BY o."createdAtMs" DESC LIMIT 100`
+    );
+    const ids = r.rows.map((x: any) => Number(x.id));
+    const prog = new Map<number, { hechos: number; total: number }>();
+    if (ids.length) {
+      const p = await db.query(
+        `SELECT "otfId", COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE status IN ('finalizado','no_realizado')) AS hechos
+           FROM otf_trabajos WHERE "otfId" = ANY($1) GROUP BY "otfId"`,
+        [ids]
+      );
+      for (const row of p.rows) prog.set(Number(row.otfId), { hechos: Number(row.hechos), total: Number(row.total) });
+    }
+    res.json(
+      r.rows.map((x: any) => ({
+        id: Number(x.id),
+        workshopId: x.workshopId ?? null,
+        clientName: x.clientName ?? "",
+        baseName: x.baseName ?? null,
+        direccion: x.direccion ?? null,
+        status: x.status ?? "planificada",
+        assignedTechName: x.assignedTechName ?? null,
+        assignedVehicleName: x.assignedVehicleName ?? null,
+        fechaProgramadaMs: x.fechaProgramadaMs != null ? Number(x.fechaProgramadaMs) : null,
+        arrivedAtBaseMs: x.arrivedAtBaseMs != null ? Number(x.arrivedAtBaseMs) : null,
+        enEspera: x.enEspera === true,
+        progreso: prog.get(Number(x.id)) ?? { hechos: 0, total: 0 },
+      }))
+    );
+  } catch (e) {
+    console.error("GET /api/otf-en-curso error:", e);
+    res.json([]);
+  }
+});
+
 app.get("/api/otf/:id", requireAdminRole, async (req, res) => {
   try {
     const data = await otfWithDetails(Number(req.params.id));
