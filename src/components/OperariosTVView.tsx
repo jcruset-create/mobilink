@@ -17,6 +17,8 @@ import {
 import { horaDeRecepcion, type RecepcionVehiculo } from "../modules/recepcionVehiculo";
 import { ETIQUETA_ASISTENCIA_EN_CURSO } from "../modules/asistenciaEnCurso";
 import { FLUJO_SALIDA, destinoDeSalida, esSalida, etiquetaDeMotivo } from "../modules/salidasTaller";
+import { ETIQUETA_OTF, otfDelTecnico, otfsEnCurso, progresoDeOtf, textoDeOtf, type OtfEnPantalla } from "../modules/otfEnPantalla";
+import { getAdminHeaders } from "../modules/adminHeaders";
 
 type AreaKey = "camion" | "movil" | "tacografo" | "turismo" | "mecanica";
 
@@ -692,6 +694,29 @@ export default function OperariosTVView({
   agendados = [],
 }: Props) {
   const [nowTick, setNowTick] = useState(Date.now());
+
+  /*
+   * Las OTF de Assist (operario en la base de un cliente). No llegan con las
+   * asistencias: se piden aquí cada 20 s, y si no hay respuesta se deja lo
+   * último que había. Ver src/modules/otfEnPantalla.ts.
+   */
+  const [otfs, setOtfs] = useState<OtfEnPantalla[]>([]);
+  useEffect(() => {
+    let activo = true;
+    async function cargar() {
+      try {
+        const res = await apiFetch(`${API_BASE}/api/otf-en-curso`, { headers: getAdminHeaders() });
+        const body = await res.json().catch(() => []);
+        if (activo && res.ok && Array.isArray(body)) setOtfs(body);
+      } catch {
+        /* sin red se deja lo último */
+      }
+    }
+    void cargar();
+    const t = window.setInterval(() => void cargar(), 20_000);
+    return () => { activo = false; window.clearInterval(t); };
+  }, []);
+  const otfsActivas = otfsEnCurso(otfs);
   const [maintenanceApiLoaded, setMaintenanceApiLoaded] = useState(false);
   const [maintenanceLastSyncAt, setMaintenanceLastSyncAt] = useState<
     number | null
@@ -1256,6 +1281,8 @@ export default function OperariosTVView({
   const asistenciasEnCurso = roadsideAssistances.filter(
     (a) => a.assignedTechName && ROADSIDE_STATUS_LABELS[a.status] != null
   );
+  const fechaHora = (ms?: number | null) =>
+    ms ? new Date(ms).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : "";
   const validationJobs = jobs.filter((job) => job.status === "validacion");
   const standByJobs = jobs.filter((job) => job.status === "parado");
   const waitingJobs = jobs.filter((job) => job.status === "espera");
@@ -1331,12 +1358,38 @@ export default function OperariosTVView({
 
           {activeJobs.length === 0 &&
           asistenciasEnCurso.length === 0 &&
+          otfsActivas.length === 0 &&
           pendingAssignedMaintenanceTasks.length === 0 ? (
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
               No hay trabajos activos ni tareas de mantenimiento asignadas.
             </div>
           ) : (
             <div className="grid gap-3 2xl:grid-cols-2">
+              {otfsActivas.map((o) => {
+                const tech = techs.find((t) => t.name === o.assignedTechName);
+                return (
+                  <div key={`otf-${o.id}`} className="rounded-3xl border border-amber-200 bg-amber-50 p-4">
+                    <div className="mb-3 flex flex-wrap gap-3">
+                      <div className="flex items-center gap-3 rounded-2xl bg-white px-3 py-2 shadow-sm">
+                        <TechAvatar tech={tech} size="large" />
+                        <div className="text-2xl font-black">{nombreConPapel(String(o.assignedTechName), "responsable")}</div>
+                      </div>
+                      <ChipFurgoneta matricula={matriculaDeFurgoneta({ assignedVehicleName: o.assignedVehicleName }, vehicles)} />
+                    </div>
+                    <div className="mb-1 flex items-center gap-2">
+                      <span className="rounded-full bg-amber-200 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-900">OTF · flota</span>
+                      <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-amber-800">
+                        {ETIQUETA_OTF[o.status] ?? o.status}
+                        {o.status === "en_curso" && o.arrivedAtBaseMs ? ` · desde ${fechaHora(o.arrivedAtBaseMs)}` : ""}
+                        {o.status === "planificada" && o.fechaProgramadaMs ? ` · ${fechaHora(o.fechaProgramadaMs)}` : ""}
+                      </span>
+                    </div>
+                    <div className="text-xl font-black leading-tight text-slate-950">{o.clientName || "Cliente"}</div>
+                    <div className="text-sm font-semibold text-amber-900">{o.baseName || o.direccion || ""}</div>
+                    {progresoDeOtf(o) && <div className="mt-1 text-xs font-bold text-amber-800">{progresoDeOtf(o)}</div>}
+                  </div>
+                );
+              })}
               {asistenciasEnCurso.map((a) => {
                 const tech = techs.find((t) => t.name === a.assignedTechName);
                 return (
@@ -1795,6 +1848,8 @@ export default function OperariosTVView({
                 asistenciasEnCurso.find((a) => a.assignedTechName === tech.name) ??
                 null;
 
+              const otfActiva = otfDelTecnico(otfs, tech.name);
+
               const validationProposal = jobs.find(
                 (job) =>
                   job.status === "validacion" &&
@@ -1822,11 +1877,11 @@ export default function OperariosTVView({
               // Responsable o apoyo en su trabajo: decide el rojo y el texto del nombre.
               const papel = currentJob
                 ? papelDelOperario(tech.name, currentJob.assignedNames)
-                : activeRoadsideAssistance
+                : activeRoadsideAssistance || otfActiva
                   ? "responsable"
                   : null;
               const situacion = situacionDeTecnico(normalizeTechStatus(tech.status), {
-                enAsistencia: Boolean(activeRoadsideAssistance),
+                enAsistencia: Boolean(activeRoadsideAssistance) || Boolean(otfActiva),
                 mantenimientoFuera: Boolean(pendingOutsideMaintenanceTask),
                 mantenimientoEnTaller: Boolean(pendingWorkshopMaintenanceTask),
                 reservadoParaValidar: Boolean(isReservedForValidation),
@@ -1860,6 +1915,8 @@ export default function OperariosTVView({
                                   ROADSIDE_STATUS_LABELS[activeRoadsideAssistance.status] ?? activeRoadsideAssistance.status
                                 }${activeRoadsideAssistance.etaMinutos != null ? ` · ETA ${activeRoadsideAssistance.etaMinutos} min` : ""}`}</span>
                               </span>
+                            : otfActiva
+                            ? textoDeOtf(otfActiva)
                             : currentJob
                             ? `${currentJob.plate} · ${getOperationLabel(
                                 currentJob
@@ -1881,6 +1938,8 @@ export default function OperariosTVView({
                       <span className={`rounded-full px-2.5 py-1 text-[10px] font-black ${chipDeSituacion(situacion)}`}>
                         {activeRoadsideAssistance
                           ? "CARRETERA"
+                          : otfActiva
+                          ? "OTF"
                           : pendingOutsideMaintenanceTask
                           ? "FUERA TALLER"
                           : pendingWorkshopMaintenanceTask
