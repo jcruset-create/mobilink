@@ -575,6 +575,18 @@ export async function initDb() {
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "knownPlaceId" INTEGER;
 
+    -- Salidas de taller (server/core/salidasTaller.ts): misma tabla que las
+    -- asistencias, con tipo 'salida' y el motivo. "enPuntoVisto" es el apunte
+    -- del vigilante GPS: furgoneta vista dentro del radio del destino.
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS tipo TEXT NOT NULL DEFAULT 'asistencia';
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS motivo TEXT;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "enPuntoVisto" BOOLEAN NOT NULL DEFAULT false;
+
     CREATE TABLE IF NOT EXISTS roadside_known_places (
       id SERIAL PRIMARY KEY,
       nombre TEXT NOT NULL,

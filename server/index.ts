@@ -138,6 +138,7 @@ import { AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "./core/ai.ts";
 import { makeSecret, safeEquals, verifySecretWithLegacy } from "./core/credentials.ts";
 import { proponerVinculos, type EmpleadoCore } from "./core/vinculoTecnicos.ts";
 import { resolverRolDelPanel, type RolResuelto } from "./core/rolDelPanel.ts";
+import { TIPO_SALIDA, esMotivoDeSalida, pasoDeSalida, validarSalida, RADIO_DESTINO_M } from "./core/salidasTaller.ts";
 import { siguienteReferencia } from "./cobros/referencias.ts";
 import { saveCaptureAnalysis, reconcileCaptureAiStatus } from "./core/whatsappCapture.ts";
 import { aE164, clienteTwilio, numeroWhatsAppEmisor } from "./core/twilio.ts";
@@ -980,6 +981,8 @@ function normalizeRoadsideAssistanceRow(row: any) {
     plateRemolque: row.plateRemolque ?? null,
     esRemolque: row.esRemolque === true || row.esRemolque === "true",
     origen: row.origen === "central" ? "central" : "taller",
+    tipo: row.tipo === TIPO_SALIDA ? TIPO_SALIDA : "asistencia",
+    motivo: row.motivo ?? null,
     expedienteCentral: row.expedienteCentral ?? null,
     solicitanteEmpresa: row.solicitanteEmpresa ?? null,
     solicitanteClienteId: row.solicitanteClienteId != null ? Number(row.solicitanteClienteId) : null,
@@ -5102,26 +5105,32 @@ app.get("/api/safety-operator/meetings", requirePresenciaEmployee, async (_req, 
    WORKSHOP CONFIG
 ========================================================= */
 
-const WORKSHOP_CONFIG_KEYS = ["taller_lat", "taller_lng", "taller_direccion", "taller_radio_m"] as const;
 
-async function getWorkshopConfig() {
-  const result = await db.query(
-    `SELECT key, value FROM workshop_config WHERE key = ANY($1)`,
-    [WORKSHOP_CONFIG_KEYS]
-  );
+/*
+ * Coordenadas del taller. Había un único juego para toda la instalación; con
+ * dos talleres (Tarragona y Reus) haciendo salidas, cada uno necesita las
+ * suyas: se guardan con la clave sufijada («taller_lat:sea-reus»). Sin
+ * sufijo para ese taller, se usa el juego general, que es lo de siempre.
+ */
+async function getWorkshopConfig(workshopId?: string | null) {
+  const result = await db.query(`SELECT key, value FROM workshop_config WHERE key LIKE 'taller_%'`);
   const map: Record<string, string> = {};
   for (const row of result.rows) map[row.key] = row.value;
+  const leer = (k: string) => {
+    const propio = workshopId ? map[`${k}:${workshopId}`] : undefined;
+    return propio != null && String(propio).trim() !== "" ? propio : map[k];
+  };
   return {
-    taller_lat: map["taller_lat"] ?? "",
-    taller_lng: map["taller_lng"] ?? "",
-    taller_direccion: map["taller_direccion"] ?? "",
-    taller_radio_m: map["taller_radio_m"] ?? "300",
+    taller_lat: leer("taller_lat") ?? "",
+    taller_lng: leer("taller_lng") ?? "",
+    taller_direccion: leer("taller_direccion") ?? "",
+    taller_radio_m: leer("taller_radio_m") ?? "300",
   };
 }
 
-app.get("/api/workshop-config", requireAdminRole, async (_req, res) => {
+app.get("/api/workshop-config", requireAdminRole, async (req, res) => {
   try {
-    res.json(await getWorkshopConfig());
+    res.json(await getWorkshopConfig(String(req.query.workshopId ?? "").trim() || null));
   } catch (error) {
     console.error("GET /api/workshop-config error:", error);
     res.status(500).json({ error: "Error cargando configuración" });
@@ -5130,12 +5139,14 @@ app.get("/api/workshop-config", requireAdminRole, async (_req, res) => {
 
 app.post("/api/workshop-config", requireAdminRole, async (req, res) => {
   try {
-    const { taller_lat, taller_lng, taller_direccion, taller_radio_m } = req.body ?? {};
+    const { taller_lat, taller_lng, taller_direccion, taller_radio_m, workshopId } = req.body ?? {};
+    // Con workshopId se guardan las coordenadas de ESE taller; sin él, las generales.
+    const sufijo = String(workshopId ?? "").trim() ? `:${String(workshopId).trim()}` : "";
     const entries: [string, string][] = [
-      ["taller_lat", String(taller_lat ?? "")],
-      ["taller_lng", String(taller_lng ?? "")],
-      ["taller_direccion", String(taller_direccion ?? "")],
-      ["taller_radio_m", String(taller_radio_m ?? "300")],
+      [`taller_lat${sufijo}`, String(taller_lat ?? "")],
+      [`taller_lng${sufijo}`, String(taller_lng ?? "")],
+      [`taller_direccion${sufijo}`, String(taller_direccion ?? "")],
+      [`taller_radio_m${sufijo}`, String(taller_radio_m ?? "300")],
     ];
     for (const [key, value] of entries) {
       await db.query(
@@ -8708,7 +8719,13 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
      */
     const esperaTrasId = await trasQueEspera(null, assignedTechName);
 
-    if (!customerName && !customerPhone) {
+    // Salida de taller: sin cliente; lo que hace falta es motivo, operario y destino.
+    const tipo = body.tipo === TIPO_SALIDA ? TIPO_SALIDA : "asistencia";
+    const motivo = tipo === TIPO_SALIDA && esMotivoDeSalida(body.motivo) ? String(body.motivo) : null;
+    if (tipo === TIPO_SALIDA) {
+      const errores = validarSalida({ ...body, assignedTechName, address, latitude, longitude });
+      if (errores.length) return res.status(400).json({ error: errores.join(" ") });
+    } else if (!customerName && !customerPhone) {
       return res.status(400).json({
         error: "Indica cliente o telefono para crear la asistencia",
       });
@@ -8756,13 +8773,17 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
           "solicitanteContactoId",
           -- La cola: detrás de qué asistencia espera turno ésta. Lo decide el
           -- servidor mirando qué lleva el operario, no quien llama.
-          "esperaTrasId"
+          "esperaTrasId",
+          -- Salida de taller o asistencia, y el motivo de la salida.
+          tipo,
+          motivo,
+          "knownPlaceId"
         )
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8,
           $9, $10, $11, $12, $13, $14, $15, $16,
           $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33,
-          $34, $35, $36
+          $34, $35, $36, $37, $38, $39
         )
         RETURNING *
       `,
@@ -8803,6 +8824,9 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
         idOpcional(body.solicitanteClienteId),
         idOpcional(body.solicitanteContactoId),
         esperaTrasId,
+        tipo,
+        motivo,
+        idOpcional(body.knownPlaceId),
       ]
     );
 
@@ -15625,7 +15649,7 @@ async function checkWebfleetWorkshopArrival() {
   try {
     // Busca asistencias en_camino_base con furgoneta Webfleet asignada
     const result = await db.query(`
-      SELECT ra.id, ra."webfleetVehicleId"
+      SELECT ra.id, ra."webfleetVehicleId", ra."workshopId"
       FROM roadside_assistances ra
       WHERE ra.status = 'en_camino_base'
         AND ra."arrivedAtWorkshopMs" IS NULL
@@ -15633,14 +15657,15 @@ async function checkWebfleetWorkshopArrival() {
     `);
     if (result.rows.length === 0) return;
 
-    const cfg = await getWorkshopConfig();
-    const tallerLat = parseFloat(cfg.taller_lat);
-    const tallerLng = parseFloat(cfg.taller_lng);
-    const radioM = parseFloat(cfg.taller_radio_m) || 300;
-    if (!isFinite(tallerLat) || !isFinite(tallerLng)) return;
-
     for (const row of result.rows) {
       try {
+        // Cada asistencia vuelve a SU taller: Reus no es Tarragona.
+        const cfg = await getWorkshopConfig(row.workshopId ?? null);
+        const tallerLat = parseFloat(cfg.taller_lat);
+        const tallerLng = parseFloat(cfg.taller_lng);
+        const radioM = parseFloat(cfg.taller_radio_m) || 300;
+        if (!isFinite(tallerLat) || !isFinite(tallerLng)) continue;
+
         const pos = await getWebfleetVehiclePosition(row.webfleetVehicleId);
         const distM = haversineDistanceM(pos.lat, pos.lng, tallerLat, tallerLng);
         console.log(`Webfleet geofence check #${row.id} (${row.webfleetVehicleId}): ${Math.round(distM)}m al taller`);
@@ -15768,6 +15793,85 @@ async function checkOtfBaseArrival() {
     console.error("checkOtfBaseArrival error:", e);
   }
 }
+
+/*
+ * Salidas de taller: llegada al punto y vuelta, por GPS.
+ *
+ * Nadie lleva tablet en una salida, así que estos dos pasos los pone el
+ * servidor. La decisión (server/core/salidasTaller.ts) es pura; aquí solo se
+ * mira dónde está la furgoneta y se escribe el resultado. Cada minuto: una
+ * parada de reparto puede ser corta.
+ */
+let vigilarSalidasRunning = false;
+async function vigilarSalidas() {
+  if (vigilarSalidasRunning) return;
+  vigilarSalidasRunning = true;
+  try {
+    const r = await db.query(
+      `SELECT id, status, "webfleetVehicleId", latitude, longitude, "enPuntoVisto", "assignedTechName"
+         FROM roadside_assistances
+        WHERE tipo = $1 AND status IN ('en_camino', 'en_punto')
+          AND "webfleetVehicleId" IS NOT NULL
+          AND latitude IS NOT NULL AND longitude IS NOT NULL`,
+      [TIPO_SALIDA]
+    );
+    for (const s of r.rows) {
+      try {
+        const pos = await getWebfleetVehiclePosition(s.webfleetVehicleId);
+        const dist = haversineDistanceM(pos.lat, pos.lng, Number(s.latitude), Number(s.longitude));
+        const paso = pasoDeSalida({
+          status: String(s.status),
+          distDestinoM: dist,
+          moving: typeof pos.moving === "boolean" ? pos.moving : null,
+          enPuntoVisto: s.enPuntoVisto === true,
+          radioDestinoM: RADIO_DESTINO_M,
+        });
+        const now = Date.now();
+        // El mapa del panel en vivo, como en la vuelta al taller.
+        await db.query(
+          `UPDATE roadside_assistances
+              SET "operatorLat" = $2, "operatorLng" = $3, "operatorLocationAtMs" = $4
+            WHERE id = $1`,
+          [s.id, pos.lat, pos.lng, now]
+        );
+        if (paso.enPuntoVisto != null && paso.enPuntoVisto !== (s.enPuntoVisto === true)) {
+          await db.query(`UPDATE roadside_assistances SET "enPuntoVisto" = $2 WHERE id = $1`, [s.id, paso.enPuntoVisto]);
+        }
+        if (paso.status === "en_punto") {
+          await db.query(
+            `UPDATE roadside_assistances
+                SET status = 'en_punto', "arrivedAtPointMs" = COALESCE("arrivedAtPointMs", $2), "updatedAtMs" = $2
+              WHERE id = $1 AND status = 'en_camino'`,
+            [s.id, now]
+          );
+        } else if (paso.status === "en_camino_base") {
+          await db.query(
+            `UPDATE roadside_assistances
+                SET status = 'en_camino_base', "enCaminoBaseAtMs" = COALESCE("enCaminoBaseAtMs", $2), "updatedAtMs" = $2
+              WHERE id = $1 AND status = 'en_punto'`,
+            [s.id, now]
+          );
+        }
+        if (paso.status) {
+          await db.query(
+            `INSERT INTO roadside_assistance_events ("assistanceId", status, note, "createdBy", "createdAtMs")
+             VALUES ($1, $2, $3, 'auto-webfleet', $4)`,
+            [s.id, paso.status, paso.nota ?? null, now]
+          );
+          console.log(`✓ Salida #${s.id} → ${paso.status} (GPS, ${Math.round(dist)} m del destino)`);
+        }
+      } catch (err) {
+        console.warn(`vigilarSalidas error #${s.id}:`, err);
+      }
+    }
+  } catch (e) {
+    console.error("vigilarSalidas error:", e);
+  } finally {
+    vigilarSalidasRunning = false;
+  }
+}
+setInterval(() => void vigilarSalidas(), 60 * 1000);
+void vigilarSalidas();
 
 // Comprobar cada 2 minutos
 setInterval(() => {
@@ -21502,16 +21606,11 @@ async function vigilarSalidaDelTaller() {
   autoEnCaminoRunning = true;
   try {
     const asignadas = await db.query(
-      `SELECT id, "webfleetVehicleId", "autoEnCaminoArmada"
+      `SELECT id, "webfleetVehicleId", "autoEnCaminoArmada", "workshopId"
        FROM roadside_assistances
        WHERE status = 'asignada' AND "webfleetVehicleId" IS NOT NULL`
     );
     if (!asignadas.rows.length) return;
-
-    const wcfg = await getWorkshopConfig();
-    const wlat = parseFloat(wcfg.taller_lat);
-    const wlng = parseFloat(wcfg.taller_lng);
-    if (!Number.isFinite(wlat) || !Number.isFinite(wlng)) return;
 
     // Una sola llamada trae la posición de toda la flota
     const { url, headers } = buildWebfleetRequest("showObjectReportExtern");
@@ -21532,6 +21631,11 @@ async function vigilarSalidaDelTaller() {
     for (const a of asignadas.rows) {
       const pos = posByObj.get(String(a.webfleetVehicleId));
       if (!pos) continue;
+      // Cada asistencia sale de SU taller.
+      const wcfg = await getWorkshopConfig(a.workshopId ?? null);
+      const wlat = parseFloat(wcfg.taller_lat);
+      const wlng = parseFloat(wcfg.taller_lng);
+      if (!Number.isFinite(wlat) || !Number.isFinite(wlng)) continue;
       const dist = haversineDistanceM(pos.lat, pos.lng, wlat, wlng);
       if (dist <= AUTO_EN_CAMINO_RADIO_M) {
         // Furgoneta vista en el taller: se arma el disparo automático
