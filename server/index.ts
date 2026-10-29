@@ -2334,6 +2334,10 @@ app.post("/api/tyrecontrol/intervencion/cerrar", exigirCredencial(authenticate, 
       ].filter(Boolean).join("\n\n");
       const r = await pedirIA({
         operacion: "tyrecontrol.informe-intervencion",
+        // El gasto se imputa a la empresa de la intervención. Si se cierra sin
+        // sesión abierta no hay de dónde sacarla y se apunta sin empresa, que
+        // es mejor que atribuírsela a quien no toca.
+        empresaId: (sesion as any)?.empresa_id ?? null,
         proposito: "informe",
         prompt:
           "Eres un técnico de neumáticos. Redacta un informe breve (2-4 frases, español, tono profesional) " +
