@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
 import '../models/models.dart';
 import '../models/umbrales.dart';
+import '../services/lectura_km.dart';
 import '../services/offline_store.dart';
 import '../services/pausa_controller.dart';
 import '../services/probe_session.dart';
@@ -31,7 +32,11 @@ class ReviewScreen extends StatefulWidget {
   /// Km informados a mano en la pantalla de confirmación, para el vehículo que
   /// no está enlazado con ninguna plataforma.
   final int? kmManual;
-  const ReviewScreen({super.key, required this.vehiculo, this.revisionExistente, this.verificarPresiones = false, this.kmManual});
+  /// La lectura del odómetro que ya hizo «Confirmar vehículo», si la hizo.
+  /// Se reutiliza mientras siga vigente para no gastar dos veces el cupo del
+  /// proveedor en la misma revisión. Si ha caducado, se vuelve a preguntar.
+  final Map<String, dynamic>? lecturaKm;
+  const ReviewScreen({super.key, required this.vehiculo, this.revisionExistente, this.verificarPresiones = false, this.kmManual, this.lecturaKm});
 
   @override
   State<ReviewScreen> createState() => _ReviewScreenState();
@@ -145,7 +150,12 @@ class _ReviewScreenState extends State<ReviewScreen> {
          * proveedor es cada vehículo, y el origen queda guardado con la
          * revisión en vez de perderse.
          */
-        final lectura = await TyreControlApi.kilometrajeActual(widget.vehiculo.id);
+        // La pantalla anterior ya ha preguntado hace segundos: si su lectura
+        // sigue vigente se reutiliza, y si no, se pregunta otra vez. Lo
+        // decide `lecturaSigueValiendo`, que ante la duda dice que no.
+        final lectura = lecturaSigueValiendo(widget.lecturaKm)
+            ? widget.lecturaKm!
+            : await TyreControlApi.kilometrajeActual(widget.vehiculo.id);
         _lecturaKm = lectura;
         final kmTel = (lectura['km'] as num?)?.round();
         if (kmTel != null) {
