@@ -108,15 +108,48 @@ create table if not exists ia_resumen_vehiculo (
 create index if not exists ia_resumen_vehiculo_busqueda_idx
   on ia_resumen_vehiculo (vehiculo_id, caduca_at desc);
 
+-- ── 4. Coordinación entre instancias ─────────────────────────────────────
+--
+-- Dos personas pulsando «Resumen IA» a la vez sobre la misma ficha deben
+-- costar UNA llamada, no dos. Dentro de un proceso eso lo resuelve un Map;
+-- entre procesos, no: hoy el manifiesto de Render declara una sola instancia,
+-- pero subir de plan añade instancias sin tocar una línea de código, y
+-- durante un despliegue conviven dos procesos unos segundos.
+--
+-- Así que la coordinación vive en la base, con un arrendamiento por clave:
+-- quien consigue insertar la fila es el que llama al proveedor; el resto
+-- espera a que aparezca el resumen en la caché.
+--
+-- `caduca_at` es lo que hace esto recuperable: si la instancia que tenía el
+-- arrendamiento se muere a media llamada, la fila caduca y otra lo toma. Sin
+-- caducidad, un proceso muerto dejaría la ficha bloqueada para siempre.
+--
+-- Y a propósito NO se usa un lock de transacción: eso obligaría a mantener
+-- una transacción abierta mientras se espera a OpenAI —medio minuto con una
+-- conexión del pool secuestrada—, que es exactamente lo que no se debe hacer.
+create table if not exists ia_resumen_en_curso (
+  clave       text primary key,
+  empresa_id  uuid not null references tc_empresas(id) on delete cascade,
+  vehiculo_id uuid not null references tc_vehiculos(id) on delete cascade,
+  -- Quién lo tiene. Solo para diagnóstico: no se confía en ello para nada.
+  instancia   text not null,
+  iniciado_at timestamptz not null default now(),
+  caduca_at   timestamptz not null
+);
+
+create index if not exists ia_resumen_en_curso_caduca_idx
+  on ia_resumen_en_curso (caduca_at);
+
 -- ── Permisos ─────────────────────────────────────────────────────────────
 --
 -- Las tres las escribe el servidor con la service key. El panel todavía no
 -- las lee, así que no se concede nada a `authenticated` más allá de lo que
 -- hace falta para que un administrador pueda mirar su propio consumo cuando
 -- se construya esa pantalla. Escribir, nunca desde la aplicación.
-alter table ia_uso              enable row level security;
-alter table ia_limites          enable row level security;
-alter table ia_resumen_vehiculo enable row level security;
+alter table ia_uso               enable row level security;
+alter table ia_limites           enable row level security;
+alter table ia_resumen_vehiculo  enable row level security;
+alter table ia_resumen_en_curso  enable row level security;
 
 drop policy if exists ia_uso_lectura on ia_uso;
 create policy ia_uso_lectura on ia_uso
@@ -133,8 +166,29 @@ create policy ia_resumen_lectura on ia_resumen_vehiculo
   for select to authenticated
   using (tc_puede_ver_empresa(empresa_id));
 
-revoke insert, update, delete, truncate on ia_uso              from anon, authenticated;
-revoke insert, update, delete, truncate on ia_limites          from anon, authenticated;
-revoke insert, update, delete, truncate on ia_resumen_vehiculo from anon, authenticated;
+-- Se revoca TODO primero y se concede después solo lo que hace falta. En este
+-- orden a propósito: Supabase trae `alter default privileges` que conceden de
+-- oficio a anon y authenticated sobre lo nuevo de public, así que crear una
+-- tabla y no decir nada equivale a abrirla. Esto lo cierra.
+revoke all on ia_uso              from public, anon, authenticated;
+revoke all on ia_limites          from public, anon, authenticated;
+revoke all on ia_resumen_vehiculo from public, anon, authenticated;
+revoke all on ia_resumen_en_curso from public, anon, authenticated;
 
-grant select on ia_uso, ia_limites, ia_resumen_vehiculo to authenticated, service_role;
+-- Lectura para el panel, acotada por las políticas de arriba (que solo
+-- cubren SELECT: sin política de escritura, con RLS activa, escribir desde la
+-- aplicación es imposible aunque alguien concediera el permiso por error).
+grant select on ia_uso, ia_limites, ia_resumen_vehiculo to authenticated;
+
+-- El servidor escribe con la service key, que además salta la RLS.
+grant select, insert, update, delete on ia_uso, ia_limites, ia_resumen_vehiculo, ia_resumen_en_curso to service_role;
+
+-- `ia_resumen_en_curso` es fontanería interna: ni el panel ni la APK la
+-- necesitan, así que no se le concede nada a authenticated. Sin grant y sin
+-- política, para un cliente no existe.
+
+-- No se crea ninguna función SQL para reservar cuota: la lógica vive en el
+-- servidor (server/core/iaConsumo.ts) y lo único que se usa de la base es
+-- `pg_advisory_xact_lock`, que es un built-in de PostgreSQL con EXECUTE para
+-- PUBLIC de fábrica. Es decir: no se añade superficie nueva invocable desde
+-- el cliente, y no hay ninguna función SECURITY DEFINER que auditar.

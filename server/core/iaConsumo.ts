@@ -35,6 +35,26 @@
  * misma transacción, tomando antes un `pg_advisory_xact_lock` por empresa. Sin
  * eso, veinte peticiones a la vez leerían el mismo recuento y pasarían todas.
  *
+ * ── Qué garantiza cada tope, y qué NO ───────────────────────────────────────
+ *
+ * `max_peticiones_dia` es firme: la cuenta y la inserción van en la misma
+ * transacción serializada por empresa, así que N peticiones simultáneas no
+ * pueden pasar las dos del tope. Como mucho se cuela la que estaba ya dentro.
+ *
+ * `max_tokens_dia` NO es un límite estricto, y conviene decirlo sin adornos:
+ * los tokens solo se saben DESPUÉS de que el proveedor conteste. El tope se
+ * comprueba contra lo ya REGISTRADO, de modo que una petición que arranca
+ * dentro del tope puede acabar pasándose, y diez peticiones simultáneas
+ * reservan todas antes de que ninguna haya sumado un token. Es un freno con
+ * retardo: corta la siguiente oleada, no la que está en vuelo. Si hace falta
+ * un corte duro, el que lo da es `max_peticiones_dia`.
+ *
+ * Tampoco se cuentan los tokens de los intentos FALLIDOS: cuando el proveedor
+ * devuelve un error o se agota el plazo no informa de consumo, así que no hay
+ * nada que sumar. Lo que sí queda es `intentos`, para que el hueco se vea.
+ * Donde sí hay varias respuestas —el bucle de herramientas del asistente— se
+ * suman todas, no solo la última (ver asistente.ts).
+ *
  * ── Y si la base no contesta ────────────────────────────────────────────────
  *
  * Se deja pasar la llamada y se avisa por consola con un código buscable.
@@ -77,6 +97,17 @@ export interface Reserva {
   permitido: boolean;
   /** Null si no se pudo apuntar (base caída) o si no se permite. */
   usoId: string | null;
+  /**
+   * Si el contador pudo hacer su trabajo.
+   *
+   * "caido" significa: NO se ha comprobado la cuota y NO se ha apuntado nada.
+   * Se devuelve permitido de todas formas —los lectores y el asistente no se
+   * apagan porque falle el contador— pero quien quiera lo contrario puede
+   * mirar este campo y negarse. El resumen de vehículo lo hace, porque es
+   * funcionalidad nueva y gastar sin contar no es aceptable en algo que
+   * todavía no hace falta a nadie.
+   */
+  contador: "ok" | "caido";
   /** Por qué no se permite, para que el llamante lo cuente en su idioma. */
   motivo?: "ia_desactivada" | "tope_peticiones" | "tope_tokens";
   /** Lo consumido hoy, para poder decirlo sin volver a preguntar. */
@@ -84,7 +115,7 @@ export interface Reserva {
   tokensHoy?: number;
 }
 
-const PERMITIDO_SIN_CONTADOR: Reserva = { permitido: true, usoId: null };
+const PERMITIDO_SIN_CONTADOR: Reserva = { permitido: true, usoId: null, contador: "caido" };
 
 export function moduloDe(operacion: string): string {
   const i = operacion.indexOf(".");
@@ -160,7 +191,7 @@ export async function reservar(ctx: ContextoUso): Promise<Reserva> {
     const tokensHoy = Number(usado[0]?.tokens ?? 0);
 
     const negar = (motivo: Reserva["motivo"]): Reserva => ({
-      permitido: false, usoId: null, motivo, peticionesHoy, tokensHoy,
+      permitido: false, usoId: null, contador: "ok", motivo, peticionesHoy, tokensHoy,
     });
 
     let rechazo: Reserva | null = null;
@@ -187,7 +218,7 @@ export async function reservar(ctx: ContextoUso): Promise<Reserva> {
       [ctx.empresaId ?? null, ctx.modulo ?? moduloDe(ctx.operacion),
        ctx.operacion, ctx.modeloPedido]);
     await cliente.query("commit");
-    return { permitido: true, usoId: String(creada[0].id), peticionesHoy, tokensHoy };
+    return { permitido: true, usoId: String(creada[0].id), contador: "ok", peticionesHoy, tokensHoy };
   } catch (e) {
     await cliente.query("rollback").catch(() => {});
     avisar("reservar", e);

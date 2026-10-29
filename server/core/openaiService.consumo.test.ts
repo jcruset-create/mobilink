@@ -44,7 +44,7 @@ class ErrorProveedor extends Error {
 
 beforeEach(() => {
   crear.mockReset();
-  reservar.mockReset().mockResolvedValue({ permitido: true, usoId: "uso-1" });
+  reservar.mockReset().mockResolvedValue({ permitido: true, usoId: "uso-1", contador: "ok" });
   cerrar.mockReset().mockResolvedValue(undefined);
   registrarSinClave.mockReset().mockResolvedValue(undefined);
   process.env.OPENAI_API_KEY = "sk-de-prueba";
@@ -122,6 +122,71 @@ describe("qué se apunta", () => {
   });
 });
 
+describe("exigir contador (el resumen falla cerrado)", () => {
+  it("si el contador no ha podido contar, NO se llama al proveedor", async () => {
+    reservar.mockResolvedValue({ permitido: true, usoId: null, contador: "caido" });
+    crear.mockResolvedValue(respuestaOk("no debería llamarse"));
+    const r = await pedirIA({
+      prompt: "x", operacion: "resumen.vehiculo", empresaId: EMPRESA, exigirContador: true,
+    });
+    expect(r).toMatchObject({ ok: false, error: "No se ha podido comprobar el consumo de IA" });
+    expect(crear).not.toHaveBeenCalled();
+  });
+
+  it("los llamantes que NO lo exigen siguen pasando con el contador caído", async () => {
+    reservar.mockResolvedValue({ permitido: true, usoId: null, contador: "caido" });
+    crear.mockResolvedValue(respuestaOk("1234 ABC"));
+    const r = await pedirIA({ prompt: "x", operacion: "assist.detectPlate" });
+    expect(r.ok).toBe(true);
+    expect(crear).toHaveBeenCalledTimes(1);
+  });
+
+  it("con el contador en pie, exigirlo no cambia nada", async () => {
+    crear.mockResolvedValue(respuestaOk("vale"));
+    const r = await pedirIA({
+      prompt: "x", operacion: "resumen.vehiculo", empresaId: EMPRESA, exigirContador: true,
+    });
+    expect(r.ok).toBe(true);
+  });
+});
+
+describe("plazo: abortar corta de verdad", () => {
+  it("abortado antes de empezar, no se llama al proveedor", async () => {
+    const corte = new AbortController();
+    corte.abort();
+    const r = await pedirIA({
+      prompt: "x", operacion: "resumen.vehiculo", empresaId: EMPRESA, signal: corte.signal,
+    });
+    expect(crear).not.toHaveBeenCalled();
+    expect(r).toMatchObject({ ok: false, error: "Plazo agotado" });
+    expect(cerrar).toHaveBeenCalledWith("uso-1", expect.objectContaining({
+      resultado: "error", errorCodigo: "plazo", intentos: 0,
+    }));
+  });
+
+  it("si vence durante un reintento, no se reintenta más ni se cae al respaldo", async () => {
+    process.env.OPENAI_FALLBACK_MODEL = "modelo-respaldo";
+    const corte = new AbortController();
+    crear.mockImplementation(async () => { corte.abort(); throw new ErrorProveedor(503); });
+    const r = await pedirIA({
+      prompt: "x", operacion: "resumen.vehiculo", empresaId: EMPRESA, signal: corte.signal,
+    });
+    expect(r.ok).toBe(false);
+    // Un intento y se acabó: sin el corte serían 3 del principal y 3 del respaldo.
+    expect(crear).toHaveBeenCalledTimes(1);
+    expect(cerrar).toHaveBeenCalledWith("uso-1", expect.objectContaining({
+      errorCodigo: "plazo", intentos: 1, usoRespaldo: false,
+    }));
+  });
+
+  it("la señal viaja al proveedor para cancelar la llamada en vuelo", async () => {
+    crear.mockResolvedValue(respuestaOk("vale"));
+    const corte = new AbortController();
+    await pedirIA({ prompt: "x", operacion: "resumen.vehiculo", signal: corte.signal });
+    expect(crear.mock.calls[0][1]).toMatchObject({ signal: corte.signal });
+  });
+});
+
 describe("cuando no se puede llamar", () => {
   it("sin clave no se llama al proveedor y queda apuntado", async () => {
     delete process.env.OPENAI_API_KEY;
@@ -149,7 +214,7 @@ describe("cuando no se puede llamar", () => {
   });
 
   it("si el contador no contesta, la llamada sale igual y no se apunta", async () => {
-    reservar.mockResolvedValue({ permitido: true, usoId: null });
+    reservar.mockResolvedValue({ permitido: true, usoId: null, contador: "caido" });
     crear.mockResolvedValue(respuestaOk("sale igual"));
     const r = await pedirIA({ prompt: "x", operacion: "tyre.flanco" });
     expect(r.ok).toBe(true);

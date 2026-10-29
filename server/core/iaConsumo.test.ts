@@ -155,13 +155,15 @@ describe("reservar · topes", () => {
 describe("reservar · si el contador no puede contar", () => {
   it("sin conexión deja pasar: un fallo del contador no apaga los lectores", async () => {
     fallarConexion = true;
-    expect(await reservar(ctx)).toEqual({ permitido: true, usoId: null });
+    expect(await reservar(ctx)).toEqual({ permitido: true, usoId: null, contador: "caido" });
   });
 
   it("si revienta a mitad, hace rollback y deja pasar igual", async () => {
     fallarConsulta = "count(*)";
     const r = await reservar(ctx);
-    expect(r).toEqual({ permitido: true, usoId: null });
+    // Deja pasar, pero DICE que no ha contado: quien quiera fallar cerrado
+    // (el resumen de vehículo) mira este campo.
+    expect(r).toEqual({ permitido: true, usoId: null, contador: "caido" });
     expect(sqls()).toContain("rollback");
     expect(liberado).toHaveBeenCalled();
   });

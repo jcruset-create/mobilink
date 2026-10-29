@@ -31,7 +31,8 @@ import { createHash } from "node:crypto";
 import { supabase } from "../../supabase.ts";
 import { hayIA, pedirIA } from "../../core/openaiService.ts";
 import { registrarCache, resumenVehiculoActivo } from "../../core/iaConsumo.ts";
-import { resolverAlcance, type Alcance } from "../asistente.ts";
+import { resolverAlcance, type Alcance } from "../alcance.ts";
+import { esperarResultado, soltar, tomar } from "./coordinacion.ts";
 import { reunir, type Reunido } from "./datos.ts";
 import { listaDeRefs } from "./evidencias.ts";
 import { construirPrompt, ESQUEMA, VERSION, type SalidaModelo } from "./prompt.ts";
@@ -66,7 +67,12 @@ interface Generado {
   resumen: ResumenValidado;
   generado_at: string;
   caduca_at: string;
+  /** True si lo generó OTRA instancia y aquí solo se ha leído de la caché. */
+  deCache?: boolean;
 }
+
+/** Cuánto se espera a que otra instancia termine antes de dar la cara. */
+const ESPERA_AJENA_MS = 20_000;
 
 /** Clave de caché: empresa, vehículo, alcance, datos de entrada y versión. */
 function claveCache(r: Reunido, a: Alcance): string {
@@ -109,6 +115,15 @@ async function guardarCache(
       generado_at: g.generado_at,
       caduca_at: g.caduca_at,
     }, { onConflict: "vehiculo_id,huella" });
+
+    // Barrido de lo caducado de ESTE vehículo. La huella cambia cada pocas
+    // horas por su cuenta (lleva días abiertos y antigüedades dentro), así
+    // que sin esto la tabla crecería sin parar con resúmenes que ya no sirve
+    // nadie. Va aquí, en la escritura, para no necesitar un proceso aparte.
+    await supabase.from("ia_resumen_vehiculo")
+      .delete()
+      .eq("vehiculo_id", vehiculoId)
+      .lt("caduca_at", new Date().toISOString());
   } catch (e: any) {
     // No poder guardar la caché no invalida el resumen ya generado.
     console.log(JSON.stringify({
@@ -143,6 +158,19 @@ function respuesta(g: Generado, r: Reunido, origen: "ia" | "cache"): Record<stri
 async function generar(r: Reunido, alcance: Alcance, vehiculoId: string, clave: string): Promise<Generado> {
   const ctxEvidencias = { vehiculoId, intervencionDeOperacion: intervencionDeOperacion(r) };
 
+  /*
+   * El plazo total CANCELA. Antes se corría una carrera contra un temporizador
+   * y la llamada seguía viva por detrás: la persona recibía el aviso y el
+   * servidor seguía reintentando y cayendo al respaldo, pagando por una
+   * respuesta que ya no iba a ver nadie. Con el AbortSignal, al vencer el
+   * plazo se corta el intento en vuelo y no se empieza ninguno más.
+   */
+  const corte = new AbortController();
+  let vencido: NodeJS.Timeout | undefined;
+  const plazo = new Promise<null>((resolve) => {
+    vencido = setTimeout(() => { corte.abort(); resolve(null); }, plazoTotalMs());
+  });
+
   const peticion = pedirIA<SalidaModelo>({
     prompt: construirPrompt(r.datos, listaDeRefs(r.refs)),
     proposito: "informe",
@@ -151,26 +179,31 @@ async function generar(r: Reunido, alcance: Alcance, vehiculoId: string, clave: 
     empresaId: alcance.empresaId,
     maxTokens: 1600,
     timeoutMs: TIMEOUT_INTENTO_MS,
+    // Funcionalidad nueva: si no se puede comprobar la cuota, no se llama.
+    exigirContador: true,
+    signal: corte.signal,
   });
 
-  let vencido: NodeJS.Timeout | undefined;
-  const plazo = new Promise<null>((resolve) => {
-    vencido = setTimeout(() => resolve(null), plazoTotalMs());
-  });
   const res = await Promise.race([peticion, plazo]).finally(() => clearTimeout(vencido));
 
   if (!res) throw new ErrorAmable(504, "El resumen ha tardado demasiado. Vuelve a intentarlo en un momento.");
   if (!res.ok || !res.datos) {
     // El motivo real queda en la métrica de consumo y en el log del servicio;
     // a la persona no se le enseña el error del proveedor.
-    throw new ErrorAmable(
-      res.error?.includes("límite diario") ? 429 : 503,
-      res.error?.includes("límite diario")
-        ? "Se ha alcanzado el límite diario de uso de IA de esta empresa."
-        : res.error?.includes("desactivada")
-          ? "La IA está desactivada para esta empresa."
-          : "No se ha podido generar el resumen ahora mismo. La ficha sigue disponible.",
-    );
+    if (res.error?.includes("límite diario")) {
+      throw new ErrorAmable(429, "Se ha alcanzado el límite diario de uso de IA de esta empresa.");
+    }
+    if (res.error?.includes("desactivada")) {
+      throw new ErrorAmable(403, "La IA está desactivada para esta empresa.");
+    }
+    if (res.error?.includes("comprobar el consumo")) {
+      // Falla CERRADO a propósito, al contrario que los lectores: ver
+      // iaConsumo.ts y el campo `exigirContador` de openaiService.
+      throw new ErrorAmable(503,
+        "No se puede generar el resumen ahora mismo porque no se puede comprobar el consumo de IA.");
+    }
+    throw new ErrorAmable(503,
+      "No se ha podido generar el resumen ahora mismo. La ficha sigue disponible.");
   }
 
   const resumen = validar(res.datos, r.datos, r.refs, ctxEvidencias);
@@ -182,6 +215,38 @@ async function generar(r: Reunido, alcance: Alcance, vehiculoId: string, clave: 
   };
   await guardarCache(vehiculoId, alcance.empresaId, clave, g, res.modelo);
   return g;
+}
+
+/**
+ * Genera, coordinándose con las demás instancias.
+ *
+ * Si otra lo está generando, aquí NO se llama al proveedor: se espera a que
+ * aparezca en la caché. Si no aparece a tiempo se devuelve un mensaje
+ * entendible en vez de pagar una segunda llamada por lo mismo.
+ */
+async function generarCoordinado(
+  r: Reunido, alcance: Alcance, vehiculoId: string, clave: string,
+): Promise<Generado> {
+  // El arrendamiento dura algo más que el plazo total: si la instancia muere,
+  // caduca y otra puede tomarlo, pero mientras viva nadie le pisa la llamada.
+  const arrendamiento = await tomar(clave, alcance.empresaId, vehiculoId, plazoTotalMs() + 10_000);
+
+  if (arrendamiento === "ajeno") {
+    const guardado = await esperarResultado(
+      () => leerCache(vehiculoId, clave, alcance.empresaId), ESPERA_AJENA_MS);
+    if (guardado) return { ...guardado, deCache: true };
+    throw new ErrorAmable(503,
+      "Se está generando el resumen de este vehículo. Inténtalo de nuevo en unos segundos.");
+  }
+
+  // "sin_coordinacion" (la base no contestó) sigue adelante: el que de verdad
+  // para la llamada en ese caso es el contador, que falla cerrado para esta
+  // funcionalidad. Duplicar aquí la negativa solo escondería el motivo real.
+  try {
+    return await generar(r, alcance, vehiculoId, clave);
+  } finally {
+    if (arrendamiento === "mio") await soltar(clave);
+  }
 }
 
 class ErrorAmable extends Error {
@@ -269,15 +334,23 @@ export function mountResumenVehiculo(app: Express, ...guards: RequestHandler[]):
         }
       }
 
-      // Una sola llamada por clave, aunque entren varias peticiones a la vez.
+      /*
+       * Dos niveles de deduplicación, porque hacen falta los dos:
+       *
+       *  1. En este proceso, un Map de promesas: dos pulsaciones a la vez
+       *     comparten la misma llamada y la misma respuesta.
+       *  2. Entre procesos, un arrendamiento en la base (coordinacion.ts):
+       *     el segundo proceso no llama al proveedor, espera a que el primero
+       *     guarde el resumen y lo sirve de la caché.
+       */
       let tarea = enVuelo.get(clave);
       if (!tarea) {
-        tarea = generar(reunido, alcance, vehiculoId, clave)
+        tarea = generarCoordinado(reunido, alcance, vehiculoId, clave)
           .finally(() => enVuelo.delete(clave));
         enVuelo.set(clave, tarea);
       }
       const g = await tarea;
-      res.json(respuesta(g, reunido, "ia"));
+      res.json(respuesta(g, reunido, g.deCache ? "cache" : "ia"));
     } catch (e: any) {
       if (e instanceof ErrorAmable) return res.status(e.estado).json({ error: e.message });
       console.error("resumen vehiculo error:", e?.message ?? e);

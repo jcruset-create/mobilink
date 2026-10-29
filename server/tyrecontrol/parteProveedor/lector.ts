@@ -203,7 +203,12 @@ REGLAS
    todo lo demás a null, las listas vacías, y dilo en aviso.`;
 
 export interface LectorParte {
-  leer(fichero: { dataUri: string; nombre?: string }): Promise<ParteLeido>;
+  /**
+   * A quién se le imputa el gasto de esta lectura. Opcional a propósito: si no
+   * llega, la llamada se apunta sin empresa (y sin tope por cliente) en vez de
+   * fallar. Ver server/tyrecontrol/alcance.ts.
+   */
+  leer(fichero: { dataUri: string; nombre?: string; empresaId?: string | null }): Promise<ParteLeido>;
 }
 
 const VACIO: ParteLeido = {
@@ -215,10 +220,11 @@ const VACIO: ParteLeido = {
 };
 
 export class LectorParteIA implements LectorParte {
-  async leer(fichero: { dataUri: string; nombre?: string }): Promise<ParteLeido> {
+  async leer(fichero: { dataUri: string; nombre?: string; empresaId?: string | null }): Promise<ParteLeido> {
     const esPdf = /^data:application\/pdf/i.test(fichero.dataUri);
     const r = await pedirIA<ParteLeido>({
       prompt: INSTRUCCIONES,
+      empresaId: fichero.empresaId ?? null,
       // Un PDF va como archivo y una foto como imagen: la Responses API las
       // trata distinto y mandar un PDF como imagen no lee nada.
       ...(esPdf

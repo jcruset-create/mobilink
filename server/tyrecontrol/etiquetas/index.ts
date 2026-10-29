@@ -2,6 +2,7 @@ import type { Express, RequestHandler } from "express";
 import { hayIA } from "../../core/openaiService.ts";
 import { motivoFotoNoValida } from "../flanco/index.ts";
 import { LectorSerieIA, type LectorSerie } from "./lectorEtiqueta.ts";
+import { empresaDeSesion } from "../alcance.ts";
 import { clasificarLectura } from "./serie.ts";
 import { seriesDeCodigoDeBarras } from "./codigoBarras.ts";
 import sharp from "sharp";
@@ -85,7 +86,11 @@ export function mountEtiquetas(app: Express, ...guards: RequestHandler[]): void 
       if (!hayIA()) {
         return res.status(503).json({ error: "Lectura por foto no disponible (falta OPENAI_API_KEY)" });
       }
-      let leido = await lector.leer(imagenUrl);
+      // La empresa de la sesión, ya validada contra tc_usuarios, para imputar
+      // el gasto. OJO: esta pantalla puede pedir hasta CUATRO lecturas (la
+      // foto y tres giros), y cada una es una petición en el contador.
+      const empresaId = await empresaDeSesion((req as any).authCtx?.userId);
+      let leido = await lector.leer(imagenUrl, empresaId);
 
       // Una pegatina girada —de lado o boca abajo— es justo la que el modelo
       // más da por ilegible. Si no ha leído nada, se le enseña la foto
@@ -94,7 +99,7 @@ export function mountEtiquetas(app: Express, ...guards: RequestHandler[]): void 
         for (const grados of [90, 180, 270]) {
           const girada = await sharp(bytes).rotate(grados).jpeg({ quality: 90 }).toBuffer().catch(() => null);
           if (!girada) break;
-          const otra = await lector.leer(`data:image/jpeg;base64,${girada.toString("base64")}`);
+          const otra = await lector.leer(`data:image/jpeg;base64,${girada.toString("base64")}`, empresaId);
           if (otra.numero_serie) { leido = otra; break; }
         }
       }

@@ -19824,7 +19824,9 @@ app.post(
     try {
       const { data: doc } = await supabase
         .from("tc_vehiculo_documentos")
-        .select("id, vehiculo_id, storage_path, mime_type, paginas")
+        // empresa_id entra para poder imputar el gasto de IA al cliente dueño
+        // del documento (la columna es not null, así que siempre está).
+        .select("id, vehiculo_id, empresa_id, storage_path, mime_type, paginas")
         .eq("id", docId)
         .maybeSingle();
       if (!doc) return res.status(404).json({ error: "Documento no encontrado" });
@@ -19877,7 +19879,10 @@ app.post(
       }
       if (!urls.length) throw new Error("No se han podido leer las páginas del documento");
 
-      const resultado = await fichaOcr.extraer(urls);
+      // El gasto se imputa a la empresa del DOCUMENTO (columna not null), no a
+      // la del usuario que pulsa: aquí la atribución es exacta incluso cuando
+      // todavía no hay vehículo creado.
+      const resultado = await fichaOcr.extraer(urls, (doc as any)?.empresa_id ?? null);
 
       // Configuración de ejes: se CALCULA contando neumáticos por eje, nunca
       // se copia la nomenclatura del fabricante.

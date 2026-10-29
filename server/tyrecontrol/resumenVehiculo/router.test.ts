@@ -25,8 +25,19 @@ vi.mock("../../supabase.ts", () => ({ get supabase() { return clienteFalso(tabla
 let alcance: { empresaId: string; nombre: string; esCliente: boolean } | null = null;
 const resolverAlcance = vi.fn(async (_u: string, pedida?: string) =>
   (alcance && (!pedida || pedida === alcance.empresaId)) ? alcance : null);
-vi.mock("../asistente.ts", () => ({
+vi.mock("../alcance.ts", () => ({
   resolverAlcance: (u: string, pedida?: string) => resolverAlcance(u, pedida),
+}));
+
+// Coordinación entre instancias: aquí se da por concedida y se prueba aparte
+// en coordinacion.test.ts.
+let arrendamiento: "mio" | "ajeno" | "sin_coordinacion" = "mio";
+const soltar = vi.fn(async () => {});
+let loQueEncuentraEsperando: any = null;
+vi.mock("./coordinacion.ts", () => ({
+  tomar: async () => arrendamiento,
+  soltar: () => soltar(),
+  esperarResultado: async () => loQueEncuentraEsperando,
 }));
 
 let activa = true;
@@ -80,6 +91,9 @@ beforeEach(() => {
   hayClave = true;
   pedirIA.mockReset();
   registrarCache.mockReset();
+  arrendamiento = "mio";
+  loQueEncuentraEsperando = null;
+  soltar.mockClear();
   resolverAlcance.mockClear();
   process.env.IA_RESUMEN_PLAZO_MS = "300";
   tablas = {
@@ -227,6 +241,74 @@ describe("camino normal", () => {
   });
 });
 
+describe("varias instancias", () => {
+  beforeEach(() => {
+    pedirIA.mockResolvedValue(salidaModelo({
+      titular: "x", ultimas_actuaciones: [], incidencias_abiertas: [],
+      trabajos_pendientes: [], datos_que_faltan: [], avisos: [],
+    }));
+  });
+
+  it("si otra instancia lo está generando, aquí NO se llama al proveedor", async () => {
+    arrendamiento = "ajeno";
+    loQueEncuentraEsperando = {
+      resumen: {
+        titular: "El de la otra instancia", ultimas_actuaciones: [], incidencias_abiertas: [],
+        trabajos_pendientes: [], datos_que_faltan: [], avisos: [], descartados: 0,
+      },
+      generado_at: new Date().toISOString(), caduca_at: new Date().toISOString(),
+    };
+    const r = await pedir();
+    expect(r.status).toBe(200);
+    expect(r.body.origen).toBe("cache");
+    expect(r.body.titular).toBe("El de la otra instancia");
+    expect(pedirIA).not.toHaveBeenCalled();
+  });
+
+  it("si la otra no termina a tiempo, se dice y no se paga una segunda llamada", async () => {
+    arrendamiento = "ajeno";
+    const r = await pedir();
+    expect(r.status).toBe(503);
+    expect(r.body.error).toContain("unos segundos");
+    expect(pedirIA).not.toHaveBeenCalled();
+  });
+
+  it("el arrendamiento propio se suelta al terminar, también si falla", async () => {
+    await pedir();
+    expect(soltar).toHaveBeenCalledTimes(1);
+    pedirIA.mockResolvedValueOnce({ ok: false, texto: "", modelo: "m", duracionMs: 1, error: "boom" });
+    await pedir(VEHICULO, { refrescar: true });
+    expect(soltar).toHaveBeenCalledTimes(2);
+  });
+
+  it("sin coordinación (base caída) no se suelta nada que no se tenía", async () => {
+    arrendamiento = "sin_coordinacion";
+    await pedir();
+    expect(soltar).not.toHaveBeenCalled();
+  });
+});
+
+describe("el contador no contesta", () => {
+  it("el resumen falla CERRADO, con un mensaje que explica por qué", async () => {
+    pedirIA.mockResolvedValue({
+      ok: false, texto: "", modelo: "m", duracionMs: 1,
+      error: "No se ha podido comprobar el consumo de IA",
+    });
+    const r = await pedir();
+    expect(r.status).toBe(503);
+    expect(r.body.error).toContain("no se puede comprobar el consumo");
+  });
+
+  it("y se lo exige a la capa de IA, no lo da por bueno", async () => {
+    pedirIA.mockResolvedValue(salidaModelo({
+      titular: "x", ultimas_actuaciones: [], incidencias_abiertas: [],
+      trabajos_pendientes: [], datos_que_faltan: [], avisos: [],
+    }));
+    await pedir();
+    expect(pedirIA).toHaveBeenCalledWith(expect.objectContaining({ exigirContador: true }));
+  });
+});
+
 describe("texto malicioso dentro de los datos", () => {
   it("una orden escrita en el resumen de una intervención no se obedece ni sale como hecho", async () => {
     tablas.tc_intervenciones[0].resumen =
@@ -277,6 +359,17 @@ describe("cuando la IA falla, la ficha sigue", () => {
     const r = await pedir();
     expect(r.status).toBe(504);
     expect(r.body.error).toContain("demasiado");
+  });
+
+  it("al agotarse el plazo se ABORTA la llamada, no se deja corriendo sola", async () => {
+    let señal: AbortSignal | undefined;
+    pedirIA.mockImplementation((req: any) => { señal = req.signal; return new Promise(() => {}); });
+    const r = await pedir();
+    expect(r.status).toBe(504);
+    expect(señal).toBeDefined();
+    // Esto es lo que impide que el servidor siga reintentando y cayendo al
+    // respaldo por una respuesta que ya no va a ver nadie.
+    expect(señal!.aborted).toBe(true);
   });
 
   it("un fallo no deja la clave bloqueada: el siguiente intento vuelve a llamar", async () => {

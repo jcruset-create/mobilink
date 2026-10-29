@@ -191,6 +191,66 @@ describe("reunir · huella de caché", () => {
   });
 });
 
+describe("reunir · lo que envejece solo", () => {
+  /*
+   * Hay afirmaciones que cambian sin que cambie ninguna fila: «lleva 12 días
+   * abierta», «el kilometraje se actualizó hace 40 días», «el plan está
+   * vencido». Si la huella no se moviera con el reloj, la caché serviría un
+   * resumen correcto de ayer como si fuera de hoy.
+   */
+  const DIA = 86_400_000;
+
+  it("los días abiertos suben solos y la huella cambia con ellos", async () => {
+    tablas.tc_vehiculos = [vehiculo()];
+    tablas.tc_incidencias = [{
+      id: uuid(7), empresa_id: EMPRESA, vehiculo_id: VEHICULO,
+      estado: "abierta", gravedad: "alta", detectada_at: "2026-10-01T08:00:00Z",
+    }];
+    const hoy = await reunir(VEHICULO, EMPRESA, AHORA);
+    const manana = await reunir(VEHICULO, EMPRESA, new Date(AHORA.getTime() + DIA));
+
+    expect((manana!.datos.incidencias_abiertas[0] as any).dias_abierta)
+      .toBe((hoy!.datos.incidencias_abiertas[0] as any).dias_abierta + 1);
+    // Y por tanto la entrada de caché de hoy no vale para mañana.
+    expect(manana!.huella).not.toBe(hoy!.huella);
+  });
+
+  it("el aviso de kilometraje viejo aparece solo, sin tocar ninguna fila", async () => {
+    tablas.tc_vehiculos = [vehiculo({ updated_at: "2026-10-10T10:00:00Z" })];
+    const hoy = await reunir(VEHICULO, EMPRESA, AHORA);                       // 19 días
+    const dentroDeUnMes = await reunir(VEHICULO, EMPRESA, new Date(AHORA.getTime() + 20 * DIA));
+
+    expect(hoy!.datos.datos_que_faltan.map((d) => d.clave)).not.toContain("km_viejo");
+    expect(dentroDeUnMes!.datos.datos_que_faltan.map((d) => d.clave)).toContain("km_viejo");
+    expect(dentroDeUnMes!.huella).not.toBe(hoy!.huella);
+  });
+
+  it("un plan vence con el calendario, no con un registro nuevo", async () => {
+    tablas.tc_vehiculos = [vehiculo()];
+    tablas.tc_planes_mantenimiento = [{
+      id: uuid(4), empresa_id: EMPRESA, vehiculo_id: VEHICULO,
+      nombre: "ITV", proxima_fecha: "2026-11-05", activo: true,
+    }];
+    const antes = await reunir(VEHICULO, EMPRESA, AHORA);
+    const despues = await reunir(VEHICULO, EMPRESA, new Date("2026-11-10T10:00:00Z"));
+
+    expect((antes!.datos.planes[0] as any).vencido).toBe(false);
+    expect((despues!.datos.planes[0] as any).vencido).toBe(true);
+    expect(despues!.huella).not.toBe(antes!.huella);
+  });
+
+  it("dentro del mismo día y sin cambios, la huella NO se mueve: la caché sirve", async () => {
+    tablas.tc_vehiculos = [vehiculo()];
+    tablas.tc_incidencias = [{
+      id: uuid(7), empresa_id: EMPRESA, vehiculo_id: VEHICULO,
+      estado: "abierta", gravedad: "alta", detectada_at: "2026-10-01T08:00:00Z",
+    }];
+    const a = await reunir(VEHICULO, EMPRESA, AHORA);
+    const b = await reunir(VEHICULO, EMPRESA, new Date(AHORA.getTime() + 60_000));
+    expect(b!.huella).toBe(a!.huella);
+  });
+});
+
 describe("reunir · el texto de la ficha es dato", () => {
   it("un resumen con pinta de orden se transporta como dato, sin interpretarse", async () => {
     tablas.tc_vehiculos = [vehiculo()];

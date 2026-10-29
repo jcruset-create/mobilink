@@ -23,56 +23,17 @@
 import type { Express, RequestHandler } from "express";
 import { supabase } from "../supabase.ts";
 import { getClienteIA, hayIA, MODELOS } from "../core/openaiService.ts";
+import { cerrar, reservar } from "../core/iaConsumo.ts";
 
 const UMBRAL_LEGAL_MM = 1.6; // mínimo legal si la empresa no tiene umbral propio
 const MAX_LLAMADAS_HERRAMIENTA = 3;
 const MAX_FILAS = 50;
 
-// ── Alcance: qué empresas puede consultar este usuario ──────────────────────
-// Se exporta porque es LA comprobación de aislamiento entre clientes y no
-// debe existir una segunda copia: el resumen de vehículo usa esta misma.
-export type Alcance = { empresaId: string; nombre: string; esCliente: boolean };
-
-/**
- * Calcula la empresa sobre la que responde el asistente. Es la barrera de
- * aislamiento entre clientes: la IA no interviene aquí, y `empresaSolicitada`
- * solo se acepta si el usuario ya tenía acceso.
- */
-export async function resolverAlcance(userId: string, empresaSolicitada?: string): Promise<Alcance | null> {
-  const { data: u } = await supabase
-    .from("tc_usuarios")
-    .select("rol, empresa_id, es_superadmin")
-    .eq("id", userId)
-    .maybeSingle();
-  if (!u) return null;
-
-  const esCliente = u.rol === "cliente" && !u.es_superadmin;
-
-  // Un cliente responde SIEMPRE por su empresa: no puede pedir otra.
-  let empresaId: string | null = esCliente ? (u.empresa_id as string) : null;
-
-  if (!esCliente) {
-    const permitidas = new Set<string>();
-    if (u.empresa_id) permitidas.add(u.empresa_id as string);
-    const { data: asignadas } = await supabase
-      .from("tc_operador_empresas")
-      .select("empresa_id")
-      .eq("usuario_id", userId);
-    for (const a of asignadas ?? []) permitidas.add(a.empresa_id as string);
-
-    if (empresaSolicitada) {
-      // Un superadmin puede consultar cualquiera; el resto, solo las suyas.
-      if (!u.es_superadmin && !permitidas.has(empresaSolicitada)) return null;
-      empresaId = empresaSolicitada;
-    } else {
-      empresaId = (u.empresa_id as string) ?? [...permitidas][0] ?? null;
-    }
-  }
-  if (!empresaId) return null;
-
-  const { data: e } = await supabase.from("tc_empresas").select("nombre").eq("id", empresaId).maybeSingle();
-  return { empresaId, nombre: (e?.nombre as string) ?? "tu empresa", esCliente };
-}
+// El alcance —de qué empresa habla el asistente— vive en alcance.ts desde que
+// lo comparten el resumen de vehículo y los lectores de imagen. Se re-exporta
+// para no romper a quien ya lo importaba de aquí.
+export { resolverAlcance, type Alcance } from "./alcance.ts";
+import { resolverAlcance, type Alcance } from "./alcance.ts";
 
 /** Umbral de profundidad de la empresa (mm). Cae al mínimo legal. */
 async function umbralMinimo(empresaId: string): Promise<number> {
@@ -418,6 +379,36 @@ export function mountAsistente(app: Express, ...guards: RequestHandler[]): void 
   });
 
   app.post("/api/tyrecontrol/asistente/preguntar", ...guards, async (req, res) => {
+    /*
+     * El asistente NO pasa por `pedirIA`: necesita varias vueltas con
+     * herramientas y `pedirIA` hace una sola llamada. Así que el contador se
+     * engancha a mano aquí, y por eso vive en `iaConsumo.ts` y no dentro de
+     * `openaiService.ts`: hay más de un camino hacia el proveedor.
+     *
+     * Una pregunta es UNA petición, aunque el modelo dé cuatro vueltas. Los
+     * tokens se suman de TODAS las vueltas —no solo de la que redacta—, que es
+     * lo que de verdad se factura, e `intentos` cuenta las llamadas al
+     * proveedor.
+     */
+    let usoId: string | null = null;
+    const gasto = { intentos: 0, entrada: 0, salida: 0, peticionId: null as string | null };
+    const inicio = Date.now();
+    let cerrado = false;
+    const apuntar = async (resultado: "ok" | "error", errorCodigo?: string) => {
+      if (cerrado) return;
+      cerrado = true;
+      await cerrar(usoId, {
+        resultado,
+        modeloServido: gasto.intentos > 0 ? MODELOS.asistente : null,
+        intentos: gasto.intentos,
+        tokensEntrada: gasto.entrada || null,
+        tokensSalida: gasto.salida || null,
+        duracionMs: Date.now() - inicio,
+        errorCodigo: errorCodigo ?? null,
+        peticionId: gasto.peticionId,
+      });
+    };
+
     try {
       if (!hayIA()) return res.status(503).json({ error: "Asistente no disponible (falta OPENAI_API_KEY)" });
       const pregunta = String(req.body?.pregunta ?? "").trim();
@@ -429,6 +420,23 @@ export function mountAsistente(app: Express, ...guards: RequestHandler[]): void 
 
       const alcance = await resolverAlcance(userId, req.body?.empresa ? String(req.body.empresa) : undefined);
       if (!alcance) return res.status(403).json({ error: "Sin acceso a los datos de esa empresa" });
+
+      // El tope de la empresa, antes de gastar. Si el contador no contesta
+      // deja pasar: el asistente llevaba meses funcionando sin él y una base
+      // caída no puede apagarlo (ver iaConsumo.ts).
+      const reserva = await reservar({
+        empresaId: alcance.empresaId,
+        operacion: "asistente.preguntar",
+        modeloPedido: MODELOS.asistente,
+      });
+      if (!reserva.permitido) {
+        return res.status(reserva.motivo === "ia_desactivada" ? 403 : 429).json({
+          error: reserva.motivo === "ia_desactivada"
+            ? "El asistente está desactivado para esta empresa"
+            : "Se ha alcanzado el límite diario de uso de IA de esta empresa",
+        });
+      }
+      usoId = reserva.usoId;
 
       const cliente = getClienteIA();
       // Responses API: `input` es una lista de items que va creciendo con lo
@@ -450,11 +458,17 @@ export function mountAsistente(app: Express, ...guards: RequestHandler[]): void 
           max_output_tokens: 1200,
         } as any, { timeout: 60_000 });
 
+        gasto.intentos += 1;
+        gasto.entrada += Number(r?.usage?.input_tokens ?? 0);
+        gasto.salida += Number(r?.usage?.output_tokens ?? 0);
+        if (typeof r?.id === "string") gasto.peticionId = r.id;
+
         const salida: any[] = Array.isArray(r?.output) ? r.output : [];
         const llamadas = salida.filter((o) => o?.type === "function_call");
 
         if (llamadas.length === 0) {
           const texto = String(r?.output_text ?? "").trim();
+          await apuntar("ok");
           return res.json({
             respuesta: texto,
             herramientas_usadas: usadas.map((u) => u.herramienta),
@@ -481,6 +495,9 @@ export function mountAsistente(app: Express, ...guards: RequestHandler[]): void 
         }
       }
 
+      // Se agotaron las vueltas de herramientas sin respuesta redactada: ha
+      // costado dinero igual, así que se apunta como error con su código.
+      await apuntar("error", "sin_respuesta");
       res.json({
         respuesta: "No he podido completar la consulta. Inténtalo de nuevo.",
         herramientas_usadas: usadas.map((u) => u.herramienta),
@@ -489,7 +506,12 @@ export function mountAsistente(app: Express, ...guards: RequestHandler[]): void 
       });
     } catch (e: any) {
       console.error("asistente error:", e);
+      await apuntar("error", "proveedor");
       res.status(500).json({ error: e?.message || "Error del asistente" });
+    } finally {
+      // Red de seguridad: una fila en 'en_curso' para siempre es una fila que
+      // nadie sabe interpretar.
+      await apuntar("error", "interrumpido");
     }
   });
 }

@@ -63,6 +63,24 @@ export interface PeticionIA {
   empresaId?: string | null;
   /** Si no se indica, sale del prefijo de `operacion`. */
   modulo?: string;
+  /**
+   * Exigir que el contador funcione.
+   *
+   * Por defecto `false`: si el contador no contesta, la llamada sale igual y
+   * se apunta sin cuota, que es lo que necesitan los lectores y el asistente
+   * —llevan meses en producción y una base caída no puede apagarlos—.
+   *
+   * Con `true`, no poder comprobar la cuota es motivo suficiente para NO
+   * llamar: es lo que usa el resumen de vehículo, funcionalidad nueva donde
+   * gastar sin contar no compensa.
+   */
+  exigirContador?: boolean;
+  /**
+   * Para cortar de verdad. Cuando se aborta, no se empieza otro intento ni se
+   * cae al modelo de respaldo, y el intento en vuelo se cancela en el
+   * proveedor en vez de quedar corriendo solo.
+   */
+  signal?: AbortSignal;
 }
 
 export interface RespuestaIA<T = string> {
@@ -138,6 +156,14 @@ export async function pedirIA<T = string>(req: PeticionIA): Promise<RespuestaIA<
   // iaConsumo.ts). Lo que nunca hace es llamar al proveedor con la cuota
   // agotada.
   const reserva = await reservar(ctxUso);
+  if (req.exigirContador && reserva.contador === "caido") {
+    const salida: RespuestaIA<T> = {
+      ok: false, texto: "", modelo, duracionMs: Date.now() - inicio,
+      error: "No se ha podido comprobar el consumo de IA",
+    };
+    registrar(req.operacion, salida);
+    return salida;
+  }
   if (!reserva.permitido) {
     const motivo = reserva.motivo === "ia_desactivada"
       ? "La IA está desactivada para esta empresa"
@@ -190,11 +216,13 @@ export async function pedirIA<T = string>(req: PeticionIA): Promise<RespuestaIA<
 
   for (const m of modelos) {
     for (let intento = 0; intento <= REINTENTOS; intento++) {
+      // Abortado: ni este intento, ni los que quedan, ni el respaldo.
+      if (req.signal?.aborted) { ultimoError = ultimoError || "plazo agotado"; break; }
       try {
         intentos += 1;
         const r: any = await getCliente().responses.create(
           { ...cuerpo, model: m } as any,
-          { timeout: req.timeoutMs ?? TIMEOUT_POR_DEFECTO },
+          { timeout: req.timeoutMs ?? TIMEOUT_POR_DEFECTO, signal: req.signal },
         );
 
         const texto = extraerTexto(r);
@@ -237,24 +265,28 @@ export async function pedirIA<T = string>(req: PeticionIA): Promise<RespuestaIA<
         // Solo se reintenta (y solo se cae al respaldo) ante fallos técnicos:
         // un error de esquema o de petición no mejora repitiéndolo.
         if (!esErrorTecnico(e)) break;
+        if (req.signal?.aborted) break;
         if (intento < REINTENTOS) await esperar(500 * Math.pow(2, intento));
       }
     }
+    if (req.signal?.aborted) break;
   }
 
+  const abortado = req.signal?.aborted === true;
   const fallo: RespuestaIA<T> = {
-    ok: false, texto: "", modelo, duracionMs: Date.now() - inicio, error: ultimoError,
+    ok: false, texto: "", modelo, duracionMs: Date.now() - inicio,
+    error: abortado ? "Plazo agotado" : ultimoError,
   };
   registrar(req.operacion, fallo);
   await cerrar(reserva.usoId, {
     resultado: "error",
     modeloServido: null,
-    usoRespaldo: modelos.length > 1,
+    usoRespaldo: modelos.length > 1 && !abortado,
     intentos,
     duracionMs: fallo.duracionMs,
     // Código corto y sin cuerpo: el mensaje del proveedor puede llevar
     // trozos de lo que se le mandó.
-    errorCodigo: "proveedor",
+    errorCodigo: abortado ? "plazo" : "proveedor",
   });
   return fallo;
 }

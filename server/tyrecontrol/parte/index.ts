@@ -3,6 +3,7 @@ import { hayIA } from "../../core/openaiService.ts";
 import { supabase } from "../../supabase.ts";
 import { puedeVerEmpresaDeRequest } from "../empresaAcceso.ts";
 import { LectorParteIA, type LectorParte } from "./lectorParte.ts";
+import { empresaDeSesion } from "../alcance.ts";
 import { armarParte, type MovimientoFila } from "./armarParte.ts";
 import { filasDeOperaciones, type OperacionFila, type MedicionPos }
   from "./filasDeOperaciones.ts";
@@ -150,7 +151,9 @@ export function mountParte(app: Express, ...guards: RequestHandler[]): void {
         }
       }
 
-      const parte = await lector.leer(imagenes);
+      // La empresa de la sesión, ya validada, para imputar el gasto.
+      const empresaId = await empresaDeSesion((req as any).authCtx?.userId);
+      const parte = await lector.leer(imagenes, empresaId);
       // 200 aunque no se haya podido leer: unas fotos que no dan no son un
       // error del servidor. El APK enseña los avisos y deja seguir a mano.
       res.json(parte);

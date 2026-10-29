@@ -33,6 +33,8 @@ export function clienteFalso(tablas: Tablas, espias: Espia[] = []) {
         in: () => b,
         order: () => b,
         limit: () => b,
+        lt: () => b,
+        delete: () => b,
         not: (c: string, _op: string, lista: string) => {
           fuera.push([c, String(lista).replace(/[()"']/g, "").split(",").map((s) => s.trim())]);
           return b;
