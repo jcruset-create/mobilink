@@ -29,14 +29,16 @@ const MAX_LLAMADAS_HERRAMIENTA = 3;
 const MAX_FILAS = 50;
 
 // ── Alcance: qué empresas puede consultar este usuario ──────────────────────
-type Alcance = { empresaId: string; nombre: string; esCliente: boolean };
+// Se exporta porque es LA comprobación de aislamiento entre clientes y no
+// debe existir una segunda copia: el resumen de vehículo usa esta misma.
+export type Alcance = { empresaId: string; nombre: string; esCliente: boolean };
 
 /**
  * Calcula la empresa sobre la que responde el asistente. Es la barrera de
  * aislamiento entre clientes: la IA no interviene aquí, y `empresaSolicitada`
  * solo se acepta si el usuario ya tenía acceso.
  */
-async function resolverAlcance(userId: string, empresaSolicitada?: string): Promise<Alcance | null> {
+export async function resolverAlcance(userId: string, empresaSolicitada?: string): Promise<Alcance | null> {
   const { data: u } = await supabase
     .from("tc_usuarios")
     .select("rol, empresa_id, es_superadmin")

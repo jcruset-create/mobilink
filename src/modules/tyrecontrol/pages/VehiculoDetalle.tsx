@@ -6,6 +6,7 @@ import type { MontajeActual, PosicionVehiculo, Vehiculo, TipoLlanta, VehiculoEje
 import { ORIGEN_KM_LABELS, tipoLlantaLabel, presionTxt, TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS } from "../types";
 import { resumenOperaciones } from "../services/resumenOperaciones";
 import { ubicacionDeVehiculoBD } from "../services/data";
+import { resumenIaDisponible } from "../services/data";
 import { ubicacionDeVehiculo, coordenadasDeVehiculo, enlaceDeMapa, type Ubicacion, type PosicionMapa } from "../services/presenciaVista";
 import { explicarKm } from "../services/procedenciaKm";
 import { Badge, Modal, TableWrap, tdCls, thCls } from "../components/ui";
@@ -17,6 +18,7 @@ import WebfleetVehiculo from "../components/WebfleetVehiculo";
 import KilometrajeMensual from "../components/KilometrajeMensual";
 import PlanMantenimientoVehiculo from "../components/PlanMantenimiento";
 import EditorVehiculo from "../components/EditorVehiculo";
+import ResumenVehiculoIA from "../components/ResumenVehiculoIA";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 
 // Fecha + hora de una revisión: el día de fecha_revision y la hora del
@@ -49,6 +51,11 @@ export default function VehiculoDetalle() {
    * coordenada buena, el botón no sale y se dice por qué.
    */
   const [posicionMapa, setPosicionMapa] = useState<PosicionMapa | null>(null);
+  /*
+   * ¿Se ofrece el resumen IA? Solo si el servidor tiene IA y la empresa lo
+   * tiene activado. Es una consulta de disponibilidad: NO genera nada.
+   */
+  const [resumenIa, setResumenIa] = useState(false);
   const [posiciones, setPosiciones] = useState<PosicionVehiculo[]>([]);
   const [montajes, setMontajes] = useState<MontajeActual[]>([]);
   const [medidasMap, setMedidasMap] = useState<Map<string, string>>(new Map());
@@ -129,6 +136,9 @@ export default function VehiculoDetalle() {
     try { setFichaDetalle(await listarDetalleRevision(r.id)); } finally { setCargandoFicha(false); }
   }
   useEffect(() => { void cargar(); /* eslint-disable-next-line */ }, [id]);
+  // Disponibilidad del resumen IA. A mejor esfuerzo: si no contesta, el botón
+  // no sale y la ficha funciona igual.
+  useEffect(() => { void resumenIaDisponible().then(setResumenIa).catch(() => setResumenIa(false)); }, []);
 
   const dato = (l: string, val?: string | null) => (
     <div><div className="text-[10px] text-slate-400">{l}</div><div className="text-sm text-slate-200">{val || "—"}</div></div>
@@ -259,6 +269,10 @@ export default function VehiculoDetalle() {
           onGuardado={async () => { await cargar(); }}
         />
       )}
+
+      {/* Resumen IA: solo si la empresa lo tiene activado, y solo al pulsar.
+          Va antes de los datos generales porque es la lectura de conjunto. */}
+      {resumenIa && <ResumenVehiculoIA vehiculoId={v.id} />}
 
       {/* Datos generales: todo lo que traiga la ficha técnica, no solo lo que tiene columna propia */}
       <div className="rounded-lg bg-slate-800 p-3">

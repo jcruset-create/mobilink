@@ -128,6 +128,7 @@ import {
   engancharPosteriores, prepararRespuestaTrasCambio,
 } from "./cierre/finalizacion.ts";
 import { mountAsistente } from "./tyrecontrol/asistente.ts";
+import { mountResumenVehiculo } from "./tyrecontrol/resumenVehiculo/router.ts";
 import { mountFlanco } from "./tyrecontrol/flanco/index.ts";
 import { mountEtiquetas } from "./tyrecontrol/etiquetas/index.ts";
 import { mountParte } from "./tyrecontrol/parte/index.ts";
@@ -21630,6 +21631,10 @@ app.use("/api/documentos", createDocumentosRouter("assist", requireSupervisorRol
 // Asistente virtual de TyreControl (function calling sobre herramientas de
 // solo lectura). Ver server/tyrecontrol/asistente.ts.
 mountAsistente(app, authenticate, requireModule("tyrecontrol"));
+
+// Resumen IA de la ficha de vehículo: solo bajo demanda, solo lectura y solo
+// para las empresas que lo tengan activado. Ver server/tyrecontrol/resumenVehiculo/.
+mountResumenVehiculo(app, authenticate, requireModule("tyrecontrol"));
 
 // Identificar un neumático por la foto de su flanco durante una revisión.
 // Solo propone: guardar lo decide el técnico. Ver server/tyrecontrol/flanco/.

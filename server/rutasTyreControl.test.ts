@@ -51,7 +51,7 @@ describe("orden de las rutas de /api/tyrecontrol", () => {
     expect(veces).toBe(1);
   });
 
-  const MONTAJES = ["mountAsistente", "mountFlanco", "mountParte", "mountEtiquetas"];
+  const MONTAJES = ["mountAsistente", "mountResumenVehiculo", "mountFlanco", "mountParte", "mountEtiquetas"];
 
   for (const mount of MONTAJES) {
     it(`${mount} va antes del router del panel, o sus rutas dan 401`, () => {
