@@ -261,6 +261,12 @@ export default function Vehiculos() {
   }
 
   const estadoDe = (id: string): EstadoWebfleet => ubicacionDe(id);
+
+  /** id → nombre de delegación, para no recorrer la lista en cada fila. */
+  const nombreDelegacion = useMemo(
+    () => new Map(delegaciones.map((d) => [d.id, d.nombre])),
+    [delegaciones],
+  );
   const telematicaPorVehiculo = useMemo(() => porVehiculo(enlacesTel), [enlacesTel]);
 
   // KPIs: en base, pendientes en base, vencidas en base, en ruta, sin conexión.
@@ -387,21 +393,49 @@ export default function Vehiculos() {
                 */}
                 {(() => {
                   const donde = etiquetaBase(presencias.get(v.id), estados.get(v.id));
-                  if (!donde) return null;
+                  if (donde) {
+                    return (
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                          donde.ahora
+                            ? "bg-emerald-500/15 text-emerald-300"
+                            : "bg-slate-700/60 text-slate-300"
+                        }`}
+                        title={
+                          donde.ahora
+                            ? "Está en esta base ahora mismo"
+                            : "Aquí se le vio por última vez; su equipo lleva rato sin emitir"
+                        }
+                      >
+                        📍 {donde.ahora ? "En" : "Última vez en"} {donde.base}
+                      </span>
+                    );
+                  }
+                  /*
+                    No está en ninguna base, y hasta ahora eso se enseñaba
+                    como un hueco. Un hueco mezclaba tres cosas distintas —en
+                    ruta, sin conexión y sin posición— y justo la primera es
+                    la que se puede ir a buscar. Se dice cuál de las tres es,
+                    con el mismo texto y el mismo tono que la ficha, que ya lo
+                    resolvía.
+                  */
+                  const u = ubicacionDeVehiculo({
+                    presencia: presencias.get(v.id),
+                    webfleet: estados.get(v.id),
+                  });
                   return (
                     <span
                       className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
-                        donde.ahora
-                          ? "bg-emerald-500/15 text-emerald-300"
-                          : "bg-slate-700/60 text-slate-300"
+                        u.tono === "ruta"
+                          ? "bg-sky-500/15 text-sky-300"
+                          : u.tono === "viejo"
+                            ? "bg-amber-500/15 text-amber-300"
+                            : "bg-slate-700/60 text-slate-400"
                       }`}
-                      title={
-                        donde.ahora
-                          ? "Está en esta base ahora mismo"
-                          : "Aquí se le vio por última vez; su equipo lleva rato sin emitir"
-                      }
+                      title={u.detalle ?? ""}
                     >
-                      📍 {donde.ahora ? "En" : "Última vez en"} {donde.base}
+                      {u.tono === "ruta" ? "🛣 " : ""}{u.texto}
+                      {u.detalle ? <span className="ml-1 font-normal opacity-70">· {u.detalle}</span> : null}
                     </span>
                   );
                 })()}
@@ -412,7 +446,26 @@ export default function Vehiculos() {
                     .filter(Boolean).join(", ") || "nada obvio"}
                   {" pendiente"}
                 </span>
-                <div className="ml-auto flex gap-2">
+                <div className="ml-auto flex items-center gap-2">
+                  {/*
+                    La base que tiene ASIGNADA en su ficha, que no es lo mismo
+                    que dónde está ahora: la chapa de arriba dice dónde se le
+                    ve, esto dice a qué base pertenece. Si no la tiene, no se
+                    escribe nada: el aviso de la izquierda ya dice que la
+                    delegación está pendiente.
+                  */}
+                  {(() => {
+                    const base = v.delegacion_id ? nombreDelegacion.get(v.delegacion_id) : null;
+                    if (!base) return null;
+                    return (
+                      <span
+                        className="text-[12px] text-slate-300"
+                        title="Base asignada en la ficha del vehículo. No es dónde está ahora."
+                      >
+                        🏠 {base}
+                      </span>
+                    );
+                  })()}
                   {/*
                     Dónde está, en el mapa. Aquí es donde más falta hace: a
                     estos vehículos les falta la marca y el modelo, y para

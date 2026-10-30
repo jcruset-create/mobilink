@@ -417,6 +417,34 @@ describe("ubicacionDeVehiculo()", () => {
     expect(u.texto).toBe("Sin posición");
   });
 
+  it("un GPS sin fijación se dice, no se cuenta como que no hay dato", () => {
+    // Ahora se pinta en la lista de vehículos: «Posición no válida» y «Sin
+    // posición» mandan a sitios distintos —uno es un equipo que falla, el
+    // otro un camión sin equipo— y confundirlos hace perder una mañana.
+    const u = ubicacionDeVehiculo({
+      presencia: { vehiculo_id: "v", estado: "INVALID_POSITION", delegacion: null },
+      ahora: AHORA,
+    });
+    expect(u.texto).toBe("Posición no válida");
+    expect(u.tono).toBe("desconocido");
+  });
+
+  it("un «sin conexión» de Webfleet dice de cuándo es lo último que se supo", () => {
+    const u = ubicacionDeVehiculo({
+      webfleet: {
+        vehiculo_id: "v",
+        empresa_id: "e",
+        estado: "sin_conexion",
+        pos_time: hace(4000),
+        delegacion: null,
+      },
+      ahora: AHORA,
+    });
+    expect(u.texto).toBe("Sin conexión");
+    expect(u.tono).toBe("desconocido");
+    expect(u.detalle).toContain("posición de hace");
+  });
+
   it("sin dato del Hub vale el de Webfleet", () => {
     const u = ubicacionDeVehiculo({
       webfleet: {
