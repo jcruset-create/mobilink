@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/configuracion_ejes.dart';
+import '../models/tipo_llanta.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import 'inventario_inicial_screen.dart';
@@ -16,9 +17,22 @@ import 'inventario_inicial_screen.dart';
 /// Porque son dos preguntas distintas para quien está delante del camión:
 /// «¿qué es esto?» y «¿cuántas ruedas lleva?». En la base son una sola cosa
 /// —las posiciones cuelgan del TIPO, y el tipo ya trae su configuración—, así
-/// que el segundo paso no vuelve a preguntar: enseña lo que va a quedar y pide
-/// confirmación. Un plano mal elegido se arrastra a todos los vehículos que
-/// comparten ese tipo, así que verlo antes de guardar no es un lujo.
+/// que el paso de la configuración no vuelve a preguntar: enseña lo que va a
+/// quedar y pide confirmación. Un plano mal elegido se arrastra a todos los
+/// vehículos que comparten ese tipo, así que verlo antes de guardar no es un
+/// lujo, y cambiarlo desde una tablet tocaría la flota entera: si no cuadra,
+/// lo que está mal elegido es el tipo.
+///
+/// ── Medida y llanta ─────────────────────────────────────────────────────────
+///
+/// Las pregunta el técnico porque las tiene delante, y sin ellas el inventario
+/// se hace a ciegas. Son del vehículo entero: una medida y un tipo de llanta.
+/// Cuando un camión lleva medidas distintas por eje —direccional y tracción—
+/// eso se afina en el panel, que es donde está esa pantalla.
+///
+/// Las dos se pueden dejar en blanco con «No lo sé ahora». Quien está en el
+/// patio con el camión en marcha a veces no lo sabe, y obligarle a elegir
+/// produce datos inventados, que es peor que un hueco: el hueco se ve.
 class AltaOperativaScreen extends StatefulWidget {
   final String vehiculoId;
   final String matricula;
@@ -36,11 +50,13 @@ class AltaOperativaScreen extends StatefulWidget {
   State<AltaOperativaScreen> createState() => _AltaOperativaScreenState();
 }
 
-enum _Paso { vehiculo, tipo, configuracion }
+enum _Paso { vehiculo, tipo, medida, llanta, configuracion }
 
 const _titulos = <_Paso, String>{
   _Paso.vehiculo: 'El vehículo',
   _Paso.tipo: '¿Qué vehículo es?',
+  _Paso.medida: '¿Qué medida llevan?',
+  _Paso.llanta: '¿Qué llanta llevan?',
   _Paso.configuracion: 'Sus ruedas',
 };
 
@@ -49,6 +65,14 @@ class _AltaOperativaScreenState extends State<AltaOperativaScreen> {
   Map<String, dynamic>? _vehiculo;
   List<Map<String, dynamic>> _tipos = const [];
   String? _tipoId;
+  List<Map<String, dynamic>> _medidas = const [];
+  List<Map<String, dynamic>> _llantas = const [];
+  /// null + «decidido» = se ha contestado «No lo sé ahora». Son dos estados
+  /// distintos: sin decidir no se deja seguir, en blanco sí.
+  String? _medidaId;
+  bool _medidaDecidida = false;
+  String? _llantaId;
+  bool _llantaDecidida = false;
   bool _cargando = true;
   bool _guardando = false;
   String? _error;
@@ -68,11 +92,22 @@ class _AltaOperativaScreenState extends State<AltaOperativaScreen> {
         // Ya viene filtrado a los tipos que TIENEN plano: ofrecer uno sin
         // posiciones sería ofrecer un callejón sin salida.
         TyreControlApi.tiposVehiculoParaAlta(),
+        TyreControlApi.listarMedidasVehiculo(),
+        TyreControlApi.tiposLlantaParaAlta(),
       ]);
       if (!mounted) return;
+      final v = r[0] as Map<String, dynamic>?;
       setState(() {
-        _vehiculo = r[0] as Map<String, dynamic>?;
+        _vehiculo = v;
         _tipos = (r[1] as List).cast<Map<String, dynamic>>();
+        _medidas = (r[2] as List).cast<Map<String, dynamic>>();
+        _llantas = (r[3] as List).cast<Map<String, dynamic>>();
+        // Lo que ya tuviera la ficha viene marcado: reconfirmar es un toque,
+        // y así se ve de un vistazo si oficina ya lo había puesto.
+        _medidaId = v?['medida_id'] as String?;
+        _medidaDecidida = _medidaId != null;
+        _llantaId = v?['tipo_llanta_id'] as String?;
+        _llantaDecidida = _llantaId != null;
         _cargando = false;
       });
     } catch (e) {
@@ -94,6 +129,10 @@ class _AltaOperativaScreenState extends State<AltaOperativaScreen> {
         return _vehiculo != null;
       case _Paso.tipo:
         return _tipoId != null;
+      case _Paso.medida:
+        return _medidaDecidida;
+      case _Paso.llanta:
+        return _llantaDecidida;
       case _Paso.configuracion:
         return _config.esValida && !_guardando;
     }
@@ -116,7 +155,12 @@ class _AltaOperativaScreenState extends State<AltaOperativaScreen> {
   Future<void> _guardarConfiguracion() async {
     setState(() { _guardando = true; _error = null; });
     try {
-      await TyreControlApi.ponerTipoDeAlta(vehiculoId: widget.vehiculoId, tipoId: _tipoId!);
+      await TyreControlApi.guardarFichaDeAlta(
+        vehiculoId: widget.vehiculoId,
+        tipoId: _tipoId!,
+        medidaId: _medidaId,
+        tipoLlantaId: _llantaId,
+      );
       if (!mounted) return;
       // Directo al inventario, sin pasar por el menú: el técnico está delante
       // del camión y mandarlo a la lista para que vuelva a entrar es lo que
@@ -177,6 +221,10 @@ class _AltaOperativaScreenState extends State<AltaOperativaScreen> {
         return _pasoVehiculo();
       case _Paso.tipo:
         return _pasoTipo();
+      case _Paso.medida:
+        return _pasoMedida();
+      case _Paso.llanta:
+        return _pasoLlanta();
       case _Paso.configuracion:
         return _pasoConfiguracion();
     }
@@ -240,6 +288,73 @@ class _AltaOperativaScreenState extends State<AltaOperativaScreen> {
     ]);
   }
 
+  // ── Paso 3: la medida del neumático ───────────────────────────────────────
+  Widget _pasoMedida() {
+    if (_medidas.isEmpty) {
+      return const _Aviso(
+        icono: Icons.warning_amber,
+        texto: 'No hay medidas en el catálogo. Tiene que crearlas oficina; '
+            'mientras tanto, sigue con «No lo sé ahora».',
+      );
+    }
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const Text('La medida que llevan montada ahora, la que pone en el flanco.',
+          style: TextStyle(color: AppColors.textSecondary)),
+      const SizedBox(height: 16),
+      for (final m in _medidas) ...[
+        _Opcion(
+          texto: m['valor'] as String? ?? '',
+          elegido: _medidaDecidida && _medidaId == m['id'],
+          onTap: () => setState(() {
+            _medidaId = m['id'] as String?;
+            _medidaDecidida = true;
+          }),
+        ),
+        const SizedBox(height: 10),
+      ],
+      _Opcion(
+        texto: 'No lo sé ahora',
+        detalle: 'Se deja como está y lo completa oficina. Mejor un hueco que un dato inventado.',
+        elegido: _medidaDecidida && _medidaId == null,
+        onTap: () => setState(() { _medidaId = null; _medidaDecidida = true; }),
+      ),
+    ]);
+  }
+
+  // ── Paso 4: el tipo de llanta ─────────────────────────────────────────────
+  Widget _pasoLlanta() {
+    if (_llantas.isEmpty) {
+      return const _Aviso(
+        icono: Icons.warning_amber,
+        texto: 'No hay tipos de llanta en el catálogo. Tiene que crearlos oficina; '
+            'mientras tanto, sigue con «No lo sé ahora».',
+      );
+    }
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const Text('Acero o aluminio, y la medida de la llanta.',
+          style: TextStyle(color: AppColors.textSecondary)),
+      const SizedBox(height: 16),
+      for (final l in _llantas) ...[
+        _Opcion(
+          texto: nombreTipoLlanta(l),
+          elegido: _llantaDecidida && _llantaId == l['id'],
+          onTap: () => setState(() {
+            _llantaId = l['id'] as String?;
+            _llantaDecidida = true;
+          }),
+        ),
+        const SizedBox(height: 10),
+      ],
+      _Opcion(
+        texto: 'No lo sé ahora',
+        detalle: 'Se deja como está y lo completa oficina.',
+        elegido: _llantaDecidida && _llantaId == null,
+        onTap: () => setState(() { _llantaId = null; _llantaDecidida = true; }),
+      ),
+    ]);
+  }
+
+
   // ── Paso 3: ver lo que va a quedar ─────────────────────────────────────────
   Widget _pasoConfiguracion() {
     final c = _config;
@@ -259,13 +374,39 @@ class _AltaOperativaScreenState extends State<AltaOperativaScreen> {
       const SizedBox(height: 20),
       _Esquema(config: c),
       const SizedBox(height: 20),
+      // Lo que se va a guardar, en una línea cada cosa: es la última pantalla
+      // antes de escribir en la ficha.
+      _Resumen(etiqueta: 'Medida', valor: _textoMedida),
+      const SizedBox(height: 8),
+      _Resumen(etiqueta: 'Llanta', valor: _textoLlanta),
+      const SizedBox(height: 20),
       _Aviso(
         icono: Icons.info_outline,
-        texto: 'Se guardará el tipo del vehículo. Las posiciones ya existen: son de este '
-            'tipo y las comparten todos los camiones iguales, así que no se crea ni se '
-            'duplica ninguna.',
+        texto: 'Se guardará el tipo del vehículo, la medida y la llanta. Las posiciones ya '
+            'existen: son de este tipo y las comparten todos los camiones iguales, así que '
+            'no se crea ni se duplica ninguna.',
       ),
+      if (_medidaId == null || _llantaId == null) ...[
+        const SizedBox(height: 12),
+        const _Aviso(
+          icono: Icons.info_outline,
+          texto: 'Lo que has dejado sin contestar se queda como estaba en la ficha: no se '
+              'borra nada. Lo completa oficina desde el panel.',
+        ),
+      ],
     ]);
+  }
+
+  String get _textoMedida {
+    if (_medidaId == null) return 'Sin indicar';
+    final m = _medidas.where((x) => x['id'] == _medidaId);
+    return m.isEmpty ? 'Sin indicar' : (m.first['valor'] as String? ?? 'Sin indicar');
+  }
+
+  String get _textoLlanta {
+    if (_llantaId == null) return 'Sin indicar';
+    final l = _llantas.where((x) => x['id'] == _llantaId);
+    return l.isEmpty ? 'Sin indicar' : nombreTipoLlanta(l.first);
   }
 
   Widget _barraInferior() {
@@ -428,5 +569,70 @@ class _Aviso extends StatelessWidget {
         Expanded(child: Text(texto, style: const TextStyle(color: AppColors.textSecondary, height: 1.4))),
       ]),
     );
+  }
+}
+
+/// Una opción de lista, del tamaño de un dedo con guante.
+///
+/// Mismo lenguaje visual que `_TarjetaTipo` (borde grueso y fondo teñido para
+/// lo elegido) para que elegir una medida se parezca a elegir un tipo.
+class _Opcion extends StatelessWidget {
+  final String texto;
+  final String? detalle;
+  final bool elegido;
+  final VoidCallback onTap;
+  const _Opcion({required this.texto, required this.elegido, required this.onTap, this.detalle});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+        decoration: BoxDecoration(
+          color: elegido ? AppColors.primary.withValues(alpha: 0.12) : AppColors.surface,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+              color: elegido ? AppColors.primary : AppColors.cardBorder, width: elegido ? 2 : 1),
+        ),
+        child: Row(children: [
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(texto,
+                  style: const TextStyle(
+                      fontSize: 18, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+              if (detalle != null) ...[
+                const SizedBox(height: 4),
+                Text(detalle!,
+                    style: const TextStyle(fontSize: 13, color: AppColors.textSecondary, height: 1.3)),
+              ],
+            ]),
+          ),
+          if (elegido) const Icon(Icons.check_circle, color: AppColors.primary),
+        ]),
+      ),
+    );
+  }
+}
+
+/// Una línea «etiqueta: valor» del resumen final.
+class _Resumen extends StatelessWidget {
+  final String etiqueta;
+  final String valor;
+  const _Resumen({required this.etiqueta, required this.valor});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(children: [
+      SizedBox(
+        width: 90,
+        child: Text(etiqueta, style: const TextStyle(color: AppColors.textSecondary)),
+      ),
+      Expanded(
+        child: Text(valor,
+            style: const TextStyle(fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+      ),
+    ]);
   }
 }
