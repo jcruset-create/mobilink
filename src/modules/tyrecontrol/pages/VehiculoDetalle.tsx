@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones, listarIntervenciones, imagenChasisDeMarca, generarPosicionesDeTipo, cotejarPlanoDeTipo, type CotejoPlano } from "../services/data";
+import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones, listarIntervenciones, listarIntervalosReconstruidos, revisarIntervalo, cargarCoberturaRecorridos, imagenChasisDeMarca, generarPosicionesDeTipo, cotejarPlanoDeTipo, type CotejoPlano, type IntervaloReconstruido, type CoberturaRecorridos } from "../services/data";
 import type { Intervencion } from "../services/data";
+import { resumenMontajes, textoPorCondicion } from "../../../../shared/condicionNeumatico";
+import { textoRecorrido, textoRitmo, textoMotivos, textoDecision, textoDecisionContinuidad, textoCobertura, numero } from "../../../../shared/recorridoEstimado";
+import { esHistoricoAlbaran, etiquetaHistorico, textoNeumaticoHistorico, textoPosicionHistorica, textoRetirado } from "../../../../shared/historicoAlbaran";
 import type { MontajeActual, PosicionVehiculo, Vehiculo, TipoLlanta, VehiculoEje, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle, OperacionNeumatico } from "../types";
 import { ORIGEN_KM_LABELS, tipoLlantaLabel, presionTxt, TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS } from "../types";
 import { resumenOperaciones } from "../services/resumenOperaciones";
@@ -59,6 +62,17 @@ export default function VehiculoDetalle() {
   const [fichaDetalle, setFichaDetalle] = useState<RevisionDetalle[]>([]);
   const [cargandoFicha, setCargandoFicha] = useState(false);
   const [operaciones, setOperaciones] = useState<OperacionNeumatico[]>([]);
+  const [intervalos, setIntervalos] = useState<IntervaloReconstruido[]>([]);
+  // Cobertura de las medias estimadas de este vehículo: ninguna media se
+  // enseña sin decir sobre cuántos intervalos sale.
+  const [cobertura, setCobertura] = useState<CoberturaRecorridos | null>(null);
+  // Revisión de un intervalo: el motivo es obligatorio.
+  const [revisando, setRevisando] = useState<{
+    iv: IntervaloReconstruido; ambito: "kilometros" | "continuidad"; decision: "aceptado" | "rechazado";
+  } | null>(null);
+  const [motivoRevision, setMotivoRevision] = useState("");
+  const [errorRevision, setErrorRevision] = useState<string | null>(null);
+  const [guardandoRevision, setGuardandoRevision] = useState(false);
   const [modalOps, setModalOps] = useState(false);
   const [filtroOps, setFiltroOps] = useState("");
   const [intervenciones, setIntervenciones] = useState<Intervencion[]>([]);
@@ -108,6 +122,8 @@ export default function VehiculoDetalle() {
     setEjes(veh?.medidas_por_eje ? await listarEjesVehiculo(id) : []);
     setRevisiones(await listarRevisiones(id));
     setOperaciones(await listarOperaciones({ vehiculoId: id }).catch(() => []));
+    setIntervalos(await listarIntervalosReconstruidos(id).catch(() => []));
+    setCobertura(veh?.empresa_id ? await cargarCoberturaRecorridos(veh.empresa_id, null, null, id).catch(() => null) : null);
     setIntervenciones(await listarIntervenciones(id).catch(() => []));
     setImagenMarca(
       await imagenChasisDeMarca(veh?.config_ejes_id, (veh as any)?.marca_id, veh?.marca).catch(() => null),
@@ -144,12 +160,14 @@ export default function VehiculoDetalle() {
           del parte, OP-…, va en la cabecera del bloque. */}
       <td className={tdCls + " font-mono text-slate-500"}>{o.numero_operacion ? `#${o.numero_operacion}` : "—"}</td>
       <td className={tdCls + " text-slate-400"}>
-        {o.created_at ? new Date(o.created_at).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : o.fecha_operacion}
+        {/* En el histórico de albaranes la hora de registro es la de la importación, no la del trabajo: no se enseña. */}
+        {esHistoricoAlbaran(o) ? "hora desconocida" : o.created_at ? new Date(o.created_at).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : o.fecha_operacion}
       </td>
       <td className={tdCls + " text-slate-200"}>{TIPO_OPERACION_LABELS[o.tipo_operacion] ?? o.tipo_operacion}{o.is_anulada ? " (anulada)" : ""}</td>
       <td className={tdCls + " text-slate-400"}>{o.status ? ESTADO_OPERACION_LABELS[o.status] : "—"}</td>
-      <td className={tdCls + " text-slate-400"}>{o.neumatico?.numero_interno ?? o.neumatico?.codigo_interno ?? "—"}</td>
-      <td className={tdCls + " text-slate-400"}>{o.posicion_origen?.codigo_posicion ?? ""}{o.posicion_origen && o.posicion_destino ? " → " : ""}{o.posicion_destino?.codigo_posicion ?? ""}</td>
+      <td className={tdCls + " text-slate-400"}>{!esHistoricoAlbaran(o) ? (o.neumatico?.numero_interno ?? o.neumatico?.codigo_interno ?? "—")
+                    : o.tipo_operacion === "desmontaje" ? textoRetirado(o) : textoNeumaticoHistorico(o)}</td>
+      <td className={tdCls + " text-slate-400"}>{esHistoricoAlbaran(o) ? textoPosicionHistorica(o.posicion_destino?.codigo_posicion, o.posicion_fuente) : <>{o.posicion_origen?.codigo_posicion ?? ""}{o.posicion_origen && o.posicion_destino ? " → " : ""}{o.posicion_destino?.codigo_posicion ?? ""}</>}</td>
       <td className={tdCls + " text-slate-400"}>{o.motivo ? MOTIVO_OPERACION_LABELS[o.motivo] : "—"}</td>
     </tr>
   );
@@ -451,6 +469,204 @@ export default function VehiculoDetalle() {
         )}
       </div>
 
+      {/* Ocupación reconstruida del histórico. NO es rendimiento confirmado:
+          vive en su propia tabla y no alimenta los informes de siempre.
+          Las dos cosas que se separan aquí a propósito:
+            · la CLASIFICACIÓN de los kilómetros, que hace la base sola;
+            · la DECISIÓN humana de usar o no el intervalo en estadísticas.
+          Rechazar no borra kilómetros, y aceptar no convierte un estimado en
+          rendimiento confirmado. */}
+      {intervalos.length > 0 && (
+        <div className="mt-3 rounded-lg bg-slate-800 p-3">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <span className="text-[11px] font-bold uppercase text-slate-400">Ocupación reconstruida del histórico ({intervalos.length})</span>
+            <span className="text-[11px] text-slate-500">
+              Reconstruida de los albaranes importados. No es rendimiento confirmado y no suma en los informes.
+            </span>
+          </div>
+          {cobertura && (
+            <div className="mb-2 rounded-lg border border-slate-700 bg-slate-900/40 p-2 text-[11px] text-slate-400">
+              {textoCobertura(cobertura)}
+              {(["identidad_respaldada", "ficha_reconstruida", "ocupacion_sin_ficha"] as const).map((k) => {
+                const r = cobertura.recorrido[k];
+                if (r.n === 0) return null;
+                const titulo = k === "identidad_respaldada" ? "Media de gomas identificadas por una persona"
+                  : k === "ficha_reconstruida" ? "Media de fichas reconstruidas por la importación"
+                  : "Media de ocupaciones de posición sin ficha";
+                return (
+                  <div key={k} className="mt-1 text-slate-300">
+                    {titulo}: {numero(r.media)} km
+                    <span className="text-slate-500"> ({r.n} intervalo(s)) · {r.que_es}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <TableWrap>
+            <table className="min-w-full text-sm">
+              <thead><tr>
+                <th className={thCls}>Posición</th><th className={thCls}>Qué es</th><th className={thCls}>Montaje</th>
+                <th className={thCls}>Salida</th><th className={thCls}>Recorrido</th><th className={thCls}>Estado</th>
+                <th className={thCls}>Uso estadístico</th>
+              </tr></thead>
+              <tbody>
+                {intervalos.map((r) => {
+                  const rec = textoRecorrido(r);
+                  const ritmo = textoRitmo(r);
+                  return (
+                  <tr key={r.id} className="border-t border-slate-700">
+                    <td className={tdCls}>
+                      {r.posicion?.codigo_posicion ?? "—"}
+                      {r.posicion_fuente && <span className="ml-1 text-[11px] text-slate-500">({r.posicion_fuente})</span>}
+                    </td>
+                    <td className={tdCls}>
+                      {r.clase === "unidad" ? (
+                        <span title="Hay una goma identificada: su recorrido puede estimarse">
+                          {r.neumatico?.numero_interno ?? "unidad"}
+                        </span>
+                      ) : (
+                        <span className="text-slate-400" title="Sabemos que la posición estuvo calzada, no qué goma: no es el recorrido de ningún neumático">
+                          ocupación de la posición
+                        </span>
+                      )}
+                    </td>
+                    <td className={tdCls}>{r.fecha_montaje}{r.km_montaje_conocido ? ` · ${r.km_montaje} km` : " · sin km"}</td>
+                    <td className={tdCls}>
+                      {r.fecha_desmontaje ?? "—"}
+                      {r.fecha_desmontaje ? (r.km_desmontaje_conocido ? ` · ${r.km_desmontaje} km` : " · sin km") : ""}
+                    </td>
+                    <td className={tdCls}>
+                      <span className={rec.aviso ? "text-amber-300" : "text-slate-200"}>{rec.texto}</span>
+                      {ritmo && <div className="text-[11px] text-slate-500">{ritmo}</div>}
+                    </td>
+                    <td className={tdCls}>
+                      <span className={r.estado === "interrumpido" ? "text-amber-300" : "text-slate-300"}>{r.estado}</span>
+                      {r.continuidad_desde && <div className="text-[11px] text-amber-300/80">continuidad desconocida desde {r.continuidad_desde}</div>}
+                      {/* Un albarán bloqueado dentro del intervalo: no se ha
+                          importado nada de él, pero la cadena no está limpia. */}
+                      {r.continuidad_docs && r.continuidad_docs.length > 0 && (
+                        <div className="text-[11px] text-amber-300/80">
+                          posible montaje intermedio sin importar: {r.continuidad_docs.join(", ")}
+                        </div>
+                      )}
+                      {r.motivo_revision && <div className="text-[11px] text-slate-500">{r.motivo_revision}</div>}
+                    </td>
+                    <td className={tdCls}>
+                      <div className={r.en_medias ? "text-emerald-300" : "text-slate-400"}>
+                        {r.en_medias ? "entra en las medias" : "fuera de las medias"}
+                      </div>
+                      {!r.en_medias && r.motivos_exclusion && r.motivos_exclusion.length > 0 && (
+                        <div className="text-[11px] text-slate-500">{textoMotivos(r.motivos_exclusion)}</div>
+                      )}
+                      <div className="text-[11px] text-slate-500">{textoDecision(r)}</div>
+                      {(r.continuidad_docs?.length || r.continuidad_desde || r.continuidad_decision !== "pendiente") && (
+                        <div className="text-[11px] text-slate-500">{textoDecisionContinuidad(r)}</div>
+                      )}
+                      {/* Dos decisiones distintas, dos juegos de botones: aceptar
+                          los kilómetros no resuelve la continuidad. */}
+                      {!esCliente && (r.km_estado === "anomalos" || r.km_estado === "utilizables") && r.recorrido_km != null && (
+                        <div className="mt-1 flex flex-wrap items-center gap-1">
+                          <span className="text-[10px] uppercase text-slate-500">km</span>
+                          <button
+                            onClick={() => { setRevisando({ iv: r, ambito: "kilometros", decision: "aceptado" }); setMotivoRevision(""); setErrorRevision(null); }}
+                            className="rounded border border-emerald-600/50 px-2 py-0.5 text-[11px] text-emerald-300 hover:bg-emerald-500/10"
+                          >Aceptar</button>
+                          <button
+                            onClick={() => { setRevisando({ iv: r, ambito: "kilometros", decision: "rechazado" }); setMotivoRevision(""); setErrorRevision(null); }}
+                            className="rounded border border-slate-600 px-2 py-0.5 text-[11px] text-slate-300 hover:bg-slate-700"
+                          >Rechazar</button>
+                        </div>
+                      )}
+                      {!esCliente && (r.continuidad_docs?.length || r.continuidad_desde) && (
+                        <div className="mt-1 flex flex-wrap items-center gap-1">
+                          <span className="text-[10px] uppercase text-slate-500">continuidad</span>
+                          <button
+                            onClick={() => { setRevisando({ iv: r, ambito: "continuidad", decision: "aceptado" }); setMotivoRevision(""); setErrorRevision(null); }}
+                            className="rounded border border-emerald-600/50 px-2 py-0.5 text-[11px] text-emerald-300 hover:bg-emerald-500/10"
+                          >Aceptar</button>
+                          <button
+                            onClick={() => { setRevisando({ iv: r, ambito: "continuidad", decision: "rechazado" }); setMotivoRevision(""); setErrorRevision(null); }}
+                            className="rounded border border-slate-600 px-2 py-0.5 text-[11px] text-slate-300 hover:bg-slate-700"
+                          >Rechazar</button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </TableWrap>
+        </div>
+      )}
+
+      {/* Aceptar o rechazar el uso estadístico de un intervalo. El motivo es
+          obligatorio: queda auditado con usuario y fecha, y si la evidencia
+          del intervalo cambia después, la decisión caduca y vuelve a pedir
+          revisión. */}
+      {revisando && (
+        <Modal
+          title={`${revisando.decision === "aceptado" ? "Aceptar" : "Rechazar"} ${
+            revisando.ambito === "kilometros" ? "los kilómetros del intervalo" : "la continuidad de la cadena"}`}
+          onClose={() => setRevisando(null)}
+        >
+          <div className="space-y-3 text-sm text-slate-300">
+            <div className="rounded-lg bg-slate-900/50 p-2 text-[12px]">
+              <div>
+                {revisando.iv.fecha_montaje} → {revisando.iv.fecha_desmontaje ?? "—"} ·{" "}
+                {revisando.iv.km_montaje ?? "—"} → {revisando.iv.km_desmontaje ?? "—"} km
+              </div>
+              <div className="text-slate-400">{textoRitmo(revisando.iv)}</div>
+              {revisando.ambito === "continuidad" && revisando.iv.continuidad_docs?.length ? (
+                <div className="mt-1 text-amber-300/80">
+                  Documento(s) bloqueado(s) dentro del intervalo: {revisando.iv.continuidad_docs.join(", ")}
+                </div>
+              ) : null}
+              {revisando.iv.motivo_revision && <div className="mt-1 text-amber-300/80">{revisando.iv.motivo_revision}</div>}
+            </div>
+            <p className="text-[12px] text-slate-400">
+              {revisando.ambito === "kilometros"
+                ? (revisando.decision === "aceptado"
+                    ? "Aceptar permite usar este recorrido como ESTIMADO. No lo convierte en rendimiento confirmado, y NO resuelve la continuidad: eso se decide aparte."
+                    : "Rechazar lo deja fuera de las medias y de los rankings. Los kilómetros y el recorrido NO se borran ni cambian de clasificación.")
+                : (revisando.decision === "aceptado"
+                    ? "Aceptar la continuidad dice que la cadena de esta posición puede darse por limpia pese al documento bloqueado que hay dentro. No dice nada sobre si el kilometraje es creíble."
+                    : "Rechazar la continuidad deja el intervalo fuera de las medias aunque sus kilómetros estén aceptados.")}
+            </p>
+            <label className="block">
+              <span className="text-[11px] uppercase text-slate-400">Motivo (obligatorio)</span>
+              <textarea
+                value={motivoRevision}
+                onChange={(e) => setMotivoRevision(e.target.value)}
+                rows={3}
+                className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 p-2 text-sm text-slate-100"
+                placeholder="Qué se ha comprobado y con quién"
+              />
+            </label>
+            {errorRevision && <div className="text-[12px] text-rose-300">{errorRevision}</div>}
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setRevisando(null)} className="rounded-lg border border-slate-600 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-700">Cancelar</button>
+              <button
+                disabled={guardandoRevision || motivoRevision.trim() === ""}
+                onClick={async () => {
+                  setGuardandoRevision(true); setErrorRevision(null);
+                  try {
+                    await revisarIntervalo(revisando.iv.id, revisando.ambito, revisando.decision, motivoRevision.trim());
+                    setRevisando(null);
+                    await cargar();
+                  } catch (e) {
+                    setErrorRevision(e instanceof Error ? e.message : "No se ha podido guardar la revisión");
+                  } finally {
+                    setGuardandoRevision(false);
+                  }
+                }}
+                className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+              >{guardandoRevision ? "Guardando…" : "Guardar"}</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
       {/* Operaciones del vehículo: informe resumido + histórico */}
       <div className="mt-3 rounded-lg bg-slate-800 p-3">
         <div className="mb-2 flex items-center justify-between">
@@ -538,10 +754,11 @@ export default function VehiculoDetalle() {
             <tbody>
               {verInterv.ops.map((o) => (
                 <tr key={o.id} className={`border-t border-slate-700/60 ${o.is_anulada ? "opacity-50" : ""}`}>
-                  <td className={tdCls + " text-slate-400"}>{o.fecha_operacion}{o.created_at ? " · " + new Date(o.created_at).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : ""}</td>
+                  <td className={tdCls + " text-slate-400"}>{o.fecha_operacion}{esHistoricoAlbaran(o) ? " · hora desconocida" : o.created_at ? " · " + new Date(o.created_at).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : ""}</td>
                   <td className={tdCls + " text-slate-200"}>{TIPO_OPERACION_LABELS[o.tipo_operacion] ?? o.tipo_operacion}</td>
-                  <td className={tdCls + " text-slate-400"}>{o.neumatico?.numero_interno ?? o.neumatico?.codigo_interno ?? "—"}</td>
-                  <td className={tdCls + " text-slate-400"}>{o.posicion_origen?.codigo_posicion ?? ""}{o.posicion_origen && o.posicion_destino ? " → " : ""}{o.posicion_destino?.codigo_posicion ?? ""}</td>
+                  <td className={tdCls + " text-slate-400"}>{!esHistoricoAlbaran(o) ? (o.neumatico?.numero_interno ?? o.neumatico?.codigo_interno ?? "—")
+                    : o.tipo_operacion === "desmontaje" ? textoRetirado(o) : textoNeumaticoHistorico(o)}</td>
+                  <td className={tdCls + " text-slate-400"}>{esHistoricoAlbaran(o) ? textoPosicionHistorica(o.posicion_destino?.codigo_posicion, o.posicion_fuente) : <>{o.posicion_origen?.codigo_posicion ?? ""}{o.posicion_origen && o.posicion_destino ? " → " : ""}{o.posicion_destino?.codigo_posicion ?? ""}</>}</td>
                   <td className={tdCls + " text-slate-400"}>{o.motivo ? MOTIVO_OPERACION_LABELS[o.motivo] : "—"}</td>
                 </tr>
               ))}
@@ -590,9 +807,24 @@ export default function VehiculoDetalle() {
           />
           {(() => {
             const lineas = resumenOperaciones(operaciones);
+            const r = resumenMontajes(operaciones);
             return lineas.length > 0 ? (
               <div className="mb-3 rounded-lg border border-emerald-600/30 bg-emerald-500/5 p-3">
                 <div className="mb-1 text-[11px] font-semibold uppercase text-emerald-300">Resumen general</div>
+                {/* Recuento por operaciones, no por posiciones conocidas: el
+                    histórico importado trae gomas sin posición y antes salía
+                    «Montados 2» de 4. */}
+                <div className="mb-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-300" data-testid="resumen-recuento">
+                  <span><b className="text-slate-100">{r.total}</b> {r.total === 1 ? "operación" : "operaciones"}</span>
+                  {r.montajes > 0 && <span><b className="text-slate-100">{r.montajes}</b> {r.montajes === 1 ? "montaje" : "montajes"}{textoPorCondicion(r) ? `: ${textoPorCondicion(r)}` : ""}</span>}
+                  {r.desmontajes > 0 && <span><b className="text-slate-100">{r.desmontajes}</b> {r.desmontajes === 1 ? "desmontaje" : "desmontajes"}</span>}
+                  <span>
+                    <b className="text-slate-100">{r.conPosicion}</b> con posición conocida
+                    {r.posicionDeducida > 0 && r.posicionConfirmada > 0 && <> ({r.posicionConfirmada} confirmada{r.posicionConfirmada === 1 ? "" : "s"} · {r.posicionDeducida} deducida{r.posicionDeducida === 1 ? "" : "s"})</>}
+                    {r.posicionDeducida > 0 && r.posicionConfirmada === 0 && <> (deducida{r.posicionDeducida === 1 ? "" : "s"}, no confirmada{r.posicionDeducida === 1 ? "" : "s"})</>}
+                    {" "}· <b className="text-slate-100">{r.sinPosicion}</b> sin posición
+                  </span>
+                </div>
                 <ul className="list-disc space-y-0.5 pl-5 text-sm text-slate-200 marker:text-emerald-400">
                   {lineas.map((l, i) => <li key={i}>{l}</li>)}
                 </ul>
@@ -641,9 +873,10 @@ export default function VehiculoDetalle() {
                   <div key={i.id} className="rounded-lg border border-slate-700 bg-slate-900/60">
                     <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-slate-700 px-3 py-2">
                       <span className="font-mono text-[13px] font-bold text-sky-300">{i.numero ?? "sin número"}</span>
+                      {esHistoricoAlbaran(i) && <span className="rounded bg-slate-700 px-1 text-[10px] uppercase text-slate-300" title={etiquetaHistorico(i)}>histórico importado</span>}
                       <span className="text-[12px] text-slate-300">
                         {i.fecha}
-                        {i.created_at ? " · " + new Date(i.created_at).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : ""}
+                        {esHistoricoAlbaran(i) ? " · hora desconocida" : i.created_at ? " · " + new Date(i.created_at).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : ""}
                       </span>
                       <span className="text-[12px] text-slate-500">
                         {i.n_operaciones} {i.n_operaciones === 1 ? "operación" : "operaciones"}

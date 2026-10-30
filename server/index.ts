@@ -45,6 +45,7 @@ import { toFile } from "openai";
 import { findUserByPassword } from "./modules/users";
 import twilio from "twilio";
 import Stripe from "stripe";
+import { stripeOCortar } from "./core/stripeCliente.ts";
 import { initIntegrationHub, mountIntegrationHub, startIntegrationWorker } from "./integration-hub/index.ts";
 import { initCash, mountCash, startCashErpWorker, startCashEventWorker } from "./cash/index.ts";
 import { initTacografos, mountTacografos } from "./tacografos/index.ts";
@@ -208,6 +209,8 @@ app.post(
   express.raw({ type: "application/json" }),
   async (req, res) => {
     const sig = req.headers["stripe-signature"];
+    const stripe = stripeOCortar(res);
+    if (!stripe) return;
 
     try {
       const event = stripe.webhooks.constructEvent(
@@ -370,6 +373,8 @@ app.post("/api/payments/create-deposit", authenticate, requireModule("administra
 
     const desc = String(description || "").trim();
 
+    const stripe = stripeOCortar(res);
+    if (!stripe) return;
     const session = await stripe.checkout.sessions.create({
             line_items: [
         {
@@ -769,9 +774,10 @@ const PORT = process.env.PORT || 4000;
 // El cliente de OpenAI vive en core/openaiService.ts: aquí no se crea ninguno.
 // Toda la IA de la plataforma pasa por pedirIA() / transcribirAudio().
 console.log("KEY:", process.env.OPENAI_API_KEY ? "OK" : "NO CARGADA");
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
-  apiVersion: "2026-04-22.dahlia",
-});
+// Stripe vive en core/stripeCliente.ts: aquí no se construye ninguno. Sin
+// STRIPE_SECRET_KEY el servidor arranca igual y las rutas de cobro responden
+// 503 antes de intentar nada (antes, el cliente se creaba en el arranque con
+// la clave vacía y la librería tumbaba el proceso entero).
 /* =========================================================
    HELPERS
 ========================================================= */
@@ -8092,6 +8098,8 @@ app.post(
       if (!reference) return res.status(400).json({ success: false, message: "Referencia obligatoria" });
       if (!amountCents || amountCents < 100) return res.status(400).json({ success: false, message: "Importe mínimo 1 €" });
 
+      const stripe = stripeOCortar(res);
+      if (!stripe) return;
       const session = await stripe.checkout.sessions.create({
         line_items: [{
           price_data: {
