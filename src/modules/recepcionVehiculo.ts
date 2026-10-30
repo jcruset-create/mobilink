@@ -18,6 +18,8 @@ export type OrigenVehiculo = "roadside" | "tyrecontrol";
 
 export type FotoRecepcion = {
   url: string;
+  /** matricula | kilometros | estado. Sin tipo: del estado (fotos antiguas). */
+  tipo?: string | null;
   nombre?: string | null;
   creadaAtMs?: number | null;
 };
