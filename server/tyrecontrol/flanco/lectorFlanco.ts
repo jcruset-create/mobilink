@@ -12,7 +12,12 @@ import { prepararPropuesta, type LecturaFlanco, type PropuestaFlanco } from "./f
  * neumáticos y no toca el catálogo. Lo confirma una persona.
  */
 export interface LectorFlanco {
-  leer(imagenUrl: string): Promise<PropuestaFlanco>;
+  /**
+   * A quién se le imputa el gasto de esta lectura. Opcional a propósito: si no
+   * llega, la llamada se apunta sin empresa (y sin tope por cliente) en vez de
+   * fallar. Ver server/tyrecontrol/alcance.ts.
+   */
+  leer(imagenUrl: string, empresaId?: string | null): Promise<PropuestaFlanco>;
 }
 
 const CAMPO = {
@@ -78,9 +83,10 @@ REGLAS QUE NO PUEDES SALTARTE:
    dilo en aviso.`;
 
 export class LectorFlancoIA implements LectorFlanco {
-  async leer(imagenUrl: string): Promise<PropuestaFlanco> {
+  async leer(imagenUrl: string, empresaId?: string | null): Promise<PropuestaFlanco> {
     const r = await pedirIA<LecturaFlanco>({
       prompt: INSTRUCCIONES,
+      empresaId: empresaId ?? null,
       imagenes: [{ url: imagenUrl }],
       proposito: "documento",
       esquema: { nombre: "lectura_flanco", schema: ESQUEMA as unknown as Record<string, unknown> },

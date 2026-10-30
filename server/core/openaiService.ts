@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { cerrar, moduloDe, registrarSinClave, reservar, type ResultadoUso } from "./iaConsumo.ts";
 
 /**
  * Capa ÚNICA de IA de Mobilink.
@@ -54,6 +55,32 @@ export interface PeticionIA {
   /** Identificador de la operación, solo para métricas y logs. */
   operacion: string;
   timeoutMs?: number;
+  /**
+   * Empresa a la que se le imputa el gasto. Opcional a propósito: los
+   * llamantes que ya existían no la pasan y siguen funcionando igual, solo
+   * que su consumo se apunta sin empresa y no les aplica tope por cliente.
+   */
+  empresaId?: string | null;
+  /** Si no se indica, sale del prefijo de `operacion`. */
+  modulo?: string;
+  /**
+   * Exigir que el contador funcione.
+   *
+   * Por defecto `false`: si el contador no contesta, la llamada sale igual y
+   * se apunta sin cuota, que es lo que necesitan los lectores y el asistente
+   * —llevan meses en producción y una base caída no puede apagarlos—.
+   *
+   * Con `true`, no poder comprobar la cuota es motivo suficiente para NO
+   * llamar: es lo que usa el resumen de vehículo, funcionalidad nueva donde
+   * gastar sin contar no compensa.
+   */
+  exigirContador?: boolean;
+  /**
+   * Para cortar de verdad. Cuando se aborta, no se empieza otro intento ni se
+   * cae al modelo de respaldo, y el intento en vuelo se cancela en el
+   * proveedor en vez de quedar corriendo solo.
+   */
+  signal?: AbortSignal;
 }
 
 export interface RespuestaIA<T = string> {
@@ -106,9 +133,46 @@ const esperar = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export async function pedirIA<T = string>(req: PeticionIA): Promise<RespuestaIA<T>> {
   const inicio = Date.now();
   const modelo = MODELOS[req.proposito ?? "porDefecto"];
+  const ctxUso = {
+    empresaId: req.empresaId ?? null,
+    modulo: req.modulo ?? moduloDe(req.operacion),
+    operacion: req.operacion,
+    modeloPedido: modelo,
+  };
 
   if (!hayIA()) {
-    return { ok: false, texto: "", modelo, duracionMs: 0, error: "OPENAI_API_KEY no configurada" };
+    const salida: RespuestaIA<T> = {
+      ok: false, texto: "", modelo, duracionMs: 0, error: "OPENAI_API_KEY no configurada",
+    };
+    registrar(req.operacion, salida);
+    // Queda apuntado: una instancia sin clave no se puede confundir con una
+    // instancia que nadie usa.
+    await registrarSinClave(ctxUso);
+    return salida;
+  }
+
+  // El tope, antes de gastar. Si el contador no contesta deja pasar: que se
+  // caiga la base no puede apagar los lectores ni el asistente (ver
+  // iaConsumo.ts). Lo que nunca hace es llamar al proveedor con la cuota
+  // agotada.
+  const reserva = await reservar(ctxUso);
+  if (req.exigirContador && reserva.contador === "caido") {
+    const salida: RespuestaIA<T> = {
+      ok: false, texto: "", modelo, duracionMs: Date.now() - inicio,
+      error: "No se ha podido comprobar el consumo de IA",
+    };
+    registrar(req.operacion, salida);
+    return salida;
+  }
+  if (!reserva.permitido) {
+    const motivo = reserva.motivo === "ia_desactivada"
+      ? "La IA está desactivada para esta empresa"
+      : "Se ha alcanzado el límite diario de uso de IA de esta empresa";
+    const salida: RespuestaIA<T> = {
+      ok: false, texto: "", modelo, duracionMs: Date.now() - inicio, error: motivo,
+    };
+    registrar(req.operacion, salida);
+    return salida;
   }
 
   const cuerpo: Record<string, any> = {
@@ -146,13 +210,19 @@ export async function pedirIA<T = string>(req: PeticionIA): Promise<RespuestaIA<
 
   const modelos = [modelo, ...(MODELOS.respaldo && MODELOS.respaldo !== modelo ? [MODELOS.respaldo] : [])];
   let ultimoError = "";
+  // Intentos CONTRA EL PROVEEDOR, no peticiones: tres intentos de los que el
+  // tercero responde son una sola petición. Ver iaConsumo.ts.
+  let intentos = 0;
 
   for (const m of modelos) {
     for (let intento = 0; intento <= REINTENTOS; intento++) {
+      // Abortado: ni este intento, ni los que quedan, ni el respaldo.
+      if (req.signal?.aborted) { ultimoError = ultimoError || "plazo agotado"; break; }
       try {
+        intentos += 1;
         const r: any = await getCliente().responses.create(
           { ...cuerpo, model: m } as any,
-          { timeout: req.timeoutMs ?? TIMEOUT_POR_DEFECTO },
+          { timeout: req.timeoutMs ?? TIMEOUT_POR_DEFECTO, signal: req.signal },
         );
 
         const texto = extraerTexto(r);
@@ -169,6 +239,17 @@ export async function pedirIA<T = string>(req: PeticionIA): Promise<RespuestaIA<
           catch { salida.ok = false; salida.error = "La respuesta no era JSON válido"; }
         }
         registrar(req.operacion, salida);
+        await cerrar(reserva.usoId, {
+          resultado: (salida.ok ? "ok" : "error") as ResultadoUso,
+          modeloServido: m,
+          usoRespaldo: m !== modelo,
+          intentos,
+          tokensEntrada: salida.tokensEntrada ?? null,
+          tokensSalida: salida.tokensSalida ?? null,
+          duracionMs: salida.duracionMs,
+          errorCodigo: salida.ok ? null : "json_invalido",
+          peticionId: typeof r?.id === "string" ? r.id : null,
+        });
         return salida;
       } catch (e: any) {
         ultimoError = String(e?.message ?? e);
@@ -184,15 +265,29 @@ export async function pedirIA<T = string>(req: PeticionIA): Promise<RespuestaIA<
         // Solo se reintenta (y solo se cae al respaldo) ante fallos técnicos:
         // un error de esquema o de petición no mejora repitiéndolo.
         if (!esErrorTecnico(e)) break;
+        if (req.signal?.aborted) break;
         if (intento < REINTENTOS) await esperar(500 * Math.pow(2, intento));
       }
     }
+    if (req.signal?.aborted) break;
   }
 
+  const abortado = req.signal?.aborted === true;
   const fallo: RespuestaIA<T> = {
-    ok: false, texto: "", modelo, duracionMs: Date.now() - inicio, error: ultimoError,
+    ok: false, texto: "", modelo, duracionMs: Date.now() - inicio,
+    error: abortado ? "Plazo agotado" : ultimoError,
   };
   registrar(req.operacion, fallo);
+  await cerrar(reserva.usoId, {
+    resultado: "error",
+    modeloServido: null,
+    usoRespaldo: modelos.length > 1 && !abortado,
+    intentos,
+    duracionMs: fallo.duracionMs,
+    // Código corto y sin cuerpo: el mensaje del proveedor puede llevar
+    // trozos de lo que se le mandó.
+    errorCodigo: abortado ? "plazo" : "proveedor",
+  });
   return fallo;
 }
 

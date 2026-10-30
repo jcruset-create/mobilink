@@ -3480,3 +3480,59 @@ export async function asignarBaseHabitual(
   if (error) throw new Error(error.message);
   return (data ?? {}) as ResultadoAsignarBase;
 }
+
+// ── Resumen IA de la ficha de vehículo ──────────────────────────
+// Se genera SOLO al pulsar el botón: abrir la ficha no llama a la IA. Cada
+// hecho viene con sus evidencias, y la ruta de cada evidencia la construye el
+// servidor (el modelo no escribe enlaces).
+
+export interface EvidenciaResumen {
+  ref: string;
+  tipo: string;
+  id: string;
+  etiqueta: string;
+  ruta: string;
+}
+
+export interface HechoResumen {
+  texto: string;
+  evidencias: EvidenciaResumen[];
+}
+
+export interface ResumenVehiculoIA {
+  ok: boolean;
+  origen: "ia" | "cache" | "sin_datos";
+  generado_at: string;
+  caduca_at?: string;
+  ventana: { meses: number; desde: string };
+  titular: string;
+  ultimas_actuaciones: HechoResumen[];
+  incidencias_abiertas: HechoResumen[];
+  trabajos_pendientes: HechoResumen[];
+  datos_que_faltan: { clave: string; texto: string }[];
+  avisos: string[];
+}
+
+/** ¿Tiene esta empresa el resumen IA activado y el servidor con IA? */
+export async function resumenIaDisponible(): Promise<boolean> {
+  try {
+    const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/resumen-vehiculo/estado`, {
+      headers: await authHeaders(),
+    });
+    const j = await r.json().catch(() => ({}));
+    return r.ok && (j as any)?.disponible === true;
+  } catch {
+    return false;   // sin respuesta, no se ofrece el botón
+  }
+}
+
+export async function pedirResumenVehiculo(vehiculoId: string, refrescar = false): Promise<ResumenVehiculoIA> {
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/vehiculos/${vehiculoId}/resumen`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ refrescar }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || "No se ha podido generar el resumen");
+  return j as ResumenVehiculoIA;
+}

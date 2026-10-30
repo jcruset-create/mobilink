@@ -128,6 +128,7 @@ import {
   engancharPosteriores, prepararRespuestaTrasCambio,
 } from "./cierre/finalizacion.ts";
 import { mountAsistente } from "./tyrecontrol/asistente.ts";
+import { mountResumenVehiculo } from "./tyrecontrol/resumenVehiculo/router.ts";
 import { mountFlanco } from "./tyrecontrol/flanco/index.ts";
 import { mountEtiquetas } from "./tyrecontrol/etiquetas/index.ts";
 import { mountParte } from "./tyrecontrol/parte/index.ts";
@@ -2333,6 +2334,10 @@ app.post("/api/tyrecontrol/intervencion/cerrar", exigirCredencial(authenticate, 
       ].filter(Boolean).join("\n\n");
       const r = await pedirIA({
         operacion: "tyrecontrol.informe-intervencion",
+        // El gasto se imputa a la empresa de la intervención. Si se cierra sin
+        // sesión abierta no hay de dónde sacarla y se apunta sin empresa, que
+        // es mejor que atribuírsela a quien no toca.
+        empresaId: (sesion as any)?.empresa_id ?? null,
         proposito: "informe",
         prompt:
           "Eres un técnico de neumáticos. Redacta un informe breve (2-4 frases, español, tono profesional) " +
@@ -19823,7 +19828,9 @@ app.post(
     try {
       const { data: doc } = await supabase
         .from("tc_vehiculo_documentos")
-        .select("id, vehiculo_id, storage_path, mime_type, paginas")
+        // empresa_id entra para poder imputar el gasto de IA al cliente dueño
+        // del documento (la columna es not null, así que siempre está).
+        .select("id, vehiculo_id, empresa_id, storage_path, mime_type, paginas")
         .eq("id", docId)
         .maybeSingle();
       if (!doc) return res.status(404).json({ error: "Documento no encontrado" });
@@ -19876,7 +19883,10 @@ app.post(
       }
       if (!urls.length) throw new Error("No se han podido leer las páginas del documento");
 
-      const resultado = await fichaOcr.extraer(urls);
+      // El gasto se imputa a la empresa del DOCUMENTO (columna not null), no a
+      // la del usuario que pulsa: aquí la atribución es exacta incluso cuando
+      // todavía no hay vehículo creado.
+      const resultado = await fichaOcr.extraer(urls, (doc as any)?.empresa_id ?? null);
 
       // Configuración de ejes: se CALCULA contando neumáticos por eje, nunca
       // se copia la nomenclatura del fabricante.
@@ -21630,6 +21640,10 @@ app.use("/api/documentos", createDocumentosRouter("assist", requireSupervisorRol
 // Asistente virtual de TyreControl (function calling sobre herramientas de
 // solo lectura). Ver server/tyrecontrol/asistente.ts.
 mountAsistente(app, authenticate, requireModule("tyrecontrol"));
+
+// Resumen IA de la ficha de vehículo: solo bajo demanda, solo lectura y solo
+// para las empresas que lo tengan activado. Ver server/tyrecontrol/resumenVehiculo/.
+mountResumenVehiculo(app, authenticate, requireModule("tyrecontrol"));
 
 // Identificar un neumático por la foto de su flanco durante una revisión.
 // Solo propone: guardar lo decide el técnico. Ver server/tyrecontrol/flanco/.
