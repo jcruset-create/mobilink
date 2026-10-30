@@ -234,7 +234,14 @@ async function generarCoordinado(
   if (arrendamiento === "ajeno") {
     const guardado = await esperarResultado(
       () => leerCache(vehiculoId, clave, alcance.empresaId), ESPERA_AJENA_MS);
-    if (guardado) return { ...guardado, deCache: true };
+    if (guardado) {
+      // Se sirve, luego se apunta: como caché, igual que la lectura directa.
+      // Si no, la segunda persona recibiría un resumen que no consta en
+      // ningún sitio y las cuentas del piloto no cuadrarían.
+      await registrarCache(
+        { empresaId: alcance.empresaId, operacion: OPERACION, modeloPedido: "cache" }, 0);
+      return { ...guardado, deCache: true };
+    }
     throw new ErrorAmable(503,
       "Se está generando el resumen de este vehículo. Inténtalo de nuevo en unos segundos.");
   }

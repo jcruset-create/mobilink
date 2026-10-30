@@ -42,8 +42,12 @@ vi.mock("./coordinacion.ts", () => ({
 
 let activa = true;
 const registrarCache = vi.fn(async () => {});
+const interruptorConsultadoPara: string[] = [];
 vi.mock("../../core/iaConsumo.ts", () => ({
-  resumenVehiculoActivo: async () => activa,
+  resumenVehiculoActivo: async (empresaId: string) => {
+    interruptorConsultadoPara.push(empresaId);
+    return activa;
+  },
   registrarCache: () => registrarCache(),
 }));
 
@@ -92,6 +96,7 @@ beforeEach(() => {
   pedirIA.mockReset();
   registrarCache.mockReset();
   arrendamiento = "mio";
+  interruptorConsultadoPara.length = 0;
   loQueEncuentraEsperando = null;
   soltar.mockClear();
   resolverAlcance.mockClear();
@@ -130,6 +135,19 @@ describe("permisos y aislamiento", () => {
   it("el alcance se valida contra la empresa DEL VEHÍCULO, no contra lo que pida el cliente", async () => {
     await pedir(VEHICULO, { empresa: OTRA });
     expect(resolverAlcance).toHaveBeenCalledWith("usuario-1", EMPRESA);
+  });
+
+  it("el interruptor y la cuota se miran contra la empresa DUEÑA DEL VEHÍCULO", async () => {
+    // Un operador que trabaja para varias empresas: su empresa de sesión no
+    // decide nada aquí. Manda la del vehículo.
+    alcance = { empresaId: EMPRESA, nombre: "Plana", esCliente: false };
+    pedirIA.mockResolvedValue(salidaModelo({
+      titular: "x", ultimas_actuaciones: [], incidencias_abiertas: [],
+      trabajos_pendientes: [], datos_que_faltan: [], avisos: [],
+    }));
+    await pedir();
+    expect(interruptorConsultadoPara).toEqual([EMPRESA]);
+    expect(pedirIA).toHaveBeenCalledWith(expect.objectContaining({ empresaId: EMPRESA }));
   });
 
   it("si la empresa no lo tiene activado, 403 y no se gasta nada", async () => {
@@ -263,6 +281,8 @@ describe("varias instancias", () => {
     expect(r.body.origen).toBe("cache");
     expect(r.body.titular).toBe("El de la otra instancia");
     expect(pedirIA).not.toHaveBeenCalled();
+    // Y queda apuntada como respuesta de caché: todo lo que se sirve se cuenta.
+    expect(registrarCache).toHaveBeenCalledTimes(1);
   });
 
   it("si la otra no termina a tiempo, se dice y no se paga una segunda llamada", async () => {
