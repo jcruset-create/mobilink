@@ -575,6 +575,18 @@ export async function initDb() {
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "knownPlaceId" INTEGER;
 
+    -- Salidas de taller (server/core/salidasTaller.ts): misma tabla que las
+    -- asistencias, con tipo 'salida' y el motivo. "enPuntoVisto" es el apunte
+    -- del vigilante GPS: furgoneta vista dentro del radio del destino.
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS tipo TEXT NOT NULL DEFAULT 'asistencia';
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS motivo TEXT;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "enPuntoVisto" BOOLEAN NOT NULL DEFAULT false;
+
     CREATE TABLE IF NOT EXISTS roadside_known_places (
       id SERIAL PRIMARY KEY,
       nombre TEXT NOT NULL,
@@ -800,6 +812,24 @@ export async function initDb() {
     );
     CREATE INDEX IF NOT EXISTS otf_status_idx ON otf(status);
     CREATE INDEX IF NOT EXISTS otf_tech_idx ON otf("assignedTechName");
+
+    -- Detrás de QUÉ asistencia de carretera espera esta OTF.
+    --
+    -- Una OTF para un operario que está en una asistencia ya no se rechaza:
+    -- se crea y queda pendiente hasta que la cierre. Lo que se guarda es el
+    -- enlace, no un «en espera» de sí o no: la OTF espera mientras esa
+    -- asistencia siga abierta, y deja de esperar sola en cuanto se cierra,
+    -- sin depender de que nada la apague. Mismo criterio que la cola de
+    -- asistencias (src/modules/colaEspera.ts). Sin REFERENCES: las tablas de
+    -- asistencias y OTF las crean módulos distintos y en otro orden.
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "esperaAsistenciaId" INTEGER;
+
+    -- Seguimiento como el de una asistencia (src/modules/seguimientoOtf.ts):
+    -- salida del taller, vuelta y llegada, las tres por GPS de la furgoneta.
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "departedAtMs" BIGINT;
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "enCaminoBaseAtMs" BIGINT;
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "arrivedAtWorkshopMs" BIGINT;
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "salidaArmada" BOOLEAN NOT NULL DEFAULT false;
 
     CREATE TABLE IF NOT EXISTS otf_trabajos (
       id SERIAL PRIMARY KEY,
@@ -1096,6 +1126,15 @@ export async function initDb() {
     -- 'relation "whatsapp_capture_messages" does not exist'. Lo destapo el
     -- contenedor de PostgreSQL de las pruebas de integracion.
     ALTER TABLE whatsapp_capture_messages ALTER COLUMN job_id DROP NOT NULL;
+
+    -- Por qué NO se guardó la copia de un adjunto, cuando no se guardó.
+    --
+    -- Hasta ahora el fallo iba al log del servidor y nada más, y el log no lo
+    -- mira nadie hasta que las fotos llevan días sin verse. Con el motivo en
+    -- la fila, el panel lo enseña donde iría la foto y quien lo ve sabe si es
+    -- Twilio, es el almacén o es otra cosa, sin tener que entrar a ningún log.
+    ALTER TABLE whatsapp_capture_messages
+      ADD COLUMN IF NOT EXISTS media_error TEXT;
   `);
 
   await pool.query(`
@@ -1440,6 +1479,36 @@ export async function initDb() {
     .catch((error) => {
       console.error("No se pudo aplicar la migración del módulo workplanner:", error);
     });
+
+  // ── Horarios y turnos de los empleados (Core) ─────────────────────────
+  // Equivale a supabase/migrations/011_horarios_turnos.sql. Sin clave foránea
+  // contra sea_employees por el mismo motivo que techs.employee_id: esa tabla
+  // la crean las migraciones de Supabase y en la base de la CI no existe. La
+  // FK va en la migración manual.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sea_turnos (
+      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      nombre      TEXT NOT NULL,
+      tramos      JSONB NOT NULL DEFAULT '[]'::jsonb,
+      dias        INTEGER[] NOT NULL DEFAULT '{1,2,3,4,5}',
+      activo      BOOLEAN NOT NULL DEFAULT true,
+      orden       INTEGER NOT NULL DEFAULT 0,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS sea_horarios_empleado (
+      id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      employee_id    UUID NOT NULL,
+      tipo           TEXT NOT NULL CHECK (tipo IN ('fijo','rotativo')),
+      turno_ids      TEXT[] NOT NULL,
+      semana_inicio  DATE,
+      vigente_desde  DATE NOT NULL,
+      created_by     UUID,
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (employee_id, vigente_desde)
+    );
+    CREATE INDEX IF NOT EXISTS idx_sea_horarios_empleado_emp ON sea_horarios_empleado (employee_id);
+  `);
 
   console.log("PostgreSQL/Supabase inicializado correctamente");
 }

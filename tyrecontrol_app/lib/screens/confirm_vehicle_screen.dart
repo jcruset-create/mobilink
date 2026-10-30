@@ -24,11 +24,38 @@ class _ConfirmVehicleScreenState extends State<ConfirmVehicleScreen> {
   /// Km que teclea el técnico cuando el vehículo no los da solo. Null hasta
   /// que los informa; entonces viajan a la revisión.
   int? _kmManual;
+  /*
+   * La lectura del odómetro, preguntada al Hub nada más abrir.
+   *
+   * Antes esta pantalla decidía con `vehiculo.kmAutomaticos`, que solo mira si
+   * hay un objeto de WEBFLEET enlazado. Un cliente de Movertis —632 vehículos
+   * enlazados en Plana— veía siempre el botón naranja «Informar kilómetros» y
+   * tecleaba un número que la revisión descartaba acto seguido, porque allí sí
+   * se pregunta al Hub. Aquí se pregunta lo mismo y se enseña lo que conteste.
+   *
+   * La consulta no escribe nada: quien guarda los km es la revisión, con el
+   * técnico delante. Y nunca lanza: si el proveedor está caído, `_lecturaKm`
+   * se queda sin número y la pantalla vuelve a pedirlos a mano, como antes.
+   */
+  Map<String, dynamic>? _lecturaKm;
+  bool _consultandoKm = true;
 
   @override
   void initState() {
     super.initState();
     _cargarContexto();
+    _consultarKm();
+  }
+
+  /// Va aparte de `_cargarContexto` a propósito: una telemática lenta o caída
+  /// no puede retrasar ni tumbar el resto de la ficha.
+  Future<void> _consultarKm() async {
+    final l = await TyreControlApi.kilometrajeActual(widget.vehiculo.id);
+    if (!mounted) return;
+    setState(() {
+      _lecturaKm = l;
+      _consultandoKm = false;
+    });
   }
 
   Future<void> _cargarContexto() async {
@@ -74,7 +101,11 @@ class _ConfirmVehicleScreenState extends State<ConfirmVehicleScreen> {
           builder: (_) => ReviewScreen(
               vehiculo: widget.vehiculo,
               verificarPresiones: _verificarPresiones,
-              kmManual: _kmManual)));
+              kmManual: _kmManual,
+              // Se le pasa la lectura para que no vuelva a gastar cupo del
+              // proveedor tres segundos después. Si ha caducado, la revisión
+              // pregunta igual: lo decide `lecturaSigueValiendo`.
+              lecturaKm: _lecturaKm)));
     } finally {
       if (mounted) setState(() => _cargando = false);
     }
@@ -112,8 +143,10 @@ class _ConfirmVehicleScreenState extends State<ConfirmVehicleScreen> {
                     _Fila('Configuración de ejes', v.tipo?.configuracionEjes),
                     _Fila('Nº de neumáticos', _numNeumaticos > 0 ? '$_numNeumaticos' : null),
                     _FilaKm(
-                      vehiculo: v,
-                      km: _kmManual ?? (v.kmActual > 0 ? v.kmActual : null),
+                      kmManual: _kmManual,
+                      kmFicha: v.kmActual > 0 ? v.kmActual : null,
+                      lectura: _lecturaKm,
+                      consultando: _consultandoKm,
                       onEditar: _pedirKm,
                     ),
                     _Fila('Última revisión', _ultimaRevision?.fechaRevision),
@@ -169,49 +202,108 @@ class _Fila extends StatelessWidget {
   }
 }
 
-/// Fila de kilómetros. Con plataforma enlazada solo informa; sin ella es un
-/// campo que hay que rellenar, y se nota que falta.
+/// Fila de kilómetros.
+///
+/// Decide con la LECTURA que ha contestado el Hub, no con
+/// `vehiculo.kmAutomaticos`: ese flag solo sabe de Webfleet y deja fuera a
+/// todo cliente de Movertis. Tres estados, y el técnico siempre puede
+/// teclear: la telemetría rellena el campo, no lo secuestra.
 class _FilaKm extends StatelessWidget {
-  final Vehiculo vehiculo;
-  final num? km;
+  /// Lo que ha tecleado el técnico en esta pantalla. Si hay algo, manda.
+  final int? kmManual;
+  /// El último km guardado en la ficha. Es el peor de los tres: puede ser de
+  /// hace meses. Solo se usa si no hay nada mejor.
+  final num? kmFicha;
+  final Map<String, dynamic>? lectura;
+  final bool consultando;
   final VoidCallback onEditar;
-  const _FilaKm({required this.vehiculo, required this.km, required this.onEditar});
+  const _FilaKm({
+    required this.kmManual,
+    required this.kmFicha,
+    required this.lectura,
+    required this.consultando,
+    required this.onEditar,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final auto = vehiculo.kmAutomaticos;
+    final kmLectura = lectura?['km'] as num?;
+    final estado = lectura?['estado'] as String?;
+    // El orden importa: lo que el técnico ha confirmado a mano no se le pisa.
+    final telematica = kmManual == null && kmLectura != null;
+    final valor = kmManual ?? kmLectura ?? kmFicha;
+
+    Widget contenido;
+    if (consultando && kmManual == null) {
+      contenido = const Row(children: [
+        SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+        SizedBox(width: 8),
+        Text('Consultando telemetría…',
+            style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+      ]);
+    } else if (telematica) {
+      // Con número del proveedor: se enseña con su procedencia y se deja
+      // corregir. Un odómetro de hace rato sigue valiendo —lo que no se mueve
+      // no suma kilómetros— pero el técnico tiene derecho a saberlo.
+      final viejo = estado == 'lectura_anterior';
+      contenido = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        InkWell(
+          onTap: onEditar,
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: Row(children: [
+              Text('${valor!.round()} km',
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+              const SizedBox(width: 8),
+              Icon(Icons.satellite_alt, size: 14,
+                  color: viejo ? AppColors.warning : AppColors.textSecondary),
+              const SizedBox(width: 4),
+              Text('telemática',
+                  style: TextStyle(
+                      color: viejo ? AppColors.warning : AppColors.textSecondary, fontSize: 12)),
+              const SizedBox(width: 6),
+              const Icon(Icons.edit, size: 12, color: AppColors.textSecondary),
+            ]),
+          ),
+        ),
+        if ((lectura?['texto'] as String?)?.isNotEmpty == true)
+          Text(lectura!['texto'] as String,
+              style: TextStyle(
+                  color: viejo ? AppColors.warning : AppColors.textHint, fontSize: 11)),
+      ]);
+    } else {
+      // Sin telemática, con el proveedor caído o con un equipo que no da
+      // cuentakilómetros: como siempre, los pide el técnico.
+      final tiene = (valor ?? 0) > 0;
+      contenido = OutlinedButton.icon(
+        onPressed: onEditar,
+        icon: Icon(tiene ? Icons.edit : Icons.speed,
+            size: 16, color: tiene ? AppColors.textPrimary : AppColors.warning),
+        label: Text(
+          tiene ? '${valor!.round()} km' : 'Informar kilómetros',
+          style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
+              color: tiene ? AppColors.textPrimary : AppColors.warning),
+        ),
+        style: OutlinedButton.styleFrom(
+          side: BorderSide(color: tiene ? AppColors.cardBorder : AppColors.warning),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        ),
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 5),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const SizedBox(width: 150, child: Text('Km actuales', style: TextStyle(color: AppColors.textSecondary, fontSize: 13))),
-          Expanded(
-            child: auto
-                ? Row(children: [
-                    Text('${(km ?? 0).round()}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-                    const SizedBox(width: 8),
-                    const Icon(Icons.satellite_alt, size: 14, color: AppColors.textSecondary),
-                    const SizedBox(width: 4),
-                    const Text('automáticos', style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
-                  ])
-                : OutlinedButton.icon(
-                    onPressed: onEditar,
-                    icon: Icon((km ?? 0) > 0 ? Icons.edit : Icons.speed,
-                        size: 16, color: (km ?? 0) > 0 ? AppColors.textPrimary : AppColors.warning),
-                    label: Text(
-                      (km ?? 0) > 0 ? '${km!.round()} km' : 'Informar kilómetros',
-                      style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                          color: (km ?? 0) > 0 ? AppColors.textPrimary : AppColors.warning),
-                    ),
-                    style: OutlinedButton.styleFrom(
-                      side: BorderSide(color: (km ?? 0) > 0 ? AppColors.cardBorder : AppColors.warning),
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    ),
-                  ),
-          ),
+          const SizedBox(
+              width: 150,
+              child: Text('Km actuales',
+                  style: TextStyle(color: AppColors.textSecondary, fontSize: 13))),
+          Expanded(child: contenido),
         ],
       ),
     );

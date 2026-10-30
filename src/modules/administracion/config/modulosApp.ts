@@ -90,18 +90,12 @@ export const MODULOS_APP: ModuloApp[] = [
       { value: "cajero", label: "Cajero" },
       { value: "consulta", label: "Solo consulta" },
     ],
-    pantallas: [
-      { key: "posicion", label: "Posición global" },
-      { key: "jornada", label: "Jornada actual" },
-      { key: "cobros", label: "Cobros" },
-      { key: "pagos", label: "Pagos" },
-      { key: "movimientos", label: "Movimientos" },
-      { key: "stock", label: "Stock de caja" },
-      { key: "arqueo", label: "Arqueo" },
-      { key: "cierre", label: "Cierre" },
-      { key: "historico", label: "Histórico" },
-      { key: "erp", label: "Integración ERP" },
-    ],
+    // Sin casillas de pantallas, a propósito. Estaban y no se aplicaban en
+    // ningún sitio: quien las desmarcaba creía estar quitando una pantalla y
+    // no quitaba nada. En Cash lo que entra cada uno lo deciden el rol y, en
+    // la propia Cash, «Configuración → Usuarios y cajas» (taller, cajas y si
+    // un responsable entra en Configuración).
+    pantallas: [],
   },
   {
     key: "central",
@@ -338,7 +332,12 @@ export const MODULOS_APP: ModuloApp[] = [
       { key: "operativo2", label: "Operativo 2" },
       { key: "agenda", label: "Agenda" },
       { key: "tecnicos", label: "Pantalla técnicos" },
+      // Las claves son las del menú de WorkPlanner (SECCIONES en
+      // WorkPlannerApp.tsx): lo que se desmarca aquí desaparece de allí.
+      { key: "recepciones", label: "Recepción vehículos" },
+      { key: "salidas", label: "Salidas de taller" },
       { key: "partes", label: "Partes de trabajo" },
+      { key: "pedidos", label: "Pedidos ERP" },
       { key: "plantillas", label: "Plantillas de checklist" },
       { key: "personal", label: "Personal (fichas y bajas)" },
       { key: "ausencias", label: "Ausencias y vacaciones" },

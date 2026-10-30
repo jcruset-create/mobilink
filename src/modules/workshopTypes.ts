@@ -10,7 +10,9 @@ export type TechStatus =
   | "vacaciones"
   | "baja"
   | "permiso"
-  | "otro_taller";
+  | "otro_taller"
+  /** En un curso: ausente y no disponible, con fechas, como vacaciones. */
+  | "formacion";
 
 export type AreaKey = "camion" | "movil" | "tacografo" | "turismo" | "mecanica";
 
@@ -87,6 +89,8 @@ export type Tech = {
   roadsideCapable?: boolean;
   currentRoadsideAssistanceId?: number | null;
   phone?: string | null;
+  /** Empleado de Core vinculado (sea_employees.id). null = sin vincular. */
+  employeeId?: string | null;
 };
 
 export type SavedTechConfig = {

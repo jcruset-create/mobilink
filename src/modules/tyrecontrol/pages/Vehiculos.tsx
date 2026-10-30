@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   listarVehiculos, actualizarVehiculo, listarEmpresas, listarDelegaciones, listarTiposVehiculo,
   listarMedidas,
   listarEstadoWebfleet, listarPresenciaEnBases, sincronizarWebfleet, listarRevisionEstado,
   listarVehiculosPendientes, validarVehiculo, eliminarVehiculo,
+  calcularBaseHabitual, type BaseHabitual,
 } from "../services/data";
+import { motivoSinBase } from "../services/baseHabitual";
 import EditorVehiculo from "../components/EditorVehiculo";
 import ModalBaseHabitual from "../components/ModalBaseHabitual";
 import type {
@@ -65,6 +67,47 @@ export default function Vehiculos() {
     catch { /* la columna puede no estar aún: el listado sigue siendo útil */ }
   }
   useEffect(() => { void cargarPendientes(); }, []);
+
+  /*
+   * Por qué a un vehículo pendiente le falta la base.
+   *
+   * El cálculo de la base habitual deja sin tocar las decisiones dudosas y
+   * las que no tienen histórico, y eso está bien —una base mal puesta manda a
+   * un técnico al patio equivocado—, pero quien mira la lista se queda con un
+   * hueco y sin saber si esto se arregla volviendo a pasar el cálculo, lo
+   * tiene que decidir él, o hay que escribirlo a mano.
+   *
+   * Va APARTE y después de pintar, por dos razones: recorre el histórico de
+   * presencia de un mes y no debe retrasar la lista, y es una explicación —si
+   * falla, se calla y no rompe nada—. Se pide una vez por empresa y se
+   * recuerda; si no, validar un vehículo volvería a lanzarlo entero.
+   */
+  const [sinBase, setSinBase] = useState<Map<string, BaseHabitual>>(new Map());
+  const empresasConsultadas = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const faltan = new Set(
+      pendientes.filter((v) => !v.delegacion_id && v.empresa_id).map((v) => v.empresa_id as string),
+    );
+    const nuevas = [...faltan].filter((e) => !empresasConsultadas.current.has(e));
+    if (nuevas.length === 0) return;
+    let vivo = true;
+    void (async () => {
+      for (const empresaId of nuevas) {
+        empresasConsultadas.current.add(empresaId);
+        try {
+          const filas = await calcularBaseHabitual(empresaId);
+          if (!vivo) return;
+          setSinBase((antes) => {
+            const m = new Map(antes);
+            for (const f of filas) m.set(f.vehiculo_id, f);
+            return m;
+          });
+        } catch { /* es una explicación: si no se puede dar, no se da */ }
+      }
+    })();
+    return () => { vivo = false; };
+  }, [pendientes]);
 
   async function validar(v: Vehiculo) {
     setValidando(v.id); setMsgPend("");
@@ -261,6 +304,12 @@ export default function Vehiculos() {
   }
 
   const estadoDe = (id: string): EstadoWebfleet => ubicacionDe(id);
+
+  /** id → nombre de delegación, para no recorrer la lista en cada fila. */
+  const nombreDelegacion = useMemo(
+    () => new Map(delegaciones.map((d) => [d.id, d.nombre])),
+    [delegaciones],
+  );
   const telematicaPorVehiculo = useMemo(() => porVehiculo(enlacesTel), [enlacesTel]);
 
   // KPIs: en base, pendientes en base, vencidas en base, en ruta, sin conexión.
@@ -387,21 +436,49 @@ export default function Vehiculos() {
                 */}
                 {(() => {
                   const donde = etiquetaBase(presencias.get(v.id), estados.get(v.id));
-                  if (!donde) return null;
+                  if (donde) {
+                    return (
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                          donde.ahora
+                            ? "bg-emerald-500/15 text-emerald-300"
+                            : "bg-slate-700/60 text-slate-300"
+                        }`}
+                        title={
+                          donde.ahora
+                            ? "Está en esta base ahora mismo"
+                            : "Aquí se le vio por última vez; su equipo lleva rato sin emitir"
+                        }
+                      >
+                        📍 {donde.ahora ? "En" : "Última vez en"} {donde.base}
+                      </span>
+                    );
+                  }
+                  /*
+                    No está en ninguna base, y hasta ahora eso se enseñaba
+                    como un hueco. Un hueco mezclaba tres cosas distintas —en
+                    ruta, sin conexión y sin posición— y justo la primera es
+                    la que se puede ir a buscar. Se dice cuál de las tres es,
+                    con el mismo texto y el mismo tono que la ficha, que ya lo
+                    resolvía.
+                  */
+                  const u = ubicacionDeVehiculo({
+                    presencia: presencias.get(v.id),
+                    webfleet: estados.get(v.id),
+                  });
                   return (
                     <span
                       className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
-                        donde.ahora
-                          ? "bg-emerald-500/15 text-emerald-300"
-                          : "bg-slate-700/60 text-slate-300"
+                        u.tono === "ruta"
+                          ? "bg-sky-500/15 text-sky-300"
+                          : u.tono === "viejo"
+                            ? "bg-amber-500/15 text-amber-300"
+                            : "bg-slate-700/60 text-slate-400"
                       }`}
-                      title={
-                        donde.ahora
-                          ? "Está en esta base ahora mismo"
-                          : "Aquí se le vio por última vez; su equipo lleva rato sin emitir"
-                      }
+                      title={u.detalle ?? ""}
                     >
-                      📍 {donde.ahora ? "En" : "Última vez en"} {donde.base}
+                      {u.tono === "ruta" ? "🛣 " : ""}{u.texto}
+                      {u.detalle ? <span className="ml-1 font-normal opacity-70">· {u.detalle}</span> : null}
                     </span>
                   );
                 })()}
@@ -412,7 +489,44 @@ export default function Vehiculos() {
                     .filter(Boolean).join(", ") || "nada obvio"}
                   {" pendiente"}
                 </span>
-                <div className="ml-auto flex gap-2">
+                <div className="ml-auto flex items-center gap-2">
+                  {/*
+                    La base que tiene ASIGNADA en su ficha, que no es lo mismo
+                    que dónde está ahora: la chapa de arriba dice dónde se le
+                    ve, esto dice a qué base pertenece. Si no la tiene, no se
+                    escribe nada: el aviso de la izquierda ya dice que la
+                    delegación está pendiente.
+                  */}
+                  {(() => {
+                    const base = v.delegacion_id ? nombreDelegacion.get(v.delegacion_id) : null;
+                    if (base) {
+                      return (
+                        <span
+                          className="text-[12px] text-slate-300"
+                          title="Base asignada en la ficha del vehículo. No es dónde está ahora."
+                        >
+                          🏠 {base}
+                        </span>
+                      );
+                    }
+                    /*
+                      Sin base: se dice POR QUÉ, que es lo que decide qué hacer
+                      con él. Mientras el cálculo no haya llegado no se escribe
+                      nada: un hueco es mejor que un motivo a medias.
+                    */
+                    const motivo = motivoSinBase(sinBase.get(v.id));
+                    if (!motivo) return null;
+                    return (
+                      <span
+                        className={`text-[12px] ${
+                          motivo.clase === "propuesta" ? "text-emerald-300/80" : "text-slate-500"
+                        }`}
+                        title={motivo.detalle}
+                      >
+                        🏠 {motivo.texto}
+                      </span>
+                    );
+                  })()}
                   {/*
                     Dónde está, en el mapa. Aquí es donde más falta hace: a
                     estos vehículos les falta la marca y el modelo, y para

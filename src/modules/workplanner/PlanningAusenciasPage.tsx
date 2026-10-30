@@ -9,6 +9,20 @@ import { DEFAULT_AGENDA_CONFIG, type AgendaConfig } from "../agendaConfig";
 import { getTodayDateValue, type ScheduledTechStatus } from "../techStatusScheduleHelpers";
 import { DEFAULT_WORKSHOP_ID, WORKSHOPS, normalizeWorkshopId } from "../workshops";
 import {
+  TODOS_LOS_TALLERES,
+  estadoCuentaEnTaller,
+} from "../tecnicosPorTaller";
+import { personasDelTaller, type EmpleadoCore } from "../personasDeAusencias";
+import { cargarEmpleadosCore } from "../empleadosCoreApi";
+
+/** La ficha del técnico tal como la devuelve el servidor. */
+type FichaTecnico = {
+  name?: string | null;
+  activo?: boolean;
+  workshopId?: unknown;
+  employeeId?: string | null;
+};
+import {
   diasDelAnio,
   faltanPorDia,
   filaDeTecnico,
@@ -40,6 +54,7 @@ const COLOR: Record<EstadoDia, string> = {
   permiso: "bg-yellow-400",
   otro_taller: "bg-blue-500",
   nodisponible: "bg-violet-500",
+  formacion: "bg-sky-300",
 };
 
 function formatoFecha(fecha: string) {
@@ -49,7 +64,9 @@ function formatoFecha(fecha: string) {
 
 export default function PlanningAusenciasPage() {
   const [estados, setEstados] = useState<ScheduledTechStatus[]>([]);
-  const [tecnicos, setTecnicos] = useState<string[]>([]);
+  const [fichas, setFichas] = useState<FichaTecnico[]>([]);
+  // Todos los empleados entran, no solo los técnicos.
+  const [empleados, setEmpleados] = useState<EmpleadoCore[]>([]);
   const [configAgenda, setConfigAgenda] = useState<AgendaConfig>(DEFAULT_AGENDA_CONFIG);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
@@ -57,28 +74,44 @@ export default function PlanningAusenciasPage() {
 
   const [workshopId, setWorkshopId] = useState<string>(() => {
     const guardado = window.localStorage.getItem("sea-selected-workshop");
-    return normalizeWorkshopId(guardado ?? DEFAULT_WORKSHOP_ID);
+    return normalizeWorkshopId(guardado ?? DEFAULT_WORKSHOP_ID) as string;
   });
 
   const hoy = getTodayDateValue();
   const [anio, setAnio] = useState<number>(() => Number(hoy.slice(0, 4)));
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
+  // Los dados de baja en la empresa no salen salvo que se pida. Se recuerda
+  // por navegador; si el almacenamiento falla, vuelve a «solo de alta».
+  const [verBajas, setVerBajas] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem("sea-ausencias-ver-bajas") === "1";
+    } catch {
+      return false;
+    }
+  });
+  function cambiarVerBajas(valor: boolean) {
+    setVerBajas(valor);
+    try {
+      window.localStorage.setItem("sea-ausencias-ver-bajas", valor ? "1" : "0");
+    } catch {
+      /* sin almacenamiento se queda solo en esta visita */
+    }
+  }
+
   const cargar = useCallback(async () => {
     setCargando(true);
     setError("");
     try {
-      const [listaEstados, listaTecnicos, agenda] = await Promise.all([
+      const [listaEstados, listaTecnicos, listaEmpleados, agenda] = await Promise.all([
         loadScheduledTechStatusesFromBackend(),
         loadTechsFromBackend().catch(() => []),
+        cargarEmpleadosCore(),
         loadAgendaConfig().catch(() => DEFAULT_AGENDA_CONFIG),
       ]);
       setEstados(listaEstados);
-      setTecnicos(
-        (listaTecnicos as { name?: string; activo?: boolean }[])
-          .filter((t) => t?.name && t.activo !== false && !esTecnicoDePrueba(t.name))
-          .map((t) => String(t.name))
-      );
+      setFichas(listaTecnicos as FichaTecnico[]);
+      setEmpleados(listaEmpleados);
       setConfigAgenda(agenda);
     } catch (e: any) {
       setError(e?.message || "Error cargando el planning.");
@@ -91,7 +124,7 @@ export default function PlanningAusenciasPage() {
 
   // Los estados de un taller no cuentan en el de otro, como en Ausencias.
   const estadosDelTaller = useMemo(
-    () => estados.filter((e) => !e.workshopId || normalizeWorkshopId(e.workshopId) === workshopId),
+    () => estados.filter((e) => estadoCuentaEnTaller(e, workshopId)),
     [estados, workshopId]
   );
 
@@ -99,18 +132,33 @@ export default function PlanningAusenciasPage() {
   const dias = useMemo(() => diasDelAnio(anio, configAgenda, hoy), [anio, configAgenda, hoy]);
 
   // Los que tuvieron ausencias este año aunque ya no estén en la lista.
+  const delTaller = useMemo(
+    () => personasDelTaller(fichas, empleados, workshopId, { incluirBajas: verBajas }),
+    [fichas, empleados, workshopId, verBajas]
+  );
+
+  /*
+   * Los que tuvieron ausencias este año aunque ya no estén en la lista del
+   * taller: se añaden al final y sin taller conocido, porque su ficha ya no
+   * dice de dónde eran. Perderlos sería perder el histórico.
+   */
   const nombres = useMemo(() => {
-    const lista = [...tecnicos];
+    const lista = delTaller.map((t) => ({ nombre: t.nombre, taller: t.taller, deBaja: !!t.deBaja }));
+    const vistos = new Set(lista.map((t) => t.nombre));
+    // Solo de alta: no se añade a nadie que no esté en la lista.
+    if (!verBajas) return lista;
+
     for (const e of estadosDelTaller) {
-      if (e.startDate?.startsWith(String(anio)) && !lista.includes(e.techName) && !esTecnicoDePrueba(e.techName)) {
-        lista.push(e.techName);
+      if (e.startDate?.startsWith(String(anio)) && !vistos.has(e.techName) && !esTecnicoDePrueba(e.techName)) {
+        lista.push({ nombre: e.techName, taller: "", deBaja: true });
+        vistos.add(e.techName);
       }
     }
     return lista;
-  }, [tecnicos, estadosDelTaller, anio]);
+  }, [delTaller, estadosDelTaller, anio, verBajas]);
 
   const filas = useMemo(
-    () => nombres.map((n) => ({ nombre: n, celdas: filaDeTecnico(n, estadosDelTaller, dias, hoy) })),
+    () => nombres.map((t) => ({ ...t, celdas: filaDeTecnico(t.nombre, estadosDelTaller, dias, hoy) })),
     [nombres, estadosDelTaller, dias, hoy]
   );
   const faltan = useMemo(() => faltanPorDia(filas.map((f) => f.celdas), dias.length), [filas, dias.length]);
@@ -159,16 +207,17 @@ export default function PlanningAusenciasPage() {
         <div>
           <h1 className="text-xl font-bold">Planning anual de ausencias</h1>
           <p className="text-xs text-slate-400">
-            Todos los técnicos del taller, día a día. Los datos son los de la agenda y su calendario. Hoy: {formatoFecha(hoy)}.
+            Todo el personal del taller, día a día. Los datos son los de la agenda y su calendario. Hoy: {formatoFecha(hoy)}.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <select
             value={workshopId}
-            onChange={(e) => setWorkshopId(normalizeWorkshopId(e.target.value))}
+            onChange={(e) => setWorkshopId(e.target.value)}
             className="rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
           >
             {WORKSHOPS.map((w) => <option key={w.id} value={w.id}>{w.shortName}</option>)}
+            <option value={TODOS_LOS_TALLERES}>Todos los talleres</option>
           </select>
           <select
             value={anio}
@@ -177,6 +226,18 @@ export default function PlanningAusenciasPage() {
           >
             {anios.map((a) => <option key={a} value={a}>{a}</option>)}
           </select>
+          <button
+            type="button"
+            onClick={() => cambiarVerBajas(!verBajas)}
+            title="Trabajadores dados de baja en la empresa (no las bajas médicas)"
+            className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+              verBajas
+                ? "border-sky-500 bg-sky-500/20 text-sky-200"
+                : "border-slate-600 bg-slate-800 text-slate-300 hover:bg-slate-700"
+            }`}
+          >
+            {verBajas ? "Altas y bajas" : "Solo de alta"}
+          </button>
           <button
             type="button"
             onClick={() => void cargar()}
@@ -253,7 +314,19 @@ export default function PlanningAusenciasPage() {
                 return (
                   <tr key={f.nombre}>
                     <td className="sticky left-0 z-10 border-b border-r-2 border-slate-600 bg-slate-800 px-2">
-                      <b className="block text-xs">{f.nombre}</b>
+                      <b className="block text-xs">
+                        {f.nombre}
+                        {f.deBaja && (
+                          <span className="ml-1 rounded bg-slate-600 px-1 py-0.5 text-[9px] font-semibold text-slate-300">
+                            DE BAJA
+                          </span>
+                        )}
+                        {workshopId === TODOS_LOS_TALLERES && f.taller && (
+                          <span className="ml-1 rounded bg-slate-700 px-1 py-0.5 text-[9px] font-semibold text-slate-300">
+                            {f.taller}
+                          </span>
+                        )}
+                      </b>
                       <span className="block font-mono text-[10px] text-slate-400">vac {vac} · prog {prog}</span>
                     </td>
                     {f.celdas.map((c, i) => (

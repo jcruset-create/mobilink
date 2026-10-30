@@ -15,6 +15,8 @@ import {
   recepcionesQueSiguenEsperando,
 } from "../modules/recepcionVehiculo";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { empleadosSinFicha, type EmpleadoCore } from "../modules/personasDeAusencias";
+import { cargarEmpleadosCore } from "../modules/empleadosCoreApi";
 import type { Dispatch, SetStateAction } from "react";
 
 import {
@@ -43,7 +45,9 @@ import {
 } from "../modules/techStatusScheduleHelpers";
 
 import { getTechStatusLabel } from "../modules/techStatus";
+import { barraDeEstado, barrasARecolocar, colorDeEstado, estadosSinBarra } from "../modules/barrasDeEstadoEnAgenda";
 import { buildScheduledJobV2FieldsFromTemplate } from "../modules/scheduledJobV2Helpers";
+import { minutosDeLaCita } from "../modules/duracionDeCita";
 import { getAgendaWhatsappV2Description } from "../modules/agendaWhatsappV2Helpers";
 
 import ScheduledJobQuantityBox from "./ScheduledJobQuantityBox";
@@ -198,7 +202,7 @@ export type ScheduledJob = {
   totalPrice?: number | null;
 };
 
-type DateReminderColor = "red" | "orange" | "blue" | "green" | "slate";
+type DateReminderColor = "red" | "orange" | "blue" | "green" | "slate" | "sky";
 
 type DateReminderKind = "normal" | "tech_status";
 
@@ -687,6 +691,31 @@ export default function AgendaView({
   const safeSelectedWorkshopId = normalizeWorkshopId(selectedWorkshopId);
   const selectedWorkshop = getWorkshopById(safeSelectedWorkshopId);
 
+  /*
+   * El resto de empleados de Core (oficina, almacén…), para poder programarles
+   * vacaciones o bajas igual que a un técnico. Solo en el selector de estado:
+   * no se les asigna trabajo. Solo se piden si quien mira puede programar
+   * estados, que es para lo único que se usan.
+   */
+  const [empleadosCore, setEmpleadosCore] = useState<EmpleadoCore[]>([]);
+  useEffect(() => {
+    if (!puedeEditarEstadoTecnico) return;
+    let activo = true;
+    void cargarEmpleadosCore().then((lista) => {
+      if (activo) setEmpleadosCore(lista);
+    });
+    return () => {
+      activo = false;
+    };
+  }, [puedeEditarEstadoTecnico]);
+  const otrosEmpleados = useMemo(
+    () =>
+      empleadosSinFicha(techs, empleadosCore)
+        .filter((e) => e.workshopId === null || e.workshopId === safeSelectedWorkshopId)
+        .map((e) => e.nombre),
+    [techs, empleadosCore, safeSelectedWorkshopId]
+  );
+
   // ── Tema "chrome" oscuro estilo Operativo 2 (solo Agenda 2) ──────────────
   // La ruta clara (dark=false) devuelve exactamente las clases originales, de
   // modo que la Agenda existente queda intacta.
@@ -925,6 +954,25 @@ function guardarRecordatorioEnBackend(reminder: DateReminder) {
   });
 }
 
+/*
+ * Manda el estado programado: si hay vacaciones o bajas sin su barra de
+ * «Todo el día» (ver barrasDeEstadoEnAgenda.ts), se reconstruyen al cargar y
+ * se guardan, para que la agenda enseñe lo mismo que el Planning.
+ */
+useEffect(() => {
+  if (!dateRemindersLoaded) return;
+  const faltan = estadosSinBarra(dateReminders as any, scheduledTechStatuses);
+  const recolocadas = barrasARecolocar(dateReminders as any, scheduledTechStatuses, normalizeWorkshopId) as DateReminder[];
+  if (faltan.length === 0 && recolocadas.length === 0) return;
+  const nuevas = faltan.map((e, i) => barraDeEstado(e, createDateReminderId() + i) as DateReminder);
+  setDateReminders((prev) => [
+    ...prev.map((b) => recolocadas.find((r) => r.id === b.id) ?? b),
+    ...nuevas,
+  ]);
+  for (const barra of [...recolocadas, ...nuevas]) guardarRecordatorioEnBackend(barra);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [dateRemindersLoaded, scheduledTechStatuses]);
+
   const [draft, setDraft] = useState({
   templateKey: quickTemplates[0]?.key ?? "",
   plate: "",
@@ -985,6 +1033,7 @@ function guardarRecordatorioEnBackend(reminder: DateReminder) {
     if (color === "blue") return "bg-blue-600 border-blue-700 text-white";
     if (color === "green") return "bg-emerald-600 border-emerald-700 text-white";
     if (color === "slate") return "bg-slate-600 border-slate-700 text-white";
+    if (color === "sky") return "bg-sky-400 border-sky-500 text-slate-900";
 
     return "bg-red-600 border-red-700 text-white";
   }
@@ -1131,7 +1180,9 @@ function saveDateReminder() {
       title: title.toUpperCase(),
       startDate: reminderDraft.startDate,
       endDate: reminderDraft.endDate,
-      color: reminderDraft.color || "orange",
+      // El color lo dice el estado (baja roja, formación azul…), no el
+      // selector: así la barra sale igual que si la reconstruye la agenda.
+      color: colorDeEstado(reminderDraft.techStatus),
       notes: reminderDraft.notes.trim(),
       techStatusId: scheduledStatus.id,
       techName,
@@ -1646,9 +1697,11 @@ function getEstimatedMinutesWithIncludedTasks(
   includedTasks,
 });
 
-const safeEstimatedMinutes = Math.max(
-  15,
-  normalizeMinutes(v2Fields.estimatedMinutes, DEFAULT_ESTIMATED_MINUTES)
+// Lo tecleado en «Duración prevista» manda sobre la plantilla: ver duracionDeCita.ts.
+const safeEstimatedMinutes = minutosDeLaCita(
+  draft.estimatedMinutes,
+  v2Fields.estimatedMinutes,
+  DEFAULT_ESTIMATED_MINUTES
 );
 
     const nextData = {
@@ -2960,6 +3013,15 @@ appendLog(
                       {tech.name}
                     </option>
                   ))}
+                  {otrosEmpleados.length > 0 && (
+                    <optgroup label="Otros empleados">
+                      {otrosEmpleados.map((nombre) => (
+                        <option key={`core-${nombre}`} value={nombre}>
+                          {nombre}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
                 </select>
               </div>
 

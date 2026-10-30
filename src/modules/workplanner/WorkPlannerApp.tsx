@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Routes, Route, Navigate, NavLink, useNavigate } from "react-router-dom";
 import {
   Home,
@@ -17,6 +17,7 @@ import {
   Users,
   FileScan,
   CarFront,
+  Truck,
 } from "lucide-react";
 import logoMobilink from "../../assets/logo-mobilink.png";
 import SeaTarragonaV1 from "../../SeaTarragonaV1";
@@ -27,8 +28,10 @@ import PlanningAusenciasPage from "./PlanningAusenciasPage";
 import AnalisisPage from "./AnalisisPage";
 import PartesTrabajoPage from "./PartesTrabajoPage";
 import RecepcionesPage from "./RecepcionesPage";
+import SalidasPage from "./SalidasPage";
 import { supabase } from "../administracion/services/supabase";
 import { useEsAdministrador } from "../esAdministrador";
+import { seccionMarcadaEnCore, seccionVisible } from "../vistasDelModulo";
 import VersionDesplegada from "../../components/VersionDesplegada";
 
 /** Clave del módulo en app_licencias / app_usuario_modulos. */
@@ -36,6 +39,17 @@ export const MODULO_WORKPLANNER = "workplanner";
 
 // Menú del módulo. Estadísticas y Configuración quedan preparadas como
 // placeholders ("Próximamente") para las próximas fases.
+/**
+ * Qué vista del panel abre cada sección, para no ofrecer en el menú lo que el
+ * usuario no puede abrir. Las que no abren una vista del panel —Recepción,
+ * Partes, Pedidos, Plantillas…— no llevan entrada y se ven siempre.
+ */
+const VISTA_DE_LA_SECCION: Record<string, string> = {
+  agenda: "agenda2",
+  tecnicos: "operarios",
+  personal: "tecnicos",
+};
+
 const SECCIONES = [
   { key: "operativo2", label: "Operativo 2", icon: ClipboardList, proximamente: false },
   { key: "agenda", label: "Agenda", icon: CalendarDays, proximamente: false },
@@ -46,6 +60,9 @@ const SECCIONES = [
   // Vehículos recibidos en el patio desde la APK, a la espera de que alguien
   // los convierta en trabajo. La captura propone; una persona valida.
   { key: "recepciones", label: "Recepción vehículos", icon: CarFront, proximamente: false },
+  // Un operario sale con una furgoneta a repartir o a buscar recambios y
+  // vuelve; se sigue por el GPS de la furgoneta, como una asistencia.
+  { key: "salidas", label: "Salidas", icon: Truck, proximamente: false },
   { key: "partes", label: "Partes de trabajo", icon: FileScan, proximamente: false },
   { key: "pedidos", label: "Pedidos ERP", icon: FileInput, proximamente: false },
   { key: "plantillas", label: "Plantillas", icon: ListChecks, proximamente: false },
@@ -107,8 +124,10 @@ function SinLicencia() {
  *
  * Devuelve null mientras carga, true/false una vez resuelto.
  */
-function useAccesoWorkplanner() {
+function useAccesoWorkplanner(): { permitido: boolean | null; pantallas: string[] | null } {
   const [permitido, setPermitido] = useState<boolean | null>(null);
+  // Pantallas marcadas en Core para este módulo. null = todas.
+  const [pantallas, setPantallas] = useState<string[] | null>(null);
 
   useEffect(() => {
     let activo = true;
@@ -131,8 +150,11 @@ function useAccesoWorkplanner() {
       try {
         const { data: rows, error } = await supabase.rpc("app_mis_modulos");
         if (error) throw error;
-        const ok = (rows ?? []).some((r: { modulo: string }) => r.modulo === MODULO_WORKPLANNER);
-        if (activo) setPermitido(ok);
+        const mio = (rows ?? []).find((r: { modulo: string }) => r.modulo === MODULO_WORKPLANNER);
+        if (activo) {
+          setPermitido(Boolean(mio));
+          setPantallas(Array.isArray(mio?.pantallas) && mio.pantallas.length ? mio.pantallas.map(String) : null);
+        }
         return;
       } catch { /* migración SaaS no aplicada: fallback */ }
 
@@ -141,10 +163,13 @@ function useAccesoWorkplanner() {
       try {
         const { data: rows } = await supabase
           .from("app_usuario_modulos")
-          .select("modulo")
+          .select("modulo, pantallas")
           .eq("user_id", user.id);
-        const ok = (rows ?? []).some((r) => r.modulo === MODULO_WORKPLANNER);
-        if (activo) setPermitido(ok);
+        const mio = (rows ?? []).find((r) => r.modulo === MODULO_WORKPLANNER);
+        if (activo) {
+          setPermitido(Boolean(mio));
+          setPantallas(Array.isArray(mio?.pantallas) && mio.pantallas.length ? mio.pantallas.map(String) : null);
+        }
       } catch {
         // Entorno sin las tablas SaaS: no bloqueamos el módulo.
         if (activo) setPermitido(true);
@@ -153,7 +178,7 @@ function useAccesoWorkplanner() {
     return () => { activo = false; };
   }, []);
 
-  return permitido;
+  return { permitido, pantallas };
 }
 
 /**
@@ -165,8 +190,22 @@ function useAccesoWorkplanner() {
  */
 export default function WorkPlannerApp() {
   const navigate = useNavigate();
-  const permitido = useAccesoWorkplanner();
+  const { permitido, pantallas: pantallasDeCore } = useAccesoWorkplanner();
   const esAdmin = useEsAdministrador();
+
+  /*
+   * Las vistas que tiene activadas este usuario, del mismo sitio del que las
+   * lee el panel. Sin lista —un administrador— no se esconde nada.
+   */
+  const vistasPermitidas = useMemo<string[] | null>(() => {
+    try {
+      const crudo = localStorage.getItem("sea-allowed-views");
+      const lista = crudo ? JSON.parse(crudo) : null;
+      return Array.isArray(lista) && lista.length > 0 ? lista.map(String) : null;
+    } catch {
+      return null;
+    }
+  }, []);
   /*
    * Commit que está corriendo en el servidor. Se pregunta una vez al abrir:
    * es lo que permite responder «¿está desplegado el arreglo?» sin depender
@@ -213,7 +252,11 @@ export default function WorkPlannerApp() {
           </div>
           {permitido && (
             <nav className="flex items-center gap-1">
-              {SECCIONES.filter((s) => !("soloAdmin" in s && s.soloAdmin) || esAdmin).map((s) => {
+              {SECCIONES.filter((s) => !("soloAdmin" in s && s.soloAdmin) || esAdmin)
+                .filter((s) => seccionVisible(VISTA_DE_LA_SECCION[s.key] ?? null, vistasPermitidas))
+                // Y lo marcado en Core → Usuarios → WorkPlanner: segunda cerradura.
+                .filter((s) => seccionMarcadaEnCore(s.key, pantallasDeCore))
+                .map((s) => {
                 const Icon = s.icon;
                 return (
                   <NavLink
@@ -309,6 +352,7 @@ export default function WorkPlannerApp() {
             }
           />
           <Route path="recepciones" element={<RecepcionesPage />} />
+          <Route path="salidas" element={<SalidasPage />} />
           <Route path="partes" element={<PartesTrabajoPage />} />
           <Route path="plantillas" element={<PlantillasChecklistPage />} />
           <Route

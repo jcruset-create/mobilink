@@ -37,6 +37,8 @@ export type Caja = {
   nombre: string;
   /** Iniciales que abren el número de sus documentos: `TAR1-IB-26-001`. */
   codigo: string;
+  /** Las secciones que tiene la caja. Vacío o ausente = todas las de la empresa. */
+  secciones?: number[];
   /**
    * Fondo fijo del cajón: lo que esta caja tiene que tener SIEMPRE al empezar
    * el día. 0 = sin fondo fijo, y entonces el cierre lo pregunta.
@@ -719,6 +721,8 @@ export type AccesoUsuario = {
   cajas: number[];
   /** Cajero o consulta: con la asignación obligatoria, solo ve sus cajas. */
   limitadoPorCaja: boolean;
+  /** Entra en Configuración. Admin siempre; responsable salvo que se le quite. */
+  puedeConfigurar: boolean;
 };
 
 export type Accesos = {

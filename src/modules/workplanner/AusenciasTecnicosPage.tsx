@@ -14,7 +14,20 @@ import { loadScheduledTechStatusesFromBackend } from "../scheduledTechStatusApi"
 import { cargarConfigVacaciones, guardarConfigVacaciones } from "../vacacionesConfigApi";
 import { loadAgendaConfig } from "../agendaConfigApi";
 import { loadTechsFromBackend } from "../workshopApi";
-import { esTecnicoDePrueba } from "../tecnicosDePrueba";
+import {
+  TODOS_LOS_TALLERES,
+  estadoCuentaEnTaller,
+} from "../tecnicosPorTaller";
+import { personasDelTaller, type EmpleadoCore } from "../personasDeAusencias";
+import { cargarEmpleadosCore } from "../empleadosCoreApi";
+
+/** La ficha del técnico tal como la devuelve el servidor. */
+type FichaTecnico = {
+  name?: string | null;
+  activo?: boolean;
+  workshopId?: unknown;
+  employeeId?: string | null;
+};
 import { DEFAULT_AGENDA_CONFIG, type AgendaConfig } from "../agendaConfig";
 import { getTodayDateValue, type ScheduledTechStatus } from "../techStatusScheduleHelpers";
 import { DEFAULT_WORKSHOP_ID, WORKSHOPS, normalizeWorkshopId } from "../workshops";
@@ -58,14 +71,16 @@ function formatoFecha(fecha: string) {
 
 export default function AusenciasTecnicosPage() {
   const [estados, setEstados] = useState<ScheduledTechStatus[]>([]);
-  const [tecnicos, setTecnicos] = useState<string[]>([]);
+  const [fichas, setFichas] = useState<FichaTecnico[]>([]);
+  // Todos los empleados entran, no solo los técnicos.
+  const [empleados, setEmpleados] = useState<EmpleadoCore[]>([]);
   const [configAgenda, setConfigAgenda] = useState<AgendaConfig>(DEFAULT_AGENDA_CONFIG);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
 
   const [workshopId, setWorkshopId] = useState<string>(() => {
     const guardado = window.localStorage.getItem("sea-selected-workshop");
-    return normalizeWorkshopId(guardado ?? DEFAULT_WORKSHOP_ID);
+    return normalizeWorkshopId(guardado ?? DEFAULT_WORKSHOP_ID) as string;
   });
 
   const hoy = getTodayDateValue();
@@ -81,14 +96,33 @@ export default function AusenciasTecnicosPage() {
   const [guardando, setGuardando] = useState(false);
   const [expandido, setExpandido] = useState<string | null>(null);
 
+  // Los dados de baja en la empresa no salen salvo que se pida. Se recuerda
+  // por navegador; si el almacenamiento falla, vuelve a «solo de alta».
+  const [verBajas, setVerBajas] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem("sea-ausencias-ver-bajas") === "1";
+    } catch {
+      return false;
+    }
+  });
+  function cambiarVerBajas(valor: boolean) {
+    setVerBajas(valor);
+    try {
+      window.localStorage.setItem("sea-ausencias-ver-bajas", valor ? "1" : "0");
+    } catch {
+      /* sin almacenamiento se queda solo en esta visita */
+    }
+  }
+
   const cargar = useCallback(async () => {
     setCargando(true);
     setError("");
 
     try {
-      const [listaEstados, listaTecnicos, agenda, vacaciones] = await Promise.all([
+      const [listaEstados, listaTecnicos, listaEmpleados, agenda, vacaciones] = await Promise.all([
         loadScheduledTechStatusesFromBackend(),
         loadTechsFromBackend().catch(() => []),
+        cargarEmpleadosCore(),
         loadAgendaConfig().catch(() => DEFAULT_AGENDA_CONFIG),
         cargarConfigVacaciones(anio, workshopId),
       ]);
@@ -97,11 +131,8 @@ export default function AusenciasTecnicosPage() {
 
       // Los técnicos dados de baja no se listan, pero si tuvieron ausencias este
       // año el resumen los añade igualmente para no perder su histórico.
-      setTecnicos(
-        (listaTecnicos as { name?: string; activo?: boolean }[])
-          .filter((t) => t?.name && t.activo !== false && !esTecnicoDePrueba(t.name))
-          .map((t) => String(t.name))
-      );
+      setFichas(listaTecnicos as FichaTecnico[]);
+      setEmpleados(listaEmpleados);
 
       setConfigAgenda(agenda);
       setConfig({
@@ -122,15 +153,29 @@ export default function AusenciasTecnicosPage() {
   // resto de la agenda. Los guardados sin taller se consideran del actual.
   const estadosDelTaller = useMemo(
     () =>
-      estados.filter(
-        (e) => !e.workshopId || normalizeWorkshopId(e.workshopId) === workshopId
-      ),
+      estados.filter((e) => estadoCuentaEnTaller(e, workshopId)),
     [estados, workshopId]
   );
 
+  // Solo los del taller que se mira; con «Todos», los de todos.
+  const tecnicos = useMemo(
+    () =>
+      personasDelTaller(fichas, empleados, workshopId, { incluirBajas: verBajas }).map(
+        (t) => t.nombre
+      ),
+    [fichas, empleados, workshopId, verBajas]
+  );
+
+  // Quién está de alta, para marcar al resto como «de baja» cuando se ven todos.
+  const deAlta = useMemo(
+    () => new Set(personasDelTaller(fichas, empleados, workshopId).map((t) => t.nombre)),
+    [fichas, empleados, workshopId]
+  );
+
   const resumenes = useMemo(
-    () => resumenPorTecnico(estadosDelTaller, tecnicos, anio, config, configAgenda, hoy),
-    [estadosDelTaller, tecnicos, anio, config, configAgenda, hoy]
+    () =>
+      resumenPorTecnico(estadosDelTaller, tecnicos, anio, config, configAgenda, hoy, verBajas),
+    [estadosDelTaller, tecnicos, anio, config, configAgenda, hoy, verBajas]
   );
 
   const solapes = useMemo(() => detectaSolapes(resumenes), [resumenes]);
@@ -222,12 +267,13 @@ export default function AusenciasTecnicosPage() {
           <div className="flex flex-wrap items-center gap-2">
             <select
               value={workshopId}
-              onChange={(e) => setWorkshopId(normalizeWorkshopId(e.target.value))}
+              onChange={(e) => setWorkshopId(e.target.value)}
               className="rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
             >
               {WORKSHOPS.map((w) => (
                 <option key={w.id} value={w.id}>{w.shortName}</option>
               ))}
+              <option value={TODOS_LOS_TALLERES}>Todos los talleres</option>
             </select>
 
             <select
@@ -254,6 +300,18 @@ export default function AusenciasTecnicosPage() {
               <Download className="h-4 w-4" /> CSV
             </button>
 
+            <button
+              type="button"
+              onClick={() => cambiarVerBajas(!verBajas)}
+              title="Trabajadores dados de baja en la empresa (no las bajas médicas)"
+              className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+                verBajas
+                  ? "border-sky-500 bg-sky-500/20 text-sky-200"
+                  : "border-slate-600 bg-slate-800 text-slate-300 hover:bg-slate-700"
+              }`}
+            >
+              {verBajas ? "Altas y bajas" : "Solo de alta"}
+            </button>
             <button
               type="button"
               onClick={() => void cargar()}
@@ -423,6 +481,7 @@ export default function AusenciasTecnicosPage() {
                       abierto={abierto}
                       onToggle={() => setExpandido(abierto ? null : r.techName)}
                       techName={r.techName}
+                      deBaja={!deAlta.has(r.techName)}
                       cupo={r.cupo}
                       disfrutadas={r.vacacionesDisfrutadas}
                       programadas={r.vacacionesProgramadas}
@@ -475,6 +534,7 @@ export default function AusenciasTecnicosPage() {
 
 function FilaTecnico({
   techName,
+  deBaja = false,
   cupo,
   disfrutadas,
   programadas,
@@ -486,6 +546,7 @@ function FilaTecnico({
   onToggle,
 }: {
   techName: string;
+  deBaja?: boolean;
   cupo: number;
   disfrutadas: number;
   programadas: number;
@@ -502,7 +563,14 @@ function FilaTecnico({
         onClick={onToggle}
         className="cursor-pointer border-b border-slate-700/60 hover:bg-slate-700/30"
       >
-        <td className="px-3 py-2 font-semibold">{techName}</td>
+        <td className="px-3 py-2 font-semibold">
+          {techName}
+          {deBaja && (
+            <span className="ml-2 rounded bg-slate-600 px-1.5 py-0.5 text-[10px] font-semibold text-slate-300">
+              DE BAJA
+            </span>
+          )}
+        </td>
         <td className="px-3 py-2 text-right tabular-nums">{disfrutadas}</td>
         <td className="px-3 py-2 text-right tabular-nums text-sky-300">{programadas}</td>
         <td

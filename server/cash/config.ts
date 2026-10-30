@@ -13,10 +13,10 @@
  */
 
 import pool from "../db.ts";
-import { registrarAuditoria } from "../core/auditoria.ts";
+import { registrarAuditoria, registrarAuditoriaEnTransaccion } from "../core/auditoria.ts";
 import type { Denominacion } from "./domain/denominations.ts";
 import { FORMAS_PAGO_SEMILLA } from "./domain/operations.ts";
-import { ErrorCaja, sesionAbierta } from "./repository.ts";
+import { ErrorCaja, enTransaccion, sesionAbierta } from "./repository.ts";
 import { nombreDeCentro } from "./hierarchy.ts";
 import { entidadDeIban, ibanValido, normalizarIban } from "./domain/bankaccount.ts";
 import { BANCOS_SEMILLA, logoDeSemilla } from "./domain/banks.ts";
@@ -63,6 +63,8 @@ export type CajaConfig = {
   fondoObjetivoCentimos: number;
   /** Esta caja no se cierra sin haberla cotejado con el ERP. */
   exigirCotejoErp: boolean;
+  /** Las secciones que tiene la caja. Vacío = todas las de la empresa. */
+  secciones: number[];
   activa: boolean;
   /** Iniciales que abren el número de sus documentos: `TAR1-IB-26-001`. */
   codigo: string;
@@ -88,6 +90,8 @@ export async function listarCajas(
   const { rows } = await pool.query(
     `SELECT c.id, c.centro, c.centro_id, c.nombre, c.codigo, c.activa, c.fondo_objetivo_centimos,
             c.exigir_cotejo_erp,
+            COALESCE((SELECT array_agg(rs.section_id ORDER BY rs.section_id)
+                        FROM cash_register_sections rs WHERE rs.register_id = c.id), '{}') AS secciones,
             (SELECT COUNT(*) FROM cash_sessions s WHERE s.register_id = c.id) AS jornadas,
             (SELECT s.id FROM cash_sessions s
               WHERE s.register_id = c.id AND s.estado IN ('OPEN','PENDING_CLOSE','REOPENED')
@@ -108,6 +112,7 @@ export async function listarCajas(
     codigo: r.codigo ?? "",
     fondoObjetivoCentimos: Number(r.fondo_objetivo_centimos ?? 0),
     exigirCotejoErp: Boolean(r.exigir_cotejo_erp),
+    secciones: (r.secciones ?? []).map(Number),
     activa: r.activa,
     jornadas: Number(r.jornadas),
     jornadaAbierta: r.jornada_abierta,
@@ -126,6 +131,86 @@ async function codigosEnUso(empresaId: string): Promise<Set<string>> {
   );
   /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
   return new Set(rows.map((r: any) => r.codigo));
+}
+
+/**
+ * Las secciones de una caja. Lista vacía = todas las de la empresa.
+ *
+ * Se guardan las que se marcan, sustituyendo las anteriores. Marcar todas
+ * las activas es lo mismo que no marcar ninguna, y se guarda vacío: así una
+ * sección que se dé de alta mañana sale también en esta caja.
+ */
+export async function fijarSeccionesDeCaja(
+  ctx: Contexto,
+  registerId: number,
+  sectionIds: number[]
+): Promise<number[]> {
+  const ids = [...new Set(sectionIds)];
+  return enTransaccion(async (client) => {
+    const { rows: caja } = await client.query(
+      `SELECT id, centro_id FROM cash_registers WHERE id = $1 AND empresa_id = $2 FOR UPDATE`,
+      [registerId, ctx.empresaId]
+    );
+    if (caja.length === 0) throw new ErrorCaja("CAJA_NO_ENCONTRADA", "La caja no existe.", 404);
+    exigirMismoTaller(ctx, caja[0].centro_id ?? null);
+
+    const { rows: activas } = await client.query<{ id: number }>(
+      `SELECT id FROM cash_sections WHERE empresa_id = $1 AND activa ORDER BY id`,
+      [ctx.empresaId]
+    );
+    const validas = new Set(activas.map((r) => Number(r.id)));
+    for (const id of ids) {
+      if (!validas.has(id)) {
+        throw new ErrorCaja("SECCION_NO_ENCONTRADA", "Alguna de las secciones no existe o está de baja.", 404);
+      }
+    }
+    if (activas.length > 0 && ids.length === 0) {
+      throw new ErrorCaja("ENTRADA_NO_VALIDA", "La caja tiene que tener al menos una sección.", 400);
+    }
+    const todas = ids.length === validas.size;
+
+    await client.query(`DELETE FROM cash_register_sections WHERE register_id = $1`, [registerId]);
+    if (!todas) {
+      await client.query(
+        `INSERT INTO cash_register_sections (register_id, section_id) SELECT $1, unnest($2::int[])`,
+        [registerId, ids]
+      );
+    }
+    await registrarAuditoriaEnTransaccion(client, {
+      empresaId: ctx.empresaId,
+      userId: ctx.userId,
+      accion: "cash.register.sections",
+      entidad: "cash_registers",
+      entidadId: String(registerId),
+      detalle: { secciones: todas ? "todas" : ids },
+      ip: ctx.ip,
+    });
+    return todas ? [] : ids.sort((a, b) => a - b);
+  });
+}
+
+/**
+ * ¿Admite esta caja esta sección? Sin secciones marcadas, todas.
+ */
+export async function exigirSeccionDeCaja(
+  client: { query: typeof pool.query },
+  registerId: number,
+  sectionId: number
+): Promise<void> {
+  const { rows } = await client.query(
+    `SELECT COUNT(*)::int AS marcadas,
+            COUNT(*) FILTER (WHERE rs.section_id = $2)::int AS esta,
+            (SELECT nombre FROM cash_sections WHERE id = $2) AS nombre
+       FROM cash_register_sections rs WHERE rs.register_id = $1`,
+    [registerId, sectionId]
+  );
+  if (rows[0].marcadas > 0 && rows[0].esta === 0) {
+    throw new ErrorCaja(
+      "SECCION_NO_DE_ESTA_CAJA",
+      `Esta caja no tiene la sección «${rows[0].nombre ?? sectionId}».`,
+      409
+    );
+  }
 }
 
 /**
@@ -2118,6 +2203,53 @@ export async function crearDestino(
     ip: ctx.ip,
   });
   return aDestino({ ...rows[0], usos: 0 });
+}
+
+/**
+ * Elimina un operario o centro de coste dado de alta por error.
+ *
+ * Solo si nada lo usa: ni un pago, ni una liquidación, ni una línea de
+ * liquidación. Con historia se desactiva, porque los pagos y los informes lo
+ * siguen nombrando y borrarlo los dejaría sin a quién se imputó el gasto.
+ */
+export async function borrarDestino(ctx: Contexto, id: number): Promise<void> {
+  await enTransaccion(async (client) => {
+    const { rows } = await client.query(
+      `SELECT * FROM cash_expense_targets WHERE id = $1 AND empresa_id = $2 FOR UPDATE`,
+      [id, ctx.empresaId]
+    );
+    const destino = rows[0];
+    if (!destino) throw new ErrorCaja("DESTINO_NO_ENCONTRADO", "Ese destino no existe.", 404);
+
+    const { rows: usos } = await client.query(
+      `SELECT (SELECT COUNT(*) FROM cash_operations WHERE expense_target_id = $1)::int
+            + (SELECT COUNT(*) FROM cash_expense_claims WHERE expense_target_id = $1)::int
+            + (SELECT COUNT(*) FROM cash_expense_claim_lines WHERE expense_target_id = $1)::int AS n`,
+      [id]
+    );
+    const n = Number(usos[0].n);
+    if (n > 0) {
+      throw new ErrorCaja(
+        "DESTINO_EN_USO",
+        `«${destino.nombre}» ya se ha usado ${n === 1 ? "una vez" : `${n} veces`}: no se puede eliminar, desactívalo.`,
+        409
+      );
+    }
+
+    await client.query(`DELETE FROM cash_expense_targets WHERE id = $1 AND empresa_id = $2`, [
+      id,
+      ctx.empresaId,
+    ]);
+    await registrarAuditoriaEnTransaccion(client, {
+      empresaId: ctx.empresaId,
+      userId: ctx.userId,
+      accion: "cash.expense_target.deleted",
+      entidad: "cash_expense_targets",
+      entidadId: String(id),
+      detalle: { tipo: destino.tipo, codigo: destino.codigo, nombre: destino.nombre },
+      ip: ctx.ip,
+    });
+  });
 }
 
 export async function actualizarDestino(

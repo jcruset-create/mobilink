@@ -65,6 +65,8 @@ type CajaConfig = {
   fondoObjetivoCentimos: number;
   /** Esta caja no se cierra sin haberla cotejado con el ERP. */
   exigirCotejoErp: boolean;
+  /** Las secciones que tiene. Vacío o ausente = todas las de la empresa. */
+  secciones?: number[];
   activa: boolean;
   jornadas: string;
   /*
@@ -995,7 +997,10 @@ function Secciones() {
 // ── Cajas ──────────────────────────────────────────────────────────────────
 
 function Cajas() {
-  const { recargarConfiguracion } = useCash();
+  const { recargarConfiguracion, secciones } = useCash();
+  // Las de la EMPRESA, no las de la caja elegida arriba: aquí se reparten.
+  const seccionesEmpresa = secciones.filter((s) => s.activa);
+  const conSecciones = seccionesEmpresa.length > 1;
   const [cajas, setCajas] = useState<CajaConfig[]>([]);
   const [nombre, setNombre] = useState("");
   const [centro, setCentro] = useState("");
@@ -1132,6 +1137,7 @@ function Cajas() {
             <th className={thCls}>Código</th>
             <th className={`${thCls} text-right`}>Fondo fijo</th>
             <th className={thCls}>Cotejo para cerrar</th>
+            {conSecciones && <th className={thCls}>Secciones</th>}
             <th className={`${thCls} text-right`}>Jornadas</th>
             <th className={thCls}>Estado</th>
             <th className={thCls}></th>
@@ -1243,6 +1249,44 @@ function Cajas() {
                     {c.exigirCotejoErp ? "Obligatorio" : "No se exige"}
                   </label>
                 </td>
+                {conSecciones && (
+                  <td className={tdCls}>
+                    {/*
+                      Qué secciones tiene esta caja. Sin ninguna marcada, todas
+                      (y así una sección nueva sale también aquí). Se guarda al
+                      pulsar: la de Agro Reus, solo Taller.
+                    */}
+                    <div className="flex min-w-max flex-wrap gap-1">
+                      {seccionesEmpresa.map((sec) => {
+                        const suyas = c.secciones ?? [];
+                        const todas = suyas.length === 0;
+                        const marcada = todas || suyas.includes(sec.id);
+                        return (
+                          <button
+                            key={sec.id}
+                            type="button"
+                            disabled={ocupado}
+                            title={marcada ? `Quitar ${sec.nombre} de esta caja` : `Dar ${sec.nombre} a esta caja`}
+                            onClick={() => {
+                              const actuales = todas ? seccionesEmpresa.map((x) => x.id) : suyas;
+                              const nuevas = marcada
+                                ? actuales.filter((x) => x !== sec.id)
+                                : [...actuales, sec.id];
+                              void accion(() => api.fijarSeccionesDeCaja(c.id, nuevas));
+                            }}
+                            className={`rounded-md border px-2 py-0.5 text-[11px] ${
+                              marcada
+                                ? "border-sky-500 bg-sky-500/20 text-sky-100"
+                                : "border-slate-600 text-slate-500 line-through hover:border-slate-400"
+                            }`}
+                          >
+                            {sec.nombre}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </td>
+                )}
                 <td className={`${tdCls} text-right tabular-nums text-slate-400`}>{c.jornadas}</td>
                 <td className={tdCls}>
                   {c.jornadaAbierta ? (
@@ -1911,12 +1955,14 @@ function Denominaciones() {
             <tr key={d.id} className={`border-t border-slate-700 ${d.activa ? "" : "opacity-50"}`}>
               <td className={`${tdCls} font-bold tabular-nums`}>{d.etiqueta}</td>
               <td className={tdCls}>
-                <div className="flex items-center gap-1">
+                {/* min-w-max: en el móvil la foto y sus dos botones se montaban
+                    encima de la columna «Tipo»; así la tabla se desplaza. */}
+                <div className="flex min-w-max items-center gap-1">
                   {d.imagenUrl ? (
                     <img
                       src={d.imagenUrl}
                       alt={d.etiqueta}
-                      className="h-8 w-12 rounded object-contain"
+                      className="h-8 w-12 shrink-0 rounded object-contain"
                     />
                   ) : (
                     <span className="flex h-8 w-12 items-center justify-center rounded border border-dashed border-slate-700 text-[9px] text-slate-500">
@@ -2088,7 +2134,8 @@ function DenominacionesSoloLectura() {
         Denominaciones, cartuchos y bolsas
       </h2>
       <Aviso tono="info">
-        El catálogo es de toda la instalación y solo lo puede modificar un administrador.
+        El catálogo es de toda la instalación (todas las empresas usan el mismo) y solo lo puede
+        modificar el superadministrador de Mobilink.
       </Aviso>
       <TableWrap>
         <thead>
@@ -2896,6 +2943,11 @@ function ConceptosDeGasto() {
           onAlternar={(d) =>
             void accion(() => api.actualizarDestinoGasto(d.id, { activo: !d.activo }))
           }
+          onEliminar={(d) => {
+            if (window.confirm(`¿Eliminar «${d.nombre}»? No se ha usado nunca, así que no deja rastro.`)) {
+              void accion(() => api.borrarDestinoGasto(d.id));
+            }
+          }}
         />
         <ListaDestinos
           titulo="Centros de coste"
@@ -2906,6 +2958,11 @@ function ConceptosDeGasto() {
           onAlternar={(d) =>
             void accion(() => api.actualizarDestinoGasto(d.id, { activo: !d.activo }))
           }
+          onEliminar={(d) => {
+            if (window.confirm(`¿Eliminar «${d.nombre}»? No se ha usado nunca, así que no deja rastro.`)) {
+              void accion(() => api.borrarDestinoGasto(d.id));
+            }
+          }}
         />
       </div>
     </section>
@@ -2919,6 +2976,7 @@ function ListaDestinos({
   editable,
   ocupado,
   onAlternar,
+  onEliminar,
 }: {
   titulo: string;
   vacio: string;
@@ -2926,6 +2984,8 @@ function ListaDestinos({
   editable: boolean;
   ocupado: boolean;
   onAlternar: (d: DestinoGasto) => void;
+  /** Solo para los que no se han usado nunca: los demás se desactivan. */
+  onEliminar: (d: DestinoGasto) => void;
 }) {
   return (
     <div className="rounded-lg border border-slate-700 bg-slate-800">
@@ -2949,6 +3009,17 @@ function ListaDestinos({
               {editable && (
                 <button className={btnMini} disabled={ocupado} onClick={() => onAlternar(d)}>
                   {d.activo ? "Desactivar" : "Activar"}
+                </button>
+              )}
+              {/* Para lo dado de alta por error: con un solo uso ya no, se desactiva. */}
+              {editable && d.usos === 0 && (
+                <button
+                  className={btnMini}
+                  disabled={ocupado}
+                  onClick={() => onEliminar(d)}
+                  title="No se ha usado nunca: se puede eliminar"
+                >
+                  Eliminar
                 </button>
               )}
             </div>

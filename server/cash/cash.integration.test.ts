@@ -377,6 +377,32 @@ describe.runIf(RUN)("Mobilink Cash sin ERP: escenario completo del encargo", () 
     );
     expect(enlace[0].reversa_de_id).toBe(cobro.operacionId);
     expect(enlace[0].motivo_reversa).toBe("Cobro duplicado");
+
+    // Un cobro vivo de 20 €, para ver que los totales cuentan solo lo vivo.
+    await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 2000,
+      formasPago: [{ forma: "CASH", importe: 2000 }],
+      efectivoRecibido: [{ valor: 2000, cantidad: 1 }],
+    });
+
+    // El resumen (la pantalla y el informe de cierre): la reversión NO suma
+    // como un cobro más, y la anulación sale aparte con su motivo.
+    const resumen = await servicio.resumenJornada(sesion.id);
+    expect(resumen.cobros.totalCentimos).toBe(2000);
+    expect(resumen.porFormaPago).toEqual([{ forma: "CASH", importeCentimos: 2000 }]);
+    expect(resumen.anulaciones).toEqual([
+      expect.objectContaining({
+        numero: cobro.numero,
+        tipo: "COLLECTION",
+        importeCentimos: 5000,
+        reversionNumero: reversa.numero,
+        motivo: "Cobro duplicado",
+      }),
+    ]);
+
+    const pdf = await informe.informeCierre(EMPRESA, sesion.id, { conJustificantes: false });
+    expect(pdf.subarray(0, 4).toString()).toBe("%PDF");
   });
 
   it("una caja no puede tener dos jornadas abiertas", async () => {
@@ -3051,6 +3077,44 @@ describe.runIf(RUN)("secciones de negocio", () => {
     expect(taller?.porDefecto).toBe(true);
     expect(gasolinera?.porDefecto).toBe(false);
     expect(gasolinera?.activa).toBe(true);
+  });
+
+  it("una caja sin gasolinera no cobra en gasolinera; sin marcar, tiene todas", async () => {
+    const caja = await crearCaja("solo-taller");
+    const taller = await seccion("TALLER");
+    const gasolinera = await seccion("GASOLINERA");
+
+    // Sin marcar: todas, como antes.
+    expect((await config.listarCajas(EMPRESA)).find((c) => c.id === caja)!.secciones).toEqual([]);
+
+    expect(await config.fijarSeccionesDeCaja(ctx, caja, [taller])).toEqual([taller]);
+    expect((await config.listarCajas(EMPRESA)).find((c) => c.id === caja)!.secciones).toEqual([taller]);
+
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO_300 });
+    const cobro = (sectionId: number) =>
+      servicio.registrarCobro(ctx, {
+        sessionId: sesion.id,
+        importeCentimos: 1000,
+        formasPago: [{ forma: "CASH", importe: 1000 }],
+        efectivoRecibido: [{ valor: 1000, cantidad: 1 }],
+        sectionId,
+        partyNombre: "Cliente",
+      });
+    await expect(cobro(gasolinera)).rejects.toMatchObject({ codigo: "SECCION_NO_DE_ESTA_CAJA" });
+    const bueno = await cobro(taller);
+
+    // Tampoco se reclasifica a una sección que la caja no tiene.
+    await expect(servicio.cambiarSeccion(ctx, bueno.operacionId, gasolinera)).rejects.toMatchObject({
+      codigo: "SECCION_NO_DE_ESTA_CAJA",
+    });
+
+    // Ninguna no se puede; todas las activas se guarda como «todas».
+    await expect(config.fijarSeccionesDeCaja(ctx, caja, [])).rejects.toMatchObject({
+      codigo: "ENTRADA_NO_VALIDA",
+    });
+    const activas = (await config.listarSecciones(EMPRESA)).filter((x) => x.activa).map((x) => x.id);
+    expect(await config.fijarSeccionesDeCaja(ctx, caja, activas)).toEqual([]);
+    await cobro(gasolinera);
   });
 
   it("reparte los cobros por sección sin tocar el arqueo, que sigue siendo uno", async () => {

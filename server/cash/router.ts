@@ -424,7 +424,10 @@ export function createCashRouter(): Router {
         cargarDenominaciones(pool, true),
         config.listarFormasPago(empresaId),
         pool.query(
-          `SELECT id, centro, centro_id AS "centroId", nombre, codigo, fondo_objetivo_centimos
+          `SELECT id, centro, centro_id AS "centroId", nombre, codigo, fondo_objetivo_centimos,
+                  COALESCE((SELECT array_agg(rs.section_id ORDER BY rs.section_id)
+                              FROM cash_register_sections rs WHERE rs.register_id = cash_registers.id), '{}')
+                    AS secciones
              FROM cash_registers
             WHERE empresa_id = $1 AND activa = true
               AND ($2::uuid IS NULL OR centro_id = $2)
@@ -501,6 +504,23 @@ export function createCashRouter(): Router {
     })
   );
 
+  /** Da o quita Configuración a un responsable. */
+  r.put(
+    "/access/users/:userId/configuration",
+    exigirPermiso("cash.access.manage"),
+    ruta(async (req, res) => {
+      const userId = String(req.params.userId);
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) {
+        throw new ErrorCaja("USUARIO_NO_ENCONTRADO", "Ese usuario no existe.", 404);
+      }
+      const b = req.body ?? {};
+      if (typeof b.puede !== "boolean") {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "puede tiene que ser sí o no.", 400);
+      }
+      res.json({ usuario: await asignaciones.fijarConfiguracion(contexto(req), userId, b.puede) });
+    })
+  );
+
   /** Enciende o apaga «cajeros y consulta, solo sus cajas». */
   r.put(
     "/access/enforce",
@@ -538,6 +558,25 @@ export function createCashRouter(): Router {
         codigo: typeof b.codigo === "string" ? b.codigo : undefined,
       });
       res.status(201).json({ caja });
+    })
+  );
+
+  /** Las secciones de una caja. Lista vacía o todas las activas = todas. */
+  r.put(
+    "/registers/:id/sections",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      if (!Array.isArray(b.secciones)) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "secciones tiene que ser una lista.", 400);
+      }
+      res.json({
+        secciones: await config.fijarSeccionesDeCaja(
+          contexto(req),
+          enteroPositivo(req.params.id, "id"),
+          b.secciones.map((v: unknown, i: number) => enteroPositivo(v, `secciones[${i}]`))
+        ),
+      });
     })
   );
 
@@ -2457,7 +2496,7 @@ export function createCashRouter(): Router {
    */
   r.patch(
     "/operations/:id/section",
-    exigirPermiso("cash.configure"),
+    exigirPermiso("cash.operation.reclassify"),
     ruta(async (req, res) => {
       const b = req.body ?? {};
       const salida = await servicio.cambiarSeccion(
@@ -3071,6 +3110,16 @@ export function createCashRouter(): Router {
           orden: b.orden != null ? entero(b.orden, "orden") : undefined,
         }),
       });
+    })
+  );
+
+  /** Solo los que no se han usado nunca: los demás se desactivan. */
+  r.delete(
+    "/expense-targets/:id",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      await config.borrarDestino(contexto(req), enteroPositivo(req.params.id, "id"));
+      res.json({ ok: true });
     })
   );
 

@@ -34,28 +34,49 @@ export const limitadoPorCaja = (rol: string | null | undefined) =>
   ROLES_LIMITADOS_POR_CAJA.has(String(rol ?? ""));
 
 /**
- * Las cajas a las que se limita este usuario, o `null` si no se limita por
- * caja (solo por taller, si lo tiene).
+ * Lo que restringe a este usuario además de su rol, en una sola consulta por
+ * petición:
  *
- * Una sola consulta por petición: el interruptor y las cajas juntos. Sin
- * caché por lo mismo que `rolDeCaja`: quitarle una caja a alguien tiene que
- * surtir efecto en su siguiente clic, no dentro de un minuto.
+ * · `cajas`: a qué cajas se limita, o `null` si no se limita por caja (solo
+ *   por taller, si lo tiene). Cajero y consulta, con la asignación encendida.
+ * · `sinConfiguracion`: un responsable al que el admin ha quitado
+ *   Configuración. Al admin no se le puede quitar.
+ *
+ * Sin caché por lo mismo que `rolDeCaja`: quitarle una caja o la
+ * configuración a alguien tiene que surtir efecto en su siguiente clic.
  */
+export async function restriccionesDe(
+  empresaId: string,
+  userId: string,
+  rol: string | null,
+  esSuperadmin: boolean
+): Promise<{ cajas: number[] | null; sinConfiguracion: boolean }> {
+  if (esSuperadmin || (!limitadoPorCaja(rol) && rol !== "responsable")) {
+    return { cajas: null, sinConfiguracion: false };
+  }
+  const { rows } = await pool.query<{ exige: string | null; cajas: number[] | null; sin: boolean }>(
+    `SELECT (SELECT valor FROM cash_settings WHERE empresa_id = $1 AND clave = $2) AS exige,
+            (SELECT array_agg(register_id ORDER BY register_id)
+               FROM cash_usuario_cajas WHERE empresa_id = $1 AND user_id = $3) AS cajas,
+            EXISTS (SELECT 1 FROM cash_usuario_sin_configuracion
+                     WHERE empresa_id = $1 AND user_id = $3) AS sin`,
+    [empresaId, CLAVE_EXIGIR_ASIGNACION, userId]
+  );
+  const r = rows[0];
+  return {
+    cajas: limitadoPorCaja(rol) && r?.exige === "1" ? (r?.cajas ?? []).map(Number) : null,
+    sinConfiguracion: rol === "responsable" && Boolean(r?.sin),
+  };
+}
+
+/** Las cajas a las que se limita este usuario. Ver `restriccionesDe`. */
 export async function limiteDeCajas(
   empresaId: string,
   userId: string,
   rol: string | null,
   esSuperadmin: boolean
 ): Promise<number[] | null> {
-  if (esSuperadmin || !limitadoPorCaja(rol)) return null;
-  const { rows } = await pool.query<{ exige: string | null; cajas: number[] | null }>(
-    `SELECT (SELECT valor FROM cash_settings WHERE empresa_id = $1 AND clave = $2) AS exige,
-            (SELECT array_agg(register_id ORDER BY register_id)
-               FROM cash_usuario_cajas WHERE empresa_id = $1 AND user_id = $3) AS cajas`,
-    [empresaId, CLAVE_EXIGIR_ASIGNACION, userId]
-  );
-  if (rows[0]?.exige !== "1") return null;
-  return (rows[0]?.cajas ?? []).map(Number);
+  return (await restriccionesDe(empresaId, userId, rol, esSuperadmin)).cajas;
 }
 
 export async function exigeAsignacion(empresaId: string): Promise<boolean> {
@@ -80,6 +101,11 @@ export type AccesoUsuario = {
   cajas: number[];
   /** Cajero o consulta: con el interruptor encendido, solo ve sus cajas. */
   limitadoPorCaja: boolean;
+  /**
+   * Si entra en Configuración. Admin: siempre. Responsable: salvo que se le
+   * haya quitado. Cajero y consulta: nunca.
+   */
+  puedeConfigurar: boolean;
 };
 
 export type Accesos = {
@@ -103,7 +129,9 @@ export async function listarAccesos(empresaId: string, centroId: string | null =
               m.rol, m.centro_id::text AS "centroId",
               COALESCE((SELECT array_agg(c.register_id ORDER BY c.register_id)
                           FROM cash_usuario_cajas c
-                         WHERE c.user_id = u.id AND c.empresa_id = $1), '{}') AS cajas
+                         WHERE c.user_id = u.id AND c.empresa_id = $1), '{}') AS cajas,
+              EXISTS (SELECT 1 FROM cash_usuario_sin_configuracion x
+                       WHERE x.user_id = u.id AND x.empresa_id = $1) AS sin_configuracion
          FROM app_usuario_modulos m
          JOIN app_usuarios u ON u.id = m.user_id
         WHERE m.modulo = 'cash' AND u.empresa_id = $1
@@ -123,6 +151,7 @@ export async function listarAccesos(empresaId: string, centroId: string | null =
     centroId: r.centroId ?? null,
     cajas: (r.cajas ?? []).map(Number),
     limitadoPorCaja: limitadoPorCaja(r.rol),
+    puedeConfigurar: r.rol === "admin" || (r.rol === "responsable" && !r.sin_configuracion),
   }));
   /* eslint-enable @typescript-eslint/no-explicit-any */
   return {
@@ -243,6 +272,70 @@ export async function fijarAcceso(
   } finally {
     cliente.release();
   }
+
+  const { usuarios } = await listarAccesos(ctx.empresaId, ctx.centroId ?? null);
+  return usuarios.find((u) => u.userId === userId)!;
+}
+
+/**
+ * Da o quita Configuración a un responsable.
+ *
+ * Solo a responsables: el admin entra siempre (si se le pudiera quitar, nadie
+ * podría devolvérselo) y cajero y consulta no entran nunca. Un admin limitado
+ * a un taller solo lo decide para la gente de su taller.
+ */
+export async function fijarConfiguracion(
+  ctx: Contexto,
+  userId: string,
+  puede: boolean
+): Promise<AccesoUsuario> {
+  const { rows } = await pool.query(
+    `SELECT m.rol, m.centro_id::text AS "centroId"
+       FROM app_usuario_modulos m
+       JOIN app_usuarios u ON u.id = m.user_id
+      WHERE m.user_id = $1 AND m.modulo = 'cash' AND u.empresa_id = $2`,
+    [userId, ctx.empresaId]
+  );
+  if (rows.length === 0) {
+    throw new ErrorCaja("USUARIO_NO_ENCONTRADO", "Ese usuario no existe o no tiene acceso a Mobilink Cash.", 404);
+  }
+  if (ctx.centroId && rows[0].centroId !== ctx.centroId) {
+    throw new ErrorCaja(
+      "USUARIO_FUERA_DE_AMBITO",
+      "Solo puedes decidirlo para la gente de tu taller.",
+      403
+    );
+  }
+  if (rows[0].rol !== "responsable") {
+    throw new ErrorCaja(
+      "SOLO_RESPONSABLES",
+      rows[0].rol === "admin"
+        ? "Un admin entra siempre en Configuración."
+        : "Cajeros y consulta no entran en Configuración: para eso hay que ser responsable.",
+      409
+    );
+  }
+
+  if (puede) {
+    await pool.query(`DELETE FROM cash_usuario_sin_configuracion WHERE empresa_id = $1 AND user_id = $2`, [
+      ctx.empresaId,
+      userId,
+    ]);
+  } else {
+    await pool.query(
+      `INSERT INTO cash_usuario_sin_configuracion (empresa_id, user_id, quitado_por, quitado_at_ms)
+       VALUES ($1, $2, $3, $4) ON CONFLICT (empresa_id, user_id) DO NOTHING`,
+      [ctx.empresaId, userId, ctx.userId, Date.now()]
+    );
+  }
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: puede ? "cash.access.configure_granted" : "cash.access.configure_revoked",
+    entidad: "app_usuario_modulos",
+    entidadId: userId,
+    ip: ctx.ip,
+  });
 
   const { usuarios } = await listarAccesos(ctx.empresaId, ctx.centroId ?? null);
   return usuarios.find((u) => u.userId === userId)!;

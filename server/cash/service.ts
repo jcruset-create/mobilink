@@ -90,6 +90,7 @@ import { conectorPara } from "./erp/registry.ts";
 import { puertaDeCierre } from "./domain/puertaDeCierre.ts";
 import { huellaDeLaJornada, ultimoCotejo } from "./cotejoRegistro.ts";
 import { exigirAmbitoCaja, exigirJornadaPropia } from "./hierarchy.ts";
+import { exigirSeccionDeCaja } from "./config.ts";
 import { autorDeOperacion, exigirOtraPersona } from "./sod.ts";
 import { centroDeCaja, emitirEvento } from "./events/emitter.ts";
 
@@ -710,6 +711,8 @@ export async function registrarOperacion(
           409
         );
       }
+      // Y que sea de esta caja: la de Agro Reus no tiene gasolinera.
+      await exigirSeccionDeCaja(client, sesion.registerId, e.sectionId);
     }
 
     /*
@@ -2872,6 +2875,22 @@ export type ResumenJornada = {
     arqueaAparte: boolean;
     operaciones: number;
   }[];
+  /**
+   * Las operaciones anuladas en esta jornada, cada una con la reversión que la
+   * deshizo. Los totales de arriba ya no las cuentan (ni la original ni su
+   * inversa); aquí es donde se ve qué se anuló, por cuánto y por qué.
+   */
+  anulaciones: {
+    /** La operación anulada. */
+    numero: string;
+    tipo: string;
+    importeCentimos: Centimos;
+    partyNombre: string | null;
+    /** La reversión que la deshizo. */
+    reversionNumero: string;
+    motivo: string | null;
+    anuladaAtMs: number | null;
+  }[];
 };
 
 /**
@@ -2932,15 +2951,19 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
     stockPorFormatoBruto(pool, sessionId),
   ]);
 
-  // Los totales por forma de pago salen de las operaciones vivas: una anulada y
-  // su reversión se compensan solas porque la reversión no se cuenta y la
-  // original deja de estar CONFIRMED.
+  /*
+   * Los totales salen de las operaciones VIVAS: ni la anulada (que pasa a
+   * REVERSED) ni su reversión (`reversa_de_id`). La reversión es del mismo
+   * tipo, CONFIRMED y con el importe en positivo: si se contaba, un cobro
+   * anulado seguía sumando como cobro en la pantalla y en el informe de cierre.
+   * Lo anulado se enseña aparte, en `anulaciones`.
+   */
   const { rows: formas } = await pool.query(
     `SELECT p.forma_pago,
             SUM(CASE WHEN o.tipo = 'REFUND' THEN -p.importe_centimos ELSE p.importe_centimos END) AS importe
        FROM cash_operation_payments p
        JOIN cash_operations o ON o.id = p.operation_id
-      WHERE o.session_id = $1 AND o.estado = 'CONFIRMED'
+      WHERE o.session_id = $1 AND o.estado = 'CONFIRMED' AND o.reversa_de_id IS NULL
         AND o.tipo IN ('COLLECTION','REFUND','PAYMENT')
       GROUP BY p.forma_pago`,
     [sessionId]
@@ -2949,7 +2972,7 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
   const { rows: porTipo } = await pool.query(
     `SELECT tipo, origen, SUM(importe_centimos) AS importe, COUNT(*) AS n
        FROM cash_operations
-      WHERE session_id = $1 AND estado = 'CONFIRMED'
+      WHERE session_id = $1 AND estado = 'CONFIRMED' AND reversa_de_id IS NULL
       GROUP BY tipo, origen`,
     [sessionId]
   );
@@ -2978,7 +3001,7 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
             COUNT(*) AS n
        FROM cash_operations o
        LEFT JOIN cash_sections sec ON sec.id = o.section_id
-      WHERE o.session_id = $1 AND o.estado = 'CONFIRMED'
+      WHERE o.session_id = $1 AND o.estado = 'CONFIRMED' AND o.reversa_de_id IS NULL
         AND o.tipo IN ('COLLECTION','REFUND','PAYMENT','MANUAL_OUT')
       GROUP BY o.section_id, sec.nombre, sec.orden, sec.arquea_aparte
       ORDER BY sec.orden NULLS LAST, sec.nombre`,
@@ -3023,6 +3046,16 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
   const { rows: pendientes } = await pool.query(
     `SELECT COUNT(*) AS n FROM cash_operations
       WHERE session_id = $1 AND erp_sync_status IN ('PENDING','ERROR','RETRY_PENDING')`,
+    [sessionId]
+  );
+
+  const { rows: anuladas } = await pool.query(
+    `SELECT o.numero, o.tipo, o.importe_centimos, o.party_nombre,
+            r.numero AS reversion, r.motivo_reversa, r.created_at_ms
+       FROM cash_operations r
+       JOIN cash_operations o ON o.id = r.reversa_de_id
+      WHERE r.session_id = $1
+      ORDER BY r.id`,
     [sessionId]
   );
 
@@ -3079,6 +3112,15 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
     bloqueanAnulacion: await operacionesQueBloqueanAnular(pool, sessionId),
     ultimoArqueo,
     /* eslint-disable @typescript-eslint/no-explicit-any */
+    anulaciones: anuladas.map((r: any) => ({
+      numero: r.numero,
+      tipo: r.tipo,
+      importeCentimos: Number(r.importe_centimos),
+      partyNombre: r.party_nombre ?? null,
+      reversionNumero: r.reversion,
+      motivo: r.motivo_reversa ?? null,
+      anuladaAtMs: r.created_at_ms == null ? null : Number(r.created_at_ms),
+    })),
     porSeccion: secciones.map((r: any) => ({
       sectionId: r.section_id ?? null,
       nombre: r.nombre,
@@ -3294,6 +3336,12 @@ export async function cambiarSeccion(
     // Aquí sí se admite una sección de baja: reclasificar hacia atrás puede
     // necesitar una sección que ya no se usa para cobros nuevos.
     nombre = rows[0].nombre;
+    // Pero no una que la caja no tiene.
+    const { rows: caja } = await pool.query(
+      `SELECT s.register_id FROM cash_operations o JOIN cash_sessions s ON s.id = o.session_id WHERE o.id = $1`,
+      [operationId]
+    );
+    if (caja[0]) await exigirSeccionDeCaja(pool, Number(caja[0].register_id), sectionId);
   }
 
   await pool.query(

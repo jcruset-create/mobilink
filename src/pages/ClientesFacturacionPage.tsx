@@ -53,6 +53,15 @@ const CAMPOS_FISCALES: [keyof Cliente, string][] = [
 ];
 
 const CAMPOS_FACTURACION: [keyof Cliente, string][] = [
+  /*
+   * El número que tiene este cliente en el ERP. Va el primero porque es el que
+   * se busca cuando hay que casar una factura, y porque sin él los demás campos
+   * de facturación no sirven de mucho: no se sabe a qué ficha del ERP van.
+   *
+   * No es una columna de la ficha —vive en los enlaces con otros sistemas— pero
+   * se edita aquí como uno más; el servidor sabe dónde guardarlo.
+   */
+  ["erpCode", "Nº de cliente ERP"],
   ["paymentMethod", "Forma de pago"],
   ["paymentTerms", "Condiciones de pago"],
   ["billingPeriodicity", "Periodicidad"],
@@ -175,7 +184,7 @@ export default function ClientesFacturacionPage() {
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Buscar por nombre, razón social, CIF o población…"
+            placeholder="Buscar por nombre, razón social, CIF, población o nº de ERP…"
             className="w-full rounded-lg border border-slate-700 bg-slate-950 py-2 pl-9 pr-3 text-sm text-slate-100 outline-none focus:border-orange-500"
           />
         </div>
@@ -222,6 +231,12 @@ export default function ClientesFacturacionPage() {
                         {[c.taxId, c.city, c.contactEmail].filter(Boolean).join(" · ") || "Sin datos fiscales"}
                       </div>
                     </div>
+                    {/* El número al lado del estado: «Sincronizado» dice que
+                        el enlace existe, pero el que se busca para casar una
+                        factura es el número. */}
+                    {c.erpCode && (
+                      <span className="shrink-0 font-mono text-[11px] text-slate-400">ERP {c.erpCode}</span>
+                    )}
                     <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-bold ${erp.clase}`}>{erp.texto}</span>
                   </button>
 

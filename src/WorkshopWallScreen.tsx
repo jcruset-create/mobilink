@@ -58,6 +58,8 @@ type WorkshopWallScreenProps = {
   techs?: Tech[];
   scheduledJobs?: ScheduledJobForWall[];
   quickTemplates?: QuickTemplateForWall[];
+  /** Nombre corto del taller que se está viendo («Tarragona», «Reus»). */
+  workshopName?: string;
   onBack: () => void;
 };
 
@@ -87,6 +89,7 @@ export default function WorkshopWallScreen({
   techs = [],
   scheduledJobs = [],
   quickTemplates = [],
+  workshopName = "Tarragona",
   onBack,
 }: WorkshopWallScreenProps) {
   const active = jobs.filter(
@@ -339,7 +342,7 @@ function getScheduledPhaseLabel(job: ScheduledJobForWall) {
 
               <div>
                 <h1 className="text-4xl font-bold tracking-tight">
-                  Pantalla TV · Taller Mobilink Tarragona
+                  Pantalla TV · Taller {workshopName}
                 </h1>
 
                 <p className="mt-1 text-lg text-slate-300">

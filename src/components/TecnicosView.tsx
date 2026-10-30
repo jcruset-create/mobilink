@@ -1,6 +1,7 @@
 import { type ChangeEvent, useState } from "react";
 import { WORKSHOPS, DEFAULT_WORKSHOP_ID } from "../modules/workshops";
-import { Pencil, Phone, Plus, X } from "lucide-react";
+import { Link2, Pencil, Phone, Plus, X } from "lucide-react";
+import VinculoCoreModal from "./VinculoCoreModal";
 import type {
   AreaKey,
   AssignmentRole,
@@ -41,6 +42,8 @@ type Props = {
   }) => void;
   onToggleRoadsideCapable: (name: string, value: boolean) => void;
   onBack: () => void;
+  /** Tras vincular con Core, para recargar los técnicos. */
+  onVinculoCoreGuardado?: () => void;
 };
 
 const COMPETENCY_KEYS: { key: CompetencyKey; label: string }[] = [
@@ -90,8 +93,10 @@ export default function TecnicosView({
   onSaveTech,
   onToggleRoadsideCapable,
   onBack,
+  onVinculoCoreGuardado,
 }: Props) {
   const [modal, setModal] = useState<ModalState | null>(null);
+  const [vinculoAbierto, setVinculoAbierto] = useState(false);
 
   function openNew() {
     const placeholder = "__new__";
@@ -183,21 +188,29 @@ export default function TecnicosView({
   const editingTech = modal?.mode === "edit" ? modal.tech : null;
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4 text-slate-900">
+    <div className="min-h-screen bg-slate-900 p-4 text-slate-100">
       <div className="mx-auto max-w-[1500px] space-y-5">
         {/* Header */}
-        <div className="flex items-center justify-between rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex items-center justify-between rounded-3xl border border-slate-700 bg-slate-800 p-4 shadow-sm">
           <div>
             <h1 className="text-2xl font-black">Técnicos</h1>
-            <p className="text-sm text-slate-500">
+            <p className="text-sm text-slate-400">
               Crear, editar, asignar PIN y competencias
             </p>
           </div>
           <div className="flex gap-2">
             <button
               type="button"
+              onClick={() => setVinculoAbierto(true)}
+              className="inline-flex items-center gap-2 rounded-2xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm font-bold text-slate-200 hover:bg-slate-700"
+            >
+              <Link2 className="h-4 w-4" />
+              Vincular con Core
+            </button>
+            <button
+              type="button"
               onClick={openNew}
-              className="inline-flex items-center gap-2 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white hover:bg-slate-700"
+              className="inline-flex items-center gap-2 rounded-2xl bg-sky-600 px-4 py-3 text-sm font-bold text-white hover:bg-sky-500"
             >
               <Plus className="h-4 w-4" />
               Añadir técnico
@@ -205,7 +218,7 @@ export default function TecnicosView({
             <button
               type="button"
               onClick={onBack}
-              className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium hover:bg-slate-50"
+              className="rounded-2xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm font-medium hover:bg-slate-700"
             >
               Volver
             </button>
@@ -213,12 +226,12 @@ export default function TecnicosView({
         </div>
 
         {/* Grid de técnicos */}
-        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+        <section className="rounded-3xl border border-slate-700 bg-slate-800 p-5 shadow-sm">
           <div className="space-y-3">
             {techs.map((tech) => (
               <div
                 key={tech.name}
-                className="rounded-2xl border border-slate-200 p-4"
+                className="rounded-2xl border border-slate-700 p-4"
               >
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
@@ -228,14 +241,24 @@ export default function TecnicosView({
                       className="h-12 w-12 rounded-full border object-cover"
                     />
                     <div>
-                      <div className="text-lg font-black">{tech.name}</div>
-                      <div className="text-xs font-semibold text-slate-500">
+                      <div className="flex items-center gap-2 text-lg font-black">
+                        {tech.name}
+                        {tech.employeeId && (
+                          <span
+                            title="Vinculado con su ficha de empleado de Core"
+                            className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-bold text-emerald-300"
+                          >
+                            🔗 Core
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs font-semibold text-slate-400">
                         {tech.status}
                       </div>
                       {tech.phone && (
                         <a
                           href={`tel:${tech.phone}`}
-                          className="mt-0.5 flex items-center gap-1 text-xs text-slate-500 hover:text-slate-900"
+                          className="mt-0.5 flex items-center gap-1 text-xs text-slate-400 hover:text-white"
                         >
                           <Phone className="h-3 w-3" />
                           {tech.phone}
@@ -247,8 +270,8 @@ export default function TecnicosView({
                         onClick={() => onToggleRoadsideCapable(tech.name, !tech.roadsideCapable)}
                         className={`mt-0.5 inline-block rounded px-1.5 py-0.5 text-xs font-bold transition-colors ${
                           tech.roadsideCapable
-                            ? "bg-emerald-100 text-emerald-800 hover:bg-emerald-200"
-                            : "bg-slate-100 text-slate-400 hover:bg-slate-200"
+                            ? "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30"
+                            : "bg-slate-700 text-slate-500 hover:bg-slate-600"
                         }`}
                       >
                         🚗 {tech.roadsideCapable ? "Apto carretera" : "No apto carretera"}
@@ -260,13 +283,13 @@ export default function TecnicosView({
                     <button
                       type="button"
                       onClick={() => openEdit(tech)}
-                      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-bold text-slate-200 hover:bg-slate-700"
                     >
                       <Pencil className="h-3 w-3" />
                       Editar
                     </button>
 
-                    <label className="cursor-pointer rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-800 hover:bg-blue-100">
+                    <label className="cursor-pointer rounded-lg border border-sky-500/40 bg-sky-500/15 px-3 py-2 text-xs font-bold text-sky-300 hover:bg-sky-500/25">
                       Cambiar foto
                       <input
                         type="file"
@@ -279,7 +302,7 @@ export default function TecnicosView({
                     <button
                       type="button"
                       onClick={() => onSetWorkshopPin(tech.name)}
-                      className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                      className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-bold text-slate-200 hover:bg-slate-700"
                     >
                       🔑 PIN portal móvil
                     </button>
@@ -299,7 +322,7 @@ export default function TecnicosView({
                             darDeBaja(tech.name);
                           }
                         }}
-                        className="rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-bold text-red-700 hover:bg-red-50"
+                        className="rounded-lg border border-rose-500/40 bg-slate-800 px-3 py-2 text-xs font-bold text-rose-300 hover:bg-rose-500/10"
                       >
                         Dar de baja
                       </button>
@@ -330,21 +353,28 @@ export default function TecnicosView({
         </section>
       </div>
 
+      {vinculoAbierto && (
+        <VinculoCoreModal
+          onCerrar={() => setVinculoAbierto(false)}
+          onGuardado={onVinculoCoreGuardado}
+        />
+      )}
+
       {/* ── Modal ficha técnico ── */}
       {modal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-slate-800 shadow-2xl">
             {/* Header */}
-            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+            <div className="flex items-center justify-between border-b border-slate-700 px-5 py-4">
               <h2 className="text-lg font-black">
                 {modal.mode === "new" ? "Nuevo técnico" : `Editar ${modal.tech.name}`}
               </h2>
               <button
                 type="button"
                 onClick={closeModal}
-                className="rounded-full p-1 hover:bg-slate-100"
+                className="rounded-full p-1 hover:bg-slate-700"
               >
-                <X className="h-5 w-5 text-slate-500" />
+                <X className="h-5 w-5 text-slate-400" />
               </button>
             </div>
 
@@ -358,7 +388,7 @@ export default function TecnicosView({
                     alt={modal.tech.name}
                     className="h-16 w-16 rounded-full border object-cover"
                   />
-                  <label className="cursor-pointer rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-800 hover:bg-blue-100">
+                  <label className="cursor-pointer rounded-lg border border-sky-500/40 bg-sky-500/15 px-3 py-2 text-xs font-bold text-sky-300 hover:bg-sky-500/25">
                     Cambiar foto
                     <input
                       type="file"
@@ -372,7 +402,7 @@ export default function TecnicosView({
 
               {/* Nombre */}
               <label className="block">
-                <span className="mb-1 block text-xs font-bold text-slate-600">
+                <span className="mb-1 block text-xs font-bold text-slate-300">
                   Nombre *
                 </span>
                 {modal.mode === "new" ? (
@@ -386,10 +416,10 @@ export default function TecnicosView({
                         prev?.mode === "new" ? { ...prev, name: e.target.value } : prev
                       )
                     }
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-sky-500"
                   />
                 ) : (
-                  <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-sm font-bold text-slate-700">
+                  <div className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm font-bold text-slate-200">
                     {modal.tech.name}
                   </div>
                 )}
@@ -397,11 +427,11 @@ export default function TecnicosView({
 
               {/* Teléfono */}
               <label className="block">
-                <span className="mb-1 block text-xs font-bold text-slate-600">
+                <span className="mb-1 block text-xs font-bold text-slate-300">
                   Teléfono
                 </span>
-                <div className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2">
-                  <Phone className="h-4 w-4 shrink-0 text-slate-400" />
+                <div className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2">
+                  <Phone className="h-4 w-4 shrink-0 text-slate-500" />
                   <input
                     type="tel"
                     placeholder="6XX XXX XXX"
@@ -411,7 +441,7 @@ export default function TecnicosView({
                         prev ? { ...prev, phone: e.target.value } : prev
                       )
                     }
-                    className="w-full text-sm outline-none"
+                    className="w-full bg-transparent text-sm outline-none"
                   />
                 </div>
               </label>
@@ -422,7 +452,7 @@ export default function TecnicosView({
                   la APK usa al recibir un vehículo, así que ponerlo mal manda
                   las recepciones al sitio equivocado sin dar ningún error. */}
               <label className="block">
-                <span className="mb-1 block text-xs font-bold text-slate-600">
+                <span className="mb-1 block text-xs font-bold text-slate-300">
                   Taller
                 </span>
                 <select
@@ -432,18 +462,18 @@ export default function TecnicosView({
                       prev ? { ...prev, workshopId: e.target.value } : prev
                     )
                   }
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm outline-none"
                 >
                   {WORKSHOPS.map((w) => (
                     <option key={w.id} value={w.id}>
-                      {w.name}
+                      {w.shortName}
                     </option>
                   ))}
                 </select>
               </label>
 
               {/* Apto carretera */}
-              <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
+              <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2">
                 <input
                   type="checkbox"
                   checked={modal.roadsideCapable}
@@ -453,7 +483,7 @@ export default function TecnicosView({
                     )
                   }
                 />
-                <span className="text-sm font-bold text-emerald-800">Apto carretera</span>
+                <span className="text-sm font-bold text-emerald-300">Apto carretera</span>
               </label>
 
               {/* PIN (edit only) */}
@@ -461,7 +491,7 @@ export default function TecnicosView({
                 <button
                   type="button"
                   onClick={() => { onSetWorkshopPin(editingTech!.name); closeModal(); }}
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm font-bold text-slate-200 hover:bg-slate-700"
                 >
                   🔑 Cambiar PIN portal móvil
                 </button>
@@ -469,11 +499,11 @@ export default function TecnicosView({
 
               {/* Competencias */}
               <div>
-                <div className="mb-2 text-xs font-bold text-slate-600">Competencias</div>
+                <div className="mb-2 text-xs font-bold text-slate-300">Competencias</div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs">
                     <thead>
-                      <tr className="text-left text-slate-500">
+                      <tr className="text-left text-slate-400">
                         <th className="py-1 pr-3">Rol</th>
                         {COMPETENCY_KEYS.map(({ key, label }) => (
                           <th key={key} className="px-2 py-1 text-center">
@@ -484,7 +514,7 @@ export default function TecnicosView({
                     </thead>
                     <tbody>
                       {(["responsable", "apoyo"] as AssignmentRole[]).map((role) => (
-                        <tr key={role} className="border-t border-slate-100">
+                        <tr key={role} className="border-t border-slate-700">
                           <td className="py-2 pr-3 font-bold capitalize">{role}</td>
                           {COMPETENCY_KEYS.map(({ key }) => (
                             <td key={key} className="px-2 py-2 text-center">
@@ -504,11 +534,11 @@ export default function TecnicosView({
 
               {/* Prioridades */}
               <div>
-                <div className="mb-2 text-xs font-bold text-slate-600">Prioridades</div>
+                <div className="mb-2 text-xs font-bold text-slate-300">Prioridades</div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs">
                     <thead>
-                      <tr className="text-left text-slate-500">
+                      <tr className="text-left text-slate-400">
                         <th className="py-1 pr-3">Rol</th>
                         {PRIORITY_AREAS.map(({ key, label }) => (
                           <th key={key} className="px-2 py-1 text-center">
@@ -519,7 +549,7 @@ export default function TecnicosView({
                     </thead>
                     <tbody>
                       {(["responsable", "apoyo"] as AssignmentRole[]).map((role) => (
-                        <tr key={role} className="border-t border-slate-100">
+                        <tr key={role} className="border-t border-slate-700">
                           <td className="py-2 pr-3 font-bold capitalize">{role}</td>
                           {PRIORITY_AREAS.map(({ key }) => (
                             <td key={key} className="px-2 py-2 text-center">
@@ -528,7 +558,7 @@ export default function TecnicosView({
                                 min={1}
                                 value={modal.priorities[key]?.[role] ?? 99}
                                 onChange={(e) => setPriority(key, role, Number(e.target.value))}
-                                className="w-16 rounded border border-slate-200 px-2 py-1 text-center"
+                                className="w-16 rounded border border-slate-700 bg-slate-900 px-2 py-1 text-center"
                               />
                             </td>
                           ))}
@@ -541,11 +571,11 @@ export default function TecnicosView({
             </div>
 
             {/* Footer */}
-            <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4">
+            <div className="flex justify-end gap-2 border-t border-slate-700 px-5 py-4">
               <button
                 type="button"
                 onClick={closeModal}
-                className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50"
+                className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-bold text-slate-300 hover:bg-slate-700"
               >
                 Cancelar
               </button>
@@ -553,7 +583,7 @@ export default function TecnicosView({
                 type="button"
                 onClick={handleSave}
                 disabled={modal.mode === "new" && !modal.name.trim()}
-                className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-black text-white hover:bg-slate-700 disabled:opacity-40"
+                className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-black text-white hover:bg-sky-500 disabled:opacity-40"
               >
                 Guardar
               </button>

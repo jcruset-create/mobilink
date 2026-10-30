@@ -175,9 +175,23 @@ export const fijarAcceso = (userId: string, centroId: string | null, cajas: numb
     method: "PUT",
   });
 
+/** Da o quita Configuración a un responsable. */
+export const fijarConfiguracionUsuario = (userId: string, puede: boolean) =>
+  pedir<{ usuario: AccesoUsuario }>(`/access/users/${userId}/configuration`, {
+    ...json({ puede }),
+    method: "PUT",
+  });
+
 export const fijarExigirAsignacion = (exigir: boolean, forzar = false) =>
   pedir<Omit<Accesos, "talleres" | "cajas" | "ambitoCentroId">>("/access/enforce", {
     ...json({ exigir, forzar }),
+    method: "PUT",
+  });
+
+/** Las secciones de una caja. Lista vacía o todas = todas las de la empresa. */
+export const fijarSeccionesDeCaja = (registerId: number, secciones: number[]) =>
+  pedir<{ secciones: number[] }>(`/registers/${registerId}/sections`, {
+    ...json({ secciones }),
     method: "PUT",
   });
 
@@ -1034,6 +1048,10 @@ export const crearDestinoGasto = (datos: { nombre: string; tipo: "PERSONA" | "CE
 
 export const actualizarDestinoGasto = (id: number, datos: { nombre?: string; activo?: boolean }) =>
   pedir<{ destino: DestinoGasto }>(`/expense-targets/${id}`, { method: "PATCH", body: JSON.stringify(datos) });
+
+/** Solo si no se ha usado nunca: con historia, se desactiva. */
+export const borrarDestinoGasto = (id: number) =>
+  pedir<{ ok: true }>(`/expense-targets/${id}`, { method: "DELETE" });
 
 /**
  * El informe de gasto.

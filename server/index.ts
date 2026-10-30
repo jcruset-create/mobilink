@@ -12,6 +12,10 @@ import nodemailer from "nodemailer";
 import { fileURLToPath } from "url";
 import db, { initDb } from "./db.ts";
 import { supabase, supabaseAnonAuth, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_BUCKET } from "./supabase.ts";
+import { fallaAlFirmar, firmarEnFilas, firmarUrls } from "./core/fotosFirmadas.ts";
+import { descargarMedioTwilio, rescatarMedioDeTwilio } from "./core/medioTwilio.ts";
+import { guardarCodigoErp, SISTEMAS_NO_ERP } from "./clientes/codigoErp.ts";
+import { OTF_EN_ESPERA_SQL } from "./otf/espera.ts";
 import {
   autorizacionParaTaller,
   puedeMarcarSinSeguimiento,
@@ -134,6 +138,9 @@ import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
 import { AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "./core/ai.ts";
 import { makeSecret, safeEquals, verifySecretWithLegacy } from "./core/credentials.ts";
 import { proponerVinculos, type EmpleadoCore } from "./core/vinculoTecnicos.ts";
+import { resolverRolDelPanel, type RolResuelto } from "./core/rolDelPanel.ts";
+import { TIPO_SALIDA, esMotivoDeSalida, pasoDeSalida, validarSalida, RADIO_DESTINO_M } from "../src/modules/salidasTaller.ts";
+import { pasoDeOtfGps, otfSigueEnCurso } from "../src/modules/seguimientoOtf.ts";
 import { siguienteReferencia } from "./cobros/referencias.ts";
 import { saveCaptureAnalysis, reconcileCaptureAiStatus } from "./core/whatsappCapture.ts";
 import { aE164, clienteTwilio, numeroWhatsAppEmisor } from "./core/twilio.ts";
@@ -981,6 +988,8 @@ function normalizeRoadsideAssistanceRow(row: any) {
     plateRemolque: row.plateRemolque ?? null,
     esRemolque: row.esRemolque === true || row.esRemolque === "true",
     origen: row.origen === "central" ? "central" : "taller",
+    tipo: row.tipo === TIPO_SALIDA ? TIPO_SALIDA : "asistencia",
+    motivo: row.motivo ?? null,
     expedienteCentral: row.expedienteCentral ?? null,
     solicitanteEmpresa: row.solicitanteEmpresa ?? null,
     solicitanteClienteId: row.solicitanteClienteId != null ? Number(row.solicitanteClienteId) : null,
@@ -2633,7 +2642,7 @@ app.get("/api/techs", exigirCredencial(requirePanelRole), async (_req, res) => {
     const result = await db.query(`
       SELECT name, status, blocked, "currentJobId", competencies, priorities, avatar,
              "roadsideCapable", "compartidoCentral", "currentRoadsideAssistanceId", phone,
-             "statusChangedAtMs", "statusTotals", activo, employee_id
+             "statusChangedAtMs", "statusTotals", activo, employee_id, "workshopId"
       FROM techs
       ORDER BY id ASC
     `);
@@ -2671,13 +2680,14 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
       "baja",
       "permiso",
       "otro_taller",
+      "formacion",
     ]);
 
     const normalizedBlocked =
       protectedStatuses.has(normalizedStatus) || Boolean(blocked);
 
     const existingResult = await db.query(
-      `SELECT "roadsideCapable", "workshopId" FROM techs WHERE name = $1`,
+      `SELECT "roadsideCapable", "workshopId", phone FROM techs WHERE name = $1`,
       [name]
     );
 
@@ -2739,7 +2749,10 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
         statusChangedAtMs ?? Date.now(),
         JSON.stringify(statusTotals ?? {}),
         normalizedRoadsideCapable,
-        phone != null ? String(phone).trim() || null : null,
+        // Igual que el taller: sin teléfono en el cuerpo se conserva el que había.
+        phone === undefined
+          ? existingResult.rows[0]?.phone ?? null
+          : phone != null ? String(phone).trim() || null : null,
         normalizedWorkshopId,
       ]
     );
@@ -2874,6 +2887,12 @@ app.get("/api/techs/vinculo-core", requireAdminRole, async (_req, res) => {
 
     res.json({
       propuestas,
+      // Lista completa para elegir a mano cuando la propuesta es ambigua o no
+      // hay candidato. Solo id y nombre: lo demás de la ficha no hace falta.
+      empleados: empleados.rows.map((e: any) => ({
+        id: String(e.id),
+        nombre: [e.nombre, e.apellidos].filter(Boolean).join(" ").trim(),
+      })),
       resumen: {
         total: propuestas.length,
         yaVinculados: yaVinculados.size,
@@ -2888,6 +2907,277 @@ app.get("/api/techs/vinculo-core", requireAdminRole, async (_req, res) => {
   } catch (error) {
     console.error("GET /api/techs/vinculo-core error:", error);
     res.status(500).json({ error: "Error calculando los vínculos" });
+  }
+});
+
+// Empleados activos de Core, para Ausencias, Planning y el selector de estado
+// de la agenda: ahí entran todos, no solo los que tienen ficha de técnico.
+// `techName` es el técnico vinculado, si lo hay: sus ausencias van por ese
+// nombre. Si Core no está en esta base, lista vacía y las pantallas siguen
+// con los técnicos de siempre.
+/* =========================================================
+   HORARIOS Y TURNOS (Core, solo superadministrador)
+   La regla de qué le toca a cada uno está en src/modules/horariosTurnos.ts;
+   aquí solo se guardan turnos y asignaciones y se reúnen los datos de una
+   semana. Todo lo decide el superadministrador: es control, no operación.
+========================================================= */
+
+async function requireSuperadminApp(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) {
+  const admin = await verificarAdminApp(req);
+  if (!admin.ok) return res.status(401).json({ error: admin.error });
+  if (!admin.esSuperadmin) {
+    return res.status(403).json({ error: "Solo el superadministrador gestiona los horarios" });
+  }
+  (req as any).adminApp = admin;
+  next();
+}
+
+function filaTurno(t: any) {
+  return {
+    id: String(t.id),
+    nombre: String(t.nombre ?? ""),
+    tramos: Array.isArray(t.tramos) ? t.tramos : [],
+    dias: Array.isArray(t.dias) ? t.dias.map(Number) : [1, 2, 3, 4, 5],
+    activo: t.activo !== false,
+    orden: Number(t.orden ?? 0),
+  };
+}
+
+function filaAsignacion(a: any) {
+  const fecha = (v: unknown) => (v ? String(v instanceof Date ? v.toISOString() : v).slice(0, 10) : "");
+  return {
+    id: String(a.id),
+    employeeId: String(a.employee_id),
+    tipo: a.tipo === "rotativo" ? "rotativo" : "fijo",
+    turnoIds: Array.isArray(a.turno_ids) ? a.turno_ids.map(String) : [],
+    semanaInicio: fecha(a.semana_inicio),
+    vigenteDesde: fecha(a.vigente_desde),
+  };
+}
+
+const HORA = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+
+app.get("/api/horarios/turnos", requireSuperadminApp, async (_req, res) => {
+  try {
+    const r = await db.query(`SELECT * FROM sea_turnos ORDER BY orden, nombre`);
+    res.json(r.rows.map(filaTurno));
+  } catch (error) {
+    console.error("GET /api/horarios/turnos error:", error);
+    res.status(500).json({ error: "Error cargando los turnos" });
+  }
+});
+
+app.put("/api/horarios/turnos", requireSuperadminApp, async (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const nombre = String(b.nombre ?? "").trim();
+    const tramos = (Array.isArray(b.tramos) ? b.tramos : [])
+      .map((t: any) => ({ inicio: String(t?.inicio ?? "").trim(), fin: String(t?.fin ?? "").trim() }))
+      .filter((t: any) => t.inicio || t.fin);
+    const dias = (Array.isArray(b.dias) ? b.dias : [1, 2, 3, 4, 5]).map(Number).filter((d: number) => d >= 1 && d <= 7);
+    if (!nombre) return res.status(400).json({ error: "El turno necesita un nombre" });
+    if (tramos.length === 0 || tramos.length > 2) {
+      return res.status(400).json({ error: "Un turno lleva uno o dos tramos" });
+    }
+    if (tramos.some((t: any) => !HORA.test(t.inicio) || !HORA.test(t.fin) || t.inicio === t.fin)) {
+      return res.status(400).json({ error: "Tramo con hora no válida" });
+    }
+    const activo = b.activo !== false;
+    const orden = Number.isFinite(Number(b.orden)) ? Number(b.orden) : 0;
+    const id = b.id ? String(b.id) : null;
+
+    const r = id
+      ? await db.query(
+          `UPDATE sea_turnos SET nombre = $2, tramos = $3::jsonb, dias = $4, activo = $5, orden = $6
+            WHERE id = $1 RETURNING *`,
+          [id, nombre, JSON.stringify(tramos), dias, activo, orden]
+        )
+      : await db.query(
+          `INSERT INTO sea_turnos (nombre, tramos, dias, activo, orden)
+           VALUES ($1, $2::jsonb, $3, $4, $5) RETURNING *`,
+          [nombre, JSON.stringify(tramos), dias, activo, orden]
+        );
+    if (r.rows.length === 0) return res.status(404).json({ error: "Turno no encontrado" });
+    res.json(filaTurno(r.rows[0]));
+  } catch (error) {
+    console.error("PUT /api/horarios/turnos error:", error);
+    res.status(500).json({ error: "Error guardando el turno" });
+  }
+});
+
+app.get("/api/horarios/asignaciones", requireSuperadminApp, async (req, res) => {
+  try {
+    const employeeId = String(req.query.employeeId ?? "").trim();
+    const r = employeeId
+      ? await db.query(
+          `SELECT * FROM sea_horarios_empleado WHERE employee_id = $1 ORDER BY vigente_desde DESC`,
+          [employeeId]
+        )
+      : await db.query(`SELECT * FROM sea_horarios_empleado ORDER BY vigente_desde DESC`);
+    res.json(r.rows.map(filaAsignacion));
+  } catch (error) {
+    console.error("GET /api/horarios/asignaciones error:", error);
+    res.status(500).json({ error: "Error cargando los horarios" });
+  }
+});
+
+app.post("/api/horarios/asignaciones", requireSuperadminApp, async (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const employeeId = String(b.employeeId ?? "").trim();
+    const tipo = b.tipo === "rotativo" ? "rotativo" : "fijo";
+    const turnoIds = (Array.isArray(b.turnoIds) ? b.turnoIds : []).map(String).filter(Boolean);
+    const vigenteDesde = String(b.vigenteDesde ?? "").slice(0, 10);
+    const semanaInicio = String(b.semanaInicio ?? "").slice(0, 10) || null;
+    if (!employeeId) return res.status(400).json({ error: "Falta el empleado" });
+    if (turnoIds.length === 0) return res.status(400).json({ error: "Elige al menos un turno" });
+    if (tipo === "rotativo" && turnoIds.length < 2) {
+      return res.status(400).json({ error: "Un horario rotativo necesita dos turnos o más" });
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(vigenteDesde)) return res.status(400).json({ error: "Falta la fecha desde la que vale" });
+    if (tipo === "rotativo" && !semanaInicio) {
+      return res.status(400).json({ error: "Falta la semana en la que empieza por el primer turno" });
+    }
+    const existe = await db.query(`SELECT id FROM sea_employees WHERE id = $1`, [employeeId]);
+    if (existe.rows.length === 0) return res.status(404).json({ error: "Ese empleado no existe" });
+
+    // El mismo empleado y el mismo «desde» se sobreescriben: es corregir, no duplicar.
+    const r = await db.query(
+      `INSERT INTO sea_horarios_empleado (employee_id, tipo, turno_ids, semana_inicio, vigente_desde, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (employee_id, vigente_desde) DO UPDATE
+         SET tipo = EXCLUDED.tipo, turno_ids = EXCLUDED.turno_ids,
+             semana_inicio = EXCLUDED.semana_inicio, created_by = EXCLUDED.created_by
+       RETURNING *`,
+      [employeeId, tipo, turnoIds, semanaInicio, vigenteDesde, (req as any).adminApp?.userId ?? null]
+    );
+    res.json(filaAsignacion(r.rows[0]));
+  } catch (error) {
+    console.error("POST /api/horarios/asignaciones error:", error);
+    res.status(500).json({ error: "Error guardando el horario" });
+  }
+});
+
+app.delete("/api/horarios/asignaciones/:id", requireSuperadminApp, async (req, res) => {
+  try {
+    const r = await db.query(`DELETE FROM sea_horarios_empleado WHERE id = $1 RETURNING id`, [
+      String(req.params.id),
+    ]);
+    if (r.rows.length === 0) return res.status(404).json({ error: "Horario no encontrado" });
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("DELETE /api/horarios/asignaciones error:", error);
+    res.status(500).json({ error: "Error borrando el horario" });
+  }
+});
+
+/*
+ * Todo lo que hace falta para pintar una semana: empleados activos con su
+ * centro y su técnico vinculado, turnos, asignaciones y las ausencias de la
+ * agenda que tocan esa semana. El cálculo de cada celda lo hace la pantalla
+ * con src/modules/horariosTurnos.ts.
+ */
+app.get("/api/horarios/semana", requireSuperadminApp, async (req, res) => {
+  try {
+    const fecha = String(req.query.fecha ?? "").slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return res.status(400).json({ error: "Fecha no válida" });
+    const [y, m, d] = fecha.split("-").map(Number);
+    const base = new Date(Date.UTC(y, m - 1, d));
+    const idx = (base.getUTCDay() + 6) % 7;
+    const lunes = new Date(base.getTime() - idx * 86_400_000).toISOString().slice(0, 10);
+    const domingo = new Date(base.getTime() + (6 - idx) * 86_400_000).toISOString().slice(0, 10);
+
+    const [empleados, turnos, asignaciones, ausencias] = await Promise.all([
+      db.query(
+        `SELECT e.id, e.nombre, e.apellidos, c.nombre AS centro, t.name AS tech_name
+           FROM sea_employees e
+           LEFT JOIN sea_work_centers c ON c.id = e.work_center_id
+           LEFT JOIN techs t ON t.employee_id = e.id
+          WHERE e.activo = true
+          ORDER BY c.nombre NULLS LAST, e.nombre, e.apellidos`
+      ),
+      db.query(`SELECT * FROM sea_turnos ORDER BY orden, nombre`),
+      db.query(`SELECT * FROM sea_horarios_empleado WHERE vigente_desde <= $1 ORDER BY vigente_desde`, [domingo]),
+      db.query(
+        `SELECT "techName", status, "startDate", "endDate"
+           FROM scheduled_tech_statuses
+          WHERE "startDate" <= $2 AND "endDate" >= $1`,
+        [lunes, domingo]
+      ).catch(() => ({ rows: [] as any[] })),
+    ]);
+
+    res.json({
+      lunes,
+      domingo,
+      empleados: empleados.rows.map((e: any) => ({
+        id: String(e.id),
+        nombre: [e.nombre, e.apellidos].filter(Boolean).join(" ").trim(),
+        centro: e.centro ?? null,
+        techName: e.tech_name ?? null,
+      })),
+      turnos: turnos.rows.map(filaTurno),
+      asignaciones: asignaciones.rows.map(filaAsignacion),
+      ausencias: ausencias.rows.map((a: any) => ({
+        nombre: String(a.techName ?? ""),
+        estado: String(a.status ?? ""),
+        desde: String(a.startDate ?? "").slice(0, 10),
+        hasta: String(a.endDate ?? "").slice(0, 10),
+      })),
+    });
+  } catch (error) {
+    console.error("GET /api/horarios/semana error:", error);
+    res.status(500).json({ error: "Error cargando la semana" });
+  }
+});
+
+app.get("/api/empleados-core", requireAdminRole, async (_req, res) => {
+  try {
+    const [r, sinVincular] = await Promise.all([
+      db.query(
+        `SELECT e.id, e.nombre, e.apellidos, c.nombre AS centro, t.name AS tech_name
+           FROM sea_employees e
+           LEFT JOIN sea_work_centers c ON c.id = e.work_center_id
+           LEFT JOIN techs t ON t.employee_id = e.id
+          WHERE e.activo = true
+          ORDER BY e.nombre, e.apellidos`
+      ),
+      db.query(
+        `SELECT name FROM techs WHERE employee_id IS NULL AND activo IS NOT FALSE ORDER BY name`
+      ),
+    ]);
+
+    // Técnicos aún sin vincular: si la propuesta por nombre es fiable, se
+    // dice quién sería, para que Ausencias y Planning no saquen a la misma
+    // persona dos veces («Albert» y «Albert Belles Bertran»). No se guarda
+    // nada: el vínculo de verdad se confirma en Personal.
+    const libres = r.rows.filter((e: any) => !e.tech_name) as EmpleadoCore[];
+    const propuesto = new Map<string, string>();
+    for (const p of proponerVinculos(
+      sinVincular.rows.map((t: any) => String(t.name)),
+      libres
+    )) {
+      const id = p.employeeId ? String(p.employeeId) : "";
+      if (id && p.certeza !== "ambigua" && !propuesto.has(id)) {
+        propuesto.set(id, p.tech);
+      }
+    }
+
+    res.json(
+      r.rows.map((e: any) => ({
+        id: String(e.id),
+        nombre: [e.nombre, e.apellidos].filter(Boolean).join(" ").trim(),
+        centro: e.centro ?? null,
+        techName: e.tech_name ?? null,
+        techPropuesto: e.tech_name ? null : propuesto.get(String(e.id)) ?? null,
+      }))
+    );
+  } catch (error) {
+    console.error("GET /api/empleados-core error:", error);
+    res.json([]);
   }
 });
 
@@ -3909,8 +4199,17 @@ app.get("/api/jobs/:id/files", exigirCredencial(requirePanelRole), async (req, r
       [id]
     );
 
+    /*
+     * Enlace firmado, como el resto de fotos desde #436: la URL guardada es la
+     * pública del día que se subió el fichero, y solo sirve mientras el bucket
+     * siga marcado como público —una casilla del panel de Supabase que no
+     * controla este repositorio—. Sin esto la galería del histórico enseñaría
+     * marcos rotos y nadie sabría por qué.
+     */
+    const filas = await firmarEnFilas(result.rows);
+
     res.json(
-      result.rows.map((r: any) => ({
+      filas.map((r: any) => ({
         id: Number(r.id),
         url: r.url,
         fileName: r.fileName ?? null,
@@ -4813,26 +5112,32 @@ app.get("/api/safety-operator/meetings", requirePresenciaEmployee, async (_req, 
    WORKSHOP CONFIG
 ========================================================= */
 
-const WORKSHOP_CONFIG_KEYS = ["taller_lat", "taller_lng", "taller_direccion", "taller_radio_m"] as const;
 
-async function getWorkshopConfig() {
-  const result = await db.query(
-    `SELECT key, value FROM workshop_config WHERE key = ANY($1)`,
-    [WORKSHOP_CONFIG_KEYS]
-  );
+/*
+ * Coordenadas del taller. Había un único juego para toda la instalación; con
+ * dos talleres (Tarragona y Reus) haciendo salidas, cada uno necesita las
+ * suyas: se guardan con la clave sufijada («taller_lat:sea-reus»). Sin
+ * sufijo para ese taller, se usa el juego general, que es lo de siempre.
+ */
+async function getWorkshopConfig(workshopId?: string | null) {
+  const result = await db.query(`SELECT key, value FROM workshop_config WHERE key LIKE 'taller_%'`);
   const map: Record<string, string> = {};
   for (const row of result.rows) map[row.key] = row.value;
+  const leer = (k: string) => {
+    const propio = workshopId ? map[`${k}:${workshopId}`] : undefined;
+    return propio != null && String(propio).trim() !== "" ? propio : map[k];
+  };
   return {
-    taller_lat: map["taller_lat"] ?? "",
-    taller_lng: map["taller_lng"] ?? "",
-    taller_direccion: map["taller_direccion"] ?? "",
-    taller_radio_m: map["taller_radio_m"] ?? "300",
+    taller_lat: leer("taller_lat") ?? "",
+    taller_lng: leer("taller_lng") ?? "",
+    taller_direccion: leer("taller_direccion") ?? "",
+    taller_radio_m: leer("taller_radio_m") ?? "300",
   };
 }
 
-app.get("/api/workshop-config", requireAdminRole, async (_req, res) => {
+app.get("/api/workshop-config", requireAdminRole, async (req, res) => {
   try {
-    res.json(await getWorkshopConfig());
+    res.json(await getWorkshopConfig(String(req.query.workshopId ?? "").trim() || null));
   } catch (error) {
     console.error("GET /api/workshop-config error:", error);
     res.status(500).json({ error: "Error cargando configuración" });
@@ -4841,12 +5146,14 @@ app.get("/api/workshop-config", requireAdminRole, async (_req, res) => {
 
 app.post("/api/workshop-config", requireAdminRole, async (req, res) => {
   try {
-    const { taller_lat, taller_lng, taller_direccion, taller_radio_m } = req.body ?? {};
+    const { taller_lat, taller_lng, taller_direccion, taller_radio_m, workshopId } = req.body ?? {};
+    // Con workshopId se guardan las coordenadas de ESE taller; sin él, las generales.
+    const sufijo = String(workshopId ?? "").trim() ? `:${String(workshopId).trim()}` : "";
     const entries: [string, string][] = [
-      ["taller_lat", String(taller_lat ?? "")],
-      ["taller_lng", String(taller_lng ?? "")],
-      ["taller_direccion", String(taller_direccion ?? "")],
-      ["taller_radio_m", String(taller_radio_m ?? "300")],
+      [`taller_lat${sufijo}`, String(taller_lat ?? "")],
+      [`taller_lng${sufijo}`, String(taller_lng ?? "")],
+      [`taller_direccion${sufijo}`, String(taller_direccion ?? "")],
+      [`taller_radio_m${sufijo}`, String(taller_radio_m ?? "300")],
     ];
     for (const [key, value] of entries) {
       await db.query(
@@ -5651,7 +5958,17 @@ app.get("/api/roadside-assistances", exigirCredencial(authenticate), async (req,
       params
     );
 
-    res.json(result.rows.map(normalizeRoadsideAssistanceRow));
+    /*
+     * La tira de miniaturas de cada tarjeta, firmada. Se firman todas de una
+     * sola llamada para las doscientas asistencias del listado, no una por
+     * foto: esta lista se refresca sola cada pocos segundos.
+     */
+    const asistencias = result.rows.map(normalizeRoadsideAssistanceRow);
+    await firmarEnFilas(
+      asistencias.flatMap((a: any) => (Array.isArray(a.fotosMiniaturas) ? a.fotosMiniaturas : []))
+    );
+
+    res.json(asistencias);
   } catch (error) {
     console.error("GET /api/roadside-assistances error:", error);
     res.status(500).json({ error: "Error obteniendo asistencias" });
@@ -5979,7 +6296,8 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
         status: e.status,
         createdAtMs: Number(e.createdAtMs),
       })),
-      files: filesResult.rows.map((f: any) => ({
+      // Las del seguimiento también firmadas: es la página que ve el cliente.
+      files: (await firmarEnFilas(filesResult.rows)).map((f: any) => ({
         id: Number(f.id),
         kind: f.kind,
         url: f.url,
@@ -7466,10 +7784,16 @@ app.get(
            ORDER BY ts ASC`,
           [ids]
         );
+        /*
+         * Firmadas aquí, no en la APK: así las fotos vuelven en los móviles
+         * que ya están instalados, sin publicar una APK nueva.
+         */
+        const firmadas = await firmarUrls(photos.rows.map((p: any) => p.url));
         const byJob = new Map<number, string[]>();
         for (const p of photos.rows) {
           const arr = byJob.get(Number(p.jid)) ?? [];
-          if (p.url && !arr.includes(p.url)) arr.push(p.url);
+          const url = p.url ? (firmadas[p.url] ?? p.url) : null;
+          if (url && !arr.includes(url)) arr.push(url);
           byJob.set(Number(p.jid), arr);
         }
         for (const r of rows) r.photoUrls = byJob.get(r.id) ?? [];
@@ -7615,8 +7939,12 @@ app.get(
       );
       const imageUrls: string[] = [];
       const videoUrls: string[] = [];
+      const firmadasCaptura = await firmarUrls(
+        msgResult.rows.map((m: any) => m.media_stored_url || m.media_url)
+      );
       for (const m of msgResult.rows) {
-        const url = (m.media_stored_url || m.media_url) as string;
+        const guardada = (m.media_stored_url || m.media_url) as string;
+        const url = firmadasCaptura[guardada] ?? guardada;
         if (m.message_type === "video") videoUrls.push(url);
         else imageUrls.push(url);
       }
@@ -8400,7 +8728,13 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
      */
     const esperaTrasId = await trasQueEspera(null, assignedTechName);
 
-    if (!customerName && !customerPhone) {
+    // Salida de taller: sin cliente; lo que hace falta es motivo, operario y destino.
+    const tipo = body.tipo === TIPO_SALIDA ? TIPO_SALIDA : "asistencia";
+    const motivo = tipo === TIPO_SALIDA && esMotivoDeSalida(body.motivo) ? String(body.motivo) : null;
+    if (tipo === TIPO_SALIDA) {
+      const errores = validarSalida({ ...body, assignedTechName, address, latitude, longitude });
+      if (errores.length) return res.status(400).json({ error: errores.join(" ") });
+    } else if (!customerName && !customerPhone) {
       return res.status(400).json({
         error: "Indica cliente o telefono para crear la asistencia",
       });
@@ -8448,13 +8782,17 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
           "solicitanteContactoId",
           -- La cola: detrás de qué asistencia espera turno ésta. Lo decide el
           -- servidor mirando qué lleva el operario, no quien llama.
-          "esperaTrasId"
+          "esperaTrasId",
+          -- Salida de taller o asistencia, y el motivo de la salida.
+          tipo,
+          motivo,
+          "knownPlaceId"
         )
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8,
           $9, $10, $11, $12, $13, $14, $15, $16,
           $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33,
-          $34, $35, $36
+          $34, $35, $36, $37, $38, $39
         )
         RETURNING *
       `,
@@ -8495,6 +8833,9 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
         idOpcional(body.solicitanteClienteId),
         idOpcional(body.solicitanteContactoId),
         esperaTrasId,
+        tipo,
+        motivo,
+        idOpcional(body.knownPlaceId),
       ]
     );
 
@@ -9403,7 +9744,19 @@ app.get("/api/roadside-assistances/:id/files", exigirCredencial(authenticate), a
         ORDER BY f."createdAtMs" ASC`,
       [id]
     );
-    res.json(result.rows);
+    // Enlaces firmados en el momento: ver server/core/fotosFirmadas.ts.
+    const archivos = await firmarEnFilas(result.rows);
+
+    /*
+     * Si no se han podido firmar, se dice POR QUÉ y se dice aquí.
+     *
+     * Antes el motivo iba solo al log del servidor, y quien tiene la pantalla
+     * delante veía huecos sin saber si falta la foto, falta el permiso o se ha
+     * caído el almacén. Con el motivo en la respuesta, el panel lo enseña y
+     * deja de hacer falta entrar a mirar logs para saber qué pasa.
+     */
+    const fallo = fallaAlFirmar();
+    res.json(fallo ? { data: archivos, fotosError: fallo } : archivos);
   } catch (error) {
     console.error("GET /api/roadside-assistances/:id/files error:", error);
     res.status(500).json({ error: "Error cargando archivos" });
@@ -11399,17 +11752,33 @@ app.get("/api/clientes-facturacion", requireSupervisorRole, async (req, res) => 
               COALESCE(m.sync_status, 'not_synced') AS "erpSyncStatus",
               m.last_sync_at_ms AS "erpLastSyncAtMs", m.last_sync_error AS "erpLastSyncError"
          FROM connect_clients c
+         /*
+          * El enlace del ERP, nombrando el sistema.
+          *
+          * Aquí se cogía «el mapeo más reciente de este cliente, sea de donde
+          * sea», y en esa tabla conviven los de todos los sistemas: un cliente
+          * con correspondencia de TyreControl enseñaba el identificador de TC
+          * como si fuera su número de ERP, con su estado de sincronización.
+          */
          LEFT JOIN LATERAL (
            SELECT * FROM integration_mappings im
             WHERE im.entity_type = 'customer' AND im.mobilink_id = c.id::text
+              AND NOT (im.system = ANY($2::text[]))
             ORDER BY im.updated_at_ms DESC LIMIT 1
          ) m ON true
         WHERE ($1 = '' OR c.name ILIKE '%' || $1 || '%'
                        OR c."legalName" ILIKE '%' || $1 || '%'
                        OR c."taxId" ILIKE '%' || $1 || '%'
-                       OR c.city ILIKE '%' || $1 || '%')
+                       OR c.city ILIKE '%' || $1 || '%'
+                       OR EXISTS (
+                            SELECT 1 FROM integration_mappings b
+                             WHERE b.entity_type = 'customer'
+                               AND b.mobilink_id = c.id::text
+                               AND NOT (b.system = ANY($2::text[]))
+                               AND b.external_code ILIKE '%' || $1 || '%'
+                          ))
         ORDER BY c.name`,
-      [q],
+      [q, SISTEMAS_NO_ERP],
     );
     res.json({ data: r.rows });
   } catch (e: any) {
@@ -11502,6 +11871,21 @@ app.patch("/api/clientes-facturacion/:id", requireAdminRole, async (req, res) =>
        typeof b.active === "boolean" ? b.active : null, b.notes ?? null, Date.now()],
     );
     if (!r.rows[0]) return res.status(404).json({ error: "Cliente no encontrado" });
+
+    /*
+     * El número de cliente del ERP no es una columna de la ficha: vive en
+     * `integration_mappings`, que es donde están los enlaces con los demás
+     * sistemas. Ver server/clientes/codigoErp.ts.
+     *
+     * Solo se toca si viene en la petición: así una pantalla que guarde la
+     * ficha sin enviarlo no lo borra sin querer. Y si viene vacío, se quita,
+     * que es la única forma de deshacer un número puesto por error.
+     */
+    if (Object.prototype.hasOwnProperty.call(b, "erpCode")) {
+      const enlace = await guardarCodigoErp(Number(req.params.id), b.erpCode);
+      if (enlace.ok === false) return res.status(409).json({ error: enlace.error });
+    }
+
     res.json(r.rows[0]);
   } catch (e: any) {
     console.error("PATCH /api/clientes-facturacion/:id error:", e?.message);
@@ -11679,6 +12063,59 @@ async function findDbUserByPassword(password: string | undefined): Promise<DbApp
   return users.find((u) => u.password && u.password === password) ?? null;
 }
 
+/*
+ * Rol del panel para quien entra con su usuario de Core. La regla está en
+ * server/core/rolDelPanel.ts; aquí solo se reúnen los datos. Se guarda un
+ * minuto por usuario porque se consulta en cada petición del panel.
+ */
+const cacheRolDelPanel = new Map<string, { hasta: number; valor: RolResuelto | null }>();
+
+async function rolDelPanelParaUsuario(userId: string): Promise<RolResuelto | null> {
+  const enCache = cacheRolDelPanel.get(userId);
+  if (enCache && enCache.hasta > Date.now()) return enCache.valor;
+
+  const consultaCompleta = `SELECT a.username, a.nombre, a.activo, a.es_superadmin,
+            coalesce((SELECT rol = 'admin' FROM adm_usuarios WHERE id = a.id AND activo), false) AS adm_admin,
+            (SELECT t.name FROM techs t
+              WHERE a.employee_id IS NOT NULL AND t.employee_id = a.employee_id
+              LIMIT 1) AS tech_name,
+            (SELECT m.pantallas FROM app_usuario_modulos m
+              WHERE m.user_id = a.id AND m.modulo = 'workplanner' LIMIT 1) AS wp_pantallas,
+            EXISTS (SELECT 1 FROM app_usuario_modulos m
+              WHERE m.user_id = a.id AND m.modulo = 'workplanner') AS wp
+       FROM app_usuarios a WHERE a.id = $1`;
+  let r;
+  try {
+    r = await db.query(consultaCompleta, [userId]);
+  } catch (e) {
+    // Base sin vínculo de empleado o sin módulos: la regla de siempre (nombre).
+    console.error("rolDelPanelParaUsuario: consulta completa falló, se usa la básica:", e);
+    r = await db.query(
+      `SELECT a.username, a.nombre, a.activo, a.es_superadmin,
+              coalesce((SELECT rol = 'admin' FROM adm_usuarios WHERE id = a.id AND activo), false) AS adm_admin
+         FROM app_usuarios a WHERE a.id = $1`,
+      [userId]
+    );
+  }
+  const u = r.rows[0];
+  let valor: RolResuelto | null = null;
+  if (u && u.activo) {
+    valor = resolverRolDelPanel(
+      {
+        username: u.username ?? null,
+        nombre: u.nombre ?? null,
+        esSuperadmin: Boolean(u.es_superadmin),
+        admAdmin: Boolean(u.adm_admin),
+        techName: u.tech_name ?? null,
+        workplanner: u.wp ? { pantallas: Array.isArray(u.wp_pantallas) ? u.wp_pantallas : null } : null,
+      },
+      await listDbAppUsers()
+    );
+  }
+  cacheRolDelPanel.set(userId, { hasta: Date.now() + 60_000, valor });
+  return valor;
+}
+
 async function getRoleFromRequestAsync(req: express.Request): Promise<UserRole | null> {
   // 1) Sesión unificada (Supabase) con licencia vigente del módulo taller.
   //    Es la vía preferente; las vías legacy quedan bloqueadas en strict.
@@ -11692,11 +12129,9 @@ async function getRoleFromRequestAsync(req: express.Request): Promise<UserRole |
           return null; // empresa sin licencia del panel de taller
         }
         if (ctx.esSuperadmin) return "admin";
-        // Usuario del panel con el mismo nombre (mismo criterio que login-sso)
-        const users = await listDbAppUsers();
-        const objetivo = [ctx.username.toLowerCase(), ctx.nombre.toLowerCase()];
-        const panelUser = users.find((p) => objetivo.includes(p.name.toLowerCase()));
-        if (panelUser) return panelUser.role;
+        // La misma regla que login-sso (server/core/rolDelPanel.ts).
+        const resuelto = await rolDelPanelParaUsuario(ctx.userId);
+        if (resuelto) return resuelto.role;
       }
     } catch (e) {
       console.error("getRoleFromRequestAsync (bearer) error:", e);
@@ -14413,30 +14848,14 @@ app.post("/api/login-sso", async (req, res) => {
      * Regla que queda: ninguna respuesta de la API devuelve una contraseña.
      */
 
-    // 1) Usuario del panel con el mismo nombre (username o nombre completo)
-    try {
-      const users = await listDbAppUsers();
-      const objetivo = [String(u.username).toLowerCase(), String(u.nombre).toLowerCase()];
-      const panelUser = users.find((p) => objetivo.includes(p.name.toLowerCase()));
-      if (panelUser) {
-        return res.json({
-          ok: true,
-          role: panelUser.role,
-          name: panelUser.name,
-          allowedViews: panelUser.allowedViews,
-        });
-      }
-    } catch (e) {
-      console.error("login-sso db users error:", e);
-    }
-
-    // 2) Superadmin / admin de administración → admin del panel
-    if (u.es_superadmin || u.adm_admin) {
+    // Misma regla que getRoleFromRequestAsync: server/core/rolDelPanel.ts.
+    const resuelto = await rolDelPanelParaUsuario(data.user.id);
+    if (resuelto) {
       return res.json({
         ok: true,
-        role: "admin",
-        name: u.nombre,
-        allowedViews: null,
+        role: resuelto.role,
+        name: resuelto.name,
+        allowedViews: resuelto.allowedViews,
       });
     }
 
@@ -15239,7 +15658,7 @@ async function checkWebfleetWorkshopArrival() {
   try {
     // Busca asistencias en_camino_base con furgoneta Webfleet asignada
     const result = await db.query(`
-      SELECT ra.id, ra."webfleetVehicleId"
+      SELECT ra.id, ra."webfleetVehicleId", ra."workshopId"
       FROM roadside_assistances ra
       WHERE ra.status = 'en_camino_base'
         AND ra."arrivedAtWorkshopMs" IS NULL
@@ -15247,14 +15666,15 @@ async function checkWebfleetWorkshopArrival() {
     `);
     if (result.rows.length === 0) return;
 
-    const cfg = await getWorkshopConfig();
-    const tallerLat = parseFloat(cfg.taller_lat);
-    const tallerLng = parseFloat(cfg.taller_lng);
-    const radioM = parseFloat(cfg.taller_radio_m) || 300;
-    if (!isFinite(tallerLat) || !isFinite(tallerLng)) return;
-
     for (const row of result.rows) {
       try {
+        // Cada asistencia vuelve a SU taller: Reus no es Tarragona.
+        const cfg = await getWorkshopConfig(row.workshopId ?? null);
+        const tallerLat = parseFloat(cfg.taller_lat);
+        const tallerLng = parseFloat(cfg.taller_lng);
+        const radioM = parseFloat(cfg.taller_radio_m) || 300;
+        if (!isFinite(tallerLat) || !isFinite(tallerLng)) continue;
+
         const pos = await getWebfleetVehiclePosition(row.webfleetVehicleId);
         const distM = haversineDistanceM(pos.lat, pos.lng, tallerLat, tallerLng);
         console.log(`Webfleet geofence check #${row.id} (${row.webfleetVehicleId}): ${Math.round(distM)}m al taller`);
@@ -15355,9 +15775,12 @@ async function reconcileTechRoadsideOccupation() {
 async function checkOtfBaseArrival() {
   try {
     const r = await db.query(`
-      SELECT id, "webfleetVehicleId", lat, lng FROM otf
-      WHERE status = 'planificada' AND "arrivedAtBaseMs" IS NULL
-        AND "webfleetVehicleId" IS NOT NULL AND lat IS NOT NULL AND lng IS NOT NULL
+      SELECT o.id, o."webfleetVehicleId", o.lat, o.lng FROM otf o
+      WHERE o.status = 'planificada' AND o."arrivedAtBaseMs" IS NULL
+        AND o."webfleetVehicleId" IS NOT NULL AND o.lat IS NOT NULL AND o.lng IS NOT NULL
+        -- La furgoneta puede pasar por la base de la OTF pendiente mientras
+        -- sigue con la asistencia: eso no es empezar la OTF.
+        AND NOT ${OTF_EN_ESPERA_SQL}
     `);
     for (const o of r.rows) {
       try {
@@ -15379,6 +15802,166 @@ async function checkOtfBaseArrival() {
     console.error("checkOtfBaseArrival error:", e);
   }
 }
+
+/*
+ * Salidas de taller: llegada al punto y vuelta, por GPS.
+ *
+ * Nadie lleva tablet en una salida, así que estos dos pasos los pone el
+ * servidor. La decisión (server/core/salidasTaller.ts) es pura; aquí solo se
+ * mira dónde está la furgoneta y se escribe el resultado. Cada minuto: una
+ * parada de reparto puede ser corta.
+ */
+let vigilarSalidasRunning = false;
+async function vigilarSalidas() {
+  if (vigilarSalidasRunning) return;
+  vigilarSalidasRunning = true;
+  try {
+    const r = await db.query(
+      `SELECT id, status, "webfleetVehicleId", latitude, longitude, "enPuntoVisto", "assignedTechName"
+         FROM roadside_assistances
+        WHERE tipo = $1 AND status IN ('en_camino', 'en_punto')
+          AND "webfleetVehicleId" IS NOT NULL
+          AND latitude IS NOT NULL AND longitude IS NOT NULL`,
+      [TIPO_SALIDA]
+    );
+    for (const s of r.rows) {
+      try {
+        const pos = await getWebfleetVehiclePosition(s.webfleetVehicleId);
+        const dist = haversineDistanceM(pos.lat, pos.lng, Number(s.latitude), Number(s.longitude));
+        const paso = pasoDeSalida({
+          status: String(s.status),
+          distDestinoM: dist,
+          moving: typeof pos.moving === "boolean" ? pos.moving : null,
+          enPuntoVisto: s.enPuntoVisto === true,
+          radioDestinoM: RADIO_DESTINO_M,
+        });
+        const now = Date.now();
+        // El mapa del panel en vivo, como en la vuelta al taller.
+        await db.query(
+          `UPDATE roadside_assistances
+              SET "operatorLat" = $2, "operatorLng" = $3, "operatorLocationAtMs" = $4
+            WHERE id = $1`,
+          [s.id, pos.lat, pos.lng, now]
+        );
+        if (paso.enPuntoVisto != null && paso.enPuntoVisto !== (s.enPuntoVisto === true)) {
+          await db.query(`UPDATE roadside_assistances SET "enPuntoVisto" = $2 WHERE id = $1`, [s.id, paso.enPuntoVisto]);
+        }
+        if (paso.status === "en_punto") {
+          await db.query(
+            `UPDATE roadside_assistances
+                SET status = 'en_punto', "arrivedAtPointMs" = COALESCE("arrivedAtPointMs", $2), "updatedAtMs" = $2
+              WHERE id = $1 AND status = 'en_camino'`,
+            [s.id, now]
+          );
+        } else if (paso.status === "en_camino_base") {
+          await db.query(
+            `UPDATE roadside_assistances
+                SET status = 'en_camino_base', "enCaminoBaseAtMs" = COALESCE("enCaminoBaseAtMs", $2), "updatedAtMs" = $2
+              WHERE id = $1 AND status = 'en_punto'`,
+            [s.id, now]
+          );
+        }
+        if (paso.status) {
+          await db.query(
+            `INSERT INTO roadside_assistance_events ("assistanceId", status, note, "createdBy", "createdAtMs")
+             VALUES ($1, $2, $3, 'auto-webfleet', $4)`,
+            [s.id, paso.status, paso.nota ?? null, now]
+          );
+          console.log(`✓ Salida #${s.id} → ${paso.status} (GPS, ${Math.round(dist)} m del destino)`);
+        }
+      } catch (err) {
+        console.warn(`vigilarSalidas error #${s.id}:`, err);
+      }
+    }
+  } catch (e) {
+    console.error("vigilarSalidas error:", e);
+  } finally {
+    vigilarSalidasRunning = false;
+  }
+}
+setInterval(() => void vigilarSalidas(), 60 * 1000);
+void vigilarSalidas();
+
+/*
+ * OTF: salida del taller, vuelta y llegada, por GPS.
+ *
+ * La llegada a la base ya la pone checkOtfBaseArrival; esto completa el
+ * recorrido para que la tarjeta de Pantalla técnicos lleve la misma tira que
+ * una asistencia. La decisión es pura (src/modules/seguimientoOtf.ts).
+ */
+let vigilarOtfsRunning = false;
+async function vigilarOtfs() {
+  if (vigilarOtfsRunning) return;
+  vigilarOtfsRunning = true;
+  try {
+    const r = await db.query(
+      `SELECT o.id, o.status, o."workshopId", o."webfleetVehicleId", o.lat, o.lng,
+              o."departedAtMs", o."enCaminoBaseAtMs", o."arrivedAtWorkshopMs", o."salidaArmada"
+         FROM otf o
+        WHERE o."webfleetVehicleId" IS NOT NULL
+          AND ((o.status = 'planificada' AND o."departedAtMs" IS NULL AND NOT ${OTF_EN_ESPERA_SQL})
+            OR (o.status = 'finalizada' AND o."arrivedAtWorkshopMs" IS NULL
+                AND COALESCE(o."finishedAtMs", o."updatedAtMs") > $1))`,
+      [Date.now() - 12 * 60 * 60 * 1000]
+    );
+    for (const o of r.rows) {
+      try {
+        const cfg = await getWorkshopConfig(o.workshopId ?? null);
+        const tlat = parseFloat(cfg.taller_lat);
+        const tlng = parseFloat(cfg.taller_lng);
+        if (!Number.isFinite(tlat) || !Number.isFinite(tlng)) continue;
+        const pos = await getWebfleetVehiclePosition(o.webfleetVehicleId);
+        const distTallerM = haversineDistanceM(pos.lat, pos.lng, tlat, tlng);
+        const distBaseM =
+          o.lat != null && o.lng != null ? haversineDistanceM(pos.lat, pos.lng, Number(o.lat), Number(o.lng)) : null;
+        const now = Date.now();
+        const cambio = pasoDeOtfGps(
+          {
+            status: String(o.status),
+            departedAtMs: o.departedAtMs != null ? Number(o.departedAtMs) : null,
+            enCaminoBaseAtMs: o.enCaminoBaseAtMs != null ? Number(o.enCaminoBaseAtMs) : null,
+            arrivedAtWorkshopMs: o.arrivedAtWorkshopMs != null ? Number(o.arrivedAtWorkshopMs) : null,
+            salidaArmada: o.salidaArmada === true,
+          },
+          {
+            distTallerM,
+            distBaseM,
+            radioTallerM: parseFloat(cfg.taller_radio_m) || 300,
+            radioBaseM: KNOWN_PLACE_RADIUS_M,
+          },
+          now
+        );
+        if (cambio.salidaArmada) {
+          await db.query(`UPDATE otf SET "salidaArmada" = true WHERE id = $1`, [o.id]);
+        } else if (cambio.departedAtMs) {
+          await db.query(
+            `UPDATE otf SET "departedAtMs" = COALESCE("departedAtMs", $2), "updatedAtMs" = $2 WHERE id = $1`,
+            [o.id, now]
+          );
+        } else if (cambio.enCaminoBaseAtMs) {
+          await db.query(
+            `UPDATE otf SET "enCaminoBaseAtMs" = COALESCE("enCaminoBaseAtMs", $2), "updatedAtMs" = $2 WHERE id = $1`,
+            [o.id, now]
+          );
+        } else if (cambio.arrivedAtWorkshopMs) {
+          await db.query(
+            `UPDATE otf SET "arrivedAtWorkshopMs" = COALESCE("arrivedAtWorkshopMs", $2), "updatedAtMs" = $2 WHERE id = $1`,
+            [o.id, now]
+          );
+        }
+        if (cambio.nota) console.log(`✓ OTF #${o.id}: ${cambio.nota} (${Math.round(distTallerM)} m del taller)`);
+      } catch (err) {
+        console.warn(`vigilarOtfs error #${o.id}:`, err);
+      }
+    }
+  } catch (e) {
+    console.error("vigilarOtfs error:", e);
+  } finally {
+    vigilarOtfsRunning = false;
+  }
+}
+setInterval(() => void vigilarOtfs(), 60 * 1000);
+void vigilarOtfs();
 
 // Comprobar cada 2 minutos
 setInterval(() => {
@@ -16222,30 +16805,6 @@ Devuelve SOLO el JSON sin texto adicional:
   }
 }
 
-/**
- * Descarga un medio de WhatsApp con las credenciales de la cuenta de Twilio.
- *
- * La URL viene del cuerpo del webhook, así que la elige quien manda el
- * mensaje. Por eso pasa por `fetchSeguro` con la lista de hosts de Twilio: sin
- * eso, poner `MediaUrl0=https://atacante.tld/x` hacía que el servidor enviara
- * la cabecera `Authorization: Basic <SID>:<AUTH_TOKEN>` al atacante. Estaba
- * repetido en tres sitios; ahora la credencial se construye en uno.
- */
-async function descargarMedioTwilio(url: string) {
-  return fetchSeguro(url, {
-    hostsPermitidos: HOSTS_TWILIO,
-    cabeceras: {
-      Authorization:
-        "Basic " +
-        Buffer.from(
-          `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
-        ).toString("base64"),
-    },
-    maxBytes: 25 * 1024 * 1024,
-    timeoutMs: 20_000,
-  });
-}
-
 // Twilio sends form-encoded bodies for webhooks
 app.post(
   "/api/whatsapp/inbound",
@@ -16496,12 +17055,23 @@ app.post(
           }
         }
 
-        // Try to store media in Supabase if it's an image/audio/video/document
+        /*
+         * Guardar la copia del adjunto en nuestro almacén.
+         *
+         * Si no se puede, el mensaje se guarda igual —perderlo entero por una
+         * foto sería peor— pero el MOTIVO se guarda con él. Antes solo iba al
+         * log, y las fotos llevaban días sin verse antes de que nadie mirara
+         * el log: con el motivo en la fila, el panel lo enseña donde iría la
+         * foto y se sabe al momento si es Twilio, el almacén u otra cosa.
+         */
         let storedUrl: string | null = null;
+        let mediaError: string | null = null;
         if (mediaUrl0 && ["image","audio","video","document"].includes(msgType)) {
           try {
             const mediaResp = await descargarMedioTwilio(mediaUrl0);
-            if (mediaResp.ok) {
+            if (!mediaResp.ok) {
+              mediaError = `Twilio contesta ${mediaResp.status} al descargar el adjunto`;
+            } else {
               const contentType = mediaResp.contentType;
               const ext = contentType.split("/")[1]?.split(";")[0] ?? "bin";
               const buffer = mediaResp.cuerpo;
@@ -16509,16 +17079,20 @@ app.post(
               const { error: upErr } = await supabase.storage
                 .from(process.env.SUPABASE_ROADSIDE_BUCKET || "roadside")
                 .upload(storagePath, buffer, { contentType, upsert: false });
-              if (!upErr) {
+              if (upErr) {
+                mediaError = `Almacén (Supabase): ${upErr.message}`;
+              } else {
                 const { data: pub } = supabase.storage
                   .from(process.env.SUPABASE_ROADSIDE_BUCKET || "roadside")
                   .getPublicUrl(storagePath);
                 storedUrl = pub.publicUrl ?? null;
+                if (!storedUrl) mediaError = "El almacén no ha devuelto dirección para la copia";
               }
             }
-          } catch (mediaErr) {
-            console.warn("Could not store WhatsApp media:", mediaErr);
+          } catch (mediaErr: any) {
+            mediaError = String(mediaErr?.message ?? mediaErr);
           }
+          if (mediaError) console.warn(`[captura] adjunto sin copia: ${mediaError}`);
         }
 
         // Detect Google Maps URL in text messages and extract coordinates
@@ -16627,8 +17201,8 @@ app.post(
              text_content, media_url, media_stored_url,
              latitude, longitude, address, contact_name, contact_phone,
              raw_payload, received_at,
-             transcript_status)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+             transcript_status, media_error)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
            RETURNING id`,
           [
             sessionId, jobId, MessageSid, From, effectiveMsgType,
@@ -16643,6 +17217,7 @@ app.post(
             JSON.stringify(req.body),
             Date.now(),
             effectiveMsgType === "audio" ? "pending" : "none",
+            mediaError,
           ]
         );
         console.log(`WhatsApp capture: message ${MessageSid} routed to session #${sessionId} (job ${jobId})`);
@@ -16997,6 +17572,9 @@ app.get("/api/whatsapp-capture/by-job/:jobId", requireAdminRole, async (req, res
       latitude: m.latitude != null ? Number(m.latitude) : null,
       longitude: m.longitude != null ? Number(m.longitude) : null,
     }));
+    // La copia en Supabase, con enlace firmado; la de Twilio se deja como
+    // está, que el navegador no la puede abrir igualmente.
+    await firmarEnFilas(messages, ["media_stored_url"]);
     return res.json({ ...session, messages });
   } catch (error) {
     console.error("GET /api/whatsapp-capture/by-job error:", error);
@@ -17104,7 +17682,40 @@ app.post("/api/whatsapp-capture/sessions/:id/close", requireAdminRole, async (re
     const noteLines: string[] = [];
     for (const msg of msgs.rows) {
       if ((msg.message_type === "image" || msg.message_type === "video" || msg.message_type === "audio" || msg.message_type === "document") && (msg.media_stored_url || msg.media_url)) {
-        const url = msg.media_stored_url || msg.media_url;
+        /*
+         * ── La URL que se guarda tiene que poder abrirse ──────────────────
+         *
+         * Aquí se guardaba «la copia, y si no hay, la de Twilio». La de Twilio
+         * exige usuario y contraseña —las del SERVIDOR—, así que esa fila
+         * quedaba en la ficha como una foto que ningún navegador puede abrir:
+         * salía rota, y al pulsarla el panel pedía las credenciales de Twilio a
+         * quien estaba delante.
+         *
+         * La copia falta cuando la subida falló al recibir el mensaje, que es
+         * un fallo que se traga a propósito para no perder el mensaje entero.
+         * Pero el servidor SÍ puede bajarla: tiene las credenciales. Así que se
+         * reintenta aquí, que es la segunda y última oportunidad de conservar
+         * esa foto antes de que la sesión se cierre.
+         *
+         * Si tampoco se puede, no se inserta nada: una fila con una URL que no
+         * abre es peor que no tener la fila, porque parece una foto perdida.
+         */
+        let url = msg.media_stored_url;
+        if (!url && msg.media_url) {
+          url = await rescatarMedioDeTwilio(jobId, msg.media_url).catch(() => null);
+          if (url) {
+            await db.query(
+              `UPDATE whatsapp_capture_messages SET media_stored_url = $2 WHERE id = $1`,
+              [msg.id, url]
+            ).catch(() => {});
+          }
+        }
+        if (!url) {
+          console.warn(
+            `[captura] adjunto ${msg.id} sin copia y sin rescate: no se guarda en la ficha`
+          );
+          continue;
+        }
         // Evitar duplicados al reabrir y volver a cerrar la sesión: solo insertar si esa URL aún no está guardada
         const nombreWa = `WhatsApp ${msg.message_type} ${new Date(Number(msg.received_at)).toLocaleTimeString("es-ES")}`;
         const guardado = await db.query(
@@ -17555,10 +18166,18 @@ function normalizeOtf(row: any) {
     notas: row.notas ?? null,
     arrivedAtBaseMs: row.arrivedAtBaseMs != null ? Number(row.arrivedAtBaseMs) : null,
     finishedAtMs: row.finishedAtMs != null ? Number(row.finishedAtMs) : null,
+    departedAtMs: row.departedAtMs != null ? Number(row.departedAtMs) : null,
+    enCaminoBaseAtMs: row.enCaminoBaseAtMs != null ? Number(row.enCaminoBaseAtMs) : null,
+    arrivedAtWorkshopMs: row.arrivedAtWorkshopMs != null ? Number(row.arrivedAtWorkshopMs) : null,
+    salidaArmada: row.salidaArmada === true,
     firmaUrl: row.firmaUrl ?? null,
     firmanteNombre: row.firmanteNombre ?? null,
     firmanteDni: row.firmanteDni ?? null,
     createdAtMs: Number(row.createdAtMs ?? Date.now()),
+    // La asistencia por la que espera, y si de verdad sigue esperando (solo
+    // viene calculado en las consultas que lo piden con OTF_EN_ESPERA_SQL).
+    esperaAsistenciaId: row.esperaAsistenciaId != null ? Number(row.esperaAsistenciaId) : null,
+    enEspera: row.enEspera === true,
     updatedAtMs: Number(row.updatedAtMs ?? Date.now()),
   };
 }
@@ -17589,7 +18208,7 @@ function combineTrabajo(plantilla?: string | null, manual?: string | null): stri
 }
 
 async function otfWithDetails(id: number) {
-  const h = await db.query(`SELECT * FROM otf WHERE id = $1`, [id]);
+  const h = await db.query(`SELECT o.*, ${OTF_EN_ESPERA_SQL} AS "enEspera" FROM otf o WHERE o.id = $1`, [id]);
   if (!h.rows[0]) return null;
   const t = await db.query(`SELECT * FROM otf_trabajos WHERE "otfId" = $1 ORDER BY id ASC`, [id]);
   const f = await db.query(`SELECT * FROM otf_trabajo_files WHERE "otfId" = $1 ORDER BY id ASC`, [id]);
@@ -17612,7 +18231,11 @@ app.get("/api/otf", requireAdminRole, async (req, res) => {
     const params: any[] = [];
     const where = status ? `WHERE status = $1` : "";
     if (status) params.push(status);
-    const r = await db.query(`SELECT * FROM otf ${where} ORDER BY "createdAtMs" DESC LIMIT 200`, params);
+    const r = await db.query(
+      `SELECT o.*, ${OTF_EN_ESPERA_SQL} AS "enEspera" FROM otf o ${where.replace("status", "o.status")}
+        ORDER BY o."createdAtMs" DESC LIMIT 200`,
+      params
+    );
     // progreso por OTF en una sola consulta
     const ids = r.rows.map((x: any) => Number(x.id));
     const prog = new Map<number, { hechos: number; total: number }>();
@@ -17630,6 +18253,145 @@ app.get("/api/otf", requireAdminRole, async (req, res) => {
   } catch (e) {
     console.error("GET /api/otf error:", e);
     res.status(500).json({ error: "Error obteniendo OTF" });
+  }
+});
+
+/*
+ * Las OTF en curso para Pantalla técnicos. La lista completa es de
+ * administrador; esto es lo mínimo para que la TV sepa quién está de servicio
+ * en la base de un cliente, y lo puede leer cualquier rol del panel.
+ */
+app.get("/api/otf-en-curso", exigirCredencial(requirePanelRole), async (_req, res) => {
+  try {
+    const r = await db.query(
+      `SELECT o.id, o."workshopId", o."clientName", o."baseName", o.direccion, o.status,
+              o."assignedTechName", o."assignedVehicleName", o."fechaProgramadaMs", o."arrivedAtBaseMs",
+              o."createdAtMs", o."departedAtMs", o."finishedAtMs", o."enCaminoBaseAtMs", o."arrivedAtWorkshopMs",
+              ${OTF_EN_ESPERA_SQL} AS "enEspera"
+         FROM otf o
+        WHERE o."assignedTechName" IS NOT NULL
+          AND (o.status IN ('planificada', 'en_curso')
+            -- Finalizada sigue en la TV hasta que la furgoneta entra en el taller.
+            OR (o.status = 'finalizada' AND o."arrivedAtWorkshopMs" IS NULL
+                AND COALESCE(o."finishedAtMs", o."updatedAtMs") > $1))
+        ORDER BY o."createdAtMs" DESC LIMIT 100`,
+      [Date.now() - 12 * 60 * 60 * 1000]
+    );
+    const ids = r.rows.map((x: any) => Number(x.id));
+    const prog = new Map<number, { hechos: number; total: number }>();
+    const primer = new Map<number, number>();
+    if (ids.length) {
+      const p = await db.query(
+        `SELECT "otfId", COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE status IN ('finalizado','no_realizado')) AS hechos,
+                MIN("updatedAtMs") FILTER (WHERE status <> 'pendiente') AS "primerTrabajoMs"
+           FROM otf_trabajos WHERE "otfId" = ANY($1) GROUP BY "otfId"`,
+        [ids]
+      );
+      for (const row of p.rows) {
+        prog.set(Number(row.otfId), { hechos: Number(row.hechos), total: Number(row.total) });
+        if (row.primerTrabajoMs != null) primer.set(Number(row.otfId), Number(row.primerTrabajoMs));
+      }
+    }
+    res.json(
+      r.rows.map((x: any) => ({
+        id: Number(x.id),
+        workshopId: x.workshopId ?? null,
+        clientName: x.clientName ?? "",
+        baseName: x.baseName ?? null,
+        direccion: x.direccion ?? null,
+        status: x.status ?? "planificada",
+        assignedTechName: x.assignedTechName ?? null,
+        assignedVehicleName: x.assignedVehicleName ?? null,
+        fechaProgramadaMs: x.fechaProgramadaMs != null ? Number(x.fechaProgramadaMs) : null,
+        arrivedAtBaseMs: x.arrivedAtBaseMs != null ? Number(x.arrivedAtBaseMs) : null,
+        createdAtMs: x.createdAtMs != null ? Number(x.createdAtMs) : null,
+        departedAtMs: x.departedAtMs != null ? Number(x.departedAtMs) : null,
+        primerTrabajoMs: primer.get(Number(x.id)) ?? null,
+        finishedAtMs: x.finishedAtMs != null ? Number(x.finishedAtMs) : null,
+        enCaminoBaseAtMs: x.enCaminoBaseAtMs != null ? Number(x.enCaminoBaseAtMs) : null,
+        arrivedAtWorkshopMs: x.arrivedAtWorkshopMs != null ? Number(x.arrivedAtWorkshopMs) : null,
+        enEspera: x.enEspera === true,
+        progreso: prog.get(Number(x.id)) ?? { hechos: 0, total: 0 },
+      }))
+    );
+  } catch (e) {
+    console.error("GET /api/otf-en-curso error:", e);
+    res.json([]);
+  }
+});
+
+/*
+ * Seguimiento de una OTF para la tarjeta de Pantalla técnicos: lo mismo que
+ * /api/roadside-tracking para una asistencia (posición de la furgoneta, ETA,
+ * taller), pero sin token: lo lee cualquier rol del panel.
+ */
+app.get("/api/otf/:id/seguimiento", exigirCredencial(requirePanelRole), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "OTF no válida" });
+    const r = await db.query(`SELECT * FROM otf WHERE id = $1`, [id]);
+    if (!r.rows[0]) return res.status(404).json({ error: "OTF no encontrada" });
+    const otf = normalizeOtf(r.rows[0]);
+    const t = await db.query(
+      `SELECT MIN("updatedAtMs") AS "primerTrabajoMs" FROM otf_trabajos WHERE "otfId" = $1 AND status <> 'pendiente'`,
+      [id]
+    );
+    const primerTrabajoMs = t.rows[0]?.primerTrabajoMs != null ? Number(t.rows[0].primerTrabajoMs) : null;
+
+    let workshop: { lat: number; lng: number } | null = null;
+    try {
+      const wcfg = await getWorkshopConfig(otf.workshopId);
+      const wlat = parseFloat(wcfg.taller_lat);
+      const wlng = parseFloat(wcfg.taller_lng);
+      if (Number.isFinite(wlat) && Number.isFinite(wlng)) workshop = { lat: wlat, lng: wlng };
+    } catch { /* sin config */ }
+
+    let vehiclePosition: { lat: number; lng: number; speedKmh: number | null; moving: boolean | null } | null = null;
+    let eta: { minutos: number; km: string } | null = null;
+    const sigue = otfSigueEnCurso(otf);
+    if (sigue && otf.webfleetVehicleId) {
+      try {
+        const pos = await getWebfleetVehiclePosition(otf.webfleetVehicleId);
+        vehiclePosition = { lat: pos.lat, lng: pos.lng, speedKmh: pos.speedKmh, moving: pos.moving };
+        // Ida: hacia la base hasta que llega; vuelta: hacia el taller.
+        const destino =
+          otf.status === "finalizada"
+            ? otf.enCaminoBaseAtMs != null ? workshop : null
+            : otf.arrivedAtBaseMs == null && otf.lat != null && otf.lng != null
+              ? { lat: otf.lat, lng: otf.lng }
+              : null;
+        if (destino) {
+          try {
+            const e = await calcularETA({ lat: pos.lat, lng: pos.lng }, destino);
+            eta = { minutos: e.minutos, km: e.kilometros };
+          } catch { /* sin ETA */ }
+        }
+      } catch { /* sin posición */ }
+    }
+
+    let vanPlate: string | null = null;
+    try {
+      const vp = otf.webfleetVehicleId
+        ? await db.query(`SELECT plate FROM roadside_vehicles WHERE "webfleetVehicleId" = $1 LIMIT 1`, [otf.webfleetVehicleId])
+        : otf.assignedVehicleName
+          ? await db.query(`SELECT plate FROM roadside_vehicles WHERE name = $1 LIMIT 1`, [otf.assignedVehicleName])
+          : null;
+      vanPlate = vp?.rows[0]?.plate ?? null;
+    } catch { /* sin furgoneta */ }
+
+    res.json({
+      otf: { ...otf, primerTrabajoMs },
+      vehiclePosition,
+      eta,
+      workshop,
+      vanPlate,
+      actualizadoMs: Date.now(),
+      expired: !sigue,
+    });
+  } catch (e) {
+    console.error("GET /api/otf/:id/seguimiento error:", e);
+    res.status(500).json({ error: "Error obteniendo seguimiento" });
   }
 });
 
@@ -17654,21 +18416,27 @@ async function checkTechDisponibleParaOtf(
   techName: string | null | undefined,
   knownPlaceId: number | null,
   excludeOtfId?: number
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; esperaAsistenciaId?: number | null }> {
   const name = String(techName ?? "").trim();
-  if (!name) return { ok: true };
+  if (!name) return { ok: true, esperaAsistenciaId: null };
 
-  // ¿Está en una asistencia de carretera?
+  /*
+   * ¿Está en una asistencia de carretera? Antes eso RECHAZABA la OTF —«no se
+   * le puede asignar otra OTF hasta que termine»— y había que acordarse de
+   * volver a crearla más tarde. Ahora se crea igual y queda PENDIENTE detrás
+   * de esa asistencia: entra sola cuando el operario la cierra.
+   *
+   * La regla de abajo (una OTF abierta en otra base) sí sigue rechazando: dos
+   * OTF a la vez en sitios distintos no es «la siguiente», es un error.
+   */
   const tech = await db.query(
     `SELECT "currentRoadsideAssistanceId" FROM techs WHERE name = $1`,
     [name]
   );
-  if (tech.rows.length && tech.rows[0].currentRoadsideAssistanceId != null) {
-    return {
-      ok: false,
-      error: `${name} está en una asistencia en carretera (nº ${tech.rows[0].currentRoadsideAssistanceId}). No se le puede asignar otra OTF hasta que termine.`,
-    };
-  }
+  const esperaAsistenciaId =
+    tech.rows.length && tech.rows[0].currentRoadsideAssistanceId != null
+      ? Number(tech.rows[0].currentRoadsideAssistanceId)
+      : null;
 
   // ¿Tiene ya una OTF abierta?
   const abierta = await db.query(
@@ -17678,14 +18446,14 @@ async function checkTechDisponibleParaOtf(
      ORDER BY "createdAtMs" DESC LIMIT 1`,
     [name, excludeOtfId ?? null]
   );
-  if (!abierta.rows.length) return { ok: true };
+  if (!abierta.rows.length) return { ok: true, esperaAsistenciaId };
 
   const actual = abierta.rows[0];
   const mismaBase =
     knownPlaceId != null &&
     actual.knownPlaceId != null &&
     Number(actual.knownPlaceId) === Number(knownPlaceId);
-  if (mismaBase) return { ok: true }; // ampliación del trabajo en su base actual
+  if (mismaBase) return { ok: true, esperaAsistenciaId }; // ampliación del trabajo en su base actual
 
   return {
     ok: false,
@@ -17830,17 +18598,18 @@ app.post("/api/otf", requireSupervisorRole, async (req, res) => {
     if (!disp.ok) return res.status(409).json({ error: disp.error, code: "TECH_OCUPADO" });
     const r = await db.query(
       `INSERT INTO otf ("workshopId","clientName","clientId","knownPlaceId","baseName",direccion,lat,lng,
-        "fechaProgramadaMs",status,"assignedTechName","assignedVehicleName","webfleetVehicleId",notas,"createdAtMs","updatedAtMs")
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'planificada',$10,$11,$12,$13,$14,$14) RETURNING *`,
+        "fechaProgramadaMs",status,"assignedTechName","assignedVehicleName","webfleetVehicleId",notas,"createdAtMs","updatedAtMs",
+        "esperaAsistenciaId")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'planificada',$10,$11,$12,$13,$14,$14,$15) RETURNING *`,
       [
         b.workshopId ?? null, String(b.clientName ?? "").trim(), b.clientId ?? null, b.knownPlaceId ?? null,
         b.baseName ?? null, b.direccion ?? null,
         b.lat != null ? Number(b.lat) : null, b.lng != null ? Number(b.lng) : null,
         b.fechaProgramadaMs ?? null, b.assignedTechName ?? null, b.assignedVehicleName ?? null,
-        b.webfleetVehicleId ?? null, b.notas ?? null, now,
+        b.webfleetVehicleId ?? null, b.notas ?? null, now, disp.esperaAsistenciaId ?? null,
       ]
     );
-    res.json(normalizeOtf(r.rows[0]));
+    res.json({ ...normalizeOtf(r.rows[0]), enEspera: disp.esperaAsistenciaId != null });
   } catch (e) {
     console.error("POST /api/otf error:", e);
     res.status(500).json({ error: "Error creando OTF" });
@@ -17880,6 +18649,11 @@ app.put("/api/otf/:id", requireSupervisorRole, async (req, res) => {
         id
       );
       if (!disp.ok) return res.status(409).json({ error: disp.error, code: "TECH_OCUPADO" });
+      // Cambiar de operario cambia detrás de qué espera: se recalcula.
+      await db.query(`UPDATE otf SET "esperaAsistenciaId" = $2 WHERE id = $1`, [
+        id,
+        disp.esperaAsistenciaId ?? null,
+      ]);
     }
 
     await db.query(
@@ -17962,8 +18736,9 @@ app.get("/api/roadside-operator/otf", requireRoadsideOperator, async (req, res) 
   try {
     const operator = (req as any).roadsideOperator as { techName: string };
     const r = await db.query(
-      `SELECT * FROM otf WHERE "assignedTechName" = $1 AND status NOT IN ('finalizada','cancelada')
-       ORDER BY "createdAtMs" DESC LIMIT 100`,
+      `SELECT o.*, ${OTF_EN_ESPERA_SQL} AS "enEspera" FROM otf o
+        WHERE o."assignedTechName" = $1 AND o.status NOT IN ('finalizada','cancelada')
+        ORDER BY o."createdAtMs" DESC LIMIT 100`,
       [operator.techName]
     );
     const ids = r.rows.map((x: any) => Number(x.id));
@@ -17998,6 +18773,20 @@ app.post("/api/roadside-operator/otf/:id/checkin", requireRoadsideOperator, asyn
   try {
     const id = Number(req.params.id);
     const now = Date.now();
+    /*
+     * Mientras espera, no arranca. Lo decide el servidor y no la APK, para que
+     * valga para los móviles que ya están instalados sin publicar otra.
+     */
+    const espera = await db.query(
+      `SELECT o."esperaAsistenciaId" AS tras FROM otf o WHERE o.id = $1 AND ${OTF_EN_ESPERA_SQL}`,
+      [id]
+    );
+    if (espera.rows[0]) {
+      return res.status(409).json({
+        error: `Esta OTF está pendiente: empieza cuando cierres la asistencia #${espera.rows[0].tras}.`,
+        code: "OTF_EN_ESPERA",
+      });
+    }
     await db.query(
       `UPDATE otf SET status = CASE WHEN status = 'planificada' THEN 'en_curso' ELSE status END,
          "arrivedAtBaseMs" = COALESCE("arrivedAtBaseMs", $2), "updatedAtMs" = $2
@@ -21050,16 +21839,11 @@ async function vigilarSalidaDelTaller() {
   autoEnCaminoRunning = true;
   try {
     const asignadas = await db.query(
-      `SELECT id, "webfleetVehicleId", "autoEnCaminoArmada"
+      `SELECT id, "webfleetVehicleId", "autoEnCaminoArmada", "workshopId"
        FROM roadside_assistances
        WHERE status = 'asignada' AND "webfleetVehicleId" IS NOT NULL`
     );
     if (!asignadas.rows.length) return;
-
-    const wcfg = await getWorkshopConfig();
-    const wlat = parseFloat(wcfg.taller_lat);
-    const wlng = parseFloat(wcfg.taller_lng);
-    if (!Number.isFinite(wlat) || !Number.isFinite(wlng)) return;
 
     // Una sola llamada trae la posición de toda la flota
     const { url, headers } = buildWebfleetRequest("showObjectReportExtern");
@@ -21080,6 +21864,11 @@ async function vigilarSalidaDelTaller() {
     for (const a of asignadas.rows) {
       const pos = posByObj.get(String(a.webfleetVehicleId));
       if (!pos) continue;
+      // Cada asistencia sale de SU taller.
+      const wcfg = await getWorkshopConfig(a.workshopId ?? null);
+      const wlat = parseFloat(wcfg.taller_lat);
+      const wlng = parseFloat(wcfg.taller_lng);
+      if (!Number.isFinite(wlat) || !Number.isFinite(wlng)) continue;
       const dist = haversineDistanceM(pos.lat, pos.lng, wlat, wlng);
       if (dist <= AUTO_EN_CAMINO_RADIO_M) {
         // Furgoneta vista en el taller: se arma el disparo automático

@@ -3,13 +3,23 @@ import { apiFetch } from "../modules/apiFetch";
 import { useEffect, useState } from "react";
 import { formatoEntradaParte, resumenTarjeta } from "../modules/tarjetaTrabajo";
 import PuntoEnCola from "./PuntoEnCola";
+import SeguimientoAsistenciaCard from "./SeguimientoAsistenciaCard";
+import SeguimientoOtfCard from "./SeguimientoOtfCard";
+import { tieneSeguimiento } from "../modules/seguimientoEnTarjeta";
+import { matriculaDeFurgoneta, type FurgonetaConocida } from "../modules/furgonetaDelTrabajo";
+import { nombreConPapel, papelDelOperario } from "../modules/papelDelOperario";
 import {
+  chipDeSituacion,
   claseDeSituacion,
   emojiDeSituacion,
   situacionDeTecnico,
   type SituacionTecnico,
 } from "../modules/colorEstadoTecnico";
 import { horaDeRecepcion, type RecepcionVehiculo } from "../modules/recepcionVehiculo";
+import { ETIQUETA_ASISTENCIA_EN_CURSO } from "../modules/asistenciaEnCurso";
+import { FLUJO_SALIDA, destinoDeSalida, esSalida, etiquetaDeMotivo } from "../modules/salidasTaller";
+import { ETIQUETA_OTF, otfDelTecnico, otfsEnCurso, progresoDeOtf, textoDeOtf, type OtfEnPantalla } from "../modules/otfEnPantalla";
+import { getAdminHeaders } from "../modules/adminHeaders";
 
 type AreaKey = "camion" | "movil" | "tacografo" | "turismo" | "mecanica";
 
@@ -33,6 +43,8 @@ type JobForOperarios = {
   pausedAtMs?: number | string | null;
   linkedGroupId?: string | null;
   linkedOrder?: 1 | 2 | null;
+  /** Furgoneta del trabajo móvil, para ponerla al lado del operario. */
+  assignedVehicleId?: number | null;
   dependsOnJobId?: number | null;
   blockedReason?: string | null;
   includedTasks?: {
@@ -70,14 +82,21 @@ type RoadsideAssistanceForOperarios = {
   assignedTechName?: string | null;
   etaMinutos?: number | null;
   etaKm?: string | null;
+  /** Con token se pinta el seguimiento (aviso, mapa y pasos) dentro de la tarjeta. */
+  trackingToken?: string | null;
+  sinSeguimiento?: boolean | null;
+  /** Furgoneta con la que ha salido, para ponerla al lado del operario. */
+  assignedVehicleName?: string | null;
+  /** Salida de taller (repartir, buscar recambios…) en vez de asistencia. */
+  tipo?: string | null;
+  motivo?: string | null;
+  address?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
 };
 
-const ROADSIDE_STATUS_LABELS: Record<string, string> = {
-  asignada: "Asignada",
-  en_camino: "En camino",
-  en_punto: "En el punto",
-  inicio_reparacion: "Reparando",
-};
+// Qué asistencias siguen en curso y cómo se llaman: src/modules/asistenciaEnCurso.ts.
+const ROADSIDE_STATUS_LABELS = ETIQUETA_ASISTENCIA_EN_CURSO;
 
 type OperationLabelJob = Pick<
   JobForOperarios,
@@ -88,6 +107,8 @@ type Props = {
   jobs: JobForOperarios[];
   techs: TechForOperarios[];
   roadsideAssistances?: RoadsideAssistanceForOperarios[];
+  /** Las furgonetas del taller, para pasar de id o nombre a matrícula. */
+  vehicles?: FurgonetaConocida[];
   finishJob: (jobId: number) => void;
   moveJobToStandBy: (jobId: number) => void;
   getOperationLabel: (job: OperationLabelJob) => string;
@@ -267,6 +288,7 @@ function getTechStatusLabel(status: string) {
   if (normalized === "permiso") return "PERMISO";
   if (normalized === "supervisor") return "SUPERVISOR";
   if (normalized === "refuerzo") return "REFUERZO";
+  if (normalized === "formacion") return "FORMACIÓN";
 
   return (status || "-").toUpperCase();
 }
@@ -338,6 +360,24 @@ function getAssignedMaintenanceStatusClass(
   if (status === "interrumpida") return "bg-sky-100 text-sky-700";
 
   return "bg-amber-100 text-amber-700";
+}
+
+/**
+ * La matrícula de la furgoneta, en una etiqueta propia al lado de la del
+ * operario: misma caja blanca y mismo tamaño de letra que el nombre, para
+ * que desde la TV se lean igual. Sin furgoneta no pinta nada.
+ */
+function ChipFurgoneta({ matricula }: { matricula: string | null }) {
+  if (!matricula) return null;
+  return (
+    <div
+      title="Furgoneta"
+      className="flex items-center gap-3 rounded-2xl bg-white px-3 py-2 shadow-sm"
+    >
+      <img src="/van-icon.png" alt="" className="h-8 w-auto" />
+      <div className="font-mono text-2xl font-black tracking-wide">{matricula}</div>
+    </div>
+  );
 }
 
 function TechAvatar({
@@ -642,6 +682,7 @@ export default function OperariosTVView({
   jobs,
   techs,
   roadsideAssistances = [],
+  vehicles = [],
   finishJob,
   moveJobToStandBy,
   getOperationLabel,
@@ -654,6 +695,29 @@ export default function OperariosTVView({
   agendados = [],
 }: Props) {
   const [nowTick, setNowTick] = useState(Date.now());
+
+  /*
+   * Las OTF de Assist (operario en la base de un cliente). No llegan con las
+   * asistencias: se piden aquí cada 20 s, y si no hay respuesta se deja lo
+   * último que había. Ver src/modules/otfEnPantalla.ts.
+   */
+  const [otfs, setOtfs] = useState<OtfEnPantalla[]>([]);
+  useEffect(() => {
+    let activo = true;
+    async function cargar() {
+      try {
+        const res = await apiFetch(`${API_BASE}/api/otf-en-curso`, { headers: getAdminHeaders() });
+        const body = await res.json().catch(() => []);
+        if (activo && res.ok && Array.isArray(body)) setOtfs(body);
+      } catch {
+        /* sin red se deja lo último */
+      }
+    }
+    void cargar();
+    const t = window.setInterval(() => void cargar(), 20_000);
+    return () => { activo = false; window.clearInterval(t); };
+  }, []);
+  const otfsActivas = otfsEnCurso(otfs);
   const [maintenanceApiLoaded, setMaintenanceApiLoaded] = useState(false);
   const [maintenanceLastSyncAt, setMaintenanceLastSyncAt] = useState<
     number | null
@@ -1218,6 +1282,8 @@ export default function OperariosTVView({
   const asistenciasEnCurso = roadsideAssistances.filter(
     (a) => a.assignedTechName && ROADSIDE_STATUS_LABELS[a.status] != null
   );
+  const fechaHora = (ms?: number | null) =>
+    ms ? new Date(ms).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : "";
   const validationJobs = jobs.filter((job) => job.status === "validacion");
   const standByJobs = jobs.filter((job) => job.status === "parado");
   const waitingJobs = jobs.filter((job) => job.status === "espera");
@@ -1293,12 +1359,39 @@ export default function OperariosTVView({
 
           {activeJobs.length === 0 &&
           asistenciasEnCurso.length === 0 &&
+          otfsActivas.length === 0 &&
           pendingAssignedMaintenanceTasks.length === 0 ? (
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
               No hay trabajos activos ni tareas de mantenimiento asignadas.
             </div>
           ) : (
             <div className="grid gap-3 2xl:grid-cols-2">
+              {otfsActivas.map((o) => {
+                const tech = techs.find((t) => t.name === o.assignedTechName);
+                return (
+                  <div key={`otf-${o.id}`} className="rounded-3xl border border-amber-200 bg-amber-50 p-4">
+                    <div className="mb-3 flex flex-wrap gap-3">
+                      <div className="flex items-center gap-3 rounded-2xl bg-white px-3 py-2 shadow-sm">
+                        <TechAvatar tech={tech} size="large" />
+                        <div className="text-2xl font-black">{nombreConPapel(String(o.assignedTechName), "responsable")}</div>
+                      </div>
+                      <ChipFurgoneta matricula={matriculaDeFurgoneta({ assignedVehicleName: o.assignedVehicleName }, vehicles)} />
+                    </div>
+                    <div className="mb-1 flex items-center gap-2">
+                      <span className="rounded-full bg-amber-200 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-900">OTF · flota</span>
+                      <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-amber-800">
+                        {ETIQUETA_OTF[o.status] ?? o.status}
+                        {o.status === "en_curso" && o.arrivedAtBaseMs ? ` · desde ${fechaHora(o.arrivedAtBaseMs)}` : ""}
+                        {o.status === "planificada" && o.fechaProgramadaMs ? ` · ${fechaHora(o.fechaProgramadaMs)}` : ""}
+                      </span>
+                    </div>
+                    <div className="text-xl font-black leading-tight text-slate-950">{o.clientName || "Cliente"}</div>
+                    <div className="text-sm font-semibold text-amber-900">{o.baseName || o.direccion || ""}</div>
+                    {progresoDeOtf(o) && <div className="mt-1 text-xs font-bold text-amber-800">{progresoDeOtf(o)}</div>}
+                    <SeguimientoOtfCard otfId={o.id} apiBase={API_BASE} otf={o} />
+                  </div>
+                );
+              })}
               {asistenciasEnCurso.map((a) => {
                 const tech = techs.find((t) => t.name === a.assignedTechName);
                 return (
@@ -1309,21 +1402,37 @@ export default function OperariosTVView({
                     <div className="mb-3 flex flex-wrap gap-3">
                       <div className="flex items-center gap-3 rounded-2xl bg-white px-3 py-2 shadow-sm">
                         <TechAvatar tech={tech} size="large" />
-                        <div className="text-2xl font-black">{a.assignedTechName}</div>
+                        <div className="text-2xl font-black">{nombreConPapel(String(a.assignedTechName), "responsable")}</div>
                       </div>
+                      <ChipFurgoneta matricula={matriculaDeFurgoneta(a, vehicles)} />
                     </div>
                     <div className="mb-1 flex items-center gap-2">
                       <span className="rounded-full bg-emerald-200 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-900">
-                        Asistencia carretera
+                        {esSalida(a) ? `Salida · ${etiquetaDeMotivo(a.motivo)}` : "Asistencia carretera"}
                       </span>
                       <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-emerald-800">
                         {ROADSIDE_STATUS_LABELS[a.status] ?? a.status}
                         {a.etaMinutos != null ? ` · ETA ${a.etaMinutos} min` : ""}
                       </span>
                     </div>
-                    <div className="text-3xl font-black text-slate-950">{a.plate || "—"}</div>
-                    {a.customerName && (
-                      <div className="text-sm font-semibold text-emerald-900">{a.customerName}</div>
+                    {esSalida(a) ? (
+                      <div className="text-xl font-black leading-tight text-slate-950">{destinoDeSalida(a)}</div>
+                    ) : (
+                      <>
+                        <div className="text-3xl font-black text-slate-950">{a.plate || "—"}</div>
+                        {a.customerName && (
+                          <div className="text-sm font-semibold text-emerald-900">{a.customerName}</div>
+                        )}
+                      </>
+                    )}
+                    {tieneSeguimiento(a) && (
+                      <SeguimientoAsistenciaCard
+                        trackingToken={String(a.trackingToken)}
+                        status={a.status}
+                        etaMinutos={a.etaMinutos}
+                        etaKm={a.etaKm}
+                        flujo={esSalida(a) ? FLUJO_SALIDA : undefined}
+                      />
                     )}
                   </div>
                 );
@@ -1350,7 +1459,7 @@ export default function OperariosTVView({
                               className="flex items-center gap-3 rounded-2xl bg-white px-3 py-2 shadow-sm"
                             >
                               <TechAvatar tech={tech} size="large" />
-                              <div className="text-2xl font-black">{name}</div>
+                              <div className="text-2xl font-black">{nombreConPapel(name, papelDelOperario(name, assignedNames))}</div>
                             </div>
                           );
                         })
@@ -1359,6 +1468,7 @@ export default function OperariosTVView({
                           Sin técnicos asignados
                         </div>
                       )}
+                      <ChipFurgoneta matricula={matriculaDeFurgoneta(job, vehicles)} />
                     </div>
 
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -1740,6 +1850,8 @@ export default function OperariosTVView({
                 asistenciasEnCurso.find((a) => a.assignedTechName === tech.name) ??
                 null;
 
+              const otfActiva = otfDelTecnico(otfs, tech.name);
+
               const validationProposal = jobs.find(
                 (job) =>
                   job.status === "validacion" &&
@@ -1764,12 +1876,19 @@ export default function OperariosTVView({
 
               // Una sola lectura de la situación: la usan el color de la
               // tarjeta y la cara de la redonda, y así no pueden discrepar.
+              // Responsable o apoyo en su trabajo: decide el rojo y el texto del nombre.
+              const papel = currentJob
+                ? papelDelOperario(tech.name, currentJob.assignedNames)
+                : activeRoadsideAssistance || otfActiva
+                  ? "responsable"
+                  : null;
               const situacion = situacionDeTecnico(normalizeTechStatus(tech.status), {
-                enAsistencia: Boolean(activeRoadsideAssistance),
+                enAsistencia: Boolean(activeRoadsideAssistance) || Boolean(otfActiva),
                 mantenimientoFuera: Boolean(pendingOutsideMaintenanceTask),
                 mantenimientoEnTaller: Boolean(pendingWorkshopMaintenanceTask),
                 reservadoParaValidar: Boolean(isReservedForValidation),
                 trabajando: Boolean(currentJob),
+                apoyo: papel === "apoyo",
               });
 
               return (
@@ -1783,7 +1902,7 @@ export default function OperariosTVView({
 
                       <div className="min-w-0">
                         <div className="truncate text-lg font-black">
-                          {tech.name}
+                          {nombreConPapel(tech.name, papel)}
                         </div>
 
                         <div className="truncate text-xs font-semibold opacity-80">
@@ -1798,6 +1917,8 @@ export default function OperariosTVView({
                                   ROADSIDE_STATUS_LABELS[activeRoadsideAssistance.status] ?? activeRoadsideAssistance.status
                                 }${activeRoadsideAssistance.etaMinutos != null ? ` · ETA ${activeRoadsideAssistance.etaMinutos} min` : ""}`}</span>
                               </span>
+                            : otfActiva
+                            ? textoDeOtf(otfActiva)
                             : currentJob
                             ? `${currentJob.plate} · ${getOperationLabel(
                                 currentJob
@@ -1816,9 +1937,11 @@ export default function OperariosTVView({
                     </div>
 
                     <div className="flex items-center gap-1 shrink-0">
-                      <span className="rounded-full border border-white/80 bg-white/80 px-2 py-1 text-[10px] font-black">
+                      <span className={`rounded-full px-2.5 py-1 text-[10px] font-black ${chipDeSituacion(situacion)}`}>
                         {activeRoadsideAssistance
                           ? "CARRETERA"
+                          : otfActiva
+                          ? "OTF"
                           : pendingOutsideMaintenanceTask
                           ? "FUERA TALLER"
                           : pendingWorkshopMaintenanceTask

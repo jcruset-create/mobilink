@@ -15,7 +15,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Check, ShieldCheck, ShieldOff } from "lucide-react";
-import { Aviso, ErrorBox, TableWrap, thCls, tdCls, inputCls, btnPrimary, btnSecondary, btnMini } from "./ui";
+import { Aviso, ErrorBox, inputCls, btnPrimary, btnSecondary } from "./ui";
 import type { Accesos, AccesoUsuario } from "../types";
 import * as api from "../services/api";
 
@@ -28,17 +28,14 @@ const ROL: Record<string, string> = {
 
 type Borrador = { centroId: string | null; cajas: number[] };
 
-const mismo = (a: Borrador, u: AccesoUsuario) =>
-  a.centroId === u.centroId &&
-  a.cajas.length === u.cajas.length &&
-  [...a.cajas].sort((x, y) => x - y).every((c, i) => c === [...u.cajas].sort((x, y) => x - y)[i]);
-
 export default function AccesoCajas() {
   const [datos, setDatos] = useState<Accesos | null>(null);
   const [borradores, setBorradores] = useState<Record<string, Borrador>>({});
   const [error, setError] = useState("");
   const [ocupado, setOcupado] = useState("");
   const [forzable, setForzable] = useState(false);
+  /** Usuario cuyo último cambio acaba de guardarse: se le pone «✓ Guardado». */
+  const [guardado, setGuardado] = useState("");
 
   const cargar = useCallback(async () => {
     try {
@@ -65,19 +62,43 @@ export default function AccesoCajas() {
   const borradorDe = (u: AccesoUsuario): Borrador =>
     borradores[u.userId] ?? { centroId: u.centroId, cajas: u.cajas };
 
-  function cambiar(u: AccesoUsuario, b: Borrador) {
+  /*
+   * Cada cambio se guarda al momento. Había un botón «Guardar» al final de la
+   * fila, y en el móvil la tabla no cabía: el botón quedaba fuera de la
+   * pantalla, el cambio se veía hecho y al recargar volvía como estaba.
+   * Mientras se guarda, la fila enseña ya lo nuevo (el borrador).
+   */
+  async function cambiar(u: AccesoUsuario, b: Borrador) {
     setBorradores((prev) => ({ ...prev, [u.userId]: b }));
-  }
-
-  async function guardar(u: AccesoUsuario) {
-    const b = borradorDe(u);
     setOcupado(u.userId);
     setError("");
+    setGuardado("");
     try {
       await api.fijarAcceso(u.userId, b.centroId, b.cajas);
       await cargar();
+      setGuardado(u.userId);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "No se ha podido guardar");
+      setError(`${u.nombre}: ${e instanceof Error ? e.message : "no se ha podido guardar"}`);
+      // Vuelve a lo que hay guardado de verdad.
+      setBorradores((prev) => {
+        const resto = { ...prev };
+        delete resto[u.userId];
+        return resto;
+      });
+    } finally {
+      setOcupado("");
+    }
+  }
+
+  async function configuracion(u: AccesoUsuario) {
+    setOcupado(`config:${u.userId}`);
+    setError("");
+    try {
+      await api.fijarConfiguracionUsuario(u.userId, !u.puedeConfigurar);
+      await cargar();
+      setGuardado(u.userId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido cambiar");
     } finally {
       setOcupado("");
     }
@@ -181,40 +202,50 @@ export default function AccesoCajas() {
         </Aviso>
       )}
 
-      <TableWrap>
-        <thead>
-          <tr>
-            <th className={thCls}>Usuario</th>
-            <th className={thCls}>Rol</th>
-            <th className={thCls}>Taller</th>
-            <th className={thCls}>Cajas</th>
-            <th className={thCls}></th>
-          </tr>
-        </thead>
-        <tbody>
-          {datos.usuarios.length === 0 && (
-            <tr>
-              <td className={tdCls} colSpan={5}>
-                Nadie tiene acceso a Mobilink Cash todavía. Se da desde Administración → Usuarios.
-              </td>
-            </tr>
-          )}
-          {datos.usuarios.map((u) => {
-            const b = borradorDe(u);
-            const cajasDelTaller = cajasActivas.filter((c) => !b.centroId || c.centroId === b.centroId);
-            const sucio = !mismo(b, u);
-            const sinCaja = u.limitadoPorCaja && b.cajas.length === 0;
-            return (
-              <tr key={u.userId} className={u.activo ? "" : "opacity-50"}>
-                <td className={tdCls}>
-                  <div className="font-medium text-slate-100">{u.nombre}</div>
-                  <div className="text-[11px] text-slate-500">
+      {/*
+        Una tarjeta por usuario y no una tabla: en el móvil la tabla no cabía y
+        lo de la derecha (Configuración, el botón de guardar) quedaba fuera de
+        la pantalla sin que se notara.
+      */}
+      {datos.usuarios.length === 0 && (
+        <p className="rounded-lg border border-slate-700 bg-slate-800 p-3 text-[13px] text-slate-400">
+          Nadie tiene acceso a Mobilink Cash todavía. Se da desde Administración → Usuarios.
+        </p>
+      )}
+      <div className="space-y-2">
+        {datos.usuarios.map((u) => {
+          const b = borradorDe(u);
+          const cajasDelTaller = cajasActivas.filter((c) => !b.centroId || c.centroId === b.centroId);
+          const sinCaja = u.limitadoPorCaja && b.cajas.length === 0;
+          const guardando = ocupado === u.userId || ocupado === `config:${u.userId}`;
+          return (
+            <div
+              key={u.userId}
+              className={`space-y-2 rounded-lg border border-slate-700 bg-slate-800 p-3 ${u.activo ? "" : "opacity-50"}`}
+            >
+              <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                <div className="min-w-0">
+                  <span className="font-semibold text-slate-100">{u.nombre}</span>{" "}
+                  <span className="text-[11px] text-slate-500">
                     @{u.username}
                     {!u.activo && " · dado de baja"}
-                  </div>
-                </td>
-                <td className={tdCls}>{ROL[u.rol ?? ""] ?? u.rol ?? "—"}</td>
-                <td className={tdCls}>
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 text-[12px]">
+                  <span className="rounded-md bg-slate-700 px-2 py-0.5 text-slate-200">
+                    {ROL[u.rol ?? ""] ?? u.rol ?? "—"}
+                  </span>
+                  {guardando ? (
+                    <span className="text-slate-400">Guardando…</span>
+                  ) : guardado === u.userId ? (
+                    <span className="text-emerald-300">✓ Guardado</span>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="grid gap-2 sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)] sm:items-start">
+                <label className="block">
+                  <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Taller</span>
                   <select
                     value={b.centroId ?? ""}
                     disabled={limitado || ocupado !== ""}
@@ -225,9 +256,9 @@ export default function AccesoCajas() {
                       const validas = new Set(
                         datos.cajas.filter((c) => !centroId || c.centroId === centroId).map((c) => c.id)
                       );
-                      cambiar(u, { centroId, cajas: b.cajas.filter((c) => validas.has(c)) });
+                      void cambiar(u, { centroId, cajas: b.cajas.filter((c) => validas.has(c)) });
                     }}
-                    className={inputCls}
+                    className={`${inputCls} w-full`}
                   >
                     {!limitado && <option value="">Toda la empresa</option>}
                     {datos.talleres
@@ -238,8 +269,10 @@ export default function AccesoCajas() {
                         </option>
                       ))}
                   </select>
-                </td>
-                <td className={tdCls}>
+                </label>
+
+                <div>
+                  <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Cajas</span>
                   {u.limitadoPorCaja ? (
                     <div className="flex flex-wrap gap-1.5">
                       {cajasDelTaller.length === 0 && (
@@ -253,7 +286,7 @@ export default function AccesoCajas() {
                             type="button"
                             disabled={ocupado !== ""}
                             onClick={() =>
-                              cambiar(u, {
+                              void cambiar(u, {
                                 ...b,
                                 cajas: marcada ? b.cajas.filter((x) => x !== c.id) : [...b.cajas, c.id],
                               })
@@ -272,9 +305,7 @@ export default function AccesoCajas() {
                           </button>
                         );
                       })}
-                      {sinCaja && (
-                        <span className="self-center text-[11px] text-amber-300">Sin caja</span>
-                      )}
+                      {sinCaja && <span className="self-center text-[11px] text-amber-300">Sin caja</span>}
                     </div>
                   ) : (
                     <span className="text-[12px] text-slate-400">
@@ -283,40 +314,43 @@ export default function AccesoCajas() {
                         : "Todas las de la empresa"}
                     </span>
                   )}
-                </td>
-                <td className={tdCls}>
-                  {sucio && (
-                    <div className="flex gap-1">
-                      <button
-                        className={btnMini}
-                        disabled={ocupado !== ""}
-                        onClick={() => void guardar(u)}
-                      >
-                        {ocupado === u.userId ? "Guardando…" : "Guardar"}
-                      </button>
-                      <button
-                        className={btnMini}
-                        disabled={ocupado !== ""}
-                        onClick={() =>
-                          setBorradores((prev) => {
-                            const { [u.userId]: _, ...resto } = prev;
-                            return resto;
-                          })
-                        }
-                      >
-                        Deshacer
-                      </button>
-                    </div>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </TableWrap>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 text-[12px]">
+                <span className="text-[10px] font-semibold uppercase text-slate-400">Configuración</span>
+                {u.rol === "admin" ? (
+                  <span className="text-slate-400">Entra siempre</span>
+                ) : u.rol === "responsable" ? (
+                  <button
+                    type="button"
+                    disabled={ocupado !== ""}
+                    onClick={() => void configuracion(u)}
+                    title={
+                      u.puedeConfigurar
+                        ? "Puede entrar en Configuración. Pulsa para quitárselo."
+                        : "No entra en Configuración. Pulsa para dárselo."
+                    }
+                    className={`rounded-md border px-2 py-1 ${
+                      u.puedeConfigurar
+                        ? "border-emerald-600 bg-emerald-500/15 text-emerald-200"
+                        : "border-slate-600 text-slate-400 hover:border-slate-400"
+                    }`}
+                  >
+                    {u.puedeConfigurar ? "✓ Puede" : "No"}
+                  </button>
+                ) : (
+                  <span className="text-slate-500">No entra</span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
       <p className="text-[11px] text-slate-500">
         Quién entra en Mobilink Cash y con qué rol se decide en Administración → Usuarios. Aquí, dónde
-        trabaja cada uno.
+        trabaja cada uno y qué responsables entran en Configuración (el admin entra siempre; cajeros y
+        consulta, nunca).
       </p>
     </section>
   );

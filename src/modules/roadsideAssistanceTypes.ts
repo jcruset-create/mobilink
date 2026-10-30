@@ -65,6 +65,9 @@ export type RoadsideOperatorCode = {
 export type RoadsideAssistance = {
   id: number;
   workshopId?: WorkshopId | string | null;
+  /** «salida»: salida de taller (repartir, buscar recambios…), sin cliente. */
+  tipo?: "asistencia" | "salida";
+  motivo?: string | null;
   status: RoadsideAssistanceStatus;
   priority: RoadsideAssistancePriority;
   customerName: string;

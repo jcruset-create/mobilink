@@ -20,6 +20,7 @@ export function normalizeTechStatus(status?: string | null): TechStatus {
   if (value === "baja") return "baja";
   if (value === "otro_taller") return "otro_taller";
   if (value === "en_otro_taller") return "otro_taller";
+  if (value === "formacion") return "formacion";
   if (value === "supervisor") return "supervisor";
 
   return "disponible";
@@ -32,6 +33,7 @@ export const HARD_BLOCKED_TECH_STATUSES = [
   "en_otro_taller",
   "permiso",
   "nodisponible",
+  "formacion",
 ];
 
 export function isHardBlockedTechStatus(status?: string | null) {
@@ -69,6 +71,7 @@ export function isUnavailableTechStatus(status?: string | null) {
     "permiso",
     "otro_taller",
     "en_otro_taller",
+    "formacion",
   ].includes(normalized);
 }
 
@@ -80,7 +83,8 @@ export function isTechUnavailableForAssignment(tech: Tech) {
     tech.status === "vacaciones" ||
     tech.status === "permiso" ||
     tech.status === "otro_taller" ||
-    tech.status === "nodisponible"
+    tech.status === "nodisponible" ||
+    tech.status === "formacion"
   );
 }
 
@@ -94,6 +98,7 @@ export function getTechStatusLabel(status: TechStatus) {
   if (status === "baja") return "Baja";
   if (status === "permiso") return "Permiso";
   if (status === "otro_taller") return "En otro taller";
+  if (status === "formacion") return "Formación";
   return status;
 }
 
@@ -124,6 +129,10 @@ export function getTechStatusColor(status: TechStatus) {
 
   if (status === "otro_taller") {
     return "bg-indigo-50 border-indigo-200 text-indigo-700";
+  }
+
+  if (status === "formacion") {
+    return "bg-sky-50 border-sky-200 text-sky-700";
   }
 
   return "bg-slate-50 border-slate-200 text-slate-700";

@@ -26,6 +26,8 @@ import { hasAi } from "../core/ai.ts";
 import { pedirIA } from "../core/openaiService.ts";
 import { normalizarMatricula, patronBusquedaMatricula } from "../tyrecontrol/matricula.ts";
 import { normalizeRecepcionRow } from "./normaliza.ts";
+import { firmarUrls } from "../core/fotosFirmadas.ts";
+import { tipoDeFotoRecepcion } from "../../src/modules/fotosDeRecepcion.ts";
 import {
   esClaveDuplicada,
   INTENTOS_DE_ID,
@@ -66,6 +68,27 @@ function fallo(res: Response, contexto: string, e: unknown) {
   return res
     .status(500)
     .json({ error: `Error en la recepción de vehículos (${contexto})` });
+}
+
+/**
+ * Las fotos con un enlace que funcione.
+ *
+ * En la base queda la URL pública del día que se subieron; si el bucket deja
+ * de ser público, dejan de verse todas, como pasó con las de las asistencias.
+ * Se firma una nueva al servirlas (server/core/fotosFirmadas.ts). Las que no
+ * se puedan firmar se devuelven como estaban.
+ */
+async function conFotosFirmadas<T extends { fotos: any[] }>(filas: T[]): Promise<T[]> {
+  const urls: string[] = [];
+  for (const r of filas) for (const f of r.fotos ?? []) if (typeof f?.url === "string") urls.push(f.url);
+  if (urls.length === 0) return filas;
+  const firmadas = await firmarUrls(urls);
+  for (const r of filas) {
+    r.fotos = (r.fotos ?? []).map((f: any) =>
+      typeof f?.url === "string" && firmadas[f.url] ? { ...f, url: firmadas[f.url] } : f
+    );
+  }
+  return filas;
 }
 
 function texto(valor: unknown): string {
@@ -373,7 +396,7 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
           ORDER BY "creadaAtMs" DESC LIMIT 50`,
         [texto(techName)]
       );
-      res.json(filas.rows.map(normalizeRecepcionRow));
+      res.json(await conFotosFirmadas(filas.rows.map(normalizeRecepcionRow)));
     } catch (e) {
       fallo(res, "mias", e);
     }
@@ -399,14 +422,18 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
           "image/webp": "webp",
         };
         const ext = extPorTipo[req.file.mimetype] ?? "jpg";
+        // Cuál es: la de la matrícula, la del cuadro o una del estado. La APK
+        // lo manda como campo del formulario; sin él, es del estado.
+        const tipo = tipoDeFotoRecepcion((req.body as any)?.tipo);
         const url = await subirFoto(
-          `recepciones/${id}/foto_${Date.now()}.${ext}`,
+          `recepciones/${id}/${tipo}_${Date.now()}.${ext}`,
           req.file.buffer,
           req.file.mimetype
         );
 
         const foto = {
           url,
+          tipo,
           nombre: req.file.originalname ?? null,
           creadaAtMs: Date.now(),
         };
@@ -577,7 +604,7 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
           ORDER BY "creadaAtMs" DESC LIMIT 300`,
         [estado, workshopId]
       );
-      res.json(filas.rows.map(normalizeRecepcionRow));
+      res.json(await conFotosFirmadas(filas.rows.map(normalizeRecepcionRow)));
     } catch (e) {
       fallo(res, "bandeja", e);
     }
@@ -593,7 +620,7 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
         [id]
       );
       if (filas.rowCount === 0) return res.status(404).json({ error: "No encontrada" });
-      res.json(normalizeRecepcionRow(filas.rows[0]));
+      res.json((await conFotosFirmadas([normalizeRecepcionRow(filas.rows[0])]))[0]);
     } catch (e) {
       fallo(res, "detalle", e);
     }

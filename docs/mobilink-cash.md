@@ -182,7 +182,8 @@ paralelo que mantener.
 | `consulta` | ver |
 | `cajero` | cobrar, pagar, mover efectivo, arquear, adjuntar justificantes |
 | `responsable` | además abrir/cerrar/reabrir, ajustar, anular, reintentar ERP, dar de alta cajas, pedir cambio al banco y entregar dinero |
-| `admin` | además configurar la integración y el catálogo de denominaciones |
+| `admin` | además configurar la integración |
+| superadministrador | además el catálogo de denominaciones, que es de toda la instalación |
 
 Las liquidaciones de gastos de trabajadores (§7 quaterdecies) tienen sus cuatro
 permisos: `cash.expense_claim.view` (consulta en adelante),
@@ -194,7 +195,10 @@ tampoco tiene `cash.payment.create_manual`.
 separados **porque su alcance es distinto**: las cajas son de la empresa, pero
 `cash_denominations` no tiene columna de empresa — es el catálogo de toda la
 instalación. Si un responsable pudiera desactivar la moneda de 1 c, se la
-estaría desactivando también a las demás empresas. La pantalla lo advierte.
+estaría desactivando también a las demás empresas. La pantalla lo advierte. Por eso
+`cash.denominations.configure` solo lo tiene el **superadministrador**: al
+admin de una empresa se le quita en `cargarPermisosCaja`, y lo ve en solo
+lectura.
 
 Los cobros y pagos distinguen permiso ERP de permiso manual
 (`cash.collection.create` vs `cash.collection.create_manual`), que era lo que
@@ -265,6 +269,19 @@ dentro de él, sus **cajas** (`cash_usuario_cajas`). Servidor en
 - **Sin caché:** quitarle una caja a alguien surte efecto en su siguiente
   petición. Cada cambio de asignación queda en la auditoría
   (`cash.access.assigned`), dentro de la misma transacción.
+
+**Quién entra en Configuración.** En la misma pantalla, la columna
+«Configuración»: el admin entra siempre (si se le pudiera quitar, nadie podría
+devolvérselo), cajero y consulta nunca, y cada **responsable** según su
+interruptor. Viene encendido —se guarda la excepción, en
+`cash_usuario_sin_configuracion`— para que al desplegar nadie pierda nada.
+Apagado, el servidor le retira `cash.configure`: el menú no enseña
+Configuración y sus rutas responden 403. Reclasificar la sección de un cobro
+en Jornada actual tiene su propio permiso (`cash.operation.reclassify`) y lo
+conserva. Ruta `PUT /api/cash/access/users/:userId/configuration`.
+
+Las casillas de «pantallas» de Cash en Administración → Usuarios se quitaron:
+no se aplicaban en ningún sitio.
 
 ## 7 bis. Formas de cobro
 
@@ -376,6 +393,15 @@ El escáner del mostrador saca un PDF y ese PDF se cuelga del cobro o del pago
 (`cash_operation_documents`). Al cerrar, un solo fichero reúne el papeleo del
 día: portada con el cierre y el arqueo, listado de operaciones, y **los
 escaneados detrás**.
+
+**Las anulaciones en el cierre.** Anular una operación la deja en `REVERSED` y
+asienta una reversión del mismo tipo, `CONFIRMED`, con el importe en positivo
+y `reversa_de_id`. Los totales de la jornada (`resumenJornada`: cobros, por
+forma de pago, por sección) y el cotejo con el ERP cuentan solo lo **vivo**:
+ni la anulada ni su reversión. Antes la reversión se contaba como un cobro más
+y un cobro anulado seguía saliendo en el cierre. Lo anulado sale en su propia
+sección del informe, **«Anulaciones»**: número, reversión, importe, cliente y
+motivo.
 
 - **El fichero no va en la base de datos**: vive en un bucket de Supabase
   Storage y aquí solo queda la ruta. La URL tampoco se guarda: se firma al
@@ -624,6 +650,13 @@ Decisiones que conviene no reabrir sin pensarlas:
 - El catálogo es **por empresa y configurable** (`cash_sections`), como las
   formas de cobro: mañana puede haber una tercera —tienda, lavadero— sin tocar
   código.
+- **Cada caja tiene sus secciones** (`cash_register_sections`), desde
+  Configuración → Cajas físicas: la de Agro Reus, solo Taller. Una caja sin
+  ninguna marcada tiene todas, que es lo de antes; marcar todas las activas se
+  guarda como «todas». Al cobrar solo salen las de la caja y, con una, no hay
+  selector. El servidor rechaza cobrar o reclasificar en una sección que la
+  caja no tiene (`SECCION_NO_DE_ESTA_CAJA`). Ruta
+  `PUT /api/cash/registers/:id/sections`.
 
 ## 7 octies. El descuadre del arqueo
 
