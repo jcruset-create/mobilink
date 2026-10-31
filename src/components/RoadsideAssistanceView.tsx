@@ -691,6 +691,7 @@ export default function RoadsideAssistanceView({
   const [livePos, setLivePos] = useState<{
     lat: number; lng: number; speedKmh: number | null; moving: boolean | null;
     etaMinutos: number | null; etaKm: string | null; destino: string;
+    fuente: "furgoneta" | "tablet" | null; antigua: boolean; posicionAtMs: number | null;
   } | null>(null);
   const [reportAssistance, setReportAssistance] = useState<RoadsideAssistance | null>(null);
   const [reportChannels, setReportChannels] = useState<{ whatsapp: boolean; email: boolean }>({
@@ -855,6 +856,8 @@ export default function RoadsideAssistanceView({
             setLivePos({
               lat: d.lat, lng: d.lng, speedKmh: d.speedKmh, moving: d.moving,
               etaMinutos: d.etaMinutos, etaKm: d.etaKm, destino: d.destino,
+              fuente: d.fuente ?? null, antigua: d.antigua === true,
+              posicionAtMs: d.posicionAtMs ?? null,
             });
           }
         })
@@ -4169,7 +4172,28 @@ export default function RoadsideAssistanceView({
 
                   <div className="mt-2 text-xs font-bold text-slate-500">
                     {mapAssistance.status === "en_camino_base" && (
-                      <span className="mr-2 rounded-full bg-teal-500/20 px-2 py-0.5 text-teal-300">🚐 Vuelta al taller · posición Webfleet</span>
+                      <span className="mr-2 rounded-full bg-teal-500/20 px-2 py-0.5 text-teal-300">🚐 Vuelta al taller</span>
+                    )}
+                    {livePos?.fuente && (
+                      <span
+                        className={`mr-2 rounded-full px-2 py-0.5 ${
+                          livePos.fuente === "tablet"
+                            ? "bg-amber-500/20 text-amber-300"
+                            : "bg-blue-500/20 text-blue-300"
+                        }`}
+                        title={
+                          livePos.fuente === "tablet"
+                            ? "Webfleet no da posición reciente: se usa el GPS de la tablet del operario"
+                            : "GPS de la furgoneta (Webfleet)"
+                        }
+                      >
+                        {livePos.fuente === "tablet" ? "📱 Posición: tablet del operario" : "📡 Posición: Webfleet"}
+                      </span>
+                    )}
+                    {livePos?.antigua && livePos.posicionAtMs != null && (
+                      <span className="mr-2 rounded-full bg-red-500/20 px-2 py-0.5 text-red-300">
+                        ⚠ Última posición de las {new Date(livePos.posicionAtMs).toLocaleTimeString()}
+                      </span>
                     )}
                     {livePos
                       ? `Actualizado: ${new Date().toLocaleTimeString()}`

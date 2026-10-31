@@ -429,6 +429,10 @@ export default function RoadsideTrackingPage() {
               <div className="px-4 py-2 text-xs font-semibold text-slate-400">
                 Última actualización: {formatTimeWithSeconds(assistance.etaActualizadoAt)}
                 {data?.etaWarning ? " · usando último ETA guardado" : ""}
+                {data?.vehiclePosition?.fuente === "tablet" ? " · posición por la tablet del técnico" : ""}
+                {data?.vehiclePosition?.antigua && data.vehiclePosition.atMs != null
+                  ? ` · última posición de las ${formatTimeWithSeconds(data.vehiclePosition.atMs)}`
+                  : ""}
               </div>
             )}
           </section>
