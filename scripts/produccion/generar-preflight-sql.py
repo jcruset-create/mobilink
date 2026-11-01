@@ -394,6 +394,95 @@ YA_EXISTIAN = (
 VISTAS_YA_EXISTIAN = ("tc_marcas_contadores",)
 
 
+def comprobar() -> None:
+    """¿Están las tres migraciones COMPLETAS? Para después de aplicarlas."""
+    o = objetos()
+    tablas = sorted(o["crea"]["tablas"])
+    vistas = sorted(o["crea"]["vistas"])
+    firmas = sorted(f["firma"] for f in o["redefine_funciones"])
+    nuevas_t = set(tablas)
+    cols = sorted(c for c in o["crea"]["columnas"] if c.split(".", 1)[0] not in nuevas_t)
+
+    def vals(filas):
+        return ", ".join("(" + ", ".join("'" + str(v).replace("'", "''") + "'" for v in f) + ")"
+                         for f in filas)
+
+    print(f"""-- ─────────────────────────────────────────────────────────────────────────
+-- ¿ESTÁN LAS TRES MIGRACIONES COMPLETAS? · histórico de Plana (PR #492)
+--
+-- GENERADO por scripts/produccion/generar-preflight-sql.py --comprobar
+-- SOLO LECTURA.
+--
+-- Se pasa DESPUÉS de aplicar las migraciones. Comprueba una a una las {len(tablas)}
+-- tablas, las {len(vistas)} vistas, las {len(firmas)} firmas y las {len(cols)} columnas que tienen que haber
+-- quedado, que la RLS está activa en lo nuevo, y que no se ha importado nada
+-- todavía.
+--
+-- Si falta algo, la solución es volver a pasar la migración que lo crea: las
+-- tres son idempotentes y aplicarlas de nuevo no duplica nada.
+-- ─────────────────────────────────────────────────────────────────────────
+
+with
+t(x) as (values {vals([[t] for t in tablas])}),
+v(x) as (values {vals([[v] for v in vistas])}),
+f(x) as (values {vals([[f] for f in firmas])}),
+c(tab, col) as (values {vals([cc.split(".", 1) for cc in cols])}),
+
+r1 as (
+  select 1 ord, 'Tablas' seccion, 'PARA' estado, 'FALTA la tabla ' || x detalle
+    from t where to_regclass('public.' || x) is null
+  union all
+  select 1, 'Tablas', 'OK', 'las {len(tablas)} tablas nuevas están'
+   where not exists (select 1 from t where to_regclass('public.' || x) is null)
+),
+r2 as (
+  select 2, 'Vistas', 'PARA', 'FALTA la vista ' || x from v where to_regclass('public.' || x) is null
+  union all
+  select 2, 'Vistas', 'OK', 'las {len(vistas)} vistas están'
+   where not exists (select 1 from v where to_regclass('public.' || x) is null)
+),
+r3 as (
+  select 3, 'Funciones', 'PARA', 'FALTA la función ' || x from f where to_regprocedure(x) is null
+  union all
+  select 3, 'Funciones', 'OK', 'las {len(firmas)} firmas están, con su tipo exacto'
+   where not exists (select 1 from f where to_regprocedure(x) is null)
+),
+r4 as (
+  select 4, 'Columnas', 'PARA', 'FALTA la columna ' || tab || '.' || col
+    from c where not exists (select 1 from information_schema.columns i
+                              where i.table_schema = 'public' and i.table_name = tab and i.column_name = col)
+  union all
+  select 4, 'Columnas', 'OK', 'las {len(cols)} columnas nuevas están en las tablas vivas'
+   where not exists (select 1 from c
+                      where not exists (select 1 from information_schema.columns i
+                                         where i.table_schema='public' and i.table_name=tab and i.column_name=col))
+),
+-- La RLS es la mitad de la seguridad de estas tablas: sin ella, los permisos
+-- de Supabase sobre lo nuevo de public dejarían leerlas enteras.
+r5 as (
+  select 5, 'RLS', 'PARA', 'RLS APAGADA en ' || x
+    from t join pg_class cl on cl.oid = to_regclass('public.' || x)
+   where to_regclass('public.' || x) is not null and not cl.relrowsecurity
+  union all
+  select 5, 'RLS', 'DATO', x || ': ' ||
+         (select count(*) from pg_policies p where p.schemaname='public' and p.tablename = x)::text || ' política(s)'
+    from t where to_regclass('public.' || x) is not null
+),
+-- Nada importado todavía: esto se pasa antes de subir el Excel.
+r6 as (
+  select 6, 'Datos', case when n = 0 then 'OK' else 'MIRA' end,
+         case when n = 0 then 'no hay ningún lote de importación: nada importado todavía'
+              else n::text || ' lote(s) de importación ya aplicados' end
+    from (select case when to_regclass('public.tc_importacion_lotes') is null then 0 else
+            (xpath('/table/row/n/text()', query_to_xml('select count(*) n from tc_importacion_lotes',
+                                                       false, false, '')))[1]::text::bigint end n) q
+)
+select seccion, estado, detalle
+  from (select * from r1 union all select * from r2 union all select * from r3
+        union all select * from r4 union all select * from r5 union all select * from r6) z
+ order by ord, case estado when 'PARA' then 0 when 'MIRA' then 1 when 'OK' then 2 else 3 end, detalle;""")
+
+
 def deshacer() -> None:
     """Los `drop` de todo lo que las tres migraciones crean nuevo."""
     o = objetos()
@@ -564,5 +653,7 @@ if __name__ == "__main__":
         ensayo()
     elif "--deshacer" in sys.argv:
         deshacer()
+    elif "--comprobar" in sys.argv:
+        comprobar()
     else:
         main()
