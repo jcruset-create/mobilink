@@ -382,6 +382,157 @@ select 'después del rollback' as momento,
 """
 
 
+# Las tres que YA existían en producción cuando se pasó el preflight: no se
+# borran, se restauran con vuelta-atras-produccion.sql. Confirmado contra la
+# base real («3 de 29 firmas coinciden exactas») y comparadas una a una.
+YA_EXISTIAN = (
+    "public.tc_anular_operacion(uuid, text)",
+    "public.tc_informes_inventario_por(uuid, text)",
+    "public.tc_informes_inventario_marca_medida(uuid)",
+)
+# Lo mismo con la vista: `create or replace view` la reemplaza, no la crea.
+VISTAS_YA_EXISTIAN = ("tc_marcas_contadores",)
+
+
+def deshacer() -> None:
+    """Los `drop` de todo lo que las tres migraciones crean nuevo."""
+    o = objetos()
+    nuevas_tablas = sorted(o["crea"]["tablas"])
+    nuevas_vistas = [v for v in sorted(o["crea"]["vistas"]) if v not in VISTAS_YA_EXISTIAN]
+    nuevas_fn = [f["firma"] for f in o["redefine_funciones"] if f["firma"] not in YA_EXISTIAN]
+    assert len(nuevas_fn) == len(o["redefine_funciones"]) - len(YA_EXISTIAN), \
+        "alguna de las tres funciones preexistentes ya no está en las migraciones: revisar"
+    # Columnas añadidas a tablas que YA existían (las de las tablas nuevas se
+    # van con su tabla).
+    vivas: dict[str, list[str]] = {}
+    for c in o["crea"]["columnas"]:
+        tabla, col = c.split(".", 1)
+        if tabla not in nuevas_tablas:
+            vivas.setdefault(tabla, []).append(col)
+
+    L = []
+    L.append(f"""-- ─────────────────────────────────────────────────────────────────────────
+-- DESHACER LAS TRES MIGRACIONES · histórico de Plana (PR #492)
+--
+-- GENERADO por scripts/produccion/generar-preflight-sql.py --deshacer
+--
+-- Borra lo que las migraciones CREAN: {len(nuevas_tablas)} tablas, {len(nuevas_vistas)} vista, {len(nuevas_fn)} funciones y las
+-- {sum(len(v) for v in vivas.values())} columnas que añaden a tablas que ya existían.
+--
+-- ── El orden, que importa ────────────────────────────────────────────────
+--
+--   1º  vuelta-atras-produccion.sql  (el fichero que guardaste ANTES de
+--       migrar: devuelve a su definición de siempre las tres funciones y la
+--       vista que ya existían).
+--   2º  este fichero.
+--
+-- Al revés no vale: las definiciones nuevas de los informes leen la columna
+-- `importacion_lote_id`, y si se borra la columna antes de restaurarlas, los
+-- informes del panel se quedan rotos. La guarda de abajo lo comprueba y se
+-- niega a seguir.
+--
+-- ── Lo que NO hace ───────────────────────────────────────────────────────
+--
+-- No borra datos importados. Si hay lotes aplicados, hay que deshacerlos
+-- antes con `tc_deshacer_importacion`, que es quien sabe qué quitar y qué
+-- conservar. Esta vuelta atrás es para «las migraciones están puestas y no
+-- queremos seguir», no para «hay que borrar lo importado».
+--
+-- No toca tc_marcas_contadores: esa vista ya existía y se restaura con el
+-- fichero del paso 1, no borrándola.
+--
+-- Todo va en una transacción: o se deshace entero, o no se deshace nada.
+-- ─────────────────────────────────────────────────────────────────────────
+
+begin;
+set local lock_timeout = '15s';
+set local statement_timeout = '15min';
+
+-- ── 0. Guardas ───────────────────────────────────────────────────────────
+do $guardas$
+declare n bigint; def text;
+begin
+  if to_regclass('public.tc_importacion_lotes') is not null then
+    execute 'select count(*) from tc_importacion_lotes' into n;
+    if n > 0 then
+      raise exception 'Hay % lote(s) de importación aplicados. Deshazlos primero con tc_deshacer_importacion: esto no borra datos importados.', n;
+    end if;
+  end if;""")
+    for tabla in sorted(vivas):
+        if "importacion_lote_id" in vivas[tabla]:
+            L.append(f"""
+  if exists (select 1 from information_schema.columns
+              where table_schema = 'public' and table_name = '{tabla}'
+                and column_name = 'importacion_lote_id') then
+    execute 'select count(*) from {tabla} where importacion_lote_id is not null' into n;
+    if n > 0 then
+      raise exception 'Quedan % fila(s) de importación en {tabla}. Deshaz la importación antes.', n;
+    end if;
+  end if;""")
+    L.append("""
+  -- El paso 1 tiene que estar hecho: si los informes siguen con la versión
+  -- nueva, borrar la columna los dejaría rotos.
+  if to_regprocedure('public.tc_informes_inventario_por(uuid, text)') is not null then
+    def := pg_get_functiondef(to_regprocedure('public.tc_informes_inventario_por(uuid, text)'));
+    if def like '%importacion_lote_id%' then
+      raise exception 'Primero hay que restaurar las definiciones de siempre (vuelta-atras-produccion.sql): tc_informes_inventario_por todavía es la versión nueva.';
+    end if;
+  end if;
+  if to_regclass('public.tc_marcas_contadores') is not null then
+    if pg_get_viewdef('public.tc_marcas_contadores', true) like '%importacion_lote_id%' then
+      raise exception 'Primero hay que restaurar la vista tc_marcas_contadores (vuelta-atras-produccion.sql).';
+    end if;
+  end if;
+end
+$guardas$;
+""")
+
+    L.append("-- ── 1. La vista que el PR crea nueva ─────────────────────────────────────")
+    for v in nuevas_vistas:
+        L.append(f"drop view if exists public.{v};")
+
+    L.append("\n-- ── 2. Las funciones nuevas ──────────────────────────────────────────────")
+    for f in sorted(nuevas_fn):
+        L.append(f"drop function if exists {f};")
+
+    L.append("\n-- ── 3. Las tablas nuevas ─────────────────────────────────────────────────")
+    L.append("-- `cascade` por las claves ajenas entre ellas y sus políticas; nada de")
+    L.append("-- fuera depende de estas tablas, y la guarda de arriba ya ha comprobado")
+    L.append("-- que están vacías de lotes.")
+    for t in nuevas_tablas:
+        L.append(f"drop table if exists public.{t} cascade;")
+
+    L.append("\n-- ── 4. Los índices y las columnas añadidas a tablas vivas ────────────────")
+    L.append("drop index if exists public.idx_interv_imp_lote;")
+    L.append("drop index if exists public.idx_op_imp_lote;")
+    for tabla in sorted(vivas):
+        cols = ",\n ".join(f"drop column if exists {c}" for c in sorted(vivas[tabla]))
+        L.append(f"alter table public.{tabla}\n {cols};")
+
+    L.append("""
+-- ── 5. Comprobación, todavía dentro de la transacción ────────────────────
+select 'antes de commit' as momento,
+       (select count(*) from pg_tables
+         where schemaname = 'public' and tablename like 'tc\\_importacion\\_%') tablas_importacion,
+       (select count(*) from pg_tables
+         where schemaname = 'public' and tablename like 'tc\\_reconstruccion\\_%') tablas_reconstruccion,
+       (select count(*) from information_schema.columns
+         where table_schema = 'public' and column_name = 'importacion_lote_id') columnas_de_lote;
+
+commit;
+
+-- Las tres tienen que dar cero. Si alguna no da cero, NO se ha deshecho todo.
+select 'después del commit' as momento,
+       (select count(*) from pg_tables
+         where schemaname = 'public' and tablename like 'tc\\_importacion\\_%') tablas_importacion,
+       (select count(*) from pg_tables
+         where schemaname = 'public' and tablename like 'tc\\_reconstruccion\\_%') tablas_reconstruccion,
+       (select count(*) from information_schema.columns
+         where table_schema = 'public' and column_name = 'importacion_lote_id') columnas_de_lote;
+""")
+    (AQUI / "deshacer-migraciones.sql").write_text("\n".join(L) + "\n", encoding="utf-8")
+
+
 def ensayo() -> None:
     """Las tres migraciones en una transacción que se deshace."""
     migraciones = AQUI.parent.parent / "supabase" / "migrations"
@@ -411,5 +562,7 @@ if __name__ == "__main__":
         vuelta_atras()
     elif "--ensayo" in sys.argv:
         ensayo()
+    elif "--deshacer" in sys.argv:
+        deshacer()
     else:
         main()
