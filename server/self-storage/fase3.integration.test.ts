@@ -445,7 +445,10 @@ describe.skipIf(!RUN)("Self Storage · fase 3 (accesos) contra PostgreSQL", () =
     const prodAlquiler = llamadas.filter((l) => l.tipo === "checkout_sub").at(-1)!.datos.lineas[0].productId;
     const sub = `sub_${k0.id.slice(0, 8)}`;
     await webhook("checkout.session.completed", { id: `cs_${RONDA}`, mode: "subscription", payment_status: "unpaid", amount_total: 6000, subscription: sub, invoice: `in_a_${RONDA}`, metadata: { ss_kind: "contract_subscription", ss_contract_id: k0.id, ss_empresa_id: EMPRESA } });
-    await webhook("invoice.paid", facturaStripe({ id: `in_a_${RONDA}`, sub, contractId: k0.id, pagada: true, lineas: [{ product: prodAlquiler, amount: 6000 }] }));
+    // Periodo ESCRITO (octubre) y no el de hoy: la factura de abajo fija
+    // noviembre, y un contrato no puede tener dos de alquiler del mismo
+    // periodo. Con el de hoy, esto se rompía el 1 de noviembre y solo ese día.
+    await webhook("invoice.paid", facturaStripe({ id: `in_a_${RONDA}`, sub, contractId: k0.id, pagada: true, lineas: [{ product: prodAlquiler, amount: 6000, start: 1790812800, end: 1793491200 }] }));
     expect((await ok(api(`/contracts/${k0.id}`, admin))).status).toBe("active");
     await ok(api(`/customers/${ana.id}/phones`, empleado, { method: "POST", body: { phone: TEL_ANA, allowDoorAccess: true } }), 201);
     await trabajoAccesos();
