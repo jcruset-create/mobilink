@@ -36,6 +36,7 @@ const TABS = [
   { to: "/tyrecontrol/informes/presiones", label: "Presiones" },
   { to: "/tyrecontrol/informes/productividad", label: "Productividad", interna: true },
   { to: "/tyrecontrol/informes/operaciones-informe", label: "Operaciones", interna: true },
+  { to: "/tyrecontrol/informes/montajes", label: "Montajes de neumáticos", interna: true },
   { to: "/tyrecontrol/informes/historial-neumatico", label: "Historial neumático", interna: true },
   { to: "/tyrecontrol/informes/historial-vehiculo", label: "Historial vehículo" },
 ];

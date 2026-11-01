@@ -490,9 +490,13 @@ export async function cambiarPasswordUsuario(id: string, password: string): Prom
 // ── Neumáticos ───────────────────────────────────────────────
 const NEU_SELECT = "*, empresa:tc_empresas(*)";
 
-export async function listarNeumaticos(filtros?: { empresaId?: string }): Promise<Neumatico[]> {
+export async function listarNeumaticos(filtros?: { empresaId?: string; incluirHistoricas?: boolean }): Promise<Neumatico[]> {
   let q = supabase.from("tc_neumaticos").select(NEU_SELECT).order("codigo_interno");
   if (filtros?.empresaId) q = q.eq("empresa_id", filtros.empresaId);
+  // Las fichas de la reconstrucción histórica no son existencias: dan
+  // identidad a un montaje de hace años. Fuera del listado salvo que se
+  // pidan a posta (ver shared/historicoAlbaran.ts para el criterio).
+  if (!filtros?.incluirHistoricas) q = q.is("importacion_lote_id", null);
   const { data, error } = await q;
   if (error) throw new Error(error.message);
   return (data ?? []) as unknown as Neumatico[];
@@ -1217,6 +1221,13 @@ export interface Intervencion {
   empresa?: { nombre?: string | null } | null;
   vehiculo?: { matricula?: string | null } | null;
   tecnico?: { nombre?: string | null } | null;
+  /** Histórico de albaranes importado: ver shared/historicoAlbaran.ts. */
+  importacion_lote_id?: string | null;
+  origen_sistema?: string | null;
+  origen_doc?: string | null;
+  /** cerrada_at es la medianoche del albarán, no una hora real. */
+  hora_desconocida?: boolean | null;
+  mecanico_km?: number | null;
 }
 
 /** Estado visible de una intervención, derivado (no hay columna de estado):
@@ -1242,7 +1253,11 @@ export async function listarIntervencionesPagina(
   const desde = Math.max(0, pagina) * tamano;
   let q = supabase.from("tc_intervenciones")
     .select("*, empresa:tc_empresas(nombre), vehiculo:tc_vehiculos(matricula), tecnico:tc_usuarios(nombre)", { count: "exact" })
-    .order("created_at", { ascending: false })
+    // Por la fecha del TRABAJO y no por la de registro: el histórico de
+    // albaranes se importa hoy pero es de hace meses, y no puede salir encima
+    // de lo de esta mañana. created_at desempata y sigue siendo la fecha real
+    // en que se grabó.
+    .order("fecha", { ascending: false }).order("created_at", { ascending: false })
     .range(desde, desde + tamano - 1);
   if (filtros?.empresaId) q = q.eq("empresa_id", filtros.empresaId);
   if (filtros?.vehiculoId) q = q.eq("vehiculo_id", filtros.vehiculoId);
@@ -1305,7 +1320,8 @@ export async function listarIntervenciones(vehiculoId: string): Promise<Interven
     () => undefined,
     () => undefined,
   );
-  const { data, error } = await supabase.from("tc_intervenciones").select("*").eq("vehiculo_id", vehiculoId).order("created_at", { ascending: false });
+  const { data, error } = await supabase.from("tc_intervenciones").select("*").eq("vehiculo_id", vehiculoId)
+    .order("fecha", { ascending: false }).order("created_at", { ascending: false });
   if (error) throw new Error(error.message);
   return (data ?? []) as Intervencion[];
 }
@@ -1342,7 +1358,8 @@ function filtrarOperaciones<T>(q: T, f?: FiltrosOperaciones): T {
 
 export async function listarOperaciones(filtros?: FiltrosOperaciones): Promise<OperacionNeumatico[]> {
   const q = filtrarOperaciones(
-    supabase.from("operaciones_neumaticos").select(OPERACION_SELECT).order("created_at", { ascending: false }).limit(200),
+    // Fecha del trabajo primero; created_at desempata (ver listarIntervencionesPagina).
+    supabase.from("operaciones_neumaticos").select(OPERACION_SELECT).order("fecha_operacion", { ascending: false }).order("created_at", { ascending: false }).limit(200),
     filtros,
   );
   const { data, error } = await q;
@@ -1371,7 +1388,7 @@ export async function listarOperacionesPagina(
   const q = filtrarOperaciones(
     supabase.from("operaciones_neumaticos")
       .select(OPERACION_SELECT, { count: "exact" })
-      .order("created_at", { ascending: false })
+      .order("fecha_operacion", { ascending: false }).order("created_at", { ascending: false })
       .range(desde, desde + tamano - 1),
     filtros,
   );
@@ -3479,4 +3496,287 @@ export async function asignarBaseHabitual(
   });
   if (error) throw new Error(error.message);
   return (data ?? {}) as ResultadoAsignarBase;
+}
+
+
+// ── Importación del histórico de albaranes ──────────────────────────────────
+// Todo pasa por dos RPC (tc_importar_historico, tc_deshacer_importacion) que
+// validan permisos, vehículos y catálogo en la base: el navegador solo manda
+// el contenido del albarán ya conciliado. Ver services/importHistorico.ts.
+
+export interface ResultadoAlbaranImport {
+  origen_doc: string;
+  estado: "se_crearia" | "creada" | "ya_presente" | "cambiado" | "bloqueado" | "duplicado_probable";
+  intervencion_id?: string | null;
+  motivo?: string | null;
+  operaciones?: number; servicios?: number; lineas?: number; posiciones_deducidas?: number;
+}
+export interface ResultadoImportHistorico {
+  simulacion: boolean; carga_id: string | null; lote_id: string | null; periodo: string;
+  creadas: number; ya_presentes: number; cambiados: number; bloqueados: number; duplicados_probables: number;
+  albaranes: ResultadoAlbaranImport[];
+}
+
+export async function importarHistorico(
+  empresaId: string, origenSistema: string, lote: Record<string, unknown>, simular: boolean,
+): Promise<ResultadoImportHistorico> {
+  const { data, error } = await supabase.rpc("tc_importar_historico", {
+    p_empresa: empresaId, p_origen_sistema: origenSistema, p_lote: lote, p_simular: simular,
+  });
+  if (error) throw new Error(error.message);
+  return data as ResultadoImportHistorico;
+}
+
+export interface ResultadoDeshacer {
+  simulacion: boolean; lote_id: string; borradas: number; conservadas: number;
+  estado: "deshecho" | "parcialmente_deshecho" | null;
+  detalle: { intervencion_id: string; origen_doc: string; resultado: "borrada" | "conservada"; motivos?: string[] }[];
+}
+export async function deshacerImportacion(loteId: string, excluir: string[], simular: boolean): Promise<ResultadoDeshacer> {
+  const { data, error } = await supabase.rpc("tc_deshacer_importacion", { p_lote: loteId, p_excluir: excluir, p_simular: simular });
+  if (error) throw new Error(error.message);
+  return data as ResultadoDeshacer;
+}
+
+export interface CargaImportacion {
+  id: string; empresa_id: string; origen_sistema: string; fichero: string | null; estado: string;
+  creado_at: string; actualizado_at: string;
+  /** 1 = importada antes de las fichas y las sustituciones; 2 = alcance completo. */
+  alcance?: number;
+  lotes?: LoteImportacion[];
+}
+export interface LoteImportacion {
+  id: string; carga_id: string; periodo: string; estado: string; resumen: Record<string, unknown> | null;
+  aplicado_at: string; deshecho_at: string | null;
+}
+export async function listarCargasImportacion(empresaId: string): Promise<CargaImportacion[]> {
+  const { data, error } = await supabase.from("tc_importacion_cargas")
+    .select("*, lotes:tc_importacion_lotes(*)").eq("empresa_id", empresaId)
+    .order("creado_at", { ascending: false }).limit(50);
+  if (error) throw new Error(error.message);
+  const cargas = (data ?? []) as unknown as CargaImportacion[];
+  for (const c of cargas) c.lotes = [...(c.lotes ?? [])].sort((a, b) => (a.periodo < b.periodo ? -1 : 1));
+  return cargas;
+}
+
+export interface ResultadoAmpliar {
+  simulacion: boolean; carga_id: string; ampliadas: number; sin_ampliar: number;
+  fichas: number; salidas: number;
+  detalle: { origen_doc: string; resultado: string; motivo?: string }[];
+}
+
+/**
+ * Ampliar una carga importada con el alcance antiguo: le añade las fichas de
+ * las unidades nuevas y las salidas por sustitución que le faltan. No duplica
+ * entradas, servicios ni líneas, y se salta las intervenciones que alguien
+ * haya tocado por fuera (la huella manda).
+ */
+export async function ampliarCargaImportacion(cargaId: string, simular: boolean): Promise<ResultadoAmpliar> {
+  const { data, error } = await supabase.rpc("tc_imp_ampliar_carga", { p_carga: cargaId, p_simular: simular });
+  if (error) throw new Error(error.message);
+  return data as ResultadoAmpliar;
+}
+
+export interface UnidadPorIdentificar {
+  id: string; fecha_operacion: string; condicion: string | null;
+  marca_txt: string | null; modelo_txt: string | null; medida_txt: string | null;
+  vehiculo_id: string | null; vehiculo?: { matricula: string } | null;
+  intervencion?: { origen_doc: string | null } | null;
+}
+
+/**
+ * La bandeja: unidades históricas usadas o recauchutadas que se montaron pero
+ * no tienen ficha. No se les asigna identidad sola por parecerse a otra: esto
+ * es trabajo de una persona.
+ */
+export async function listarUnidadesPorIdentificar(empresaId: string): Promise<UnidadPorIdentificar[]> {
+  const { data, error } = await supabase.from("operaciones_neumaticos")
+    .select("id, fecha_operacion, condicion, marca_txt, modelo_txt, medida_txt, vehiculo_id, vehiculo:tc_vehiculos(matricula), intervencion:tc_intervenciones(origen_doc)")
+    .eq("empresa_id", empresaId).not("importacion_lote_id", "is", null)
+    .eq("tipo_operacion", "montaje").is("neumatico_id", null).eq("is_anulada", false)
+    .order("fecha_operacion", { ascending: false }).limit(500);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as UnidadPorIdentificar[];
+}
+
+/**
+ * Candidatas para una unidad: misma empresa, misma medida y sin montaje vivo.
+ * Son PISTAS para quien decide, no una identificación: coincidir en medida no
+ * demuestra que sea la misma goma.
+ */
+export async function listarCandidatasFicha(empresaId: string, medida: string | null): Promise<Neumatico[]> {
+  let q = supabase.from("tc_neumaticos").select(NEU_SELECT)
+    .eq("empresa_id", empresaId).eq("activo", true).is("vehiculo_id", null).limit(50);
+  if (medida) q = q.eq("medida", medida);
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as Neumatico[];
+}
+
+/** Enlaza la unidad con una ficha existente, o crea una. Acción manual y auditada. */
+export async function identificarUnidad(
+  operacionId: string, neumaticoId: string | null, crear: boolean, motivo: string,
+): Promise<{ neumatico_id: string; creada: boolean }> {
+  const { data, error } = await supabase.rpc("tc_imp_identificar_unidad", {
+    p_operacion: operacionId, p_neumatico: neumaticoId, p_crear: crear, p_motivo: motivo,
+  });
+  if (error) throw new Error(error.message);
+  return data as { neumatico_id: string; creada: boolean };
+}
+
+export interface IntervaloReconstruido {
+  id: string; vehiculo_id: string; posicion_id: string | null; neumatico_id: string | null;
+  /** unidad = hay goma identificada; ocupacion = sabemos que la posición
+   *  estuvo calzada, no qué goma. Una ocupación NO es el recorrido de un
+   *  neumático. */
+  clase: "unidad" | "ocupacion";
+  operacion_entrada_id: string | null;
+  fecha_montaje: string; km_montaje: number | null; km_montaje_conocido: boolean;
+  fecha_desmontaje: string | null; km_desmontaje: number | null; km_desmontaje_conocido: boolean;
+  estado: "abierto" | "cerrado" | "interrumpido"; nivel: "confirmado" | "estimado";
+  /** Clasificación AUTOMÁTICA de los kilómetros, sin opinión humana:
+   *  utilizables (recorrido calculable y plausible), anomalos (calculable
+   *  pero el ritmo diario supera el límite; el recorrido se conserva),
+   *  ausentes (falta un extremo), incompatibles (decrecen; se conservan) o
+   *  sin cierre. */
+  km_estado: "utilizables" | "anomalos" | "ausentes" | "incompatibles" | "sin_cierre";
+  recorrido_km: number | null;
+  dias_intervalo: number | null; ritmo_km_dia: number | null; limite_km_dia: number | null;
+  /** Decisión HUMANA, separada de km_estado. Rechazar no cambia los
+   *  kilómetros; aceptar permite usar el intervalo como estimado y nunca lo
+   *  convierte en rendimiento confirmado. */
+  uso_estadistico: "pendiente" | "aceptado" | "rechazado";
+  revisado_por: string | null; revisado_at: string | null; revisado_motivo: string | null;
+  /** Decisión sobre la CONTINUIDAD, independiente de la de los kilómetros:
+   *  aceptar un kilometraje no dice nada sobre si faltó un montaje por medio. */
+  continuidad_decision: "pendiente" | "aceptada" | "rechazada";
+  continuidad_revisada_por: string | null; continuidad_revisada_at: string | null;
+  continuidad_motivo_revision: string | null;
+  /** Montaje y desmontaje el mismo día con recorrido positivo: no consta la
+   *  hora ni el orden, así que no hay ritmo diario que publicar. */
+  orden_desconocido: boolean;
+  /** Albaranes bloqueados (no importados) con evidencia de un posible
+   *  montaje dentro del intervalo: la cadena no se puede dar por limpia. */
+  continuidad_docs: string[] | null; continuidad_motivo: string | null;
+  posicion_fuente: string | null; continuidad_desde: string | null;
+  evidencia: string | null; revisar: boolean; motivo_revision: string | null;
+  origen_doc_montaje: string | null; origen_doc_desmontaje: string | null;
+  /** Las dos los calcula la base (vista tc_reconstruccion_intervalos): si el
+   *  intervalo entra en las medias y, si no, por qué. Pueden ser VARIOS
+   *  motivos a la vez. */
+  en_medias: boolean; motivos_exclusion: string[] | null;
+  neumatico?: { numero_interno: string | null } | null;
+  posicion?: { codigo_posicion: string } | null;
+}
+
+/** Una decisión humana sobre el uso estadístico de un intervalo. Append-only:
+ *  deshacer una importación no la borra, y si la evidencia cambia se marca
+ *  invalidada en vez de desaparecer. */
+export interface RevisionIntervalo {
+  id: string; operacion_entrada_id: string; fecha_montaje: string;
+  ambito: "kilometros" | "continuidad";
+  decision: "aceptado" | "rechazado" | "invalidada";
+  motivo: string; km_estado: string | null; recorrido_km: number | null;
+  ritmo_km_dia: number | null; limite_km_dia: number | null;
+  usuario_id: string | null; creado_at: string;
+  invalidada_at: string | null; motivo_invalidacion: string | null;
+}
+
+/** Cobertura de una media de recorrido estimado: sobre cuántos intervalos se
+ *  calcula y qué ha dejado fuera. Los motivos SE SOLAPAN (un intervalo puede
+ *  tener varios), así que no se suman: para eso están las combinaciones. */
+export interface CoberturaRecorridos {
+  nivel: "estimado"; aviso: string;
+  periodo: { desde: string; hasta: string; origen: string };
+  poblacion: { intervalos: number; vehiculos: number; posiciones: number;
+               cerrados: number; abiertos: number; interrumpidos: number };
+  /** Tener un recorrido que se puede restar no es lo mismo que poder usarlo. */
+  embudo: { con_recorrido_aritmetico: number; elegibles_tras_filtros: number; que_es: string };
+  /** Tres grupos, no dos: una ficha creada por la importación y no
+   *  identificada por nadie no es una unidad identificada, pero tampoco es
+   *  «sin ficha». */
+  identidad: { respaldada: number; reconstruida: number; sin_ficha: number; que_es: string };
+  incluidos: { n: number; respaldada: number; reconstruida: number; sin_ficha: number;
+               aceptados_km: number; aceptados_continuidad: number };
+  recorrido: Record<"identidad_respaldada" | "ficha_reconstruida" | "ocupacion_sin_ficha", {
+    n: number; media: number | null; mediana: number | null;
+    minimo: number | null; maximo: number | null; total_km: number | null; que_es: string }>;
+  excluidos: { n: number; motivos_se_solapan: boolean; nota: string;
+               motivos: { motivo: string; n: number }[];
+               combinaciones: { motivos: string[]; n: number }[] };
+  revision: { km_pendientes: number; km_aceptados: number; km_rechazados: number;
+              continuidad_pendientes: number; continuidad_aceptadas: number; continuidad_rechazadas: number };
+  limite_km_dia: number | null;
+}
+
+/** Los intervalos reconstruidos de un vehículo. Son ESTIMADOS: no alimentan
+ *  los informes de rendimiento confirmado. */
+export async function listarIntervalosReconstruidos(vehiculoId: string): Promise<IntervaloReconstruido[]> {
+  // De la vista, no de la tabla: `en_medias` y `motivos_exclusion` los
+  // calcula la base. El panel no reimplementa esa regla.
+  const { data, error } = await supabase.from("tc_reconstruccion_intervalos")
+    .select("*, neumatico:tc_neumaticos(numero_interno), posicion:tc_posiciones_vehiculo(codigo_posicion)")
+    .eq("vehiculo_id", vehiculoId).order("fecha_montaje", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as IntervaloReconstruido[];
+}
+
+/** Las decisiones humanas de un intervalo, la vigente y las invalidadas. */
+export async function listarRevisionesIntervalo(operacionEntradaId: string): Promise<RevisionIntervalo[]> {
+  const { data, error } = await supabase.from("tc_reconstruccion_revisiones")
+    .select("*").eq("operacion_entrada_id", operacionEntradaId).order("creado_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as RevisionIntervalo[];
+}
+
+/** Aceptar o rechazar un intervalo, en UNO de los dos ámbitos. El motivo es
+ *  obligatorio y queda auditado con usuario y fecha. Aceptar los kilómetros
+ *  permite usarlo como ESTIMADO —no lo convierte en rendimiento confirmado—
+ *  y NO resuelve su continuidad, que se decide aparte. */
+export async function revisarIntervalo(
+  intervaloId: string, ambito: "kilometros" | "continuidad",
+  decision: "aceptado" | "rechazado", motivo: string,
+): Promise<{ uso_estadistico: string; continuidad_decision: string; en_medias: boolean;
+             motivos_exclusion: string[] | null; aviso: string }> {
+  const { data, error } = await supabase.rpc("tc_imp_revisar_intervalo", {
+    p_intervalo: intervaloId, p_ambito: ambito, p_decision: decision, p_motivo: motivo,
+  });
+  if (error) throw new Error(error.message);
+  return data as any;
+}
+
+/** La cobertura de las medias de recorrido estimado. Sin esto, una media no
+ *  se puede publicar: hay que decir sobre cuántos intervalos sale. */
+export async function cargarCoberturaRecorridos(
+  empresaId: string, desde?: string | null, hasta?: string | null, vehiculoId?: string | null,
+): Promise<CoberturaRecorridos> {
+  const { data, error } = await supabase.rpc("tc_informes_recorridos_estimados", {
+    p_empresa: empresaId, p_desde: desde ?? null, p_hasta: hasta ?? null, p_vehiculo: vehiculoId ?? null,
+  });
+  if (error) throw new Error(error.message);
+  return data as unknown as CoberturaRecorridos;
+}
+
+/** El límite de plausibilidad del ritmo diario de la empresa (2.000 km/día
+ *  si no se ha configurado otro). */
+export async function cargarLimiteKmDia(empresaId: string): Promise<number> {
+  const { data, error } = await supabase.rpc("tc_imp_limite_km_dia", { p_empresa: empresaId });
+  if (error) throw new Error(error.message);
+  return Number(data ?? 2000);
+}
+
+/** Cambiar ese límite. Reclasifica los intervalos de la empresa y NO toca
+ *  las decisiones humanas: el límite no es evidencia. */
+export async function fijarLimiteKmDia(empresaId: string, limite: number): Promise<number> {
+  const { data, error } = await supabase.rpc("tc_imp_fijar_limite_km_dia", { p_empresa: empresaId, p_limite: limite });
+  if (error) throw new Error(error.message);
+  return Number(data);
+}
+
+/** Lo conservado de un lote parcialmente deshecho, con su motivo. */
+export async function listarConservadasDeLote(loteId: string): Promise<{ intervencion_id: string; origen_doc: string; motivo_conservada: string | null }[]> {
+  const { data, error } = await supabase.from("tc_importacion_intervenciones")
+    .select("intervencion_id, origen_doc, motivo_conservada").eq("lote_id", loteId).not("conservada_at", "is", null);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as any;
 }

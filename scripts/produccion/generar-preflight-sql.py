@@ -1,0 +1,659 @@
+#!/usr/bin/env python3
+"""
+Genera el preflight en SQL puro, para pegarlo en el editor de Supabase.
+
+Por qué existe además del script de bash: `preflight-produccion.sh` necesita
+`psql` con la cadena de conexión de producción, y quien tiene el acceso
+trabaja desde el panel de Supabase. Un preflight que no se puede ejecutar no
+comprueba nada.
+
+Lo que genera es **solo lectura**: puros `select`. No hay `do`, ni funciones
+temporales, ni escrituras. La lista de objetos sale de las propias
+migraciones (`objetos-de-las-migraciones.py`), así que no se queda atrás
+cuando una migración cambia.
+
+  python3 scripts/produccion/generar-preflight-sql.py > scripts/produccion/preflight-produccion.sql
+"""
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+AQUI = Path(__file__).resolve().parent
+
+def objetos() -> dict:
+    salida = subprocess.run(
+        [sys.executable, str(AQUI / "objetos-de-las-migraciones.py")],
+        capture_output=True, text=True, check=True)
+    return json.loads(salida.stdout)
+
+def lista_sql(valores) -> str:
+    """Una lista de literales para un `values`, con las comillas escapadas."""
+    return ", ".join("(" + ", ".join("'" + str(v).replace("'", "''") + "'" for v in fila) + ")"
+                     for fila in valores)
+
+def main() -> None:
+    o = objetos()
+    tablas = o["requiere_tablas"]
+    columnas = [c.split(".", 1) for c in o["requiere_columnas"]]
+    funciones = o["requiere_funciones"]
+    firmas = [(f["nombre"], f["firma"]) for f in o["redefine_funciones"]]
+    crea_tablas = o["crea"]["tablas"]
+    crea_vistas = o["crea"]["vistas"]
+
+    print(f"""-- ─────────────────────────────────────────────────────────────────────────
+-- PREFLIGHT DE PRODUCCIÓN · importación del histórico de Plana (PR #492)
+--
+-- GENERADO. No se edita a mano: sale de las tres migraciones con
+--   python3 scripts/produccion/generar-preflight-sql.py
+--
+-- SOLO LECTURA: son `select` y nada más. No crea, no borra y no modifica.
+-- Se pega entero en el editor SQL de Supabase (proyecto de PRODUCCIÓN) y se
+-- devuelve la tabla que sale.
+--
+-- Cómo se lee la columna `estado`:
+--   PARA  → no se sigue adelante hasta entenderlo.
+--   MIRA  → hay que mirarlo, puede estar bien.
+--   OK    → comprobado.
+--   DATO  → no es una comprobación, es información que hace falta.
+--
+-- Comprueba {len(tablas)} tablas, {len(columnas)} columnas y {len(funciones)} funciones que las migraciones dan
+-- por supuestas, las {len(firmas)} firmas que redefinen y los {len(crea_tablas) + len(crea_vistas)} objetos que crean.
+-- ─────────────────────────────────────────────────────────────────────────
+
+with
+-- Lo que las migraciones dan por supuesto que ya existe.
+req_tabla(t) as (values {lista_sql([[t] for t in tablas])}),
+req_col(t, c) as (values {lista_sql(columnas)}),
+req_fn(f) as (values {lista_sql([[f] for f in funciones])}),
+-- Las funciones que el PR REDEFINE: la firma tiene que coincidir EXACTA, o
+-- `create or replace` crearía una segunda y PostgREST devolvería PGRST203.
+redef(nombre, firma) as (values {lista_sql(firmas)}),
+-- Lo que el PR CREA: si ya está, alguien lo aplicó antes o hay choque de nombres.
+crea_tabla(t) as (values {lista_sql([[t] for t in crea_tablas])}),
+crea_vista(v) as (values {lista_sql([[v] for v in crea_vistas])}),
+
+-- ── 1. A qué base se está mirando ────────────────────────────────────────
+r1 as (
+  select 1 ord, '1. Base' seccion, 'DATO' estado,
+         'base=' || current_database() ||
+         ' · tablas en public=' || (select count(*) from pg_tables where schemaname = 'public') ||
+         ' · ' || substring(version() from 'PostgreSQL [0-9.]+') detalle
+  union all
+  select 1, '1. Base',
+         case when coalesce(current_setting('mobilink.entorno', true), '') = 'pruebas'
+              then 'PARA' else 'OK' end,
+         case when coalesce(current_setting('mobilink.entorno', true), '') = 'pruebas'
+              then 'esta base lleva la marca «pruebas»: NO es producción'
+              else 'sin marca de entorno de pruebas (producción no la lleva)' end
+),
+
+-- ── 2. Las empresas, con su UUID ─────────────────────────────────────────
+-- Plana se confirma por UUID, nunca por el nombre: hay nombres parecidos.
+--
+-- Va por `query_to_xml` y no como consulta normal a propósito: una tabla que
+-- no existiera haría fallar el ENTERO al analizarlo, y entonces este
+-- preflight no comprobaría nada en vez de comprobar lo que sí puede. El
+-- `case` garantiza que la consulta de dentro solo se ejecuta si está la tabla.
+emp(x) as (
+  select case when to_regclass('public.tc_empresas') is null then null else query_to_xml(
+      'select e.id::text || ''  '' || rpad(e.nombre, 28)'
+      || case when to_regclass('public.tc_vehiculos') is not null
+              then ' || ''  vehiculos='' || (select count(*) from tc_vehiculos v where v.empresa_id = e.id)'
+              else '' end
+      || case when to_regclass('public.tc_neumaticos') is not null
+              then ' || ''  neumaticos='' || (select count(*) from tc_neumaticos n where n.empresa_id = e.id)'
+              else '' end
+      -- tableforest=false: un solo <table> raíz. Con `true` salen <row>
+      -- sueltos, que no son un documento XML y xpath no los traga.
+      || ' as d from tc_empresas e order by e.nombre', false, false, '') end
+),
+r2 as (
+  -- Sin filas, `query_to_xml` devuelve un documento vacío y `xpath` se queja:
+  -- se sustituye por una tabla vacía de verdad.
+  select 2, '2. Empresas', 'DATO',
+         unnest(xpath('/table/row/d/text()', coalesce(nullif(x::text, ''), '<table/>')::xml))::text
+    from emp where x is not null
+  union all
+  select 2, '2. Empresas', 'PARA', 'no existe tc_empresas: ¿es esta la base de TyreControl?'
+   where to_regclass('public.tc_empresas') is null
+),
+
+-- ── 3. Lo que tiene que existir y no existe ──────────────────────────────
+r3 as (
+  select 3, '3. Falta', 'PARA', 'falta la tabla ' || t
+    from req_tabla where to_regclass('public.' || t) is null
+  union all
+  select 3, '3. Falta', 'PARA', 'falta la columna ' || t || '.' || c
+    from req_col
+   where to_regclass('public.' || t) is not null
+     and not exists (select 1 from information_schema.columns i
+                      where i.table_schema = 'public' and i.table_name = t and i.column_name = c)
+  union all
+  select 3, '3. Falta', 'PARA', 'falta la función ' || f
+    from req_fn
+   where not exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+                      where n.nspname = 'public' and p.proname = f)
+  union all
+  select 3, '3. Falta', 'OK', 'están las {len(tablas)} tablas, las {len(columnas)} columnas y las {len(funciones)} funciones que las migraciones dan por supuestas'
+   where not exists (select 1 from req_tabla where to_regclass('public.' || t) is null)
+     and not exists (select 1 from req_col
+                      where to_regclass('public.' || t) is not null
+                        and not exists (select 1 from information_schema.columns i
+                                         where i.table_schema='public' and i.table_name=t and i.column_name=c))
+     and not exists (select 1 from req_fn
+                      where not exists (select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+                                         where n.nspname='public' and p.proname=f))
+),
+
+-- ── 4. Firmas: ¿la que hay es la que se va a redefinir? ──────────────────
+sobre as (
+  select r.nombre, r.firma,
+         (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname = r.nombre) sobrecargas,
+         to_regprocedure(r.firma) is not null exacta
+    from redef r
+),
+r4 as (
+  select 4, '4. Firmas', 'PARA',
+         nombre || ': existe con OTRA firma (' || sobrecargas || ' sobrecarga(s)); la esperada es ' ||
+         firma || '. Redefinir crearía una segunda y PostgREST daría PGRST203'
+    from sobre where sobrecargas > 0 and not exacta
+  union all
+  select 4, '4. Firmas', 'MIRA',
+         nombre || ': ya tiene ' || sobrecargas || ' sobrecargas en la base'
+    from sobre where sobrecargas > 1 and exacta
+  union all
+  select 4, '4. Firmas', 'OK',
+         (select count(*) from sobre where exacta)::text || ' de {len(firmas)} firmas coinciden exactas; ' ||
+         (select count(*) from sobre where sobrecargas = 0)::text || ' no existen todavía (las crea el PR)'
+),
+
+-- ── 5. Lo que el PR crea y YA está ───────────────────────────────────────
+r5 as (
+  select 5, '5. Ya existe', 'MIRA', 'la tabla ' || t || ' ya existe: ¿se importó antes?'
+    from crea_tabla where to_regclass('public.' || t) is not null
+  union all
+  select 5, '5. Ya existe', 'MIRA', 'la vista ' || v || ' ya existe'
+    from crea_vista where to_regclass('public.' || v) is not null
+  union all
+  select 5, '5. Ya existe', 'OK', 'ninguno de los {len(crea_tablas) + len(crea_vistas)} objetos que crea el PR existe todavía'
+   where not exists (select 1 from crea_tabla where to_regclass('public.' || t) is not null)
+     and not exists (select 1 from crea_vista where to_regclass('public.' || v) is not null)
+),
+
+-- ── 6. ¿Hay ya datos de una importación anterior? ────────────────────────
+r6 as (
+  select 6, '6. Importado', 'MIRA',
+         'tc_importacion_lotes existe con ' ||
+         (select count(*) from information_schema.tables
+           where table_schema='public' and table_name='tc_importacion_lotes')::text ||
+         ' definición: revisa los lotes antes de nada'
+   where to_regclass('public.tc_importacion_lotes') is not null
+  union all
+  select 6, '6. Importado', 'OK', 'no hay tablas de importación: la base está virgen para esto'
+   where to_regclass('public.tc_importacion_lotes') is null
+),
+
+-- ── 7. Disparadores de las tablas que la importación escribe ─────────────
+-- Un trigger que nadie esperaba puede mover stock o tocar el montaje actual
+-- cuando se inserte una operación histórica.
+r7 as (
+  select 7, '7. Triggers', 'DATO',
+         c.relname || ' · ' || t.tgname || ' · ' || p.proname
+    from pg_trigger t
+    join pg_class c on c.oid = t.tgrelid
+    join pg_namespace n on n.oid = c.relnamespace
+    join pg_proc p on p.oid = t.tgfoid
+   where not t.tgisinternal and n.nspname = 'public'
+     and c.relname in ('operaciones_neumaticos', 'tc_intervenciones',
+                       'tc_intervencion_servicios', 'tc_neumaticos')
+),
+
+-- ── 8. Lo que este preflight NO comprueba ────────────────────────────────
+r8 as (
+  select 8, '8. Sin comprobar', 'MIRA', m
+    from (values
+      ('el backup: hay que hacerlo y verificarlo aparte'),
+      ('que PostgREST aguante el lote grande en una sola llamada'),
+      ('los planos reales de cada vehículo, que usa la deducción de posiciones'),
+      ('el contenido del Excel: eso lo concilia el panel al subirlo')
+    ) x(m)
+)
+select seccion, estado, detalle
+  from (select * from r1 union all select * from r2 union all select * from r3
+        union all select * from r4 union all select * from r5 union all select * from r6
+        union all select * from r7 union all select * from r8) todo
+ order by ord,
+          case estado when 'PARA' then 0 when 'MIRA' then 1 when 'OK' then 2 else 3 end,
+          detalle;""")
+
+FOTOGRAFIA = """-- ─────────────────────────────────────────────────────────────────────────
+-- FOTOGRAFÍA PREVIA · importación del histórico de Plana (PR #492)
+--
+-- GENERADO por scripts/produccion/generar-preflight-sql.py. SOLO LECTURA.
+--
+-- Se ejecuta DOS veces: antes de importar y después. Las tablas que la
+-- importación NO debe tocar tienen que dar el mismo número las dos veces; en
+-- las cuatro que sí escribe, la diferencia tiene que estar entera en la
+-- columna `con_lote`, que son las filas de la importación.
+--
+-- Son recuentos, no huellas por fila: la versión con md5 de cada fila está en
+-- `preflight-produccion.sh`, que necesita psql. Un recuento no detecta dos
+-- cambios que se compensen, y por eso no sustituye al backup: lo que de
+-- verdad permite volver atrás es el backup, no esto.
+--
+-- Si alguna tabla tarda demasiado en el editor, se ejecuta su línea aparte.
+-- ─────────────────────────────────────────────────────────────────────────
+
+with protegidas(t) as (values
+  ('tc_vehiculos'), ('tc_neumaticos'), ('tc_montajes_actuales'),
+  ('operaciones_neumaticos'), ('tc_intervenciones'), ('tc_intervencion_servicios'),
+  ('tc_historial_montajes'), ('revisiones_vehiculo'), ('revisiones_neumaticos_detalle'),
+  ('movimientos_stock'), ('tc_contadores_numero_interno'), ('tc_contadores_numero_operacion')
+),
+medidas as (
+  select p.t,
+         to_regclass('public.' || p.t) is not null existe,
+         exists (select 1 from information_schema.columns c
+                  where c.table_schema = 'public' and c.table_name = p.t
+                    and c.column_name = 'importacion_lote_id') tiene_lote
+    from protegidas p
+),
+conteos as (
+  select m.t, m.existe, m.tiene_lote,
+         case when not m.existe then null else
+           (xpath('/table/row/n/text()',
+                  query_to_xml('select count(*) n from public.' || quote_ident(m.t),
+                               false, false, '')))[1]::text::bigint end filas,
+         case when not m.existe or not m.tiene_lote then null else
+           (xpath('/table/row/n/text()',
+                  query_to_xml('select count(*) n from public.' || quote_ident(m.t)
+                               || ' where importacion_lote_id is not null', false, false, '')))[1]::text::bigint end con_lote
+    from medidas m
+)
+select t tabla,
+       case when existe then filas::text else '(no existe)' end filas,
+       case when not existe then '' when tiene_lote then coalesce(con_lote::text, '?')
+            else '(sin columna de lote)' end con_lote,
+       now()::timestamptz(0)::text momento
+  from conteos
+ order by t;
+"""
+
+
+VUELTA = """-- ─────────────────────────────────────────────────────────────────────────
+-- VUELTA ATRÁS · importación del histórico de Plana (PR #492)
+--
+-- GENERADO por scripts/produccion/generar-preflight-sql.py. SOLO LECTURA:
+-- esto NO deshace nada. IMPRIME el SQL que haría falta para devolver a su
+-- estado actual los objetos que ya existen y que las migraciones van a
+-- redefinir.
+--
+-- Se ejecuta ANTES de migrar y se guarda la salida. Si luego hay que volver
+-- atrás, se pega esa salida y se añade el `drop` de lo que el PR crea nuevo
+-- (que está en supabase/migrations/..., cada tabla con su nombre).
+--
+-- Son tres funciones y una vista: lo único vivo que las migraciones tocan
+-- antes de que se importe nada. Todo lo demás que crean es nuevo, y lo nuevo
+-- se deshace borrándolo.
+--
+-- Esto NO sustituye al backup: una función restaurada no devuelve los datos.
+-- ─────────────────────────────────────────────────────────────────────────
+
+select 'FUNCIÓN ' || p.oid::regprocedure::text as objeto,
+       pg_get_functiondef(p.oid) || ';' as sql_para_restaurar
+  from pg_proc p
+  join pg_namespace n on n.oid = p.pronamespace
+ where n.nspname = 'public'
+   and p.oid::regprocedure::text in (
+     'tc_anular_operacion(uuid,text)',
+     'tc_informes_inventario_por(uuid,text)',
+     'tc_informes_inventario_marca_medida(uuid)')
+union all
+select 'VISTA ' || c.relname,
+       'create or replace view public.' || c.relname || ' as' || E'\n' ||
+       pg_get_viewdef(c.oid, true) || E'\n' ||
+       coalesce((select string_agg('grant ' || lower(a.privilege_type) || ' on public.' || c.relname ||
+                                   ' to ' || quote_ident(a.grantee) || ';', E'\n')
+                   from information_schema.role_table_grants a
+                  where a.table_schema = 'public' and a.table_name = c.relname), '')
+  from pg_class c
+  join pg_namespace n on n.oid = c.relnamespace
+ where n.nspname = 'public' and c.relkind = 'v' and c.relname = 'tc_marcas_contadores'
+ order by 1;
+"""
+
+
+CABECERA_ENSAYO = """-- ─────────────────────────────────────────────────────────────────────────
+-- ENSAYO EN PRODUCCIÓN · importación del histórico de Plana (PR #492)
+--
+-- GENERADO por scripts/produccion/generar-preflight-sql.py --ensayo
+--
+-- Aplica las TRES migraciones dentro de una transacción y la DESHACE al
+-- final. En PostgreSQL el DDL es transaccional, así que al terminar la base
+-- queda exactamente como estaba: ni una tabla, ni una función, ni un permiso.
+--
+-- Para qué: producción va en PostgreSQL 17.6 y el banco de pruebas en 16. La
+-- única forma honesta de saber que las migraciones aplican en 17.6 es
+-- aplicarlas en 17.6. Esto lo hace sin dejar rastro.
+--
+-- ── Antes de pegarlo ───────────────────────────────────────────────────────
+--
+-- · Hazlo cuando no haya nadie trabajando. Añadir columnas a
+--   operaciones_neumaticos, tc_intervenciones, tc_intervencion_servicios y
+--   tc_neumaticos toma un bloqueo exclusivo sobre esas tablas mientras dura
+--   la transacción. Es rápido —son columnas nulas, sin reescribir la tabla—
+--   pero mientras tanto el panel y la APK esperarían.
+-- · `lock_timeout` está puesto a 15 s a propósito: si alguna tabla está
+--   ocupada, esto falla rápido en vez de encolarse y bloquear la aplicación.
+--   Si falla por eso, no ha pasado nada: se repite más tarde.
+-- · Si algo falla a mitad, la transacción se deshace entera. Eso es lo que
+--   se quiere: o aplican las tres, o no se aplica ninguna.
+--
+-- Lo que NO prueba: que la importación de datos funcione. Eso es el primer
+-- lote de un mes, y va después del backup y de las migraciones de verdad.
+-- ─────────────────────────────────────────────────────────────────────────
+
+begin;
+set local lock_timeout = '15s';
+set local statement_timeout = '15min';
+
+"""
+
+PIE_ENSAYO = """
+-- ── Comprobación, todavía dentro de la transacción ───────────────────────
+select 'dentro de la transacción' as momento,
+       (select count(*) from pg_tables
+         where schemaname = 'public' and tablename like 'tc\\_importacion\\_%') tablas_importacion,
+       (select count(*) from pg_tables
+         where schemaname = 'public' and tablename like 'tc\\_reconstruccion\\_%') tablas_reconstruccion,
+       (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+         where n.nspname = 'public' and p.proname like 'tc\\_imp\\_%') funciones_imp;
+
+-- ── Y se deshace TODO ────────────────────────────────────────────────────
+rollback;
+
+-- Fuera ya de la transacción: la base tiene que estar como antes.
+select 'después del rollback' as momento,
+       to_regclass('public.tc_importacion_lotes') is null as sin_tablas_de_importacion,
+       to_regclass('public.tc_reconstruccion_montajes') is null as sin_reconstruccion,
+       to_regprocedure('public.tc_imp_ampliar_carga(uuid, boolean)') is null as sin_funciones_nuevas;
+"""
+
+
+# Las tres que YA existían en producción cuando se pasó el preflight: no se
+# borran, se restauran con vuelta-atras-produccion.sql. Confirmado contra la
+# base real («3 de 29 firmas coinciden exactas») y comparadas una a una.
+YA_EXISTIAN = (
+    "public.tc_anular_operacion(uuid, text)",
+    "public.tc_informes_inventario_por(uuid, text)",
+    "public.tc_informes_inventario_marca_medida(uuid)",
+)
+# Lo mismo con la vista: `create or replace view` la reemplaza, no la crea.
+VISTAS_YA_EXISTIAN = ("tc_marcas_contadores",)
+
+
+def comprobar() -> None:
+    """¿Están las tres migraciones COMPLETAS? Para después de aplicarlas."""
+    o = objetos()
+    tablas = sorted(o["crea"]["tablas"])
+    vistas = sorted(o["crea"]["vistas"])
+    firmas = sorted(f["firma"] for f in o["redefine_funciones"])
+    nuevas_t = set(tablas)
+    cols = sorted(c for c in o["crea"]["columnas"] if c.split(".", 1)[0] not in nuevas_t)
+
+    def vals(filas):
+        return ", ".join("(" + ", ".join("'" + str(v).replace("'", "''") + "'" for v in f) + ")"
+                         for f in filas)
+
+    print(f"""-- ─────────────────────────────────────────────────────────────────────────
+-- ¿ESTÁN LAS TRES MIGRACIONES COMPLETAS? · histórico de Plana (PR #492)
+--
+-- GENERADO por scripts/produccion/generar-preflight-sql.py --comprobar
+-- SOLO LECTURA.
+--
+-- Se pasa DESPUÉS de aplicar las migraciones. Comprueba una a una las {len(tablas)}
+-- tablas, las {len(vistas)} vistas, las {len(firmas)} firmas y las {len(cols)} columnas que tienen que haber
+-- quedado, que la RLS está activa en lo nuevo, y que no se ha importado nada
+-- todavía.
+--
+-- Si falta algo, la solución es volver a pasar la migración que lo crea: las
+-- tres son idempotentes y aplicarlas de nuevo no duplica nada.
+-- ─────────────────────────────────────────────────────────────────────────
+
+with
+t(x) as (values {vals([[t] for t in tablas])}),
+v(x) as (values {vals([[v] for v in vistas])}),
+f(x) as (values {vals([[f] for f in firmas])}),
+c(tab, col) as (values {vals([cc.split(".", 1) for cc in cols])}),
+
+r1 as (
+  select 1 ord, 'Tablas' seccion, 'PARA' estado, 'FALTA la tabla ' || x detalle
+    from t where to_regclass('public.' || x) is null
+  union all
+  select 1, 'Tablas', 'OK', 'las {len(tablas)} tablas nuevas están'
+   where not exists (select 1 from t where to_regclass('public.' || x) is null)
+),
+r2 as (
+  select 2, 'Vistas', 'PARA', 'FALTA la vista ' || x from v where to_regclass('public.' || x) is null
+  union all
+  select 2, 'Vistas', 'OK', 'las {len(vistas)} vistas están'
+   where not exists (select 1 from v where to_regclass('public.' || x) is null)
+),
+r3 as (
+  select 3, 'Funciones', 'PARA', 'FALTA la función ' || x from f where to_regprocedure(x) is null
+  union all
+  select 3, 'Funciones', 'OK', 'las {len(firmas)} firmas están, con su tipo exacto'
+   where not exists (select 1 from f where to_regprocedure(x) is null)
+),
+r4 as (
+  select 4, 'Columnas', 'PARA', 'FALTA la columna ' || tab || '.' || col
+    from c where not exists (select 1 from information_schema.columns i
+                              where i.table_schema = 'public' and i.table_name = tab and i.column_name = col)
+  union all
+  select 4, 'Columnas', 'OK', 'las {len(cols)} columnas nuevas están en las tablas vivas'
+   where not exists (select 1 from c
+                      where not exists (select 1 from information_schema.columns i
+                                         where i.table_schema='public' and i.table_name=tab and i.column_name=col))
+),
+-- La RLS es la mitad de la seguridad de estas tablas: sin ella, los permisos
+-- de Supabase sobre lo nuevo de public dejarían leerlas enteras.
+r5 as (
+  select 5, 'RLS', 'PARA', 'RLS APAGADA en ' || x
+    from t join pg_class cl on cl.oid = to_regclass('public.' || x)
+   where to_regclass('public.' || x) is not null and not cl.relrowsecurity
+  union all
+  select 5, 'RLS', 'DATO', x || ': ' ||
+         (select count(*) from pg_policies p where p.schemaname='public' and p.tablename = x)::text || ' política(s)'
+    from t where to_regclass('public.' || x) is not null
+),
+-- Nada importado todavía: esto se pasa antes de subir el Excel.
+r6 as (
+  select 6, 'Datos', case when n = 0 then 'OK' else 'MIRA' end,
+         case when n = 0 then 'no hay ningún lote de importación: nada importado todavía'
+              else n::text || ' lote(s) de importación ya aplicados' end
+    from (select case when to_regclass('public.tc_importacion_lotes') is null then 0 else
+            (xpath('/table/row/n/text()', query_to_xml('select count(*) n from tc_importacion_lotes',
+                                                       false, false, '')))[1]::text::bigint end n) q
+)
+select seccion, estado, detalle
+  from (select * from r1 union all select * from r2 union all select * from r3
+        union all select * from r4 union all select * from r5 union all select * from r6) z
+ order by ord, case estado when 'PARA' then 0 when 'MIRA' then 1 when 'OK' then 2 else 3 end, detalle;""")
+
+
+def deshacer() -> None:
+    """Los `drop` de todo lo que las tres migraciones crean nuevo."""
+    o = objetos()
+    nuevas_tablas = sorted(o["crea"]["tablas"])
+    nuevas_vistas = [v for v in sorted(o["crea"]["vistas"]) if v not in VISTAS_YA_EXISTIAN]
+    nuevas_fn = [f["firma"] for f in o["redefine_funciones"] if f["firma"] not in YA_EXISTIAN]
+    assert len(nuevas_fn) == len(o["redefine_funciones"]) - len(YA_EXISTIAN), \
+        "alguna de las tres funciones preexistentes ya no está en las migraciones: revisar"
+    # Columnas añadidas a tablas que YA existían (las de las tablas nuevas se
+    # van con su tabla).
+    vivas: dict[str, list[str]] = {}
+    for c in o["crea"]["columnas"]:
+        tabla, col = c.split(".", 1)
+        if tabla not in nuevas_tablas:
+            vivas.setdefault(tabla, []).append(col)
+
+    L = []
+    L.append(f"""-- ─────────────────────────────────────────────────────────────────────────
+-- DESHACER LAS TRES MIGRACIONES · histórico de Plana (PR #492)
+--
+-- GENERADO por scripts/produccion/generar-preflight-sql.py --deshacer
+--
+-- Borra lo que las migraciones CREAN: {len(nuevas_tablas)} tablas, {len(nuevas_vistas)} vista, {len(nuevas_fn)} funciones y las
+-- {sum(len(v) for v in vivas.values())} columnas que añaden a tablas que ya existían.
+--
+-- ── El orden, que importa ────────────────────────────────────────────────
+--
+--   1º  vuelta-atras-produccion.sql  (el fichero que guardaste ANTES de
+--       migrar: devuelve a su definición de siempre las tres funciones y la
+--       vista que ya existían).
+--   2º  este fichero.
+--
+-- Al revés no vale: las definiciones nuevas de los informes leen la columna
+-- `importacion_lote_id`, y si se borra la columna antes de restaurarlas, los
+-- informes del panel se quedan rotos. La guarda de abajo lo comprueba y se
+-- niega a seguir.
+--
+-- ── Lo que NO hace ───────────────────────────────────────────────────────
+--
+-- No borra datos importados. Si hay lotes aplicados, hay que deshacerlos
+-- antes con `tc_deshacer_importacion`, que es quien sabe qué quitar y qué
+-- conservar. Esta vuelta atrás es para «las migraciones están puestas y no
+-- queremos seguir», no para «hay que borrar lo importado».
+--
+-- No toca tc_marcas_contadores: esa vista ya existía y se restaura con el
+-- fichero del paso 1, no borrándola.
+--
+-- Todo va en una transacción: o se deshace entero, o no se deshace nada.
+-- ─────────────────────────────────────────────────────────────────────────
+
+begin;
+set local lock_timeout = '15s';
+set local statement_timeout = '15min';
+
+-- ── 0. Guardas ───────────────────────────────────────────────────────────
+do $guardas$
+declare n bigint; def text;
+begin
+  if to_regclass('public.tc_importacion_lotes') is not null then
+    execute 'select count(*) from tc_importacion_lotes' into n;
+    if n > 0 then
+      raise exception 'Hay % lote(s) de importación aplicados. Deshazlos primero con tc_deshacer_importacion: esto no borra datos importados.', n;
+    end if;
+  end if;""")
+    for tabla in sorted(vivas):
+        if "importacion_lote_id" in vivas[tabla]:
+            L.append(f"""
+  if exists (select 1 from information_schema.columns
+              where table_schema = 'public' and table_name = '{tabla}'
+                and column_name = 'importacion_lote_id') then
+    execute 'select count(*) from {tabla} where importacion_lote_id is not null' into n;
+    if n > 0 then
+      raise exception 'Quedan % fila(s) de importación en {tabla}. Deshaz la importación antes.', n;
+    end if;
+  end if;""")
+    L.append("""
+  -- El paso 1 tiene que estar hecho: si los informes siguen con la versión
+  -- nueva, borrar la columna los dejaría rotos.
+  if to_regprocedure('public.tc_informes_inventario_por(uuid, text)') is not null then
+    def := pg_get_functiondef(to_regprocedure('public.tc_informes_inventario_por(uuid, text)'));
+    if def like '%importacion_lote_id%' then
+      raise exception 'Primero hay que restaurar las definiciones de siempre (vuelta-atras-produccion.sql): tc_informes_inventario_por todavía es la versión nueva.';
+    end if;
+  end if;
+  if to_regclass('public.tc_marcas_contadores') is not null then
+    if pg_get_viewdef('public.tc_marcas_contadores', true) like '%importacion_lote_id%' then
+      raise exception 'Primero hay que restaurar la vista tc_marcas_contadores (vuelta-atras-produccion.sql).';
+    end if;
+  end if;
+end
+$guardas$;
+""")
+
+    L.append("-- ── 1. La vista que el PR crea nueva ─────────────────────────────────────")
+    for v in nuevas_vistas:
+        L.append(f"drop view if exists public.{v};")
+
+    L.append("\n-- ── 2. Las funciones nuevas ──────────────────────────────────────────────")
+    for f in sorted(nuevas_fn):
+        L.append(f"drop function if exists {f};")
+
+    L.append("\n-- ── 3. Las tablas nuevas ─────────────────────────────────────────────────")
+    L.append("-- `cascade` por las claves ajenas entre ellas y sus políticas; nada de")
+    L.append("-- fuera depende de estas tablas, y la guarda de arriba ya ha comprobado")
+    L.append("-- que están vacías de lotes.")
+    for t in nuevas_tablas:
+        L.append(f"drop table if exists public.{t} cascade;")
+
+    L.append("\n-- ── 4. Los índices y las columnas añadidas a tablas vivas ────────────────")
+    L.append("drop index if exists public.idx_interv_imp_lote;")
+    L.append("drop index if exists public.idx_op_imp_lote;")
+    for tabla in sorted(vivas):
+        cols = ",\n ".join(f"drop column if exists {c}" for c in sorted(vivas[tabla]))
+        L.append(f"alter table public.{tabla}\n {cols};")
+
+    L.append("""
+-- ── 5. Comprobación, todavía dentro de la transacción ────────────────────
+select 'antes de commit' as momento,
+       (select count(*) from pg_tables
+         where schemaname = 'public' and tablename like 'tc\\_importacion\\_%') tablas_importacion,
+       (select count(*) from pg_tables
+         where schemaname = 'public' and tablename like 'tc\\_reconstruccion\\_%') tablas_reconstruccion,
+       (select count(*) from information_schema.columns
+         where table_schema = 'public' and column_name = 'importacion_lote_id') columnas_de_lote;
+
+commit;
+
+-- Las tres tienen que dar cero. Si alguna no da cero, NO se ha deshecho todo.
+select 'después del commit' as momento,
+       (select count(*) from pg_tables
+         where schemaname = 'public' and tablename like 'tc\\_importacion\\_%') tablas_importacion,
+       (select count(*) from pg_tables
+         where schemaname = 'public' and tablename like 'tc\\_reconstruccion\\_%') tablas_reconstruccion,
+       (select count(*) from information_schema.columns
+         where table_schema = 'public' and column_name = 'importacion_lote_id') columnas_de_lote;
+""")
+    (AQUI / "deshacer-migraciones.sql").write_text("\n".join(L) + "\n", encoding="utf-8")
+
+
+def ensayo() -> None:
+    """Las tres migraciones en una transacción que se deshace."""
+    migraciones = AQUI.parent.parent / "supabase" / "migrations"
+    partes = [CABECERA_ENSAYO]
+    for nombre in ("tyrecontrol_importacion_historico",
+                   "tyrecontrol_importacion_historico_fase2",
+                   "tyrecontrol_importacion_historico_fase3"):
+        partes.append(f"\n-- ═══ {nombre}.sql ═══\n")
+        partes.append((migraciones / f"{nombre}.sql").read_text(encoding="utf-8"))
+    partes.append(PIE_ENSAYO)
+    (AQUI / "ensayo-en-produccion.sql").write_text("".join(partes), encoding="utf-8")
+
+
+def vuelta_atras() -> None:
+    (AQUI / "vuelta-atras-produccion.sql").write_text(VUELTA, encoding="utf-8")
+
+
+def fotografia() -> None:
+    destino = AQUI / "fotografia-produccion.sql"
+    destino.write_text(FOTOGRAFIA, encoding="utf-8")
+
+
+if __name__ == "__main__":
+    if "--fotografia" in sys.argv:
+        fotografia()
+    elif "--vuelta-atras" in sys.argv:
+        vuelta_atras()
+    elif "--ensayo" in sys.argv:
+        ensayo()
+    elif "--deshacer" in sys.argv:
+        deshacer()
+    elif "--comprobar" in sys.argv:
+        comprobar()
+    else:
+        main()

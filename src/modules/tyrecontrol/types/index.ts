@@ -745,6 +745,22 @@ export interface OperacionNeumatico {
   coste?: number | null;
   created_by?: string | null;
   assigned_by?: string | null;
+  /** Histórico de albaranes importado (ver shared/historicoAlbaran.ts): el
+   *  vínculo con el lote es EL criterio; el resto son los datos que no tienen
+   *  ficha de neumático de la que salir. */
+  importacion_lote_id?: string | null;
+  origen_sistema?: string | null;
+  origen_linea?: string | null;
+  grupo_origen?: string | null;
+  condicion?: "nueva" | "usada" | "recauchutada" | null;
+  marca_txt?: string | null;
+  modelo_txt?: string | null;
+  medida_txt?: string | null;
+  posicion_fuente?: "indicada" | "deducida" | "desconocida" | null;
+  /** Une la entrada y la salida de una sustitución histórica. */
+  grupo_sustitucion?: string | null;
+  /** Solo en la fila de salida: si consta quién se retiró. */
+  identidad_retirado?: "respaldada" | "reconstruida" | "desconocida" | null;
   empresa?: Empresa | null;
   vehiculo?: Vehiculo | null;
   neumatico?: Neumatico | null;
