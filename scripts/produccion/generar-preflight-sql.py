@@ -325,6 +325,76 @@ select 'VISTA ' || c.relname,
 """
 
 
+CABECERA_ENSAYO = """-- ─────────────────────────────────────────────────────────────────────────
+-- ENSAYO EN PRODUCCIÓN · importación del histórico de Plana (PR #492)
+--
+-- GENERADO por scripts/produccion/generar-preflight-sql.py --ensayo
+--
+-- Aplica las TRES migraciones dentro de una transacción y la DESHACE al
+-- final. En PostgreSQL el DDL es transaccional, así que al terminar la base
+-- queda exactamente como estaba: ni una tabla, ni una función, ni un permiso.
+--
+-- Para qué: producción va en PostgreSQL 17.6 y el banco de pruebas en 16. La
+-- única forma honesta de saber que las migraciones aplican en 17.6 es
+-- aplicarlas en 17.6. Esto lo hace sin dejar rastro.
+--
+-- ── Antes de pegarlo ───────────────────────────────────────────────────────
+--
+-- · Hazlo cuando no haya nadie trabajando. Añadir columnas a
+--   operaciones_neumaticos, tc_intervenciones, tc_intervencion_servicios y
+--   tc_neumaticos toma un bloqueo exclusivo sobre esas tablas mientras dura
+--   la transacción. Es rápido —son columnas nulas, sin reescribir la tabla—
+--   pero mientras tanto el panel y la APK esperarían.
+-- · `lock_timeout` está puesto a 15 s a propósito: si alguna tabla está
+--   ocupada, esto falla rápido en vez de encolarse y bloquear la aplicación.
+--   Si falla por eso, no ha pasado nada: se repite más tarde.
+-- · Si algo falla a mitad, la transacción se deshace entera. Eso es lo que
+--   se quiere: o aplican las tres, o no se aplica ninguna.
+--
+-- Lo que NO prueba: que la importación de datos funcione. Eso es el primer
+-- lote de un mes, y va después del backup y de las migraciones de verdad.
+-- ─────────────────────────────────────────────────────────────────────────
+
+begin;
+set local lock_timeout = '15s';
+set local statement_timeout = '15min';
+
+"""
+
+PIE_ENSAYO = """
+-- ── Comprobación, todavía dentro de la transacción ───────────────────────
+select 'dentro de la transacción' as momento,
+       (select count(*) from pg_tables
+         where schemaname = 'public' and tablename like 'tc\\_importacion\\_%') tablas_importacion,
+       (select count(*) from pg_tables
+         where schemaname = 'public' and tablename like 'tc\\_reconstruccion\\_%') tablas_reconstruccion,
+       (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+         where n.nspname = 'public' and p.proname like 'tc\\_imp\\_%') funciones_imp;
+
+-- ── Y se deshace TODO ────────────────────────────────────────────────────
+rollback;
+
+-- Fuera ya de la transacción: la base tiene que estar como antes.
+select 'después del rollback' as momento,
+       to_regclass('public.tc_importacion_lotes') is null as sin_tablas_de_importacion,
+       to_regclass('public.tc_reconstruccion_montajes') is null as sin_reconstruccion,
+       to_regprocedure('public.tc_imp_ampliar_carga(uuid, boolean)') is null as sin_funciones_nuevas;
+"""
+
+
+def ensayo() -> None:
+    """Las tres migraciones en una transacción que se deshace."""
+    migraciones = AQUI.parent.parent / "supabase" / "migrations"
+    partes = [CABECERA_ENSAYO]
+    for nombre in ("tyrecontrol_importacion_historico",
+                   "tyrecontrol_importacion_historico_fase2",
+                   "tyrecontrol_importacion_historico_fase3"):
+        partes.append(f"\n-- ═══ {nombre}.sql ═══\n")
+        partes.append((migraciones / f"{nombre}.sql").read_text(encoding="utf-8"))
+    partes.append(PIE_ENSAYO)
+    (AQUI / "ensayo-en-produccion.sql").write_text("".join(partes), encoding="utf-8")
+
+
 def vuelta_atras() -> None:
     (AQUI / "vuelta-atras-produccion.sql").write_text(VUELTA, encoding="utf-8")
 
@@ -339,5 +409,7 @@ if __name__ == "__main__":
         fotografia()
     elif "--vuelta-atras" in sys.argv:
         vuelta_atras()
+    elif "--ensayo" in sys.argv:
+        ensayo()
     else:
         main()
