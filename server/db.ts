@@ -347,6 +347,18 @@ export async function initDb() {
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "operatorLocationAtMs" BIGINT;
 
+    -- La última posición de la TABLET, aparte: operatorLat/Lng la pisan
+    -- también las lecturas de Webfleet, y para usarla de respaldo hay que
+    -- saber de dónde viene (server/core/posicionDoble.ts).
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "tabletLat" DOUBLE PRECISION;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "tabletLng" DOUBLE PRECISION;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "tabletLocationAtMs" BIGINT;
+
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "plateMismatch" BOOLEAN NOT NULL DEFAULT false;
 
