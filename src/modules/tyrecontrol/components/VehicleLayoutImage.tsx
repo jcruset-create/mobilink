@@ -13,6 +13,7 @@ import { inputCls, Modal } from "./ui";
 import { mismaMedida } from "../services/medidas";
 import ModalMontarDesdeFicha from "./ModalMontarDesdeFicha";
 import ModalMontarFueraAlmacen from "./ModalMontarFueraAlmacen";
+import ModalNeumaticosMontados from "./ModalNeumaticosMontados";
 import ModalCopiarNeumatico from "./ModalCopiarNeumatico";
 import { supabase } from "../services/supabase";
 import { MARGEN_PLANO_X, MARGEN_PLANO_Y, aspectoPlano, coordAVista, vistaACoord } from "../../../../shared/planoMargen";
@@ -72,6 +73,8 @@ interface Props {
   puedeCalibrar: boolean;    // superadmin: puede editar imagen y coordenadas
   imagenConfig?: string | null; // imagen de la configuración de ejes: manda sobre la del tipo
   medidaPorPosicionId?: Record<string, string>; // medida configurada del vehículo por posición (para montar en vacío)
+  matricula?: string | null;   // solo para el título de los modales
+  kmActual?: number | null;    // sugerencia al cerrar el inventario inicial
   onFicha?: (neumaticoId: string) => void;
   onChanged?: () => void;
   onTipoChanged?: () => void;
@@ -95,7 +98,7 @@ function esDireccional(modelo?: string | null): boolean {
 }
 
 export default function VehicleLayoutImage({
-  tipo, posiciones, vehiculoId, empresaId, montajes, editable, puedeCalibrar, imagenConfig, medidaPorPosicionId, onFicha, onChanged, onTipoChanged, onOperaciones,
+  tipo, posiciones, vehiculoId, empresaId, montajes, editable, puedeCalibrar, imagenConfig, medidaPorPosicionId, matricula, kmActual, onFicha, onChanged, onTipoChanged, onOperaciones,
 }: Props) {
   // Imagen efectiva del plano: manda la de la CONFIGURACIÓN DE EJES (un 2x4
   // se dibuja igual sea tractora o camión); la del tipo solo si la
@@ -176,6 +179,11 @@ export default function VehicleLayoutImage({
   const [correccionMsg, setCorreccionMsg] = useState("");
   const [modalFicha, setModalFicha] = useState<null | { sustitucion: boolean }>(null);
   const [modalBulk, setModalBulk] = useState(false);
+  // Las gomas que el vehículo YA LLEVA. No es un montaje: ni descuenta stock
+  // ni factura. Dos entradas porque son dos trabajos distintos —informar una
+  // posición vacía y corregir una que no coincide— y escriben cosas
+  // distintas en el histórico.
+  const [modalMontados, setModalMontados] = useState<null | "informar" | "actualizar">(null);
   const [modalFueraAlmacen, setModalFueraAlmacen] = useState(false);
   const [arrastrando, setArrastrando] = useState<string | null>(null);
   const [zonaSobrevolada, setZonaSobrevolada] = useState<string | null>(null);
@@ -807,6 +815,33 @@ export default function VehicleLayoutImage({
                 Montar el mismo en todas las libres ({posicionesLibres.length})
               </button>
             )}
+
+            {/* Lo de arriba es un MONTAJE: sale del catálogo o del almacén y
+                es trabajo de taller. Lo de abajo no: son las gomas que el
+                vehículo ya traía puestas, que se apuntan sin operación, sin
+                stock y sin coste. Separados a posta: confundirlos mete en el
+                histórico montajes que nunca ocurrieron. */}
+            {editable && posicionesLibres.length > 0 && (
+              <button
+                onClick={() => setModalMontados("informar")}
+                className="mt-3 w-full rounded border border-sky-500 px-2 py-1.5 text-[12px] font-bold text-sky-300 hover:bg-sky-500/10"
+              >
+                Informar los que ya lleva montados ({posicionesLibres.length} sin informar)
+              </button>
+            )}
+            {editable && montajes.length > 0 && (
+              <button
+                onClick={() => setModalMontados("actualizar")}
+                className="mt-2 w-full rounded border border-amber-500 px-2 py-1.5 text-[12px] font-bold text-amber-300 hover:bg-amber-500/10"
+              >
+                Actualizar los que no coinciden ({montajes.length} informadas)
+              </button>
+            )}
+            {editable && (posicionesLibres.length > 0 || montajes.length > 0) && (
+              <div className="mt-2 text-[11px] leading-snug text-slate-500">
+                Las dos de abajo no son trabajo de taller: no descuentan stock, no generan coste y no facturan.
+              </div>
+            )}
           </div>
         ) : montajeSeleccionado?.neumatico ? (
           <div>
@@ -948,6 +983,20 @@ export default function VehicleLayoutImage({
           medidaActual={medidaPorPosicionId?.[posicionesLibres[0].id]}
           onClose={() => setModalBulk(false)}
           onDone={() => { setModalBulk(false); setSeleccion(null); onChanged?.(); }}
+        />
+      )}
+      {modalMontados && (
+        <ModalNeumaticosMontados
+          modo={modalMontados}
+          vehiculoId={vehiculoId}
+          empresaId={empresaId}
+          matricula={matricula}
+          posiciones={posiciones}
+          montajes={montajes}
+          medidaVehiculo={medidaPorPosicionId?.[posiciones[0]?.id ?? ""] ?? null}
+          kmActual={kmActual}
+          onClose={() => setModalMontados(null)}
+          onChanged={() => { setSeleccion(null); onChanged?.(); }}
         />
       )}
       {modalFueraAlmacen && posSeleccionada && (

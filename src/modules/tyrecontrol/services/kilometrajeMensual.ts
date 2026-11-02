@@ -183,6 +183,9 @@ export interface VehiculoDelRanking {
   kmMesActual: number | null;
   mesesSinDato: number;
   mesesConError: number;
+  /** CUÁLES son esos meses: el recuento alarma, el mes es lo que se arregla. */
+  mesesConErrorDetalle: Array<{ year: number; month: number; error: string | null }>;
+  mesesSinDatoDetalle: Array<{ year: number; month: number }>;
 }
 
 export interface Ranking {
@@ -215,7 +218,6 @@ export interface RevisionCoherencia {
 export const revisarCoherencia = (b: { empresaId?: string; aplicar?: boolean }) =>
   pedir<RevisionCoherencia>("/coherencia", { method: "POST", body: JSON.stringify(b) });
 
-/** «sep 2026». */
-export function nombreDeMes(year: number, month: number): string {
-  return new Date(Date.UTC(year, month - 1, 15)).toLocaleDateString("es-ES", { month: "short", year: "numeric", timeZone: "UTC" });
-}
+// El texto de los meses vive en su propio módulo, sin red, para poder
+// probarlo. Se reexporta para no romper a quien ya lo importaba de aquí.
+export { nombreDeMes, mesCorto, listaDeMeses, detalleDeMeses } from "./mesesEtiqueta";
