@@ -8,6 +8,9 @@ import {
   ampliarCargaImportacion, deshacerImportacion, importarHistorico, listarCargasImportacion, listarConservadasDeLote, listarEmpresas,
   type CargaImportacion, type ResultadoAlbaranImport, type ResultadoAmpliar, type ResultadoDeshacer, type ResultadoImportHistorico,
 } from "../services/data";
+import {
+  descripcionDeMeses, etiquetaPeriodo, mesesElegidos as mesesMarcados, resumenPorMes, totalACrear,
+} from "../services/lotesMensuales";
 import type { Empresa } from "../types";
 import { TableWrap, tdCls, thCls, inputCls } from "./ui";
 
@@ -48,6 +51,16 @@ export default function ImportarHistorico({ h1, h2, nombreArchivo, bytes }: {
   const [error, setError] = useState("");
   const [deshacer, setDeshacer] = useState<{ loteId: string; r: ResultadoDeshacer; excluir: Set<string> } | null>(null);
   const [ampliacion, setAmpliacion] = useState<{ cargaId: string; r: ResultadoAmpliar } | null>(null);
+  /*
+   * Qué meses se importan. `null` es «todos», que es como se comportaba
+   * antes de que esto existiera: un fichero recién leído no cambia de
+   * conducta por haber añadido la pantalla.
+   *
+   * La SIMULACIÓN sigue recorriendo el fichero entero —es solo lectura y es
+   * la foto que hace falta para decidir—; lo que se recorta es lo que se
+   * ESCRIBE.
+   */
+  const [meses, setMeses] = useState<Set<string> | null>(null);
 
   useEffect(() => { listarEmpresas().then(setEmpresas).catch(() => setEmpresas([])); }, []);
   useEffect(() => { if (empresaId) listarCargasImportacion(empresaId).then(setCargas).catch(() => setCargas([])); }, [empresaId]);
@@ -58,7 +71,7 @@ export default function ImportarHistorico({ h1, h2, nombreArchivo, bytes }: {
     let vivo = true;
     if (!bytes || h1.length === 0) { setConciliados(null); setResumen(null); setSha(""); return; }
     (async () => {
-      setOcupado("conciliando"); setError(""); setSimulacion(null); setProgreso([]); setCargaId(null);
+      setOcupado("conciliando"); setError(""); setSimulacion(null); setProgreso([]); setCargaId(null); setMeses(null);
       try {
         const l1 = leerHoja1(h1), l2 = leerHoja2(h2);
         const { albaranes, entradas, salidasSinAlbaran } = agruparAlbaranes(l1, l2);
@@ -75,6 +88,17 @@ export default function ImportarHistorico({ h1, h2, nombreArchivo, bytes }: {
   }, [h1, h2, bytes]);
 
   const lotes = useMemo(() => (conciliados ? porPeriodo(conciliados) : new Map<string, AlbaranConciliado[]>()), [conciliados]);
+  const filasMes = useMemo(() => resumenPorMes(lotes, simulacion), [lotes, simulacion]);
+  const periodosElegidos = useMemo(() => mesesMarcados([...lotes.keys()], meses), [lotes, meses]);
+  const aCrear = useMemo(() => totalACrear(filasMes, meses), [filasMes, meses]);
+  const marcado = (p: string) => !meses || meses.has(p);
+  function alternarMes(p: string) {
+    setMeses((prev) => {
+      const base = new Set(prev ?? [...lotes.keys()]);
+      if (base.has(p)) base.delete(p); else base.add(p);
+      return base;
+    });
+  }
 
   function lotePara(periodo: string, albs: AlbaranConciliado[], extra: Record<string, unknown> = {}) {
     return {
@@ -103,11 +127,21 @@ export default function ImportarHistorico({ h1, h2, nombreArchivo, bytes }: {
   //    se enseña y se puede reintentar (idempotente).
   async function importar() {
     if (!empresaId || !conciliados || !simulacion) return;
-    const n = [...simulacion.values()].filter((a) => a.estado === "se_crearia").length;
-    if (!window.confirm(`Se van a crear ${n} intervenciones históricas en ${lotes.size} lote(s) mensual(es). Nada de lo actual (montajes, stock, neumáticos, km) se toca. ¿Seguir?`)) return;
+    if (periodosElegidos.length === 0) return;
+    // El número y los meses del «¿seguro?» son los de lo MARCADO, no los del
+    // fichero: es la última pantalla antes de escribir y tiene que decir lo
+    // que de verdad va a pasar.
+    const n = aCrear ?? 0;
+    if (!window.confirm(
+      `Se van a crear ${n} intervenciones históricas de ${descripcionDeMeses(periodosElegidos)}.`
+      + (periodosElegidos.length < lotes.size
+        ? `\n\nLos otros ${lotes.size - periodosElegidos.length} mes(es) del fichero NO se tocan: se pueden cargar después, y repetir el fichero no duplica lo ya metido.`
+        : "")
+      + "\n\nNada de lo actual (montajes, stock, neumáticos, km) se toca. ¿Seguir?")) return;
     setOcupado("importando"); setError(""); setProgreso([]);
     let carga = cargaId;
     for (const [periodo, albs] of lotes) {
+      if (!marcado(periodo)) continue;
       try {
         const r = await importarHistorico(empresaId, origen.trim(), lotePara(periodo, albs, { carga_id: carga }), false);
         carga = r.carga_id ?? carga; setCargaId(carga);
@@ -192,9 +226,11 @@ export default function ImportarHistorico({ h1, h2, nombreArchivo, bytes }: {
             className="rounded bg-slate-700 px-3 py-1.5 font-bold text-white disabled:opacity-50">
             {ocupado === "simulando" ? "Simulando…" : "Simular contra la base (no escribe)"}
           </button>
-          <button onClick={importar} disabled={!simulacion || !!ocupado}
+          <button onClick={importar} disabled={!simulacion || !!ocupado || periodosElegidos.length === 0}
             className="rounded bg-emerald-600 px-3 py-1.5 font-bold text-white disabled:opacity-50">
-            {ocupado === "importando" ? "Importando…" : "Importar por lotes"}
+            {ocupado === "importando" ? "Importando…"
+              : periodosElegidos.length === 0 ? "Importar (ningún mes marcado)"
+              : `Importar ${descripcionDeMeses(periodosElegidos)}${aCrear != null ? ` · ${aCrear} albaranes` : ""}`}
           </button>
         </div>
         <div className="mt-2 text-slate-400">
@@ -219,6 +255,69 @@ export default function ImportarHistorico({ h1, h2, nombreArchivo, bytes }: {
             · entradas del depósito (no se importan) {resumen.entradasDeposito}{resumen.salidasSinAlbaran ? ` · salidas sin albarán ${resumen.salidasSinAlbaran}` : ""}
             {simulacion && <> · simulado: se crearían {cuenta.se_crearia ?? 0}, ya presentes {cuenta.ya_presente ?? 0}, cambiados {cuenta.cambiado ?? 0}, duplicados probables {cuenta.duplicado_probable ?? 0}, bloqueados por la base {[...simulacion.values()].filter((x) => x.estado === "bloqueado").length}</>}
           </div>
+        </div>
+      )}
+
+      {/*
+        Qué meses se importan.
+
+        El fichero de Plana trae diez meses y el botón los recorría todos:
+        «importar un mes y medirlo» no se podía hacer. Aquí se marcan, y lo
+        que no esté marcado no se escribe. La simulación sigue mirando el
+        fichero entero, que es solo lectura y es la foto que hace falta para
+        decidir cuál cargar primero.
+      */}
+      {lotes.size > 1 && (
+        <div className="rounded-lg border border-slate-700 bg-slate-800 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-[11px] font-bold uppercase text-slate-400">
+              Meses del fichero · se importan los marcados ({periodosElegidos.length} de {lotes.size})
+            </div>
+            <div className="flex gap-2 text-[12px]">
+              <button onClick={() => setMeses(null)}
+                className="rounded border border-slate-600 px-2 py-1 text-slate-200 hover:bg-slate-700">Todos</button>
+              <button onClick={() => setMeses(new Set())}
+                className="rounded border border-slate-600 px-2 py-1 text-slate-200 hover:bg-slate-700">Ninguno</button>
+              <button onClick={() => setMeses(new Set([...lotes.keys()].slice(0, 1)))}
+                className="rounded border border-sky-500 px-2 py-1 font-bold text-sky-300 hover:bg-sky-500/10"
+                title="El más antiguo del fichero: por donde se empieza para medir una carga antes de seguir">
+                Solo el primero
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-2 grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
+            {filasMes.map((m) => (
+              <label key={m.periodo}
+                className={`flex cursor-pointer items-center gap-2 rounded border px-2 py-1.5 text-[12px] ${
+                  marcado(m.periodo) ? "border-emerald-600/50 bg-emerald-500/5" : "border-slate-700 bg-slate-900/40 opacity-60"
+                }`}>
+                <input type="checkbox" checked={marcado(m.periodo)} onChange={() => alternarMes(m.periodo)} />
+                <span className="w-20 font-bold capitalize text-slate-100">{etiquetaPeriodo(m.periodo)}</span>
+                <span className="text-slate-400">{m.albaranes} alb.</span>
+                {/* Sin simular no hay número: un cero diría «este mes no trae
+                    nada», y lo que pasa es que nadie lo ha calculado. */}
+                {m.seCrearian != null && (
+                  <>
+                    <span className="font-bold text-emerald-300">{m.seCrearian} se crearían</span>
+                    {m.yaPresentes ? <span className="text-slate-500">· {m.yaPresentes} ya están</span> : null}
+                    {m.bloqueados ? <span className="text-rose-300">· {m.bloqueados} bloq.</span> : null}
+                  </>
+                )}
+              </label>
+            ))}
+          </div>
+
+          {!simulacion && (
+            <div className="mt-2 text-[11px] text-slate-500">
+              Simula primero: hasta entonces solo se sabe cuántos albaranes trae cada mes, no cuántos entrarían.
+            </div>
+          )}
+          {periodosElegidos.length === 0 && (
+            <div className="mt-2 text-[11px] font-bold text-amber-300">
+              Ningún mes marcado: no hay nada que importar.
+            </div>
+          )}
         </div>
       )}
 
