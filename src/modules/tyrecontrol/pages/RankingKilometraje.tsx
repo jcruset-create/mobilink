@@ -4,6 +4,7 @@ import {
   rankingKilometraje, revisarCoherencia,
   type Ranking, type VehiculoDelRanking,
 } from "../services/kilometrajeMensual";
+import { detalleDeMeses, listaDeMeses } from "../services/mesesEtiqueta";
 import { listarEmpresas } from "../services/data";
 import type { Empresa } from "../types";
 
@@ -129,10 +130,17 @@ export default function RankingKilometraje() {
 
   function exportar() {
     if (!datos) return;
-    const cab = "puesto;matricula;unidad;km_anual;meses;km_anio_actual;meses_del_anio;meses_sin_dato;meses_con_error";
+    // Los meses van con nombre y no solo contados: un CSV con «2» obliga a
+    // volver a la pantalla para saber de qué dos meses habla.
+    const mesesCsv = (ms: Array<{ year: number; month: number }>) =>
+      ms.map((m) => `${m.year}-${String(m.month).padStart(2, "0")}`).join(" ");
+    const cab = "puesto;matricula;unidad;km_anual;meses;km_anio_actual;meses_del_anio;"
+      + "meses_sin_dato;cuales_sin_dato;meses_con_error;cuales_con_error";
     const filas = datos.vehiculos.map((v, i) =>
       [i + 1, v.matricula ?? "", v.numeroUnidad ?? "", v.kmAnual ?? "", v.meses,
-       v.kmAnioActual, v.mesesDelAnio, v.mesesSinDato, v.mesesConError].join(";"),
+       v.kmAnioActual, v.mesesDelAnio,
+       v.mesesSinDato, mesesCsv(v.mesesSinDatoDetalle ?? []),
+       v.mesesConError, mesesCsv(v.mesesConErrorDetalle ?? [])].join(";"),
     );
     const csv = [cab, ...filas].join("\n");
     const url = URL.createObjectURL(new Blob([`﻿${csv}`], { type: "text/csv;charset=utf-8" }));
@@ -283,9 +291,34 @@ function Fila({ v, puesto, num }: {
         {num(v.kmAnioActual)} <span className="text-slate-500">({v.mesesDelAnio})</span>
       </td>
       <td className="px-3 py-1.5 text-right text-slate-400">{num(v.kmMesActual)}</td>
+      {/*
+        Qué meses, no solo cuántos.
+
+        «1 con error» alarma y no se puede arreglar: para arreglarlo hay que
+        saber de qué mes se trata —no es lo mismo uno de hace un año, ya
+        cerrado, que el del mes pasado— y qué contestó el proveedor. El mes
+        va en la celda y el motivo en el título, que es donde cabe.
+      */}
       <td className="px-3 py-1.5 text-slate-400">
-        {v.mesesSinDato > 0 && <span className="mr-2">{v.mesesSinDato} sin dato</span>}
-        {v.mesesConError > 0 && <span className="text-amber-300">{v.mesesConError} con error</span>}
+        {v.mesesSinDato > 0 && (
+          <span className="mr-2" title={detalleDeMeses(v.mesesSinDatoDetalle ?? [])}>
+            {v.mesesSinDato} sin dato
+            {(v.mesesSinDatoDetalle?.length ?? 0) > 0 && (
+              <span className="ml-1 capitalize text-slate-500">· {listaDeMeses(v.mesesSinDatoDetalle)}</span>
+            )}
+          </span>
+        )}
+        {v.mesesConError > 0 && (
+          <span
+            className="text-amber-300"
+            title={detalleDeMeses(v.mesesConErrorDetalle ?? []) || "El proveedor no dijo por qué"}
+          >
+            {v.mesesConError} con error
+            {(v.mesesConErrorDetalle?.length ?? 0) > 0 && (
+              <span className="ml-1 capitalize text-amber-200/70">· {listaDeMeses(v.mesesConErrorDetalle)}</span>
+            )}
+          </span>
+        )}
         {v.mesesSinDato === 0 && v.mesesConError === 0 && "—"}
       </td>
     </tr>
