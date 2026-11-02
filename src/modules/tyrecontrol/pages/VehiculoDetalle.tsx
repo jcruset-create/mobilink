@@ -404,6 +404,8 @@ export default function VehiculoDetalle() {
           empresaId={v.empresa_id}
           montajes={montajes}
           medidaPorPosicionId={medidaPorPosicionId}
+          matricula={v.matricula}
+          kmActual={v.km_actual ?? null}
           editable={!esCliente}
           puedeCalibrar={!!perfil?.es_superadmin}
           onFicha={esCliente ? undefined : (nid) => navigate(`/tyrecontrol/neumaticos/${nid}`)}

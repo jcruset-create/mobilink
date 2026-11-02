@@ -774,6 +774,70 @@ export async function buscarNeumaticosParaCorregir(empresaId: string, texto: str
   return (data ?? []) as unknown as Neumatico[];
 }
 
+/**
+ * Da de alta la ficha de la goma encontrada Y corrige el montaje, en la misma
+ * llamada.
+ *
+ * Van juntas a propósito y no es un atajo: una ficha que se creara y no
+ * llegara a montarse por un fallo de red quedaría huérfana en el inventario,
+ * contando como stock que no existe.
+ */
+export async function corregirMontadoNuevaFicha(params: {
+  montajeId: string; marca: string; modelo?: string | null; medida: string;
+  dot?: string | null; numeroSerie?: string | null; observaciones?: string | null;
+  revisionId?: string | null; metodo?: string | null;
+}): Promise<{ neumatico_id: string; operacion_id: string }> {
+  const { data, error } = await supabase.rpc("tc_corregir_montado_nueva_ficha", {
+    p_montaje: params.montajeId,
+    p_marca: params.marca, p_modelo: params.modelo ?? null, p_medida: params.medida,
+    p_dot: params.dot ?? null, p_numero_serie: params.numeroSerie ?? null,
+    p_obs: params.observaciones ?? null,
+    p_revision: params.revisionId ?? null, p_metodo: params.metodo ?? null,
+  });
+  if (error) throw new Error(error.message);
+  return data as { neumatico_id: string; operacion_id: string };
+}
+
+/**
+ * Apunta el neumático que YA ESTABA montado en una posición, con su medición.
+ *
+ * No es una venta, ni un trabajo facturable, ni una salida de almacén: es
+ * reconocer lo que ya está ahí. La base no descuenta stock y marca el origen
+ * como `carga_inicial`.
+ *
+ * Si la posición ya tiene goma, la llamada CORRIGE la medición y no monta
+ * nada: cambiar qué neumático hay tiene su propio camino.
+ */
+export async function inventarioInicialPosicion(params: {
+  vehiculoId: string; posicionId: string;
+  /** null cuando la posición ya tiene goma: entonces esto solo mide. */
+  referenciaId: string | null;
+  datos: Record<string, string>;
+}): Promise<{ revision_id: string; neumatico_id: string; numero_interno: string | null; hechas: number; total: number }> {
+  const { data, error } = await supabase.rpc("tc_inventario_inicial_posicion", {
+    p_vehiculo: params.vehiculoId, p_posicion: params.posicionId,
+    p_referencia: params.referenciaId ?? null, p_datos: params.datos,
+  });
+  if (error) throw new Error(error.message);
+  return data as { revision_id: string; neumatico_id: string; numero_interno: string | null; hechas: number; total: number };
+}
+
+/**
+ * Cierra el inventario inicial y deja el vehículo operativo.
+ *
+ * La base exige goma y profundidad en TODAS las posiciones y dice cuáles
+ * faltan. Los km solo suben, nunca bajan.
+ */
+export async function inventarioInicialFinalizar(params: {
+  vehiculoId: string; km?: number | null; origenKm?: string;
+}): Promise<{ revision_id: string; ya_estaba: boolean; posiciones?: number }> {
+  const { data, error } = await supabase.rpc("tc_inventario_inicial_finalizar", {
+    p_vehiculo: params.vehiculoId, p_km: params.km ?? null, p_origen_km: params.origenKm ?? "manual",
+  });
+  if (error) throw new Error(error.message);
+  return data as { revision_id: string; ya_estaba: boolean; posiciones?: number };
+}
+
 export async function historialNeumatico(neumaticoId: string): Promise<HistorialMontaje[]> {
   const { data, error } = await supabase.from("tc_historial_montajes").select("*")
     .eq("neumatico_id", neumaticoId).order("created_at", { ascending: false });
