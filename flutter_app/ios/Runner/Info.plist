@@ -52,7 +52,7 @@
 		<string>location</string>
 	</array>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>Mobilink Assist sigue enviando tu ubicación con la pantalla apagada mientras vas a una asistencia o vuelves al taller, para el seguimiento del cliente y la llegada al taller.</string>
+	<string>Mobilink Assist envía tu ubicación mientras tienes la sesión abierta, también con la pantalla apagada: para el mapa de la flota, el seguimiento del cliente y la llegada al taller.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Mobilink Assist usa tu ubicación para el seguimiento del trayecto hasta el punto de avería y el regreso al taller.</string>
 </dict>

@@ -403,6 +403,47 @@ class ApiService {
     }
   }
 
+  /// La posición de la tablet FUERA de una asistencia, para el Mapa flota.
+  /// Sin cola offline: es «dónde está ahora», y una posición que llega tarde
+  /// ya no lo dice.
+  Future<void> sendTabletLocation(
+    double lat,
+    double lng, {
+    double? accuracyM,
+    double? speedKmh,
+  }) async {
+    try {
+      await http
+          .post(
+            Uri.parse('$kBackendUrl/api/roadside-operator/location'),
+            headers: await _authHeaders(),
+            body: jsonEncode({
+              'lat': lat,
+              'lng': lng,
+              if (accuracyM != null) 'accuracyM': accuracyM,
+              if (speedKmh != null) 'speedKmh': speedKmh,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+    } catch (_) {
+      // Silencioso: el mapa no debe interrumpir al técnico.
+    }
+  }
+
+  /// Al cerrar sesión: la tablet deja de salir en el Mapa flota.
+  Future<void> clearTabletLocation() async {
+    try {
+      await http
+          .delete(
+            Uri.parse('$kBackendUrl/api/roadside-operator/location'),
+            headers: await _authHeaders(),
+          )
+          .timeout(const Duration(seconds: 8));
+    } catch (_) {
+      // Sin red: el mapa la ocultará igual cuando pase un día sin noticias.
+    }
+  }
+
   // ── OTF (Órdenes de Trabajo de Flota) ──
   Future<List<Map<String, dynamic>>> getOtfList() async {
     final res = await http

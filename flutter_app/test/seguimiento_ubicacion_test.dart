@@ -29,10 +29,17 @@ class _GpsFingido extends GeolocatorPlatform {
 class _ApiFingida extends ApiService {
   _ApiFingida() : super(techName: 'Iván', code: '0000');
   final enviados = <int>[];
+  int enviadosAlMapa = 0;
   @override
   Future<void> sendLocation(int id, double lat, double lng,
       {double? accuracyM, double? speedKmh}) async {
     enviados.add(id);
+  }
+
+  @override
+  Future<void> sendTabletLocation(double lat, double lng,
+      {double? accuracyM, double? speedKmh}) async {
+    enviadosAlMapa++;
   }
 }
 
@@ -87,23 +94,43 @@ void main() {
     expect(gps.flujosAbiertos, 1);
   });
 
-  test('al pasar a un estado sin seguimiento, se para', () async {
+  test('al cerrar la asistencia, sigue mandando, pero al Mapa flota', () async {
     await seguimiento.iniciar(api, 8);
+    final primerFlujo = gps.controlador!;
     await seguimiento.alCambiarEstado(api, 8, 'llegada_taller');
     expect(seguimiento.asistenciaActiva, isNull);
-    expect(gps.controlador!.hasListener, isFalse);
+    expect(seguimiento.activo, isTrue);
+    expect(primerFlujo.hasListener, isFalse);
+
+    gps.controlador!.add(_pos());
+    await Future<void>.delayed(Duration.zero);
+    expect(api.enviadosAlMapa, 1);
+    expect(api.enviados, isEmpty);
   });
 
-  test('sin asistencias en camino, se para', () async {
-    await seguimiento.iniciar(api, 8);
+  test('sin asistencias en camino, manda al Mapa flota', () async {
     await seguimiento.sincronizar(api, [{'id': 8, 'status': 'en_punto'}]);
     expect(seguimiento.asistenciaActiva, isNull);
+    expect(seguimiento.activo, isTrue);
+  });
+
+  test('cambiar de estado otra asistencia no corta la que está en camino', () async {
+    await seguimiento.iniciar(api, 8);
+    await seguimiento.alCambiarEstado(api, 9, 'en_punto');
+    expect(seguimiento.asistenciaActiva, 8);
+  });
+
+  test('al cerrar sesión, para del todo', () async {
+    await seguimiento.sincronizar(api, []);
+    await seguimiento.detener();
+    expect(seguimiento.activo, isFalse);
+    expect(gps.controlador!.hasListener, isFalse);
   });
 
   test('sin permiso de ubicación, no arranca', () async {
     gps.permiso = LocationPermission.deniedForever;
-    await seguimiento.iniciar(api, 8);
-    expect(seguimiento.asistenciaActiva, isNull);
+    await seguimiento.sincronizar(api, []);
+    expect(seguimiento.activo, isFalse);
     expect(gps.flujosAbiertos, 0);
   });
 }
