@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useInformesFiltros } from "./InformesLayout";
 import { obtenerEstadoFlota } from "../../services/informes";
+import { descargarEstadoFlotaExcel } from "../../services/data";
 import type { EstadoFlota } from "../../types/informes";
 import { Donut, ColumnChart } from "../../components/informes/charts";
 
@@ -18,6 +19,25 @@ function Semaforo({ color, label, valor }: { color: string; label: string; valor
 
 export default function InformeEstadoFlota() {
   const { filtros } = useInformesFiltros();
+  const [bajando, setBajando] = useState(false);
+  const [errorExcel, setErrorExcel] = useState("");
+
+  /*
+   * El Excel sale de la MISMA clasificación que estos semáforos: la hace la
+   * base. Si se recalculara en el servidor del Excel, la hoja y la pantalla
+   * acabarían diciendo cosas distintas el día que alguien toque una.
+   */
+  async function bajarExcel() {
+    if (bajando) return;
+    setBajando(true); setErrorExcel("");
+    try {
+      await descargarEstadoFlotaExcel(filtros.empresaId);
+    } catch (e: unknown) {
+      setErrorExcel(e instanceof Error && e.message ? e.message : "No se ha podido generar el Excel");
+    } finally {
+      setBajando(false);
+    }
+  }
   const [flota, setFlota] = useState<EstadoFlota | null>(null);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
@@ -40,6 +60,19 @@ export default function InformeEstadoFlota() {
 
   return (
     <div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <span className="text-[12px] text-slate-400">
+          {flota.total} vehículo(s) activos{filtros.empresaId ? "" : " de todos los clientes"}
+        </span>
+        <div className="flex items-center gap-2">
+          {errorExcel && <span className="text-[12px] text-rose-300">{errorExcel}</span>}
+          <button onClick={() => void bajarExcel()} disabled={bajando}
+            className="rounded-lg border border-slate-600 px-3 py-1.5 text-xs font-bold text-slate-200 hover:bg-slate-700/40 disabled:opacity-50">
+            {bajando ? "Generando…" : "Excel por vehículo"}
+          </button>
+        </div>
+      </div>
+
       <div className="mb-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
         <Semaforo color="#22c55e" label="🟢 Correcto" valor={flota.correcto} />
         <Semaforo color="#f59e0b" label="🟡 Revisar" valor={flota.revisar} />
