@@ -59,14 +59,21 @@ export function mountInformeRevisiones(app: Express, ...guards: RequestHandler[]
       const pedido = String(req.query.ambito ?? "cliente");
       const ambito: Ambito = pedido === "interno" && esAdmin ? "interno" : "cliente";
 
-      const revisiones = await leerRevisiones({ empresa, desde, hasta });
+      // Por defecto NO se filtra: dejar de imprimir revisiones que existen
+      // es decisión de quien pide el informe.
+      const soloConMediciones = String(req.query.soloConMediciones ?? "") === "1";
+
+      const { filas: revisiones, truncado } = await leerRevisiones({ empresa, desde, hasta });
       const mediciones = await leerMediciones({ empresa, desde, hasta }, revisiones.map((r) => r.id));
-      const documento = armarInforme(revisiones, mediciones, { empresa, desde, hasta, formato, ambito });
+      const documento = armarInforme(revisiones, mediciones, {
+        empresa, desde, hasta, formato, ambito, soloConMediciones, truncado,
+      });
       const nombre = await nombreEmpresa(empresa);
 
       const pdf = await generarInformeRevisiones(documento, nombre || "Empresa");
       const fichero = `revisiones-${(nombre || "empresa").toLowerCase().replace(/[^a-z0-9]+/g, "-")}`
-        + `-${desde}_${hasta}-${formato}${ambito === "interno" ? "-interno" : ""}.pdf`;
+        + `-${desde}_${hasta}-${formato}${ambito === "interno" ? "-interno" : ""}`
+        + `${soloConMediciones ? "-con-datos" : ""}.pdf`;
 
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `inline; filename="${fichero}"`);

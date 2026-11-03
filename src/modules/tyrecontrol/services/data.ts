@@ -1785,10 +1785,12 @@ export async function descargarEstadoFlotaExcel(empresaId?: string | null): Prom
 export async function abrirInformeRevisionesPdf(p: {
   empresaId: string; desde?: string | null; hasta?: string | null;
   formato: "resumen" | "detalle" | "vehiculo"; ambito: "cliente" | "interno";
+  soloConMediciones?: boolean;
 }): Promise<void> {
   const q = new URLSearchParams({ empresa: p.empresaId, formato: p.formato, ambito: p.ambito });
   if (p.desde) q.set("desde", p.desde);
   if (p.hasta) q.set("hasta", p.hasta);
+  if (p.soloConMediciones) q.set("soloConMediciones", "1");
   // La pestaña se abre ANTES del fetch: si se abriera después, el navegador
   // la trataría como emergente y la bloquearía.
   const pestana = window.open("", "_blank");

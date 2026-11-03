@@ -152,6 +152,9 @@ export async function generarInformeRevisiones(d: Documento, empresa: string): P
     ["En aviso", String(r.enAviso), r.enAviso ? AMBAR : VERDE],
     ["Sin medir", String(r.sinMedir), SUAVE],
   ];
+  // Cuántas revisiones no traen ni una medición. Sale siempre que las haya:
+  // es el número que hace ver que conviene filtrar.
+  if (r.sinMediciones > 0) kpis.push(["Sin mediciones", String(r.sinMediciones), AMBAR]);
   if (d.ambito === "interno") kpis.push(["Sin terminar", String(r.borradores), r.borradores ? AMBAR : VERDE]);
 
   const anchoKpi = (A4.ancho - 2 * MARGEN) / kpis.length;
