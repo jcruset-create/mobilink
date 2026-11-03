@@ -149,12 +149,36 @@ dinamico(bloque, concepto, valor, esperado, veredicto) as (
    where to_regclass('public.tc_montajes_actuales') is not null
 
   union all
-  select '4 · lo que no puede pasar', 'operaciones del histórico marcadas como físicas',
+  -- `es_fisica` no vive aquí: es del catálogo de tipos de operación. Lo que
+  -- SÍ escribe la importación en cada fila es `source = 'import'`, y eso es
+  -- lo que se comprueba: una operación con lote que no venga marcada así la
+  -- escribió otra cosa.
+  select '4 · lo que no puede pasar', 'operaciones con lote que no son source=import',
          coalesce((xpath('/table/row/v/text()', query_to_xml(
            'select count(*) v from public.operaciones_neumaticos '
-           || 'where importacion_lote_id is not null and coalesce(es_fisica, false)',
-           false, false, '')))[1]::text, '—'),
-         '0 · histórico no es trabajo de taller', 'PARAR si no es 0'
+           || 'where importacion_lote_id is not null '
+           || 'and coalesce(source, '''') <> ''import''', false, false, '')))[1]::text, '—'),
+         '0', 'PARAR si no es 0'
+   where to_regclass('public.operaciones_neumaticos') is not null
+
+  union all
+  -- Histórico no significa facturado: la importación no pone coste.
+  select '4 · lo que no puede pasar', 'operaciones del histórico con coste',
+         coalesce((xpath('/table/row/v/text()', query_to_xml(
+           'select count(*) v from public.operaciones_neumaticos '
+           || 'where importacion_lote_id is not null '
+           || 'and coalesce(coste, 0) <> 0', false, false, '')))[1]::text, '—'),
+         '0 · histórico no es facturado', 'PARAR si no es 0'
+   where to_regclass('public.operaciones_neumaticos') is not null
+
+  union all
+  -- Cada operación cuelga de su intervención; una suelta es un albarán a medias.
+  select '4 · lo que no puede pasar', 'operaciones del histórico sin intervención',
+         coalesce((xpath('/table/row/v/text()', query_to_xml(
+           'select count(*) v from public.operaciones_neumaticos '
+           || 'where importacion_lote_id is not null '
+           || 'and intervencion_id is null', false, false, '')))[1]::text, '—'),
+         '0', 'PARAR si no es 0'
    where to_regclass('public.operaciones_neumaticos') is not null
 
   union all
