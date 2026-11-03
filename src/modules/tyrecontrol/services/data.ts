@@ -1746,6 +1746,43 @@ export async function enlaceParteInterventionPdf(intervencionId: string): Promis
   return (j as any).url as string;
 }
 
+/**
+ * Abre el informe de revisiones en PDF en otra pestaña.
+ *
+ * Por `fetch` y no por `window.open`: una navegación del navegador no lleva
+ * cabeceras, y la sesión de TyreControl va en `Authorization`. Meter el
+ * token en la URL lo dejaría en el historial y en los registros del
+ * servidor, que es justo lo que `pdfConSesion` existe para evitar.
+ */
+export async function abrirInformeRevisionesPdf(p: {
+  empresaId: string; desde?: string | null; hasta?: string | null;
+  formato: "resumen" | "detalle" | "vehiculo"; ambito: "cliente" | "interno";
+}): Promise<void> {
+  const q = new URLSearchParams({ empresa: p.empresaId, formato: p.formato, ambito: p.ambito });
+  if (p.desde) q.set("desde", p.desde);
+  if (p.hasta) q.set("hasta", p.hasta);
+  // La pestaña se abre ANTES del fetch: si se abriera después, el navegador
+  // la trataría como emergente y la bloquearía.
+  const pestana = window.open("", "_blank");
+  try {
+    const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/informes/revisiones/pdf?${q}`, {
+      headers: { Authorization: `Bearer ${await tokenSesion()}` },
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error((j as any)?.error || `No se ha podido generar el informe (${r.status})`);
+    }
+    const url = URL.createObjectURL(await r.blob());
+    if (pestana) pestana.location.href = url;
+    else { const a = document.createElement("a"); a.href = url; a.download = "revisiones.pdf"; a.click(); }
+    // No se revoca al instante: la pestaña todavía lo está cargando.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (e) {
+    pestana?.close();
+    throw e;
+  }
+}
+
 export async function listarDocumentosVehiculo(vehiculoId: string): Promise<DocumentoVehiculo[]> {
   const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/vehiculos/${vehiculoId}/documentos`, {
     headers: { Authorization: `Bearer ${await tokenSesion()}` },
