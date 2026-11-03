@@ -15,6 +15,7 @@ import { supabase, supabaseAnonAuth, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_
 import { fallaAlFirmar, firmarEnFilas, firmarUrls } from "./core/fotosFirmadas.ts";
 import { descargarMedioTwilio, rescatarMedioDeTwilio } from "./core/medioTwilio.ts";
 import { elegirPosicion, horaWebfleet, type PosicionElegida } from "./core/posicionDoble.ts";
+import { borrarPosicionTablet, guardarPosicionTablet, listarTabletsEnMapa } from "./tablets/posicionTablet.ts";
 import { guardarCodigoErp, SISTEMAS_NO_ERP } from "./clientes/codigoErp.ts";
 import { OTF_EN_ESPERA_SQL } from "./otf/espera.ts";
 import {
@@ -7552,6 +7553,13 @@ app.post(
         `,
         [id, lat, lng, ahora]
       );
+      // Y la del operario en el Mapa flota: dentro de una asistencia la tablet
+      // manda solo a esta ruta, no a la general.
+      await guardarPosicionTablet(operator.techName, {
+        lat, lng, atMs: ahora,
+        accuracyM: normalizeNullableNumber(req.body?.accuracyM ?? req.body?.accuracy),
+        speedKmh: normalizeNullableNumber(req.body?.speedKmh ?? req.body?.speed),
+      });
 
       /*
        * Y la posición se GUARDA como rastro, no solo se pisa la última.
@@ -7628,6 +7636,54 @@ app.post(
   }
 );
 
+/*
+ * La posición de la tablet fuera de una asistencia, para el Mapa flota. La
+ * manda la APK mientras el operario tiene la sesión abierta; al cerrar sesión
+ * la borra (DELETE) y deja de salir en el mapa. Ver tablets/posicionTablet.ts.
+ */
+app.post("/api/roadside-operator/location", requireRoadsideOperator, async (req, res) => {
+  try {
+    const operator = (req as any).roadsideOperator as { techName: string };
+    const lat = normalizeNullableNumber(req.body?.lat);
+    const lng = normalizeNullableNumber(req.body?.lng);
+    if (lat == null || lng == null) {
+      return res.status(400).json({ error: "Coordenadas no validas" });
+    }
+    await guardarPosicionTablet(operator.techName, {
+      lat, lng, atMs: Date.now(),
+      accuracyM: normalizeNullableNumber(req.body?.accuracyM ?? req.body?.accuracy),
+      speedKmh: normalizeNullableNumber(req.body?.speedKmh ?? req.body?.speed),
+    });
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("POST /api/roadside-operator/location error:", error);
+    res.status(500).json({ error: "Error guardando ubicacion" });
+  }
+});
+
+app.delete("/api/roadside-operator/location", requireRoadsideOperator, async (req, res) => {
+  try {
+    const operator = (req as any).roadsideOperator as { techName: string };
+    await borrarPosicionTablet(operator.techName);
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("DELETE /api/roadside-operator/location error:", error);
+    res.status(500).json({ error: "Error borrando ubicacion" });
+  }
+});
+
+app.get("/api/tablets/posiciones", exigirCredencial(requirePanelRole), async (req, res) => {
+  try {
+    // Igual que las furgonetas: las de otro taller se ven, marcadas como ajenas.
+    const panelUser = await getAssistPanelUser(req);
+    const miTallerId = panelUser && !panelUser.esAdmin ? panelUser.tallerId : null;
+    res.json(await listarTabletsEnMapa(miTallerId ?? null));
+  } catch (error) {
+    console.error("GET /api/tablets/posiciones error:", error);
+    res.status(500).json({ error: "Error listando tablets" });
+  }
+});
+
 // Lote de posiciones capturadas offline (migas de pan). Se envían al recuperar señal.
 app.post(
   "/api/roadside-operator/assistances/:id/locations-batch",
@@ -7692,6 +7748,10 @@ app.post(
             WHERE id = $1 AND COALESCE("tabletLocationAtMs", 0) <= $4`,
           [id, last.lat, last.lng, last.ts]
         );
+        await guardarPosicionTablet(operator.techName, {
+          lat: last.lat, lng: last.lng, atMs: last.ts,
+          accuracyM: last.accuracyM, speedKmh: last.speedKmh,
+        });
         const cfg = await getWorkshopConfig();
         const tLat = parseFloat(cfg.taller_lat), tLng = parseFloat(cfg.taller_lng);
         const radioM = parseFloat(cfg.taller_radio_m) || 300;

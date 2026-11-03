@@ -622,6 +622,20 @@ export async function initDb() {
       "createdAtMs" BIGINT NOT NULL
     );
 
+    /*
+     * La última posición de la tablet de cada operario, para el Mapa flota.
+     * Una fila por operario: se pisa con cada envío y se borra al cerrar
+     * sesión (server/tablets/posicionTablet.ts).
+     */
+    CREATE TABLE IF NOT EXISTS tablet_posicion (
+      "techName" TEXT PRIMARY KEY,
+      lat DOUBLE PRECISION NOT NULL,
+      lng DOUBLE PRECISION NOT NULL,
+      "accuracyM" DOUBLE PRECISION,
+      "speedKmh" DOUBLE PRECISION,
+      "atMs" BIGINT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS roadside_operator_track (
       id SERIAL PRIMARY KEY,
       "assistanceId" INTEGER NOT NULL,

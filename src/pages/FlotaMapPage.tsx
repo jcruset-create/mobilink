@@ -31,6 +31,59 @@ type Vehicle = {
   techName?: string | null;
 };
 
+/** La última posición de la tablet de un operario: `server/tablets/posicionTablet.ts`. */
+type Tablet = {
+  techName: string;
+  lat: number;
+  lng: number;
+  accuracyM: number | null;
+  speedKmh: number | null;
+  atMs: number;
+  tallerNombre: string | null;
+  esPropio: boolean;
+  asistenciaId: number | null;
+  asistenciaEstado: string | null;
+  asistenciaMatricula: string | null;
+  furgoneta: string | null;
+};
+
+/** Sin noticias de la tablet en este rato, el icono sale apagado. */
+const TABLET_SIN_SENAL_MS = 10 * 60_000;
+
+function haceCuanto(ms: number) {
+  const min = Math.round((Date.now() - ms) / 60_000);
+  if (min < 1) return "ahora";
+  if (min < 60) return `hace ${min} min`;
+  const h = Math.floor(min / 60);
+  return `hace ${h} h ${min % 60} min`;
+}
+
+function escaparHtml(texto: string) {
+  return texto.replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string
+  );
+}
+
+function makeTabletIcon(nombre: string, activa: boolean, esPropio: boolean) {
+  const apagada = !activa || !esPropio;
+  const fondo = apagada ? "#3a3f46" : "#0f766e";
+  const borde = apagada ? "#64748b" : "#5eead4";
+  return L.divIcon({
+    html: `
+      <div style="text-align:center;${apagada ? "opacity:0.7;" : ""}">
+        <div style="display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:50%;background:${fondo};border:2px solid ${borde};box-shadow:0 2px 6px rgba(0,0,0,0.4);font-size:16px;">📱</div>
+        <div style="background:${fondo};color:#f8fafc;font-size:10px;font-weight:900;padding:1px 5px;border-radius:4px;margin-top:2px;white-space:nowrap;border:1px solid ${borde};">
+          ${escaparHtml(nombre)}
+        </div>
+      </div>
+    `,
+    className: "",
+    iconSize: [80, 50],
+    iconAnchor: [40, 15],
+    popupAnchor: [0, -18],
+  });
+}
+
 function makeVanIcon(plate: string, esPropio = true) {
   // Furgonetas de otros talleres de la empresa: en gris (solo estado/técnico)
   const imgFilter = esPropio
@@ -54,7 +107,7 @@ function makeVanIcon(plate: string, esPropio = true) {
   });
 }
 
-function FitAll({ vehicles }: { vehicles: Vehicle[] }) {
+function FitAll({ vehicles }: { vehicles: Array<{ lat: number; lng: number }> }) {
   const map = useMap();
   const fitted = useRef(false);
   useEffect(() => {
@@ -73,6 +126,9 @@ function FitAll({ vehicles }: { vehicles: Vehicle[] }) {
 
 export default function FlotaMapPage() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [tablets, setTablets] = useState<Tablet[]>([]);
+  const [verFurgonetas, setVerFurgonetas] = useState(true);
+  const [verTablets, setVerTablets] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
@@ -92,7 +148,22 @@ export default function FlotaMapPage() {
     );
   }
 
+  // Las tablets van aparte: si Webfleet falla, siguen saliendo.
+  async function loadTablets() {
+    try {
+      const res = await apiFetch(`${API_BASE}/api/tablets/posiciones`, {
+        headers: await sessionHeaders(getAdminHeaders() as Record<string, string>),
+      });
+      if (!res.ok) return;
+      const data: Tablet[] = await res.json();
+      setTablets(data.filter(t => isFinite(t.lat) && isFinite(t.lng)));
+    } catch {
+      /* el mapa de furgonetas sigue funcionando */
+    }
+  }
+
   async function load() {
+    void loadTablets();
     try {
       const res = await apiFetch(`${API_BASE}/api/webfleet/vehicles`, {
         headers: await sessionHeaders(getAdminHeaders() as Record<string, string>),
@@ -124,11 +195,21 @@ export default function FlotaMapPage() {
           <div>
             <h1 className="text-base font-black text-white">Localización de flota</h1>
             <p className="text-xs text-slate-400">
-              {loading ? "Cargando…" : error ? `Error: ${error}` : `${vehicles.length} furgoneta${vehicles.length !== 1 ? "s" : ""} · Webfleet`}
+              {loading
+                ? "Cargando…"
+                : `${error ? `Webfleet: ${error}` : `${vehicles.length} furgoneta${vehicles.length !== 1 ? "s" : ""} · Webfleet`} · ${tablets.length} tablet${tablets.length !== 1 ? "s" : ""}`}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-3">
+          <label className="flex items-center gap-1 text-xs font-bold text-slate-300">
+            <input type="checkbox" checked={verFurgonetas} onChange={(e) => setVerFurgonetas(e.target.checked)} />
+            🚐 Furgonetas
+          </label>
+          <label className="flex items-center gap-1 text-xs font-bold text-slate-300">
+            <input type="checkbox" checked={verTablets} onChange={(e) => setVerTablets(e.target.checked)} />
+            📱 Tablets
+          </label>
           <label className="flex items-center gap-1 text-xs text-slate-400">
             Informe del día:
             <input
@@ -159,7 +240,7 @@ export default function FlotaMapPage() {
       <div className="flex-1 relative">
         {loading && vehicles.length === 0 ? (
           <div className="flex h-full items-center justify-center text-slate-400">Cargando posiciones Webfleet…</div>
-        ) : error && vehicles.length === 0 ? (
+        ) : error && vehicles.length === 0 && tablets.length === 0 ? (
           <div className="flex h-full items-center justify-center text-red-400">{error}</div>
         ) : (
           <MapContainer
@@ -172,8 +253,48 @@ export default function FlotaMapPage() {
               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
               url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
             />
-            <FitAll vehicles={vehicles} />
-            {vehicles.map(v => (
+            <FitAll vehicles={[...vehicles, ...tablets]} />
+            {verTablets && tablets.map(t => {
+              const activa = Date.now() - t.atMs <= TABLET_SIN_SENAL_MS;
+              return (
+                <Marker
+                  key={`tablet-${t.techName}`}
+                  position={[t.lat, t.lng]}
+                  icon={makeTabletIcon(t.techName, activa, t.esPropio)}
+                  zIndexOffset={500}
+                >
+                  <Popup>
+                    <div className="text-sm">
+                      <div className="font-bold">📱 Tablet de {t.techName}</div>
+                      {t.tallerNombre && (
+                        <div className={`mt-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${t.esPropio ? "bg-blue-100 text-blue-700" : "bg-slate-200 text-slate-600"}`}>
+                          {t.tallerNombre}{t.esPropio ? "" : " · otro taller"}
+                        </div>
+                      )}
+                      <div className={`mt-1 text-xs font-bold ${activa ? "text-emerald-600" : "text-red-600"}`}>
+                        {activa ? "● Enviando posición" : "● Sin señal"} · {haceCuanto(t.atMs)}
+                      </div>
+                      {t.asistenciaId != null ? (
+                        <div className="mt-1 text-xs text-amber-700">
+                          Asistencia #{t.asistenciaId}
+                          {t.asistenciaMatricula ? ` · ${t.asistenciaMatricula}` : ""}
+                          {t.furgoneta ? ` · ${t.furgoneta}` : ""}
+                        </div>
+                      ) : (
+                        <div className="mt-1 text-xs text-gray-600">Sin asistencia en curso</div>
+                      )}
+                      {t.speedKmh != null && t.speedKmh >= 3 && (
+                        <div className="text-xs text-gray-600">{Math.round(t.speedKmh)} km/h</div>
+                      )}
+                      {t.accuracyM != null && (
+                        <div className="text-[10px] text-gray-400">Precisión ±{Math.round(t.accuracyM)} m</div>
+                      )}
+                    </div>
+                  </Popup>
+                </Marker>
+              );
+            })}
+            {verFurgonetas && vehicles.map(v => (
               <Marker
                 key={v.objectno}
                 position={[v.lat, v.lng]}
@@ -214,9 +335,20 @@ export default function FlotaMapPage() {
       </div>
 
       {/* Lista lateral compacta */}
-      {vehicles.length > 0 && (
+      {(vehicles.length > 0 || tablets.length > 0) && (
         <div className="flex gap-2 overflow-x-auto px-4 py-2 bg-[#162232] border-t border-[#2d4a6a]">
-          {vehicles.map(v => (
+          {verTablets && tablets.map(t => {
+            const activa = Date.now() - t.atMs <= TABLET_SIN_SENAL_MS;
+            return (
+              <div key={`tablet-${t.techName}`} className="flex-shrink-0 rounded-lg px-3 py-1.5 text-center border bg-[#123c3a] border-[#0f766e]">
+                <div className="text-xs font-black text-teal-200">📱 {t.techName}</div>
+                <div className={`text-[10px] font-bold ${activa ? "text-emerald-400" : "text-red-400"}`}>
+                  {activa ? "Enviando" : "Sin señal"} · {haceCuanto(t.atMs)}
+                </div>
+              </div>
+            );
+          })}
+          {verFurgonetas && vehicles.map(v => (
             <div key={v.objectno} className={`flex-shrink-0 rounded-lg px-3 py-1.5 text-center border ${v.esPropio === false ? "bg-[#22262c] border-[#3a3f46] opacity-80" : "bg-[#1e3a5f] border-[#2d4a6a]"}`}>
               <div className={`text-xs font-black ${v.esPropio === false ? "text-slate-300" : "text-[#f0c040]"}`}>{v.plate ?? v.objectname}</div>
               <div className={`text-[10px] font-bold ${v.estado === "trabajando" ? "text-amber-400" : "text-emerald-400"}`}>

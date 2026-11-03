@@ -104,8 +104,8 @@ class _AssistancesScreenState extends State<AssistancesScreen>
     try {
       final data = await widget.api.getAssistances();
       setState(() => _assistances = data);
-      // Con una asistencia ya en camino, el envío de la ubicación vuelve aunque
-      // no se entre en su pantalla (p. ej. tras reiniciar la tablet).
+      // El envío de la ubicación se retoma solo: a la asistencia en camino si
+      // la hay, o al Mapa flota si no (p. ej. tras reiniciar la tablet).
       unawaited(SeguimientoUbicacion.instancia.sincronizar(widget.api, data));
     } catch (e) {
       setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
@@ -129,8 +129,9 @@ class _AssistancesScreenState extends State<AssistancesScreen>
       ),
     );
     if (confirmed != true) return;
-    // Sin sesión no hay a quién mandar la ubicación: se para.
+    // Sin sesión no se manda la ubicación, y la tablet sale del Mapa flota.
     await SeguimientoUbicacion.instancia.detener();
+    await widget.api.clearTabletLocation();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('techName');
     await prefs.remove('code');
