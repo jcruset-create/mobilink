@@ -63,6 +63,21 @@ export interface OpcionesInforme {
   hasta: string;                 // ISO yyyy-mm-dd, inclusive
   formato: Formato;
   ambito: Ambito;
+  /**
+   * Dejar fuera las revisiones que no tienen ninguna medición guardada.
+   *
+   * Una revisión sin mediciones ocupa dos líneas en el PDF y no dice nada.
+   * Con un periodo largo son páginas enteras de «sin mediciones de
+   * neumático guardadas» entre las que sí tienen datos, y el informe deja
+   * de poder leerse.
+   *
+   * No es el valor por defecto: dejar de imprimir revisiones que existen es
+   * una decisión de quien pide el informe, no mía. Cuando se activa, se
+   * escribe cuántas se han quitado.
+   */
+  soloConMediciones?: boolean;
+  /** La consulta llegó al tope de filas y hay más en el periodo. */
+  truncado?: boolean;
 }
 
 /** Una rueda ya clasificada para pintarla. */
@@ -103,6 +118,8 @@ export interface Documento {
     enAviso: number;
     sinMedir: number;
     borradores: number;
+    /** Revisiones del periodo sin ninguna medición. Se cuentan se filtren o no. */
+    sinMediciones: number;
   };
   /** Revisiones por mes, para la tabla de evolución. */
   meses: Array<{ mes: string; revisiones: number; vehiculos: number; bajoMinimo: number }>;
@@ -148,7 +165,7 @@ export function armarInforme(
   // El cliente no ve borradores. Se dice cuántos se han dejado fuera en vez
   // de que el total no cuadre y nadie sepa por qué.
   const borradores = revisiones.filter((r) => r.estado !== "completada").length;
-  const visibles = op.ambito === "cliente"
+  let visibles = op.ambito === "cliente"
     ? revisiones.filter((r) => r.estado === "completada")
     : revisiones;
   if (op.ambito === "cliente" && borradores > 0) {
@@ -161,6 +178,24 @@ export function armarInforme(
   for (const m of mediciones) {
     const l = porRevision.get(m.revision_id);
     if (l) l.push(m); else porRevision.set(m.revision_id, [m]);
+  }
+
+  // Las que no tienen ni una medición. Se cuentan SIEMPRE, se quiten o no:
+  // el número es útil por sí mismo —dice cuánto trabajo quedó sin anotar— y
+  // sale en el resumen aunque no se filtre.
+  const sinMediciones = visibles.filter((r) => (porRevision.get(r.id) ?? []).length === 0).length;
+  if (op.soloConMediciones && sinMediciones > 0) {
+    visibles = visibles.filter((r) => (porRevision.get(r.id) ?? []).length > 0);
+    advertencias.push(
+      `Se han dejado fuera ${sinMediciones} revisión(es) sin ninguna medición de neumático guardada.`,
+    );
+  }
+
+  if (op.truncado) {
+    advertencias.push(
+      "El periodo tiene más revisiones de las que cabe en un informe: se han incluido las primeras. "
+      + "Acota las fechas para verlas todas.",
+    );
   }
 
   const docs: RevisionDoc[] = visibles
@@ -217,7 +252,7 @@ export function armarInforme(
   }
 
   const todasLasRuedas = docs.flatMap((d) => d.ruedas);
-  if (docs.length > 0 && todasLasRuedas.length === 0) {
+  if (docs.length > 0 && todasLasRuedas.length === 0 && !op.soloConMediciones) {
     advertencias.push("Ninguna de las revisiones del periodo tiene mediciones de neumático guardadas.");
   }
 
@@ -234,6 +269,7 @@ export function armarInforme(
       enAviso: todasLasRuedas.filter((r) => r.estado === "aviso").length,
       sinMedir: todasLasRuedas.filter((r) => r.estado === "sin_medir").length,
       borradores: op.ambito === "interno" ? borradores : 0,
+      sinMediciones,
     },
     meses: [...meses.entries()]
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))

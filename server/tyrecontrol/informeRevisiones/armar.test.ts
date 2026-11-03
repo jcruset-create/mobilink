@@ -225,3 +225,65 @@ describe("armarInforme · formatos", () => {
     expect(d.vehiculos.find((v) => v.matricula === "1111AAA")!.bajoMinimo).toBe(2);
   });
 });
+
+describe("armarInforme · solo las que tienen mediciones", () => {
+  const revisiones = [
+    rev({ id: "con", matricula: "1111AAA" }),
+    rev({ id: "sin", matricula: "2222BBB", fecha: "2026-03-11" }),
+  ];
+  const mediciones = [med({ revision_id: "con" })];
+
+  it("sin pedirlo, las vacías SE IMPRIMEN: no se quita nada por mi cuenta", () => {
+    const d = armarInforme(revisiones, mediciones, op());
+    expect(d.resumen.revisiones).toBe(2);
+    expect(d.revisiones.map((r) => r.matricula)).toContain("2222BBB");
+  });
+
+  it("pidiéndolo, se quedan fuera y se dice cuántas", () => {
+    const d = armarInforme(revisiones, mediciones, op({ soloConMediciones: true }));
+    expect(d.resumen.revisiones).toBe(1);
+    expect(d.revisiones.map((r) => r.matricula)).toEqual(["1111AAA"]);
+    expect(d.advertencias.join(" ")).toMatch(/1 revisión\(es\) sin ninguna medición/);
+  });
+
+  it("el recuento de vacías sale SIEMPRE, se filtre o no", () => {
+    // Es el número que hace ver que conviene filtrar.
+    expect(armarInforme(revisiones, mediciones, op()).resumen.sinMediciones).toBe(1);
+    expect(armarInforme(revisiones, mediciones, op({ soloConMediciones: true })).resumen.sinMediciones).toBe(1);
+  });
+
+  it("si no hay ninguna vacía, el filtro no cambia nada ni añade avisos", () => {
+    const d = armarInforme([rev({ id: "con" })], mediciones, op({ soloConMediciones: true }));
+    expect(d.resumen.revisiones).toBe(1);
+    expect(d.advertencias).toEqual([]);
+  });
+
+  it("el filtro se aplica DESPUÉS de quitar los borradores del cliente", () => {
+    // Un borrador vacío no se cuenta dos veces en los avisos.
+    const d = armarInforme([
+      rev({ id: "con" }),
+      rev({ id: "borrador-vacio", estado: "borrador" }),
+    ], mediciones, op({ ambito: "cliente", soloConMediciones: true }));
+    expect(d.resumen.revisiones).toBe(1);
+    expect(d.resumen.sinMediciones).toBe(0);
+    expect(d.advertencias.join(" ")).toMatch(/sin terminar/);
+    expect(d.advertencias.join(" ")).not.toMatch(/sin ninguna medición/);
+  });
+
+  it("el formato por vehículo también respeta el filtro", () => {
+    const d = armarInforme(revisiones, mediciones, op({ formato: "vehiculo", soloConMediciones: true }));
+    expect(d.vehiculos.map((v) => v.matricula)).toEqual(["1111AAA"]);
+  });
+});
+
+describe("armarInforme · truncado", () => {
+  it("si la consulta se cortó, el informe lo dice", () => {
+    const d = armarInforme([rev({ id: "a" })], [], op({ truncado: true }));
+    expect(d.advertencias.join(" ")).toMatch(/más revisiones de las que cabe/i);
+  });
+
+  it("sin truncar no se avisa de nada", () => {
+    const d = armarInforme([rev({ id: "a" })], [med({ revision_id: "a" })], op());
+    expect(d.advertencias).toEqual([]);
+  });
+});

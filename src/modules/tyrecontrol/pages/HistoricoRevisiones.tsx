@@ -118,6 +118,9 @@ export default function HistoricoRevisiones() {
   const [fTecnico, setFTecnico] = useState("");
   const [formatoPdf, setFormatoPdf] = useState<FormatoPdf>("resumen");
   const [generandoPdf, setGenerandoPdf] = useState(false);
+  // Por defecto NO se filtra: dejar de imprimir revisiones que existen es
+  // decisión de quien pide el informe, y se avisa en el propio PDF.
+  const [soloConDatos, setSoloConDatos] = useState(false);
 
   /*
    * Abre el PDF en otra pestaña.
@@ -131,7 +134,10 @@ export default function HistoricoRevisiones() {
     if (!fEmpresa || generandoPdf) return;
     setGenerandoPdf(true); setError("");
     try {
-      await abrirInformeRevisionesPdf({ empresaId: fEmpresa, desde, hasta, formato: formatoPdf, ambito });
+      await abrirInformeRevisionesPdf({
+        empresaId: fEmpresa, desde, hasta, formato: formatoPdf, ambito,
+        soloConMediciones: soloConDatos,
+      });
     } catch (e: unknown) {
       setError(e instanceof Error && e.message ? e.message : "No se ha podido generar el informe");
     } finally {
@@ -294,6 +300,11 @@ export default function HistoricoRevisiones() {
               className="rounded-lg border border-slate-500 px-3 py-1.5 text-[12px] font-bold text-slate-200 hover:bg-slate-700 disabled:opacity-50">
               Interno
             </button>
+            <label className="flex items-center gap-1.5 text-[12px] text-slate-300"
+                   title="Deja fuera las revisiones que no tienen ninguna medición guardada. El PDF dice cuántas se han quitado.">
+              <input type="checkbox" checked={soloConDatos} onChange={(e) => setSoloConDatos(e.target.checked)} />
+              Solo las que tienen mediciones
+            </label>
             <span className="text-[11px] text-slate-500">
               Del {desde || "—"} al {hasta || "—"}. El del cliente no lleva técnicos, códigos internos ni revisiones sin terminar.
             </span>
