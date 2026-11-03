@@ -196,6 +196,25 @@ export interface Ranking {
   totales: { vehiculosConDato: number; kmAnualTotal: number; kmAnualMedio: number | null };
 }
 
+/** Lo que contesta el botón de rehacer los meses que le faltan a un vehículo. */
+export interface HuecosVehiculo {
+  vehiculoId: string;
+  matricula: string | null;
+  huecos: Array<{ year: number; month: number; clase: "error" | "sin_dato" | "ausente"; error?: string | null }>;
+  porClase: { error: number; sin_dato: number; ausente: number };
+  pedidos: number;
+  sincronizacion: unknown | null;
+}
+
+/**
+ * Rehace los meses que le faltan a UN vehículo.
+ *
+ * Qué meses son lo decide el servidor leyendo las filas de ese vehículo: el
+ * navegador no manda la lista, así que no puede mandarla mal.
+ */
+export const rehacerHuecosVehiculo = (b: { vehiculoId: string; empresaId?: string; incluirSinDato?: boolean }) =>
+  pedir<HuecosVehiculo>("/huecos-vehiculo", { method: "POST", body: JSON.stringify(b) });
+
 export const rankingKilometraje = (empresaId?: string) =>
   pedir<Ranking>(`/ranking${empresaId ? `?empresa=${encodeURIComponent(empresaId)}` : ""}`);
 

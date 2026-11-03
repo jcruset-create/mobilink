@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Download, Gauge, Search, ShieldCheck, TriangleAlert } from "lucide-react";
+import { Download, Gauge, RefreshCw, Search, ShieldCheck, TriangleAlert } from "lucide-react";
 import {
-  rankingKilometraje, revisarCoherencia,
+  rankingKilometraje, rehacerHuecosVehiculo, revisarCoherencia,
   type Ranking, type VehiculoDelRanking,
 } from "../services/kilometrajeMensual";
 import { detalleDeMeses, listaDeMeses } from "../services/mesesEtiqueta";
@@ -44,6 +44,10 @@ export default function RankingKilometraje() {
   const [datos, setDatos] = useState<Ranking | null>(null);
   const [error, setError] = useState("");
   const [cargando, setCargando] = useState(true);
+  /* Se incrementa cuando una fila rehace sus meses: el ranking se vuelve a
+     pedir entero, porque al cambiar un vehículo cambia la media de la flota
+     y el puesto de los demás. */
+  const [recarga, setRecarga] = useState(0);
   const [busqueda, setBusqueda] = useState("");
   const [empresas, setEmpresas] = useState<Empresa[]>([]);
   const [empresaId, setEmpresaId] = useState("");
@@ -60,6 +64,8 @@ export default function RankingKilometraje() {
       .catch((e) => { setError(e.message); setCargando(false); });
   }, []);
 
+  // Se incrementa cuando una fila rehace sus meses: el ranking se vuelve a
+  // pedir entero porque la media de la flota también se mueve.
   useEffect(() => {
     if (!empresaId) return;
     let vivo = true;
@@ -75,7 +81,7 @@ export default function RankingKilometraje() {
       }
     })();
     return () => { vivo = false; };
-  }, [empresaId]);
+  }, [empresaId, recarga]);
 
   const filtrados = useMemo(() => {
     const q = busqueda.trim().toLowerCase();
@@ -227,6 +233,7 @@ export default function RankingKilometraje() {
                   <th className="px-3 py-2 text-right">Año en curso</th>
                   <th className="px-3 py-2 text-right">Mes actual</th>
                   <th className="px-3 py-2 text-left">Huecos</th>
+                  <th className="px-3 py-2 text-right"></th>
                 </tr>
               </thead>
               <tbody>
@@ -234,10 +241,11 @@ export default function RankingKilometraje() {
                     filtrada: buscar una matrícula no puede cambiar en qué
                     posición va ese autobús. */}
                 {filtrados.map((v) => (
-                  <Fila key={v.vehiculoId} v={v} puesto={datos.vehiculos.indexOf(v) + 1} num={num} />
+                  <Fila key={v.vehiculoId} v={v} puesto={datos.vehiculos.indexOf(v) + 1} num={num}
+                        empresaId={empresaId} onRehecho={() => setRecarga((n) => n + 1)} />
                 ))}
                 {filtrados.length === 0 && (
-                  <tr><td colSpan={8} className="px-3 py-6 text-center text-slate-500">
+                  <tr><td colSpan={9} className="px-3 py-6 text-center text-slate-500">
                     {busqueda
                       ? "Ningún vehículo con esa matrícula o unidad."
                       : `Todavía no hay kilómetros sincronizados${nombreEmpresa ? ` en ${nombreEmpresa}` : ""}.`}
@@ -270,11 +278,47 @@ export default function RankingKilometraje() {
   );
 }
 
-function Fila({ v, puesto, num }: {
+function Fila({ v, puesto, num, empresaId, onRehecho }: {
   v: VehiculoDelRanking;
   puesto: number;
   num: (n: number | null | undefined) => string;
+  empresaId: string;
+  onRehecho: () => void;
 }) {
+  const [rehaciendo, setRehaciendo] = useState(false);
+  const [aviso, setAviso] = useState("");
+  const huecosConocidos = v.mesesSinDato + v.mesesConError;
+
+  /*
+   * Rehacer SOLO los meses que le faltan a este vehículo.
+   *
+   * Qué meses son lo decide el servidor leyendo sus filas: aquí no se manda
+   * una lista, así que no se puede mandar mal. Y si no falta ninguno, el
+   * servidor contesta sin llamar al proveedor: pulsar dos veces no cuesta
+   * una petición de más.
+   */
+  async function rehacer() {
+    setRehaciendo(true); setAviso("");
+    try {
+      const r = await rehacerHuecosVehiculo({ vehiculoId: v.vehiculoId, empresaId });
+      if (r.pedidos === 0) {
+        setAviso("No le falta ningún mes");
+      } else {
+        const partes = [
+          r.porClase.error ? `${r.porClase.error} con error` : "",
+          r.porClase.sin_dato ? `${r.porClase.sin_dato} sin dato` : "",
+          r.porClase.ausente ? `${r.porClase.ausente} sin pedir` : "",
+        ].filter(Boolean);
+        setAviso(`Pedidos ${r.pedidos} meses (${partes.join(", ")})`);
+        onRehecho();
+      }
+    } catch (e: unknown) {
+      setAviso(e instanceof Error && e.message ? e.message : "No se ha podido rehacer");
+    } finally {
+      setRehaciendo(false);
+    }
+  }
+
   // Pocos meses detrás de la cifra: se avisa en la propia fila, en vez de
   // dejar que un 96.000 sobre dos meses parezca lo mismo que sobre doce.
   const flojo = v.meses < 3;
@@ -320,6 +364,32 @@ function Fila({ v, puesto, num }: {
           </span>
         )}
         {v.mesesSinDato === 0 && v.mesesConError === 0 && "—"}
+      </td>
+      {/*
+        El botón de la fila: rehace los meses que le faltan A ESTE vehículo y
+        a ninguno más. Las dos alternativas no servían: el relleno recorre la
+        flota entera y tarda horas, y pedir un rango a mano arrastra meses que
+        ya están bien, que es cupo del proveedor gastado en vano.
+      */}
+      <td className="px-3 py-1.5 text-right">
+        <div className="flex items-center justify-end gap-2">
+          {aviso && <span className="text-[11px] text-slate-400">{aviso}</span>}
+          <button
+            onClick={() => void rehacer()}
+            disabled={rehaciendo || !empresaId}
+            title={huecosConocidos > 0
+              ? "Vuelve a pedir al proveedor solo los meses que le faltan a este vehículo"
+              : "Vuelve a pedir los meses que le falten. Si no falta ninguno, no se llama al proveedor"}
+            className={`rounded-lg border px-2 py-1 text-[11px] font-bold disabled:opacity-40 ${
+              huecosConocidos > 0
+                ? "border-amber-500 text-amber-300 hover:bg-amber-500/10"
+                : "border-slate-600 text-slate-400 hover:bg-slate-700/40"
+            }`}
+          >
+            <RefreshCw className={`inline h-3 w-3 ${rehaciendo ? "animate-spin" : ""}`} />
+            <span className="ml-1">{rehaciendo ? "Pidiendo…" : "Rehacer"}</span>
+          </button>
+        </div>
       </td>
     </tr>
   );
