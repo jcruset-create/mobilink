@@ -133,6 +133,7 @@ import { mountAsistente } from "./tyrecontrol/asistente.ts";
 import { mountFlanco } from "./tyrecontrol/flanco/index.ts";
 import { mountEtiquetas } from "./tyrecontrol/etiquetas/index.ts";
 import { mountParte } from "./tyrecontrol/parte/index.ts";
+import { mountInformeFlota } from "./tyrecontrol/informeFlota/index.ts";
 import { masNuevaPrimero } from "./apkVersion.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
@@ -21705,6 +21706,7 @@ mountEtiquetas(app, authenticate, requireModule("tyrecontrol"));
 // guardar lo decide el técnico, y aterriza en la intervención y los montajes
 // que ya existen.
 mountParte(app, authenticate, requireModule("tyrecontrol"));
+mountInformeFlota(app, authenticate, requireModule("tyrecontrol"));
 
 /*
  * Lectura de TyreControl desde Assist. Solo lectura: en esta fase el módulo no

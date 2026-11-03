@@ -1746,6 +1746,34 @@ export async function enlaceParteInterventionPdf(intervencionId: string): Promis
   return (j as any).url as string;
 }
 
+/**
+ * Descarga el estado de la flota en Excel.
+ *
+ * Por `fetch` y no por `window.open`: la sesión de TyreControl va en la
+ * cabecera `Authorization` y una navegación del navegador no la lleva.
+ *
+ * Sin empresa salen todas las que el usuario pueda ver; la RLS decide, no
+ * esta llamada.
+ */
+export async function descargarEstadoFlotaExcel(empresaId?: string | null): Promise<void> {
+  const q = empresaId ? `?empresa=${encodeURIComponent(empresaId)}` : "";
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/informes/flota/excel${q}`, {
+    headers: { Authorization: `Bearer ${await tokenSesion()}` },
+  });
+  if (!r.ok) {
+    const j = await r.json().catch(() => ({}));
+    throw new Error((j as any)?.error || `No se ha podido generar el Excel (${r.status})`);
+  }
+  // El nombre del fichero lo pone el servidor; aquí se recupera de la
+  // cabecera para que la descarga no se llame «descarga.xlsx».
+  const cd = r.headers.get("Content-Disposition") ?? "";
+  const nombre = /filename="([^"]+)"/.exec(cd)?.[1] ?? "estado-flota.xlsx";
+  const url = URL.createObjectURL(await r.blob());
+  const a = document.createElement("a");
+  a.href = url; a.download = nombre; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+
 export async function listarDocumentosVehiculo(vehiculoId: string): Promise<DocumentoVehiculo[]> {
   const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/vehiculos/${vehiculoId}/documentos`, {
     headers: { Authorization: `Bearer ${await tokenSesion()}` },
