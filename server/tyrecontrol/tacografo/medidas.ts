@@ -33,10 +33,34 @@
  * histórico.
  *
  * De ahí las dos funciones. `normalizar` conserva la C —es el dato—, y
- * `mismaMedida` la ignora al comparar, distinguiendo «coincide» de «coincide
- * salvo el marcado» para que la diferencia se vea en pantalla en vez de
- * desaparecer.
+ * `comparar` la ignora, distinguiendo «coincide» de «coincide salvo el
+ * marcado» para que la diferencia se vea en pantalla en vez de desaparecer.
+ *
+ * ── Esto NO sustituye al normalizador del proyecto ──────────────────────────
+ *
+ * TyreControl ya tiene el suyo, y manda él: `tc_medida_normalizada()` en la
+ * base, con un disparador que lo aplica a todo lo que entra en
+ * `tc_cat_medidas_neumatico`, y su gemelo en JavaScript, `medidaCanonica` de
+ * `shared/medidas.ts`.
+ *
+ * Lo de aquí es otra cosa y hace falta igual: aquél FORMATEA una medida bien
+ * escrita —espacios, comas, la R suelta— y éste tiene que LEER lo que escribe
+ * a mano un técnico en la extranet: `29580R22.5`, `295.80R22.5`, `295-80R22.5`,
+ * `275\70 R 22.5`. Esas `medidaCanonica` no las toca, así que entrarían al
+ * catálogo como medidas nuevas y acabaríamos con cinco filas para la misma
+ * rueda.
+ *
+ * Lo que sí se respeta es que la forma de salida sea EXACTAMENTE la que
+ * produciría el disparador: si no, al dar de alta una medida la base la
+ * reescribiría y chocaría contra el `unique` de `valor`. Hay una prueba que
+ * lo comprueba sobre las 48 representaciones.
+ *
+ * Y la comparación se apoya en `baseMedida`, la del proyecto, en vez de
+ * repetir el criterio: dos ideas distintas de «es la misma medida» es como se
+ * acaba encontrando una rueda por una pantalla y no por otra.
  */
+
+import { baseMedida } from "../../../shared/medidas.ts";
 
 /** Lo que se puede decir de dos medidas al compararlas. */
 export type Comparacion = "igual" | "solo_marcado" | "distinta" | "desconocida";
@@ -66,10 +90,16 @@ export function normalizar(bruto: string | null | undefined): string | null {
   return `${ancho}/${perfil}R${llanta}${marcado ?? ""}`;
 }
 
-/** La medida sin su marcado: `225/75R16C` → `225/75R16`. */
+/**
+ * La medida sin su marcado: `225/75R16C` → `225/75R16`.
+ *
+ * Es `baseMedida` del proyecto, que ya se queda con ancho/perfil/llanta y deja
+ * fuera lo que venga detrás —el marcado, el índice de carga, el código de
+ * velocidad—. No se reimplementa aquí.
+ */
 export function sinMarcado(medida: string | null | undefined): string | null {
   if (!medida) return null;
-  return medida.replace(/[A-Z]+$/, (m) => (m === "R" ? m : "")) || null;
+  return baseMedida(medida) || null;
 }
 
 /** El marcado, si lo lleva: `225/75R16C` → `C`. */
@@ -86,7 +116,7 @@ export function marcado(medida: string | null | undefined): string | null {
  * tratarlo como `distinta` llenaría la pantalla de 36 discrepancias que no lo
  * son.
  */
-export function mismaMedida(
+export function comparar(
   a: string | null | undefined,
   b: string | null | undefined,
 ): Comparacion {

@@ -6,6 +6,7 @@ import { importCheckpoint, type ReporteCheckpoint } from "../services/importChec
 import { HOJA_DETALLE } from "../services/checkpoint";
 import { pareceHoja1, pareceHoja2 } from "../services/importHistorico";
 import ImportarHistorico from "../components/ImportarHistorico";
+import ImportarTacografo from "../components/ImportarTacografo";
 import { TableWrap, tdCls, thCls } from "../components/ui";
 
 type Modo = "vehiculos" | "revisiones" | "checkpoint" | "historico";
@@ -25,6 +26,12 @@ export default function Importar() {
   const [historico, setHistorico] = useState<{ h1: any[]; h2: any[]; bytes: ArrayBuffer } | null>(null);
   // Las cargas ya hechas se gestionan sin volver a subir el Excel.
   const [soloCargas, setSoloCargas] = useState(false);
+  /**
+   * El informe de tacógrafo tiene su propio panel y lo lee el SERVIDOR, así
+   * que no pasa por la detección de arriba: no tendría sentido leerlo aquí
+   * para volver a mandarlo entero.
+   */
+  const [tacografo, setTacografo] = useState(false);
 
   function reset() { setRepVeh(null); setRepRev(null); setRepChk(null); setEjecutado(false); setRows([]); setModo(null); setError(""); setHistorico(null); }
 
@@ -57,6 +64,21 @@ export default function Importar() {
           return;
         }
       }
+      // Si lo que han elegido es el informe de tacógrafo, se dice dónde va en
+      // vez de soltar un «no se han encontrado filas con matricula», que no
+      // ayuda a nadie. Su cabecera está en la tercera fila.
+      {
+        const primera = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],
+          { header: 1, defval: null, raw: true }) as unknown[][];
+        const esTacografo = primera.slice(0, 8).some((f) =>
+          (f ?? []).some((c) => String(c ?? "").trim().toLowerCase().includes("id intervención")));
+        if (esTacografo) {
+          setTacografo(true);
+          throw new Error("Esto es el informe de intervenciones de tacógrafo: tiene su propio "
+            + "apartado, que se acaba de abrir aquí debajo.");
+        }
+      }
+
       const tieneRev = wb.SheetNames.includes("Revisiones");
       const hoja = tieneRev ? "Revisiones" : (wb.Sheets["Vehiculos"] ? "Vehiculos" : wb.SheetNames[0]);
       const data = XLSX.utils.sheet_to_json(wb.Sheets[hoja], { defval: "" }) as any[];
@@ -98,7 +120,7 @@ export default function Importar() {
   return (
     <div>
       <h1 className="mb-1 text-lg font-black">Importar</h1>
-      <p className="mb-3 text-sm text-slate-400">Importación desde plantilla Excel. Detecta automáticamente si es de Vehículos, de Revisiones, el informe del CheckPoint o el histórico de albaranes del taller.</p>
+      <p className="mb-3 text-sm text-slate-400">Importación desde plantilla Excel. Detecta automáticamente si es de Vehículos, de Revisiones, el informe del CheckPoint o el histórico de albaranes del taller. El informe de intervenciones de tacógrafo va en su propio apartado.</p>
 
       <div className="mb-3 rounded-lg bg-slate-800 p-3">
         <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-sky-600 px-3 py-2 text-sm font-bold text-sky-300">
@@ -108,6 +130,10 @@ export default function Importar() {
         <button onClick={() => setSoloCargas((v) => !v)}
           className="ml-3 rounded-lg border border-slate-600 px-3 py-2 text-[12px] text-slate-200 hover:bg-slate-700">
           {soloCargas ? "Ocultar cargas del histórico" : "Cargas del histórico de albaranes"}
+        </button>
+        <button onClick={() => setTacografo((v) => !v)}
+          className="ml-2 rounded-lg border border-slate-600 px-3 py-2 text-[12px] text-slate-200 hover:bg-slate-700">
+          {tacografo ? "Ocultar tacógrafo" : "Informe de tacógrafo"}
         </button>
         {nombreArchivo && (
           <span className="ml-3 text-[13px] text-slate-300">
@@ -135,6 +161,7 @@ export default function Importar() {
       {soloCargas && modo !== "historico" && (
         <ImportarHistorico h1={[]} h2={[]} nombreArchivo="" bytes={null} />
       )}
+      {tacografo && <ImportarTacografo />}
       {ejecutado && reporte && <div className="mb-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 text-sm text-emerald-200">✔ Importación completada.</div>}
 
       {/* VEHÍCULOS */}

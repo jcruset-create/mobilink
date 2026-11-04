@@ -3947,3 +3947,64 @@ export async function listarConservadasDeLote(loteId: string): Promise<{ interve
   if (error) throw new Error(error.message);
   return (data ?? []) as any;
 }
+
+// ── Tacógrafo ───────────────────────────────────────────────────────────────
+
+export interface SimulacionTacografo {
+  archivo: string | null;
+  filasLeidas: number;
+  problemas: Array<{ fila: number; motivo: string; valor?: string }>;
+  nuevas: number;
+  duplicadas: number;
+  sinVehiculo: number;
+  vehiculosEncontrados: number;
+  vehiculosInactivos: number;
+  matriculasSinVehiculo: string[];
+  propuestas: Array<{
+    matriculaNorm: string; matricula: string | null; vehiculoId: string | null;
+    caso: "sin_medida" | "solo_marcado" | "discrepa" | "sin_vehiculo";
+    medidaNorm: string; medidaOrigen: string | null; fecha: string | null;
+    idOrigen: string; medidaActual: string | null; medidaActualId: string | null;
+    seguraParaBloque: boolean;
+  }>;
+  propuestasPorCaso: Record<string, number>;
+  kmSospechosos: Array<{
+    matriculaNorm: string; matricula: string | null; fecha: string | null;
+    idOrigen: string; km: number; kmAnterior: number; fechaAnterior: string | null;
+  }>;
+  conflictosBastidor: Array<{
+    matriculaNorm: string; idOrigen: string; bastidorFichero: string; bastidorVehiculo: string;
+  }>;
+  clientes: Array<{ nombre: string; filas: number }>;
+  vencimientos: Record<string, number>;
+  avisos: string[];
+}
+
+export interface RespuestaSimulacionTacografo {
+  ok: true;
+  lectura: {
+    filaCabecera: number; columnas: number; columnasUsadas: number;
+    columnasDesconocidas: string[]; hoja: string;
+  };
+  regla: { meses: number; avisoDias: number; tiposReinician: string[] | null; resultadosReinician: string[] | null };
+  simulacion: SimulacionTacografo;
+}
+
+/**
+ * Simula la importación del informe de tacógrafo. No escribe nada.
+ *
+ * El fichero se manda entero y lo lee el SERVIDOR: el parser ya vive allí, y
+ * tener otro aquí sería tener dos criterios para el mismo Excel.
+ */
+export async function simularTacografo(
+  empresaId: string, archivo: File,
+): Promise<RespuestaSimulacionTacografo> {
+  const fd = new FormData();
+  fd.append("archivo", archivo);
+  const r = await fetch(
+    `${WF_API_BASE}/api/tyrecontrol/tacografo/simular?empresa=${encodeURIComponent(empresaId)}`,
+    { method: "POST", headers: { Authorization: `Bearer ${await tokenSesion()}` }, body: fd });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || `No se ha podido simular (${r.status})`);
+  return j as RespuestaSimulacionTacografo;
+}

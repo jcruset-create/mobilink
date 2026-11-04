@@ -137,6 +137,7 @@ import { mountParte } from "./tyrecontrol/parte/index.ts";
 import { mountInformeFlota } from "./tyrecontrol/informeFlota/index.ts";
 import { mountInformeRevisiones } from "./tyrecontrol/informeRevisiones/index.ts";
 import { mountInformePendientes } from "./tyrecontrol/informePendientes/index.ts";
+import { mountTcTacografo } from "./tyrecontrol/tacografo/index.ts";
 import { masNuevaPrimero } from "./apkVersion.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
@@ -21774,6 +21775,10 @@ mountInformeRevisiones(app, authenticate, requireModule("tyrecontrol"));
 // La hoja del patio: quién está dentro de una base ahora y le toca revisión.
 // Ver server/tyrecontrol/informePendientes/.
 mountInformePendientes(app, authenticate, requireModule("tyrecontrol"));
+
+// Tacógrafo: de momento solo la simulación del informe de intervenciones,
+// que no escribe nada. Ver server/tyrecontrol/tacografo/.
+mountTcTacografo(app, authenticate, requireModule("tyrecontrol"));
 
 /*
  * Lectura de TyreControl desde Assist. Solo lectura: en esta fase el módulo no

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { marcado, mismaMedida, normalizar, sinMarcado } from "./medidas.ts";
+import { comparar, marcado, normalizar, sinMarcado } from "./medidas.ts";
+import { medidaCanonica } from "../../../shared/medidas.ts";
 
 /**
  * Las 48 representaciones son las del fichero real del centro, contadas una a
@@ -55,6 +56,24 @@ describe("normalizar · las 48 representaciones del fichero real", () => {
   it("las 48 colapsan en 20 medidas", () => {
     expect(new Set(REALES.map(([b]) => normalizar(b))).size).toBe(20);
   });
+
+  /**
+   * La que impide un choque contra la base.
+   *
+   * `tc_cat_medidas_neumatico` tiene un disparador que pasa todo lo que entra
+   * por `tc_medida_normalizada()`, y `valor` es único. Si lo que sale de aquí
+   * no fuera ya la forma que produce ese disparador, dar de alta una medida
+   * la reescribiría al guardarla y chocaría contra el unique — o peor, se
+   * crearía una fila duplicada de la misma rueda.
+   *
+   * `medidaCanonica` es el gemelo en JavaScript de esa función de la base.
+   */
+  it("lo que sale ya es la forma canónica del proyecto: nada que reescribir", () => {
+    for (const [bruto] of REALES) {
+      const n = normalizar(bruto)!;
+      expect(medidaCanonica(n), `${bruto} → ${n}`).toBe(n);
+    }
+  });
 });
 
 describe("normalizar · lo que no se reconoce", () => {
@@ -71,6 +90,12 @@ describe("normalizar · lo que no se reconoce", () => {
   });
 });
 
+/**
+ * El criterio de «es la misma medida» es el del proyecto, no uno nuevo.
+ * `baseMedida` ya se queda con ancho/perfil/llanta, y por eso la C no la
+ * distingue: lo que añade este módulo es poder DECIR que la diferencia está
+ * en el marcado, no un criterio distinto de igualdad.
+ */
 describe("el marcado", () => {
   it("se conserva al normalizar: es parte de la designación", () => {
     expect(normalizar("225/75 R16C")).toBe("225/75R16C");
@@ -88,9 +113,9 @@ describe("el marcado", () => {
   });
 });
 
-describe("mismaMedida", () => {
+describe("comparar", () => {
   it("igual es igual", () => {
-    expect(mismaMedida("295/80R22.5", "295/80R22.5")).toBe("igual");
+    expect(comparar("295/80R22.5", "295/80R22.5")).toBe("igual");
   });
 
   /**
@@ -100,18 +125,18 @@ describe("mismaMedida", () => {
    * tacógrafo dice C y el catálogo no.
    */
   it("solo el marcado C: se dice, no se esconde ni se denuncia", () => {
-    expect(mismaMedida("225/75R16C", "225/75R16")).toBe("solo_marcado");
-    expect(mismaMedida("225/75R16", "225/75R16C")).toBe("solo_marcado");
+    expect(comparar("225/75R16C", "225/75R16")).toBe("solo_marcado");
+    expect(comparar("225/75R16", "225/75R16C")).toBe("solo_marcado");
   });
 
   it("medidas de verdad distintas", () => {
-    expect(mismaMedida("295/80R22.5", "315/80R22.5")).toBe("distinta");
-    expect(mismaMedida("305/70R19.5", "305/70R22.5")).toBe("distinta");
+    expect(comparar("295/80R22.5", "315/80R22.5")).toBe("distinta");
+    expect(comparar("305/70R19.5", "305/70R22.5")).toBe("distinta");
   });
 
   it("sin una de las dos no se compara nada", () => {
-    expect(mismaMedida(null, "295/80R22.5")).toBe("desconocida");
-    expect(mismaMedida("295/80R22.5", null)).toBe("desconocida");
-    expect(mismaMedida(null, null)).toBe("desconocida");
+    expect(comparar(null, "295/80R22.5")).toBe("desconocida");
+    expect(comparar("295/80R22.5", null)).toBe("desconocida");
+    expect(comparar(null, null)).toBe("desconocida");
   });
 });
