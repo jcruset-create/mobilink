@@ -1782,6 +1782,42 @@ export async function descargarEstadoFlotaExcel(empresaId?: string | null): Prom
  * token en la URL lo dejaría en el historial y en los registros del
  * servidor, que es justo lo que `pdfConSesion` existe para evitar.
  */
+/**
+ * La hoja del patio: quién está dentro de una base ahora y le toca revisión.
+ *
+ * `base` es la que esté filtrada en la pantalla; sin ella salen todas,
+ * agrupadas. Se abre en una pestaña porque se imprime: el jefe de taller lo
+ * saca y se lo lleva al patio.
+ */
+export async function abrirPendientesEnBasePdf(p: {
+  empresaId: string; baseId?: string | null;
+}): Promise<void> {
+  const q = new URLSearchParams({ empresa: p.empresaId });
+  if (p.baseId) q.set("base", p.baseId);
+  // La pestaña se abre ANTES del fetch: si se abriera después, el navegador
+  // la trataría como emergente y la bloquearía.
+  const pestana = window.open("", "_blank");
+  try {
+    const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/informes/pendientes-en-base/pdf?${q}`, {
+      headers: { Authorization: `Bearer ${await tokenSesion()}` },
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error((j as any)?.error || `No se ha podido generar la hoja (${r.status})`);
+    }
+    const url = URL.createObjectURL(await r.blob());
+    if (pestana) pestana.location.href = url;
+    else {
+      const a = document.createElement("a");
+      a.href = url; a.download = "pendientes-en-base.pdf"; a.click();
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (e) {
+    pestana?.close();
+    throw e;
+  }
+}
+
 export async function abrirInformeRevisionesPdf(p: {
   empresaId: string; desde?: string | null; hasta?: string | null;
   formato: "resumen" | "detalle" | "vehiculo"; ambito: "cliente" | "interno";

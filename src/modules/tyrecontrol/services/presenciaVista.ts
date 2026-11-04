@@ -13,25 +13,12 @@ import type {
   VehiculoWebfleetEstado,
 } from "../types";
 import type { VehiculoPresencia } from "./presenciaBases";
+// El criterio de «pendiente» vive en su propio módulo porque lo comparte el
+// servidor (la hoja del patio en PDF). Se reexporta para que nada de lo que ya
+// lo importaba de aquí tenga que cambiar.
+import { prioridadRevision, tieneRevisionPendiente } from "./revisionPendiente";
 
-/**
- * Prioridad de una revisión: cuanto menor, más arriba.
- *
- * Nunca revisado va antes que vencida, y vencida antes que próxima. El nunca
- * revisado primero no es un capricho: de ese no se sabe ni cómo está, y es el
- * que más se arriesga a irse de la base sin que nadie le haya mirado nada.
- */
-export function prioridadRevision(estado: string | undefined): number {
-  if (estado === "sin_revision") return 0;
-  if (estado === "vencida") return 1;
-  if (estado === "proxima") return 2;
-  return 3;
-}
-
-/** ¿Tiene este vehículo algo pendiente que justifique cogerlo ahora? */
-export function tieneRevisionPendiente(rev: RevisionEstado | undefined): boolean {
-  return rev?.estado === "sin_revision" || rev?.estado === "vencida" || rev?.estado === "proxima";
-}
+export { prioridadRevision, tieneRevisionPendiente };
 
 /**
  * Los que están DENTRO de una base con posición reciente, por base.
