@@ -45,7 +45,7 @@ const CAMPOS =
  * vehículos de los que hay sin un solo error a la vista, que es la peor forma
  * de equivocarse.
  */
-async function leerPresencia(empresaId: string): Promise<any[]> {
+export async function leerPresencia(empresaId: string): Promise<any[]> {
   const out: any[] = [];
   const TAMANO = 1000;
   for (let desde = 0; ; desde += TAMANO) {

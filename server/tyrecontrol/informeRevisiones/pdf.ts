@@ -12,6 +12,7 @@
 
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 import type { Documento, RevisionDoc, RuedaDoc } from "./armar.ts";
+import { limpiarParaPdf } from "../informes/texto.ts";
 
 const A4 = { ancho: 595.28, alto: 841.89 };
 const MARGEN = 40;
@@ -55,7 +56,7 @@ function texto(l: Lienzo, s: string, x: number, y: number, opts: {
   let t = s ?? "";
   // pdf-lib revienta con caracteres que la fuente no tiene (WinAnsi): se
   // limpian en vez de dejar que falle la generación entera por una ñ rara.
-  t = t.replace(/[^\x20-\x7E -ÿ€]/g, "");
+  t = limpiarParaPdf(t);
   if (opts.ancho) {
     while (t.length > 1 && font.widthOfTextAtSize(t, tam) > opts.ancho) t = t.slice(0, -1);
   }
@@ -310,7 +311,7 @@ function pies(l: Lienzo, empresa: string, d: Documento): void {
       start: { x: MARGEN, y: PIE - 8 }, end: { x: A4.ancho - MARGEN, y: PIE - 8 },
       thickness: 0.4, color: LINEA,
     });
-    p.drawText(izq.replace(/[^\x20-\x7E -ÿ€]/g, ""), {
+    p.drawText(limpiarParaPdf(izq), {
       x: MARGEN, y: PIE - 20, size: 7, font: l.normal, color: SUAVE,
     });
     const der = `Página ${i + 1} de ${total}`;

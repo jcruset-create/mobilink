@@ -9,9 +9,17 @@
  * pantalla de Estado de flota. Aquí no se recalcula: si se hiciera, el Excel
  * y el panel acabarían diciendo cosas distintas.
  *
- * `security invoker` en la función y la RLS de `tc_vehiculos` hacen el
- * aislamiento, así que un cliente que pida «todas las empresas» recibe solo
- * la suya. No hace falta —ni serviría— comprobarlo otra vez aquí.
+ * ── Quién ve qué ────────────────────────────────────────────────────────────
+ *
+ * Se comprueba AQUÍ. La primera versión de este fichero decía que la RLS y
+ * el `security invoker` de la función bastaban; no es verdad: el servidor
+ * habla con Supabase usando `service_role`, que no pasa por RLS, así que un
+ * usuario de rol `cliente` que tecleara el UUID de otro cliente recibía su
+ * libro entero. El criterio está en `informes/alcance.ts`, uno para los tres
+ * informes.
+ *
+ * Sin `?empresa=`, el super-admin saca el libro de TODAS —que es para lo que
+ * está la hoja «Por cliente»—, y cualquier otro el de la suya.
  */
 
 import type { Express, RequestHandler } from "express";
@@ -19,15 +27,45 @@ import * as XLSX from "xlsx";
 
 import { supabase } from "../../supabase.ts";
 import { hojaFlota, hojaPorCliente, type FilaFlota } from "./armar.ts";
+import { empresaDelInforme } from "../informes/alcance.ts";
+import { paginar } from "../informes/paginar.ts";
+
+/**
+ * La flota, por páginas y con orden fijo.
+ *
+ * Sin paginar, PostgREST corta en su tope de filas y el Excel sale con
+ * menos vehículos de los que hay sin dar un error. Esta flota ya va por 751.
+ */
+function leerFlota(empresa: string | null): Promise<FilaFlota[]> {
+  return paginar<FilaFlota>((desde, hasta) =>
+    supabase
+      .rpc("tc_informe_flota_detalle", { p_empresa: empresa })
+      .select("*")
+      .order("cliente", { ascending: true })
+      .order("matricula", { ascending: true })
+      .range(desde, hasta));
+}
 
 export function mountInformeFlota(app: Express, ...guards: RequestHandler[]): void {
   app.get("/api/tyrecontrol/informes/flota/excel", ...guards, async (req, res) => {
     try {
-      const empresa = String(req.query.empresa ?? "").trim() || null;
+      const pedida = String(req.query.empresa ?? "").trim();
+      let empresa: string | null;
+      if (!pedida) {
+        if (req.authCtx?.esSuperadmin) {
+          empresa = null;
+        } else if (req.authCtx?.empresaId) {
+          empresa = req.authCtx.empresaId;
+        } else {
+          return res.status(401).json({ error: "Sesión requerida" });
+        }
+      } else {
+        const alcance = await empresaDelInforme(req, pedida);
+        if (!alcance.empresa) return res.status(alcance.estado).json({ error: alcance.error });
+        empresa = alcance.empresa;
+      }
 
-      const { data, error } = await supabase.rpc("tc_informe_flota_detalle", { p_empresa: empresa });
-      if (error) return res.status(400).json({ error: error.message });
-      const filas = (data ?? []) as FilaFlota[];
+      const filas = await leerFlota(empresa);
 
       const libro = XLSX.utils.book_new();
       // La lista primero: es la hoja que se abre al hacer doble clic.

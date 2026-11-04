@@ -22,9 +22,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { MapPin, RefreshCw, Truck } from "lucide-react";
+import { MapPin, Printer, RefreshCw, Truck } from "lucide-react";
 
-import { listarEmpresas, listarRevisionEstado } from "../services/data";
+import { abrirPendientesEnBasePdf, listarEmpresas, listarRevisionEstado } from "../services/data";
 import {
   ETIQUETA_PRESENCIA,
   barrerBases,
@@ -66,6 +66,7 @@ export default function VehiculosEnBases() {
   const [baseSel, setBaseSel] = useState<string | null>(null);
   const [cargando, setCargando] = useState(false);
   const [barriendo, setBarriendo] = useState(false);
+  const [imprimiendo, setImprimiendo] = useState(false);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
 
@@ -112,6 +113,30 @@ export default function VehiculosEnBases() {
       setError(e.message);
     } finally {
       setBarriendo(false);
+    }
+  }
+
+  /**
+   * La hoja del patio, en papel.
+   *
+   * Sale con la base que esté filtrada arriba: si el jefe de taller está
+   * mirando Tarragona, imprime Tarragona. Sin filtro salen todas, agrupadas.
+   *
+   * No se arma aquí con lo que hay en pantalla. Lo arma el servidor pidiendo
+   * los datos de nuevo, porque el PDF lleva más de lo que se enseña —medida,
+   * configuración de ejes, profundidad mínima, ruedas montadas— y porque lo
+   * que se imprime tiene que ser de ahora, no del barrido que se cargó al
+   * abrir la pestaña hace veinte minutos.
+   */
+  async function imprimir() {
+    setImprimiendo(true);
+    setError("");
+    try {
+      await abrirPendientesEnBasePdf({ empresaId, baseId: baseSel });
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setImprimiendo(false);
     }
   }
 
@@ -271,6 +296,17 @@ export default function VehiculosEnBases() {
               ))}
             </select>
           )}
+          <button
+            onClick={imprimir}
+            disabled={imprimiendo || !empresaId}
+            title={baseSel
+              ? `Hoja de los pendientes de revisar que están en ${nombreBase.get(baseSel) ?? "esa base"}`
+              : "Hoja de los pendientes de revisar que están en base, por base"}
+            className="flex items-center gap-2 rounded-lg border border-slate-600 px-3 py-2 text-sm font-bold text-slate-200 hover:bg-slate-700/40 disabled:opacity-50"
+          >
+            <Printer size={14} />
+            {imprimiendo ? "Generando…" : "Imprimir pendientes"}
+          </button>
           <button
             onClick={barrer}
             disabled={barriendo || !empresaId}

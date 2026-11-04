@@ -51,7 +51,13 @@ describe("orden de las rutas de /api/tyrecontrol", () => {
     expect(veces).toBe(1);
   });
 
-  const MONTAJES = ["mountAsistente", "mountFlanco", "mountParte", "mountEtiquetas"];
+  const MONTAJES = [
+    "mountAsistente", "mountFlanco", "mountParte", "mountEtiquetas",
+    // Los informes cuelgan de la misma raíz y se montaron después: si alguien
+    // los mueve por debajo del router del panel, el jefe de taller se queda
+    // sin PDF con un 401 que no explica nada.
+    "mountInformeFlota", "mountInformeRevisiones", "mountInformePendientes",
+  ];
 
   for (const mount of MONTAJES) {
     it(`${mount} va antes del router del panel, o sus rutas dan 401`, () => {
