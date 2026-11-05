@@ -14,6 +14,7 @@ import RankingKilometraje from "./pages/RankingKilometraje";
 import VehiculosEnBases from "./pages/VehiculosEnBases";
 import VehiculoDetalle from "./pages/VehiculoDetalle";
 import DisponiblesRevisar from "./pages/DisponiblesRevisar";
+import ControlTacografos from "./pages/ControlTacografos";
 import PlanificacionRevisiones from "./pages/PlanificacionRevisiones";
 import Incidencias from "./pages/Incidencias";
 import HistoricoRevisiones from "./pages/HistoricoRevisiones";
@@ -134,6 +135,7 @@ export default function TyreControlApp() {
               <Route path="vehiculos-en-bases" element={<VehiculosEnBases />} />
               <Route path="ranking-kilometraje" element={<RankingKilometraje />} />
               <Route path="disponibles-revisar" element={<DisponiblesRevisar />} />
+              <Route path="control-tacografos" element={<ControlTacografos />} />
               <Route path="planificacion" element={<PlanificacionRevisiones />} />
               <Route path="incidencias" element={<Incidencias />} />
               <Route path="tipos-incidencia" element={<TiposIncidencia />} />

@@ -3947,3 +3947,232 @@ export async function listarConservadasDeLote(loteId: string): Promise<{ interve
   if (error) throw new Error(error.message);
   return (data ?? []) as any;
 }
+
+// ── Tacógrafo ───────────────────────────────────────────────────────────────
+
+export interface SimulacionTacografo {
+  archivo: string | null;
+  filasLeidas: number;
+  problemas: Array<{ fila: number; motivo: string; valor?: string }>;
+  nuevas: number;
+  duplicadas: number;
+  sinVehiculo: number;
+  vehiculosEncontrados: number;
+  vehiculosInactivos: number;
+  matriculasSinVehiculo: string[];
+  propuestas: Array<{
+    matriculaNorm: string; matricula: string | null; vehiculoId: string | null;
+    caso: "sin_medida" | "solo_marcado" | "discrepa" | "sin_vehiculo";
+    medidaNorm: string; medidaOrigen: string | null; fecha: string | null;
+    idOrigen: string; medidaActual: string | null; medidaActualId: string | null;
+    seguraParaBloque: boolean;
+  }>;
+  propuestasPorCaso: Record<string, number>;
+  kmSospechosos: Array<{
+    matriculaNorm: string; matricula: string | null; fecha: string | null;
+    idOrigen: string; km: number; kmAnterior: number; fechaAnterior: string | null;
+  }>;
+  conflictosBastidor: Array<{
+    matriculaNorm: string; idOrigen: string; bastidorFichero: string; bastidorVehiculo: string;
+  }>;
+  clientes: Array<{ nombre: string; filas: number }>;
+  vencimientos: Record<string, number>;
+  avisos: string[];
+}
+
+export interface RespuestaSimulacionTacografo {
+  ok: true;
+  lectura: {
+    filaCabecera: number; columnas: number; columnasUsadas: number;
+    columnasDesconocidas: string[]; hoja: string;
+  };
+  regla: { meses: number; avisoDias: number; tiposReinician: string[] | null; resultadosReinician: string[] | null };
+  simulacion: SimulacionTacografo;
+}
+
+/**
+ * Simula la importación del informe de tacógrafo. No escribe nada.
+ *
+ * El fichero se manda entero y lo lee el SERVIDOR: el parser ya vive allí, y
+ * tener otro aquí sería tener dos criterios para el mismo Excel.
+ */
+export async function simularTacografo(
+  empresaId: string, archivo: File,
+): Promise<RespuestaSimulacionTacografo> {
+  const fd = new FormData();
+  fd.append("archivo", archivo);
+  const r = await fetch(
+    `${WF_API_BASE}/api/tyrecontrol/tacografo/simular?empresa=${encodeURIComponent(empresaId)}`,
+    { method: "POST", headers: { Authorization: `Bearer ${await tokenSesion()}` }, body: fd });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || `No se ha podido simular (${r.status})`);
+  return j as RespuestaSimulacionTacografo;
+}
+
+export interface ResultadoImportTacografo {
+  ok: true;
+  loteId: string;
+  resultado: {
+    leidas: number; insertadas: number; yaEstaban: number;
+    duplicadasEnBase: number; sinVehiculo: number; bloqueadas: number;
+  };
+  simulacion: SimulacionTacografo;
+}
+
+export interface LoteTacografo {
+  id: string; archivo_nombre: string; sistema_origen: string;
+  archivo_filas: number; filas_empresa: number; importadas: number;
+  duplicadas: number; sin_vehiculo: number; bloqueadas: number;
+  estado: "aplicado" | "deshecho"; created_at: string; deshecho_en: string | null;
+  nota: string | null;
+}
+
+export interface VeredictoDeshacer {
+  puede: boolean;
+  motivo?: string;
+  explicacion?: string;
+  estorban?: string[];
+  aBorrar: number;
+}
+
+async function tcg<T>(url: string, init: RequestInit = {}): Promise<T> {
+  const r = await fetch(`${WF_API_BASE}${url}`, {
+    ...init,
+    headers: { ...(init.headers ?? {}), Authorization: `Bearer ${await tokenSesion()}` },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || `Error ${r.status}`);
+  return j as T;
+}
+
+/** Importa de verdad. El servidor vuelve a leer el fichero y a cruzar. */
+export async function importarTacografo(
+  empresaId: string, archivo: File,
+): Promise<ResultadoImportTacografo> {
+  const fd = new FormData();
+  fd.append("archivo", archivo);
+  return tcg<ResultadoImportTacografo>(
+    `/api/tyrecontrol/tacografo/importar?empresa=${encodeURIComponent(empresaId)}`,
+    { method: "POST", body: fd });
+}
+
+export async function listarLotesTacografo(empresaId: string): Promise<LoteTacografo[]> {
+  const j = await tcg<{ lotes: LoteTacografo[] }>(
+    `/api/tyrecontrol/tacografo/lotes?empresa=${encodeURIComponent(empresaId)}`);
+  return j.lotes;
+}
+
+/**
+ * Deshacer un lote. Con `comprobar` solo pregunta si se puede: es lo que la
+ * pantalla hace antes de ofrecer el botón, para no ofrecer algo que va a fallar.
+ */
+export async function deshacerLoteTacografo(
+  empresaId: string, loteId: string, comprobar = false,
+): Promise<{ veredicto?: VeredictoDeshacer; borradas?: number }> {
+  return tcg(`/api/tyrecontrol/tacografo/lotes/${encodeURIComponent(loteId)}/deshacer`
+    + `?empresa=${encodeURIComponent(empresaId)}${comprobar ? "&comprobar=1" : ""}`,
+    { method: "POST" });
+}
+
+export async function bloqueadasDeLoteTacografo(
+  empresaId: string, loteId: string,
+): Promise<Array<{ fila_origen: number; id_origen: string | null; matricula: string | null;
+                   fecha: string | null; motivo: string; valor: string | null }>> {
+  const j = await tcg<{ bloqueadas: any[] }>(
+    `/api/tyrecontrol/tacografo/lotes/${encodeURIComponent(loteId)}/bloqueadas`
+    + `?empresa=${encodeURIComponent(empresaId)}`);
+  return j.bloqueadas;
+}
+
+// ── Tacógrafo · control de la flota y sección de la ficha ───────────────────
+
+export type EstadoTacografo = "vigente" | "proxima" | "vencida" | "sin_datos";
+
+export interface FilaTacografo {
+  vehiculoId: string;
+  matricula: string | null;
+  numeroUnidad: string | null;
+  baseId: string | null;
+  base: string | null;
+  activo: boolean;
+  estado: EstadoTacografo;
+  ultima: string | null;
+  proxima: string | null;
+  diasRestantes: number | null;
+  ultimoTipo: string | null;
+  ultimoResultado: string | null;
+  intervenciones: number;
+}
+
+export interface ReglaTacografo {
+  meses: number; avisoDias: number;
+  tiposReinician: string[] | null; resultadosReinician: string[] | null;
+}
+
+export interface ControlTacografos {
+  ok: true;
+  empresaId: string;
+  regla: ReglaTacografo;
+  bases: Array<{ id: string; nombre: string }>;
+  filas: FilaTacografo[];
+  resumen: Record<EstadoTacografo, number>;
+  total: number;
+  mostrados: number;
+}
+
+export interface FiltrosTacografo {
+  empresaId: string;
+  base?: string | null;
+  texto?: string | null;
+  estado?: EstadoTacografo[] | null;
+  venceAntesDe?: string | null;
+  incluirBaja?: boolean;
+}
+
+export async function controlTacografos(f: FiltrosTacografo): Promise<ControlTacografos> {
+  const q = new URLSearchParams({ empresa: f.empresaId });
+  if (f.base) q.set("base", f.base);
+  if (f.texto) q.set("texto", f.texto);
+  if (f.estado?.length) q.set("estado", f.estado.join(","));
+  if (f.venceAntesDe) q.set("venceAntesDe", f.venceAntesDe);
+  if (f.incluirBaja) q.set("incluirBaja", "1");
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/tacografo/control?${q}`, {
+    headers: { Authorization: `Bearer ${await tokenSesion()}` },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || `Error ${r.status}`);
+  return j as ControlTacografos;
+}
+
+export interface Fechado { valor: string; fecha: string; idOrigen: string }
+
+export interface IntervencionTacografo {
+  id: string; idOrigen: string; fecha: string;
+  tipoOperacion: string | null; resultado: string | null;
+  medidaNorm: string | null; medidaOrigen: string | null;
+  kmNuevo: number | null; kmSospechoso: boolean;
+  paramL: string | null; paramW: string | null; paramK: string | null;
+  referencia: string | null; version: string | null;
+  numSerie: string | null; numSensor: string | null;
+  tipoTacografo: string | null; fabricante: string | null;
+  tecnico: string | null; observaciones: string | null;
+}
+
+export interface FichaTacografo {
+  ok: true;
+  regla: ReglaTacografo;
+  fila: FilaTacografo;
+  tecnicos: Record<string, Fechado | null>;
+  historico: IntervencionTacografo[];
+}
+
+/** La sección Tacógrafo de un vehículo. Mismo cálculo que el control. */
+export async function fichaTacografo(empresaId: string, vehiculoId: string): Promise<FichaTacografo> {
+  const r = await fetch(
+    `${WF_API_BASE}/api/tyrecontrol/tacografo/vehiculo/${encodeURIComponent(vehiculoId)}`
+    + `?empresa=${encodeURIComponent(empresaId)}`,
+    { headers: { Authorization: `Bearer ${await tokenSesion()}` } });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || `Error ${r.status}`);
+  return j as FichaTacografo;
+}

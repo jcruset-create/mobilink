@@ -16,6 +16,7 @@ import VehicleLayoutImage from "../components/VehicleLayoutImage";
 import PlanoSnapshot from "../components/PlanoSnapshot";
 import FichaTecnicaVehiculo from "../components/FichaTecnicaVehiculo";
 import FichaTecnicaItv from "../components/FichaTecnicaItv";
+import SeccionTacografo from "../components/SeccionTacografo";
 import WebfleetVehiculo from "../components/WebfleetVehiculo";
 import KilometrajeMensual from "../components/KilometrajeMensual";
 import PlanMantenimientoVehiculo from "../components/PlanMantenimiento";
@@ -301,6 +302,14 @@ export default function VehiculoDetalle() {
 
       {/* Ficha técnica ITV: solo los códigos que tienen dato real. */}
       <FichaTecnicaItv key={recargarItv} vehiculoId={v.id} puedeEditar={!esCliente} onCambio={cargar} />
+
+      {/* Tacógrafo: va pegado a la ficha técnica ITV porque es lo mismo para
+          el que lee la ficha — una revisión obligatoria con fecha de caducidad.
+          Es de solo lectura también para el admin: aquí no se registra nada,
+          los datos entran por la importación del taller. */}
+      <div className="mt-3">
+        <SeccionTacografo empresaId={v.empresa_id} vehiculoId={v.id} />
+      </div>
 
       {/* Webfleet: enlazar vehículo y sincronizar km/posición */}
       {!esCliente && (
