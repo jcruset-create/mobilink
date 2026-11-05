@@ -27,6 +27,7 @@
 
 import { supabase } from "../../supabase.ts";
 import type { FilaBloqueada, FilaInsert } from "./importar.ts";
+import type { PropuestaInsert } from "./propuestas.ts";
 
 /** Filas por petición. Ver la cabecera: ni una sola ni de una en una. */
 const TAMANO_LOTE = 200;
@@ -157,4 +158,139 @@ export async function borrarLote(
   if (e2) throw new Error(`Filas borradas pero el lote no se ha marcado: ${e2.message}`);
 
   return (data ?? []).length;
+}
+
+// ── Fase 5: las propuestas de medida ───────────────────────────────────────
+//
+// Aquí se amplía la respuesta a «¿qué tablas toca esto?» con dos más:
+// `tc_tacografo_medida_propuesta` y —solo al aceptar, y solo la columna
+// `medida_id`— `tc_vehiculos`. Sigue sin tocarse ni un montaje, ni un
+// neumático, ni un eje, ni `km_actual`.
+
+/**
+ * Guarda las propuestas pendientes de un lote.
+ *
+ * Sin `onConflict`: el índice único de esta tabla es PARCIAL (solo para las
+ * pendientes) y PostgREST no sabe expresar el `where` de un `on conflict`,
+ * así que pedírselo daría «no unique or exclusion constraint matching». Las
+ * repetidas las filtra `filasPropuesta` antes de llegar aquí, contra las que
+ * ya hay en la base.
+ *
+ * Aun así se tolera el choque: si dos importaciones coinciden en el tiempo,
+ * la segunda se encuentra el índice y lo que NO puede pasar es que por eso
+ * se caiga una importación de 1.744 intervenciones que ya están dentro. Se
+ * cuenta como no insertada y se sigue.
+ */
+export async function insertarPropuestas(filas: PropuestaInsert[]): Promise<{ insertadas: number; chocadas: number }> {
+  if (filas.length === 0) return { insertadas: 0, chocadas: 0 };
+  let insertadas = 0;
+  let chocadas = 0;
+  for (let i = 0; i < filas.length; i += TAMANO_LOTE) {
+    const tanda = filas.slice(i, i + TAMANO_LOTE);
+    const { data, error } = await supabase
+      .from("tc_tacografo_medida_propuesta")
+      .insert(tanda)
+      .select("id");
+    if (error) {
+      // 23505 es la violación de unicidad. Cualquier otra cosa sí es un fallo.
+      if (String((error as any).code) !== "23505") {
+        throw new Error(`No se han podido guardar las propuestas: ${error.message}`);
+      }
+      chocadas += tanda.length;
+      continue;
+    }
+    insertadas += (data ?? []).length;
+  }
+  return { insertadas, chocadas };
+}
+
+export interface Aplicacion {
+  propuestaId: string;
+  empresa: string;
+  vehiculoId: string;
+  medidaId: string;
+  medidaValor: string;
+  exacta: boolean;
+  /** La medida que el vehículo tenía cuando se creó la propuesta. */
+  medidaPreviaId: string | null;
+  usuarioId: string | null;
+}
+
+/**
+ * Acepta una propuesta: escribe la medida en el vehículo y deja el rastro.
+ *
+ * ── El update es un compara-y-cambia, no una escritura a ciegas ─────────────
+ *
+ * La condición de la propia sentencia exige que la medida del vehículo siga
+ * siendo la que la propuesta vio: `is null` si estaba vacía, `eq` si tenía
+ * una. Así la comprobación la hace LA BASE en el momento de escribir, no una
+ * lectura de hace dos segundos. Si alguien la cambió entremedias, no se
+ * escribe nada y se dice; si no, es imposible pisarle la decisión.
+ *
+ * ── Y el orden importa ──────────────────────────────────────────────────────
+ *
+ * Primero se escribe el vehículo y después se marca la propuesta. Si se
+ * hiciera al revés y el update del vehículo fallara, la propuesta quedaría
+ * «aceptada» sin que la medida esté puesta: una mentira en la pantalla. Al
+ * revés, el peor caso es una medida escrita con la propuesta aún pendiente,
+ * que se ve, se entiende y se puede rehacer.
+ */
+export async function aplicarPropuesta(a: Aplicacion): Promise<{ ok: boolean; motivo?: string }> {
+  let q = supabase
+    .from("tc_vehiculos")
+    .update({ medida_id: a.medidaId })
+    .eq("id", a.vehiculoId)
+    .eq("empresa_id", a.empresa);
+  q = a.medidaPreviaId === null ? q.is("medida_id", null) : q.eq("medida_id", a.medidaPreviaId);
+
+  const { data, error } = await q.select("id");
+  if (error) throw new Error(`No se ha podido escribir la medida del vehículo: ${error.message}`);
+  if ((data ?? []).length === 0) {
+    return {
+      ok: false,
+      motivo: "La medida del vehículo ha cambiado mientras se aceptaba la propuesta, o el "
+        + "vehículo no es de esta empresa. No se ha escrito nada.",
+    };
+  }
+
+  const { error: e2 } = await supabase
+    .from("tc_tacografo_medida_propuesta")
+    .update({
+      estado: "aceptada",
+      resuelto_por: a.usuarioId,
+      resuelto_en: new Date().toISOString(),
+      medida_aplicada_id: a.medidaId,
+      medida_aplicada: a.medidaValor,
+      aplicada_exacta: a.exacta,
+    })
+    .eq("id", a.propuestaId)
+    .eq("empresa_id", a.empresa)
+    .eq("estado", "pendiente");
+  if (e2) {
+    throw new Error(
+      `La medida «${a.medidaValor}» SÍ se ha escrito en el vehículo, pero la propuesta no se ha `
+      + `marcado como aceptada: ${e2.message}. Aparecerá todavía pendiente.`,
+    );
+  }
+  return { ok: true };
+}
+
+/** Rechaza una propuesta. No escribe nada en el vehículo, que es el punto. */
+export async function rechazarPropuesta(
+  propuestaId: string, empresa: string, usuarioId: string | null, nota: string | null,
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("tc_tacografo_medida_propuesta")
+    .update({
+      estado: "rechazada",
+      resuelto_por: usuarioId,
+      resuelto_en: new Date().toISOString(),
+      nota,
+    })
+    .eq("id", propuestaId)
+    .eq("empresa_id", empresa)
+    .eq("estado", "pendiente")
+    .select("id");
+  if (error) throw new Error(`No se ha podido rechazar la propuesta: ${error.message}`);
+  return (data ?? []).length > 0;
 }

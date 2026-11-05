@@ -16,6 +16,7 @@ import { paginar } from "../informes/paginar.ts";
 import { normalizarMatricula } from "../matricula.ts";
 import type { VehiculoRef } from "./simular.ts";
 import { REGLA_POR_DEFECTO, type Regla } from "./vencimiento.ts";
+import { claveDe, type MedidaCatalogo } from "./propuestas.ts";
 
 /** El origen por defecto: el informe de intervenciones de la extranet. */
 export const SISTEMA_ORIGEN = "informe_intervenciones";
@@ -201,4 +202,127 @@ export async function leerBases(empresa: string): Promise<Array<{ id: string; no
     .order("nombre");
   if (error) throw new Error(error.message);
   return (data ?? []).map((d: any) => ({ id: String(d.id), nombre: String(d.nombre ?? "") }));
+}
+
+// ── Fase 5: lo que necesita la pantalla de propuestas de medida ────────────
+
+/**
+ * El catálogo de medidas, entero.
+ *
+ * Entero y no «la que busco»: resolver una propuesta necesita saber si la
+ * medida está con marcado, sin marcado, activa o de baja, y preguntarlo por
+ * separado para cada una de 43 propuestas son 43 viajes a la base para leer
+ * una tabla de dos docenas de filas.
+ */
+export async function leerCatalogoMedidas(): Promise<MedidaCatalogo[]> {
+  const filas = await paginar<any>((desde, hasta) =>
+    supabase
+      .from("tc_cat_medidas_neumatico")
+      .select("id, valor, activo")
+      .order("valor", { ascending: true })
+      .range(desde, hasta));
+  return filas.map((m) => ({
+    id: String(m.id),
+    valor: String(m.valor ?? ""),
+    activo: m.activo !== false,
+  }));
+}
+
+/** Las propuestas de una empresa, por estado. Sin estado, las pendientes. */
+export async function leerPropuestas(
+  empresa: string, estado: string | null = "pendiente",
+): Promise<any[]> {
+  return paginar<any>((desde, hasta) => {
+    let q = supabase
+      .from("tc_tacografo_medida_propuesta")
+      .select(
+        "id, vehiculo_id, matricula_norm, caso, medida_norm, medida_origen, "
+        + "fecha_intervencion, id_origen, intervencion_id, medida_actual, medida_actual_id, "
+        + "segura_para_bloque, estado, resuelto_en, nota, "
+        + "medida_aplicada, aplicada_exacta, created_at, lote_id",
+      )
+      .eq("empresa_id", empresa);
+    if (estado) q = q.eq("estado", estado);
+    // Orden fijo, que es lo que la paginación necesita para no repetir ni
+    // saltarse filas: por caso y, dentro, por antigüedad.
+    return q
+      .order("caso", { ascending: true })
+      .order("created_at", { ascending: true })
+      .order("id", { ascending: true })
+      .range(desde, hasta);
+  });
+}
+
+/** Una propuesta concreta, para resolverla. */
+export async function leerPropuesta(empresa: string, id: string): Promise<any | null> {
+  const { data, error } = await supabase
+    .from("tc_tacografo_medida_propuesta")
+    .select(
+      "id, empresa_id, vehiculo_id, matricula_norm, caso, medida_norm, medida_origen, "
+      + "fecha_intervencion, id_origen, medida_actual, medida_actual_id, "
+      + "segura_para_bloque, estado",
+    )
+    .eq("empresa_id", empresa)
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw new Error(`No se ha podido leer la propuesta: ${error.message}`);
+  return data ?? null;
+}
+
+/**
+ * La medida que tienen AHORA los vehículos que se le pasan.
+ *
+ * Es lo que se compara con la que la propuesta guardó, para no pisar a quien
+ * la haya puesto a mano entretanto. Se piden juntos y no de uno en uno: una
+ * confirmación en bloque de 43 propuestas serían 43 consultas.
+ */
+export async function leerMedidasDeVehiculos(
+  empresa: string, ids: string[],
+): Promise<Map<string, { medidaId: string | null; medida: string | null }>> {
+  const m = new Map<string, { medidaId: string | null; medida: string | null }>();
+  if (ids.length === 0) return m;
+  const unicos = [...new Set(ids)];
+  for (let i = 0; i < unicos.length; i += 200) {
+    const tanda = unicos.slice(i, i + 200);
+    const { data, error } = await supabase
+      .from("tc_vehiculos")
+      .select("id, medida_id, medida:tc_cat_medidas_neumatico(valor)")
+      .eq("empresa_id", empresa)
+      .in("id", tanda);
+    if (error) throw new Error(`No se han podido leer las medidas de los vehículos: ${error.message}`);
+    for (const v of data ?? []) {
+      const rel: any = (v as any).medida;
+      const valor = Array.isArray(rel) ? rel[0]?.valor : rel?.valor;
+      m.set(String(v.id), {
+        medidaId: (v as any).medida_id ?? null,
+        medida: valor ?? null,
+      });
+    }
+  }
+  return m;
+}
+
+/** Las claves (matrícula|medida) que ya tienen propuesta, en cualquier estado. */
+export async function leerClavesDePropuestas(empresa: string): Promise<Set<string>> {
+  const filas = await paginar<any>((desde, hasta) =>
+    supabase
+      .from("tc_tacografo_medida_propuesta")
+      .select("matricula_norm, medida_norm")
+      .eq("empresa_id", empresa)
+      .order("matricula_norm", { ascending: true })
+      .order("medida_norm", { ascending: true })
+      .range(desde, hasta));
+  return new Set(filas.map((f) => claveDe(String(f.matricula_norm), String(f.medida_norm))));
+}
+
+/** Los `id` de las intervenciones de un lote, por `id_origen`. */
+export async function leerIdsPorOrigen(loteId: string): Promise<Map<string, string>> {
+  const filas = await paginar<any>((desde, hasta) =>
+    supabase
+      .from("tc_tacografo_intervenciones")
+      .select("id, id_origen")
+      .eq("lote_id", loteId)
+      .order("id", { ascending: true })
+      .range(desde, hasta));
+  return new Map(filas.map((f) => [String(f.id_origen), String(f.id)]));
 }

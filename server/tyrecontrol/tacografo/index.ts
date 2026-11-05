@@ -44,8 +44,9 @@ import { createHash } from "node:crypto";
 
 import { empresaDelInforme } from "../informes/alcance.ts";
 import {
-  SISTEMA_ORIGEN, leerBases, leerBloqueadasDeLote, leerFilasDeLote, leerFlotaConBase,
-  leerIntervenciones, leerLote, leerLotes, leerPropuestasDeLote, leerRegla,
+  SISTEMA_ORIGEN, leerBases, leerBloqueadasDeLote, leerCatalogoMedidas, leerClavesDePropuestas,
+  leerFilasDeLote, leerFlotaConBase, leerIdsPorOrigen, leerIntervenciones, leerLote, leerLotes,
+  leerMedidasDeVehiculos, leerPropuesta, leerPropuestas, leerPropuestasDeLote, leerRegla,
   leerVehiculo, leerVehiculos, leerYaImportados,
 } from "./datos.ts";
 import {
@@ -53,7 +54,14 @@ import {
 } from "./control.ts";
 import type { EstadoTacografo } from "./vencimiento.ts";
 import { evaluar } from "./deshacer.ts";
-import { borrarLote, cerrarLote, crearLote, guardarBloqueadas, insertarFilas } from "./escribir.ts";
+import {
+  aplicarPropuesta, borrarLote, cerrarLote, crearLote, guardarBloqueadas, insertarFilas,
+  insertarPropuestas, rechazarPropuesta,
+} from "./escribir.ts";
+import {
+  decidir, filasPropuesta, porCaso, separarParaBloque,
+  type Candidata, type MedidaCatalogo, type PropuestaGuardada,
+} from "./propuestas.ts";
 import { preparar } from "./importar.ts";
 import { ErrorFichero, leerHoja, type Lectura } from "./parser.ts";
 import { simular } from "./simular.ts";
@@ -124,6 +132,43 @@ const aVehiculo = (r: any): VehiculoTac => ({
   base: (r.delegacion as any)?.nombre ?? null,
   activo: r.activo !== false,
 });
+
+/** Una propuesta de la base, con los nombres que usa el módulo que decide. */
+const aPropuesta = (r: any): PropuestaGuardada => ({
+  id: String(r.id),
+  vehiculoId: r.vehiculo_id ?? null,
+  matriculaNorm: String(r.matricula_norm ?? ""),
+  caso: r.caso,
+  medidaNorm: String(r.medida_norm ?? ""),
+  medidaOrigen: r.medida_origen ?? null,
+  fecha: r.fecha_intervencion ?? null,
+  idOrigen: r.id_origen ?? null,
+  medidaActual: r.medida_actual ?? null,
+  medidaActualId: r.medida_actual_id ?? null,
+  estado: String(r.estado ?? ""),
+  seguraParaBloque: r.segura_para_bloque === true,
+});
+
+/**
+ * Decide sobre un montón de propuestas de una vez.
+ *
+ * El catálogo y las medidas actuales se leen UNA vez para todas: resolver 43
+ * propuestas preguntando por cada una serían 86 consultas para leer una tabla
+ * de dos docenas de filas y 43 vehículos.
+ */
+async function decidirTodas(
+  empresa: string, propuestas: PropuestaGuardada[],
+): Promise<{ candidatas: Candidata[]; catalogo: MedidaCatalogo[] }> {
+  const [catalogo, medidas] = await Promise.all([
+    leerCatalogoMedidas(),
+    leerMedidasDeVehiculos(empresa, propuestas.map((p) => p.vehiculoId).filter(Boolean) as string[]),
+  ]);
+  const candidatas = propuestas.map((p) => ({
+    propuesta: p,
+    decision: decidir(p, catalogo, p.vehiculoId ? (medidas.get(p.vehiculoId)?.medida ?? null) : null),
+  }));
+  return { candidatas, catalogo };
+}
 
 /** Los estados que pide la URL: `?estado=vencida,proxima`. */
 function estadosPedidos(v: unknown): EstadoTacografo[] | null {
@@ -237,6 +282,25 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
           vehiculos, yaImportados: yaDespues, regla, hoy: hoyISO(), archivo,
         });
 
+        /*
+         * Las propuestas de medida se guardan AQUÍ y no al aceptarlas, porque
+         * `segura_para_bloque` solo se puede calcular con el fichero delante:
+         * depende de si alguna fila de ese vehículo traía un aviso, y eso no
+         * está en la base. Tres semanas después, cuando alguien abra la
+         * pantalla, el fichero ya no existe.
+         *
+         * Las que ya tienen propuesta se saltan, incluidas las RECHAZADAS: si
+         * alguien dijo que no a esta medida para esta matrícula, la
+         * exportación del mes que viene no puede volver a preguntarlo.
+         */
+        const [claves, idsPorOrigen] = await Promise.all([
+          leerClavesDePropuestas(empresa),
+          leerIdsPorOrigen(loteId),
+        ]);
+        const propuestas = await insertarPropuestas(filasPropuesta(simulacion.propuestas, {
+          empresa, loteId, intervencionPorIdOrigen: idsPorOrigen, yaExisten: claves,
+        }));
+
         res.json({
           ok: true,
           loteId,
@@ -247,6 +311,8 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
             duplicadasEnBase: duplicadas,
             sinVehiculo: prep.sinVehiculo,
             bloqueadas: bloqueadas.length,
+            propuestas: propuestas.insertadas,
+            propuestasYaEstaban: simulacion.propuestas.length - propuestas.insertadas,
           },
           simulacion,
         });
@@ -398,6 +464,185 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
     } catch (e: any) {
       console.error("[tacografo-deshacer] error:", e?.message ?? e);
       res.status(500).json({ error: e?.message || "No se ha podido deshacer" });
+    }
+  });
+  // ── Fase 5: las propuestas de medida ─────────────────────────────────────
+
+  /**
+   * Las propuestas pendientes, cada una con si se puede aceptar y por qué no.
+   *
+   * La decisión viene YA TOMADA del servidor: si la pantalla decidiera por su
+   * cuenta qué es aceptable, tendría que reimplementar la búsqueda en el
+   * catálogo y la comparación con la medida actual, y el día que una de las
+   * dos cambiara enseñaría un botón que el servidor rechaza.
+   */
+  app.get("/api/tyrecontrol/tacografo/propuestas", ...guards, async (req, res) => {
+    try {
+      const alcance = await empresaDelInforme(req, req.query.empresa);
+      if (!alcance.empresa) return res.status(alcance.estado!).json({ error: alcance.error });
+      const empresa = alcance.empresa;
+
+      const estado = req.query.estado ? String(req.query.estado) : "pendiente";
+      const propuestas = (await leerPropuestas(empresa, estado === "todas" ? null : estado))
+        .map(aPropuesta);
+
+      const { candidatas } = await decidirTodas(empresa, propuestas);
+      const { aceptables } = separarParaBloque(candidatas);
+
+      res.json({
+        total: candidatas.length,
+        porCaso: porCaso(propuestas),
+        // Cuántas entrarían en un «aceptar todo». Es el número que la
+        // pantalla pone en el botón, para que nadie lo pulse a ciegas.
+        aceptablesEnBloque: aceptables.length,
+        propuestas: candidatas.map((c) => ({
+          ...c.propuesta,
+          puedeAceptar: c.decision.puede,
+          motivo: c.decision.motivo ?? null,
+          explicacion: c.decision.explicacion ?? null,
+          seEscribira: c.decision.resuelta
+            ? { medidaId: c.decision.resuelta.medida.id, valor: c.decision.resuelta.medida.valor,
+                exacta: c.decision.resuelta.exacta,
+                marcadoIgnorado: c.decision.resuelta.marcadoIgnorado }
+            : null,
+          entraEnBloque: aceptables.some((a) => a.propuesta.id === c.propuesta.id),
+        })),
+      });
+    } catch (e: any) {
+      console.error("[tacografo-propuestas] error:", e?.message ?? e);
+      res.status(500).json({ error: e?.message || "No se han podido leer las propuestas" });
+    }
+  });
+
+  /**
+   * Aceptar o rechazar UNA propuesta.
+   *
+   * Se vuelve a decidir con la base delante, no se cree lo que diga el
+   * cuerpo de la petición: entre que la pantalla pintó el botón y alguien lo
+   * pulsó, la medida del vehículo puede haber cambiado. Y aceptar escribe
+   * `tc_vehiculos.medida_id` y NADA más.
+   */
+  app.post("/api/tyrecontrol/tacografo/propuestas/:id", ...guards, async (req, res) => {
+    try {
+      const alcance = await empresaDelInforme(req, req.query.empresa ?? (req as any).body?.empresa);
+      if (!alcance.empresa) return res.status(alcance.estado!).json({ error: alcance.error });
+      const empresa = alcance.empresa;
+
+      const accion = String((req.body as any)?.accion ?? "");
+      if (accion !== "aceptar" && accion !== "rechazar") {
+        return res.status(400).json({ error: "La acción tiene que ser «aceptar» o «rechazar»" });
+      }
+
+      const fila = await leerPropuesta(empresa, String(req.params.id));
+      if (!fila) return res.status(404).json({ error: "Esa propuesta no existe en esta empresa" });
+      const p = aPropuesta(fila);
+
+      if (accion === "rechazar") {
+        const nota = (req.body as any)?.nota ? String((req.body as any).nota).slice(0, 500) : null;
+        const hecho = await rechazarPropuesta(p.id, empresa, usuarioDe(req), nota);
+        if (!hecho) return res.status(409).json({ error: "La propuesta ya estaba resuelta" });
+        return res.json({ ok: true, accion: "rechazar" });
+      }
+
+      const { candidatas } = await decidirTodas(empresa, [p]);
+      const d = candidatas[0].decision;
+      if (!d.puede || !d.resuelta) {
+        return res.status(409).json({ error: d.explicacion ?? "No se puede aceptar", motivo: d.motivo });
+      }
+
+      const r = await aplicarPropuesta({
+        propuestaId: p.id, empresa, vehiculoId: p.vehiculoId!,
+        medidaId: d.resuelta.medida.id, medidaValor: d.resuelta.medida.valor,
+        exacta: d.resuelta.exacta, medidaPreviaId: p.medidaActualId,
+        usuarioId: usuarioDe(req),
+      });
+      if (!r.ok) return res.status(409).json({ error: r.motivo });
+
+      res.json({
+        ok: true, accion: "aceptar",
+        escrito: { medida: d.resuelta.medida.valor, exacta: d.resuelta.exacta },
+      });
+    } catch (e: any) {
+      console.error("[tacografo-propuesta] error:", e?.message ?? e);
+      res.status(500).json({ error: e?.message || "No se ha podido resolver la propuesta" });
+    }
+  });
+
+  /**
+   * Aceptar en bloque, y solo lo que es seguro aceptar en bloque.
+   *
+   * El filtro no es cosmético: `separarParaBloque` deja fuera las 19
+   * discrepancias reales por mucho que individualmente se puedan aceptar.
+   * Resolver 19 desacuerdos entre el tacógrafo y TyreControl con un botón es
+   * decidir sin mirar, y era una condición explícita del encargo.
+   *
+   * Si el cuerpo trae `ids`, se aceptan solo esas, y SIEMPRE pasando por el
+   * mismo filtro: mandar un id de una discrepancia no la mete en el bloque.
+   *
+   * Cada una se aplica por su cuenta y con su propio compara-y-cambia. No hay
+   * transacción: una que falle no tumba las demás, y se dice cuáles fueron.
+   */
+  app.post("/api/tyrecontrol/tacografo/propuestas-bloque", ...guards, async (req, res) => {
+    try {
+      const alcance = await empresaDelInforme(req, req.query.empresa ?? (req as any).body?.empresa);
+      if (!alcance.empresa) return res.status(alcance.estado!).json({ error: alcance.error });
+      const empresa = alcance.empresa;
+
+      const pedidos = Array.isArray((req.body as any)?.ids)
+        ? new Set((req.body as any).ids.map(String)) : null;
+
+      const todas = (await leerPropuestas(empresa, "pendiente")).map(aPropuesta);
+      const propuestas = pedidos ? todas.filter((p) => pedidos.has(p.id)) : todas;
+
+      const { candidatas } = await decidirTodas(empresa, propuestas);
+      const { aceptables, excluidas } = separarParaBloque(candidatas);
+
+      const aceptadas: Array<{ id: string; matricula: string; medida: string; exacta: boolean }> = [];
+      const falladas: Array<{ id: string; matricula: string; motivo: string }> = [];
+
+      for (const c of aceptables) {
+        const d = c.decision.resuelta!;
+        try {
+          const r = await aplicarPropuesta({
+            propuestaId: c.propuesta.id, empresa, vehiculoId: c.propuesta.vehiculoId!,
+            medidaId: d.medida.id, medidaValor: d.medida.valor, exacta: d.exacta,
+            medidaPreviaId: c.propuesta.medidaActualId, usuarioId: usuarioDe(req),
+          });
+          if (r.ok) {
+            aceptadas.push({
+              id: c.propuesta.id, matricula: c.propuesta.matriculaNorm,
+              medida: d.medida.valor, exacta: d.exacta,
+            });
+          } else {
+            falladas.push({ id: c.propuesta.id, matricula: c.propuesta.matriculaNorm, motivo: r.motivo! });
+          }
+        } catch (e: any) {
+          falladas.push({
+            id: c.propuesta.id, matricula: c.propuesta.matriculaNorm,
+            motivo: e?.message ?? "Error desconocido",
+          });
+        }
+      }
+
+      res.json({
+        ok: true,
+        aceptadas,
+        falladas,
+        // Las que no entraban, con el motivo, para que no parezca que se han
+        // olvidado: una discrepancia excluida sigue ahí esperando a que
+        // alguien la mire una a una.
+        excluidas: excluidas.map((c) => ({
+          id: c.propuesta.id, matricula: c.propuesta.matriculaNorm, caso: c.propuesta.caso,
+          motivo: c.decision.puede
+            ? (c.propuesta.caso === "sin_medida"
+                ? "El informe traía avisos en las filas de este vehículo: hay que mirarla."
+                : "No es una medida que falte, es un desacuerdo: solo una a una.")
+            : (c.decision.explicacion ?? "No se puede aceptar"),
+        })),
+      });
+    } catch (e: any) {
+      console.error("[tacografo-bloque] error:", e?.message ?? e);
+      res.status(500).json({ error: e?.message || "No se han podido aceptar las propuestas" });
     }
   });
 }
