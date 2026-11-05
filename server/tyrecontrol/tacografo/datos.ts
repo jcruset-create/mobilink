@@ -90,3 +90,60 @@ export async function leerRegla(empresa: string): Promise<Regla> {
     resultadosReinician: (data as any).resultados_reinician ?? null,
   };
 }
+
+/** Los lotes de una empresa, del más reciente al más viejo. */
+export async function leerLotes(empresa: string, limite = 50): Promise<any[]> {
+  const { data, error } = await supabase
+    .from("tc_tacografo_lotes")
+    .select("id, archivo_nombre, sistema_origen, archivo_filas, filas_empresa, importadas, "
+      + "duplicadas, sin_vehiculo, bloqueadas, estado, created_at, deshecho_en, nota")
+    .eq("empresa_id", empresa)
+    .order("created_at", { ascending: false })
+    .limit(limite);
+  if (error) throw new Error(error.message);
+  return data ?? [];
+}
+
+/** Un lote concreto, con lo que hace falta para decidir si se puede deshacer. */
+export async function leerLote(loteId: string): Promise<any | null> {
+  const { data, error } = await supabase
+    .from("tc_tacografo_lotes")
+    .select("id, empresa_id, estado, importadas, archivo_nombre, created_at")
+    .eq("id", loteId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ?? null;
+}
+
+/** Las filas de un lote, con las marcas de tiempo que delatan un cambio posterior. */
+export async function leerFilasDeLote(loteId: string): Promise<any[]> {
+  return paginar<any>((desde, hasta) =>
+    supabase
+      .from("tc_tacografo_intervenciones")
+      .select("id, id_origen, importado_en, actualizado_en, vinculado_en")
+      .eq("lote_id", loteId)
+      .order("id", { ascending: true })
+      .range(desde, hasta));
+}
+
+/** Las propuestas de medida que salieron de un lote. */
+export async function leerPropuestasDeLote(loteId: string): Promise<any[]> {
+  return paginar<any>((desde, hasta) =>
+    supabase
+      .from("tc_tacografo_medida_propuesta")
+      .select("id, estado, matricula_norm")
+      .eq("lote_id", loteId)
+      .order("id", { ascending: true })
+      .range(desde, hasta));
+}
+
+/** Las filas que no entraron en un lote, con su motivo. */
+export async function leerBloqueadasDeLote(loteId: string): Promise<any[]> {
+  return paginar<any>((desde, hasta) =>
+    supabase
+      .from("tc_tacografo_bloqueados")
+      .select("fila_origen, id_origen, matricula, fecha, motivo, valor")
+      .eq("lote_id", loteId)
+      .order("fila_origen", { ascending: true })
+      .range(desde, hasta));
+}

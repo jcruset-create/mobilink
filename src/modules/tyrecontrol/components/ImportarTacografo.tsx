@@ -1,19 +1,31 @@
-import { useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle2, FileSpreadsheet, Info } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { AlertTriangle, CheckCircle2, FileSpreadsheet, Info, Undo2, Upload } from "lucide-react";
 
-import { listarEmpresas, simularTacografo, type RespuestaSimulacionTacografo } from "../services/data";
+import {
+  bloqueadasDeLoteTacografo, importarTacografo, listarEmpresas, listarLotesTacografo,
+  deshacerLoteTacografo, simularTacografo,
+  type LoteTacografo, type RespuestaSimulacionTacografo, type ResultadoImportTacografo,
+} from "../services/data";
 import type { Empresa } from "../types";
 import { TableWrap, tdCls, thCls } from "./ui";
 
 /**
  * Simular la importación del informe de intervenciones de tacógrafo.
  *
- * De momento SOLO simula: sube el Excel y enseña qué pasaría. No escribe una
- * fila. Es a propósito —los números hay que poder discutirlos antes de que
- * existan— y el botón de importar llega en la siguiente fase.
+ * Dos botones y en este orden: primero SIMULAR, que enseña qué pasaría sin
+ * escribir una fila, y solo después IMPORTAR. Los números hay que poder
+ * discutirlos antes de que existan.
  *
  * El fichero se manda entero al servidor, que es quien lo lee: el parser vive
- * allí y tener otro aquí sería tener dos criterios para el mismo Excel.
+ * allí y tener otro aquí sería tener dos criterios para el mismo Excel. Y al
+ * importar se vuelve a leer y a cruzar, en vez de fiarse de lo que se simuló
+ * hace un rato: entre una cosa y otra alguien puede haber dado de alta un
+ * vehículo o haber importado el mismo fichero desde otro sitio.
+ *
+ * Abajo, los lotes ya importados, cada uno con su «deshacer». Deshacer se
+ * NIEGA si alguien vinculó una intervención a mano, aceptó una propuesta de
+ * medida o editó una fila: eso es trabajo de una persona y no se tira sin
+ * mirarlo.
  */
 
 const ETIQUETA_CASO: Record<string, string> = {
@@ -35,8 +47,13 @@ export default function ImportarTacografo() {
   const [empresaId, setEmpresaId] = useState("");
   const [archivo, setArchivo] = useState<File | null>(null);
   const [res, setRes] = useState<RespuestaSimulacionTacografo | null>(null);
+  const [imp, setImp] = useState<ResultadoImportTacografo | null>(null);
+  const [lotes, setLotes] = useState<LoteTacografo[]>([]);
+  const [bloqueadas, setBloqueadas] = useState<{ lote: string; filas: any[] } | null>(null);
   const [cargando, setCargando] = useState(false);
+  const [importando, setImportando] = useState(false);
   const [error, setError] = useState("");
+  const [msg, setMsg] = useState("");
 
   useEffect(() => {
     listarEmpresas()
@@ -44,14 +61,76 @@ export default function ImportarTacografo() {
       .catch((e) => setError(e.message));
   }, []);
 
+  const cargarLotes = useCallback(async () => {
+    if (!empresaId) return;
+    try { setLotes(await listarLotesTacografo(empresaId)); }
+    catch (e: any) { setError(e.message); }
+  }, [empresaId]);
+
+  useEffect(() => { void cargarLotes(); }, [cargarLotes]);
+
   async function simular() {
     if (!archivo || !empresaId) return;
-    setCargando(true); setError(""); setRes(null);
+    setCargando(true); setError(""); setMsg(""); setRes(null); setImp(null);
     try {
       setRes(await simularTacografo(empresaId, archivo));
     } catch (e: any) {
       setError(e?.message || "No se ha podido simular");
     } finally { setCargando(false); }
+  }
+
+  /**
+   * Importar. Se pide confirmación con el número delante, porque «importar»
+   * y «importar 1.694 intervenciones» no son la misma decisión.
+   */
+  async function importar() {
+    if (!archivo || !empresaId || !res) return;
+    const n = res.simulacion.nuevas;
+    if (n === 0) { setError("No hay nada nuevo que importar en este fichero."); return; }
+    if (!window.confirm(
+      `Vas a importar ${n.toLocaleString("es-ES")} intervención(es) de tacógrafo.\n\n`
+      + `Las ${res.simulacion.duplicadas.toLocaleString("es-ES")} que ya estaban se saltan, y `
+      + `${res.simulacion.sinVehiculo} entran sin vincular porque su matrícula no está en `
+      + `TyreControl.\n\n¿Continuar?`)) return;
+
+    setImportando(true); setError(""); setMsg("");
+    try {
+      const r = await importarTacografo(empresaId, archivo);
+      setImp(r);
+      setRes({ ...res, simulacion: r.simulacion });
+      setMsg(`Importadas ${r.resultado.insertadas.toLocaleString("es-ES")} intervenciones.`);
+      await cargarLotes();
+    } catch (e: any) {
+      setError(e?.message || "No se ha podido importar");
+    } finally { setImportando(false); }
+  }
+
+  async function deshacer(lote: LoteTacografo) {
+    setError(""); setMsg("");
+    try {
+      const previo = await deshacerLoteTacografo(empresaId, lote.id, true);
+      const v = previo.veredicto;
+      if (v && !v.puede) {
+        setError(v.explicacion ?? "Ese lote no se puede deshacer.");
+        return;
+      }
+      if (!window.confirm(
+        `Vas a borrar ${v?.aBorrar ?? lote.importadas} intervención(es) importadas el `
+        + `${new Date(lote.created_at).toLocaleString("es-ES")} desde «${lote.archivo_nombre}».\n\n`
+        + `Solo se borran las que metió ESE lote. ¿Continuar?`)) return;
+      const r = await deshacerLoteTacografo(empresaId, lote.id);
+      setMsg(`Deshecho: ${r.borradas ?? 0} intervención(es) borradas.`);
+      await cargarLotes();
+    } catch (e: any) {
+      setError(e?.message || "No se ha podido deshacer");
+    }
+  }
+
+  async function verBloqueadas(lote: LoteTacografo) {
+    setError("");
+    try {
+      setBloqueadas({ lote: lote.archivo_nombre, filas: await bloqueadasDeLoteTacografo(empresaId, lote.id) });
+    } catch (e: any) { setError(e.message); }
   }
 
   const s = res?.simulacion;
@@ -92,16 +171,43 @@ export default function ImportarTacografo() {
           </label>
           <button
             onClick={simular}
-            disabled={!archivo || !empresaId || cargando}
+            disabled={!archivo || !empresaId || cargando || importando}
             className="rounded-lg border border-sky-600 px-3 py-2 text-sm font-bold text-sky-300
                        hover:bg-sky-500/10 disabled:opacity-50"
           >
             {cargando ? "Simulando…" : "Simular"}
           </button>
+          {/* El de importar solo aparece después de simular: el orden es la
+              mitad del diseño. No se importa lo que no se ha mirado. */}
+          {res && res.simulacion.nuevas > 0 && (
+            <button
+              onClick={importar}
+              disabled={importando || cargando}
+              className="flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm
+                         font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
+            >
+              <Upload size={14} />
+              {importando
+                ? "Importando…"
+                : `Importar ${res.simulacion.nuevas.toLocaleString("es-ES")}`}
+            </button>
+          )}
         </div>
       </div>
 
-      {error && <div className="rounded-lg bg-rose-500/10 p-3 text-sm text-rose-300">{error}</div>}
+      {error && <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 text-sm text-rose-200">{error}</div>}
+      {msg && <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 text-sm text-emerald-200">✔ {msg}</div>}
+
+      {imp && (
+        <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3 text-[13px] text-emerald-200">
+          <b>Lote {imp.loteId.slice(0, 8)}</b> · leídas {imp.resultado.leidas.toLocaleString("es-ES")}
+          {" · "}grabadas <b>{imp.resultado.insertadas.toLocaleString("es-ES")}</b>
+          {" · "}ya estaban {imp.resultado.yaEstaban.toLocaleString("es-ES")}
+          {imp.resultado.duplicadasEnBase > 0 && <> · rechazadas por la base {imp.resultado.duplicadasEnBase}</>}
+          {" · "}sin vincular {imp.resultado.sinVehiculo}
+          {imp.resultado.bloqueadas > 0 && <> · <b>bloqueadas {imp.resultado.bloqueadas}</b></>}
+        </div>
+      )}
 
       {res && s && (
         <>
@@ -274,6 +380,84 @@ export default function ImportarTacografo() {
             </section>
           )}
         </>
+      )}
+
+      {lotes.length > 0 && (
+        <section>
+          <h3 className="mb-2 text-sm font-black">Importaciones hechas</h3>
+          <p className="mb-2 text-xs text-slate-400">
+            Deshacer borra <b className="text-slate-200">solo</b> lo que metió ese lote. Se niega si
+            alguien vinculó una intervención a mano, aceptó una propuesta de medida o editó una
+            fila: eso es trabajo de una persona y no se tira sin mirarlo.
+          </p>
+          <TableWrap>
+            <thead><tr>
+              <th className={thCls}>Fichero</th><th className={thCls}>Cuándo</th>
+              <th className={thCls}>Grabadas</th><th className={thCls}>Ya estaban</th>
+              <th className={thCls}>Sin vincular</th><th className={thCls}>Bloqueadas</th>
+              <th className={thCls}>Estado</th><th className={thCls}></th>
+            </tr></thead>
+            <tbody>
+              {lotes.map((l) => (
+                <tr key={l.id}>
+                  <td className={`${tdCls} font-bold`}>{l.archivo_nombre}</td>
+                  <td className={tdCls}>{new Date(l.created_at).toLocaleString("es-ES")}</td>
+                  <td className={`${tdCls} tabular-nums`}>{l.importadas.toLocaleString("es-ES")}</td>
+                  <td className={`${tdCls} tabular-nums text-slate-400`}>{l.duplicadas.toLocaleString("es-ES")}</td>
+                  <td className={`${tdCls} tabular-nums`}>{l.sin_vehiculo}</td>
+                  <td className={tdCls}>
+                    {l.bloqueadas > 0
+                      ? <button onClick={() => verBloqueadas(l)} className="text-amber-300 underline">{l.bloqueadas}</button>
+                      : <span className="text-slate-500">0</span>}
+                  </td>
+                  <td className={tdCls}>
+                    {l.estado === "deshecho"
+                      ? <span className="text-slate-400">deshecho {l.deshecho_en ? new Date(l.deshecho_en).toLocaleDateString("es-ES") : ""}</span>
+                      : <span className="text-emerald-300">aplicado</span>}
+                  </td>
+                  <td className={tdCls}>
+                    {l.estado === "aplicado" && (
+                      <button
+                        onClick={() => deshacer(l)}
+                        className="flex items-center gap-1 rounded border border-slate-600 px-2 py-1
+                                   text-[11px] font-bold text-slate-200 hover:bg-slate-700"
+                      >
+                        <Undo2 size={12} /> Deshacer
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </TableWrap>
+        </section>
+      )}
+
+      {bloqueadas && (
+        <section>
+          <h3 className="mb-2 flex items-center justify-between text-sm font-black">
+            <span>Filas que no entraron · {bloqueadas.lote}</span>
+            <button onClick={() => setBloqueadas(null)} className="text-xs font-normal text-slate-400 underline">
+              cerrar
+            </button>
+          </h3>
+          <TableWrap>
+            <thead><tr>
+              <th className={thCls}>Fila</th><th className={thCls}>Intervención</th>
+              <th className={thCls}>Matrícula</th><th className={thCls}>Motivo</th>
+            </tr></thead>
+            <tbody>
+              {bloqueadas.filas.map((b, i) => (
+                <tr key={i}>
+                  <td className={`${tdCls} tabular-nums`}>{b.fila_origen ?? "—"}</td>
+                  <td className={`${tdCls} text-[11px] text-slate-400`}>{b.id_origen ?? "—"}</td>
+                  <td className={tdCls}>{b.matricula ?? "—"}</td>
+                  <td className={tdCls}>{b.motivo}{b.valor ? ` (${b.valor})` : ""}</td>
+                </tr>
+              ))}
+            </tbody>
+          </TableWrap>
+        </section>
       )}
     </div>
   );

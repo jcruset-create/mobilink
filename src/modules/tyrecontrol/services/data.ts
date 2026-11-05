@@ -4008,3 +4008,78 @@ export async function simularTacografo(
   if (!r.ok) throw new Error((j as any)?.error || `No se ha podido simular (${r.status})`);
   return j as RespuestaSimulacionTacografo;
 }
+
+export interface ResultadoImportTacografo {
+  ok: true;
+  loteId: string;
+  resultado: {
+    leidas: number; insertadas: number; yaEstaban: number;
+    duplicadasEnBase: number; sinVehiculo: number; bloqueadas: number;
+  };
+  simulacion: SimulacionTacografo;
+}
+
+export interface LoteTacografo {
+  id: string; archivo_nombre: string; sistema_origen: string;
+  archivo_filas: number; filas_empresa: number; importadas: number;
+  duplicadas: number; sin_vehiculo: number; bloqueadas: number;
+  estado: "aplicado" | "deshecho"; created_at: string; deshecho_en: string | null;
+  nota: string | null;
+}
+
+export interface VeredictoDeshacer {
+  puede: boolean;
+  motivo?: string;
+  explicacion?: string;
+  estorban?: string[];
+  aBorrar: number;
+}
+
+async function tcg<T>(url: string, init: RequestInit = {}): Promise<T> {
+  const r = await fetch(`${WF_API_BASE}${url}`, {
+    ...init,
+    headers: { ...(init.headers ?? {}), Authorization: `Bearer ${await tokenSesion()}` },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || `Error ${r.status}`);
+  return j as T;
+}
+
+/** Importa de verdad. El servidor vuelve a leer el fichero y a cruzar. */
+export async function importarTacografo(
+  empresaId: string, archivo: File,
+): Promise<ResultadoImportTacografo> {
+  const fd = new FormData();
+  fd.append("archivo", archivo);
+  return tcg<ResultadoImportTacografo>(
+    `/api/tyrecontrol/tacografo/importar?empresa=${encodeURIComponent(empresaId)}`,
+    { method: "POST", body: fd });
+}
+
+export async function listarLotesTacografo(empresaId: string): Promise<LoteTacografo[]> {
+  const j = await tcg<{ lotes: LoteTacografo[] }>(
+    `/api/tyrecontrol/tacografo/lotes?empresa=${encodeURIComponent(empresaId)}`);
+  return j.lotes;
+}
+
+/**
+ * Deshacer un lote. Con `comprobar` solo pregunta si se puede: es lo que la
+ * pantalla hace antes de ofrecer el botón, para no ofrecer algo que va a fallar.
+ */
+export async function deshacerLoteTacografo(
+  empresaId: string, loteId: string, comprobar = false,
+): Promise<{ veredicto?: VeredictoDeshacer; borradas?: number }> {
+  return tcg(`/api/tyrecontrol/tacografo/lotes/${encodeURIComponent(loteId)}/deshacer`
+    + `?empresa=${encodeURIComponent(empresaId)}${comprobar ? "&comprobar=1" : ""}`,
+    { method: "POST" });
+}
+
+export async function bloqueadasDeLoteTacografo(
+  empresaId: string, loteId: string,
+): Promise<Array<{ fila_origen: number; id_origen: string | null; matricula: string | null;
+                   fecha: string | null; motivo: string; valor: string | null }>> {
+  const j = await tcg<{ bloqueadas: any[] }>(
+    `/api/tyrecontrol/tacografo/lotes/${encodeURIComponent(loteId)}/bloqueadas`
+    + `?empresa=${encodeURIComponent(empresaId)}`);
+  return j.bloqueadas;
+}
