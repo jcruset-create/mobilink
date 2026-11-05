@@ -26,6 +26,7 @@
 import { Router, json, type Request, type Response } from "express";
 
 import { supabase } from "../../supabase.ts";
+import { totalDeFlota, type RangoMeses } from "./totalFlota.ts";
 import { puedeVerEmpresa } from "../empresaAcceso.ts";
 import { empresaDe, resolverSolicitante, type Solicitante } from "../conciliacion/router.ts";
 import {
@@ -81,6 +82,34 @@ function mesDeCuerpo(v: unknown): Mes | null {
   const month = Number((v as any)?.month);
   if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) return null;
   return { year, month };
+}
+
+
+/**
+ * El rango de meses que pide la petición, o los doce últimos.
+ *
+ * Acepta `AAAA-MM` y también `AAAA-MM-DD`, porque un selector de fecha manda
+ * el día aunque aquí no signifique nada: se queda con el mes. Lo que no se
+ * acepta es cualquier otra cosa, que se dice en vez de interpretarla.
+ */
+export function rangoPedido(desde: unknown, hasta: unknown, hoy = new Date()): RangoMeses | null {
+  const mes = (v: unknown): { year: number; month: number } | null => {
+    const m = String(v ?? "").trim().match(/^(\d{4})-(\d{2})(?:-\d{2})?$/);
+    if (!m) return null;
+    const year = Number(m[1]), month = Number(m[2]);
+    return month >= 1 && month <= 12 ? { year, month } : null;
+  };
+
+  const vacio = (v: unknown) => v == null || String(v).trim() === "";
+  if (vacio(desde) && vacio(hasta)) {
+    const h = { year: hoy.getUTCFullYear(), month: hoy.getUTCMonth() + 1 };
+    const i = h.year * 12 + (h.month - 1) - 11;
+    return { desde: { year: Math.floor(i / 12), month: (i % 12) + 1 }, hasta: h };
+  }
+  const d = vacio(desde) ? null : mes(desde);
+  const h = vacio(hasta) ? null : mes(hasta);
+  if ((!vacio(desde) && !d) || (!vacio(hasta) && !h)) return null;
+  return { desde: d ?? h!, hasta: h ?? d! };
 }
 
 export function createKilometrajeMensualRouter(): Router {
@@ -423,6 +452,60 @@ export function createKilometrajeMensualRouter(): Router {
    * Supabase— y el cruce se hace aquí, en código: el Hub no conoce
    * `tc_vehiculos` y no debe empezar a conocerlos.
    */
+  /**
+   * Los kilómetros de TODA la flota entre dos meses.
+   *
+   * El filtro es por MESES, no por días, y la pantalla lo dice: el proveedor
+   * da un total por vehículo y mes natural, así que «del 15 de marzo al 20 de
+   * junio» exigiría repartir marzo y junio a ojo. Antes que redondear por
+   * dentro sin avisar, se pide lo que el dato puede responder.
+   *
+   * Sin rango, los doce últimos meses: es lo que se quiere ver al abrir.
+   */
+  router.get("/total-flota", async (req, res) => {
+    try {
+      const empresaId = empresaDe((req as Peticion).solicitante!, req.query.empresa);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+
+      const rango = rangoPedido(req.query.desde, req.query.hasta);
+      if (!rango) return res.status(400).json({ error: "Las fechas van en formato AAAA-MM" });
+
+      // Se lee desde el año más antiguo del rango: traer más sería cargar
+      // filas para descartarlas.
+      const filas = await listMonthlyMileageByTenant({
+        tenantId: empresaId,
+        desdeYear: Math.min(rango.desde.year, rango.hasta.year),
+      });
+      const total = totalDeFlota(filas, rango);
+
+      // Un identificador no dice nada en una pantalla: se cambia por la
+      // matrícula. Solo los de la cabeza, que es lo que se enseña.
+      const top = total.porVehiculo.slice(0, 20);
+      const nombres = new Map<string, { matricula: string | null; unidad: string | null }>();
+      if (top.length > 0) {
+        const { data } = await supabase
+          .from("tc_vehiculos")
+          .select("id, matricula, numero_unidad")
+          .in("id", top.map((v) => v.vehiculoId));
+        for (const v of data ?? []) {
+          nombres.set(String((v as any).id), {
+            matricula: (v as any).matricula ?? null,
+            unidad: (v as any).numero_unidad ?? null,
+          });
+        }
+      }
+
+      res.json({
+        empresaId,
+        ...total,
+        porVehiculo: top.map((v) => ({ ...v, ...(nombres.get(v.vehiculoId) ?? {}) })),
+        vehiculosEnTotal: total.porVehiculo.length,
+      });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
   router.get("/ranking", async (req, res) => {
     try {
       const empresaId = empresaDe((req as Peticion).solicitante!, req.query.empresa);

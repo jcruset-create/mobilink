@@ -218,6 +218,43 @@ export const rehacerHuecosVehiculo = (b: { vehiculoId: string; empresaId?: strin
 export const rankingKilometraje = (empresaId?: string) =>
   pedir<Ranking>(`/ranking${empresaId ? `?empresa=${encodeURIComponent(empresaId)}` : ""}`);
 
+/** El total de kilómetros de la flota entre dos meses. */
+export interface TotalFlotaKm {
+  empresaId: string;
+  rango: { desde: { year: number; month: number }; hasta: { year: number; month: number } };
+  /** Lo MEDIDO. Nunca incluye la estimación de los huecos. */
+  km: number;
+  mesesDelRango: number;
+  vehiculosConDato: number;
+  filasOk: number;
+  filasConError: number;
+  filasVacias: number;
+  mediaVehiculoMes: number | null;
+  /** Lo que habrían recorrido los meses sin dato al ritmo de los que sí. */
+  kmEstimadosEnHuecos: number | null;
+  porMes: Array<{ year: number; month: number; km: number; vehiculos: number;
+                  conError: number; vacios: number }>;
+  porVehiculo: Array<{ vehiculoId: string; km: number; meses: number;
+                       matricula?: string | null; unidad?: string | null }>;
+  vehiculosEnTotal: number;
+}
+
+/**
+ * Los kilómetros de toda la flota entre dos meses.
+ *
+ * `desde` y `hasta` van en `AAAA-MM`: el dato del proveedor es mensual y el
+ * filtro no puede fingir una precisión que no tiene. Sin rango, los doce
+ * últimos meses.
+ */
+export const totalFlotaKm = (p: { empresaId?: string; desde?: string; hasta?: string } = {}) => {
+  const q = new URLSearchParams();
+  if (p.empresaId) q.set("empresa", p.empresaId);
+  if (p.desde) q.set("desde", p.desde);
+  if (p.hasta) q.set("hasta", p.hasta);
+  const s = q.toString();
+  return pedir<TotalFlotaKm>(`/total-flota${s ? `?${s}` : ""}`);
+};
+
 /** Lo que contesta la revisión de coherencia del histórico. */
 export interface RevisionCoherencia {
   empresaId: string;

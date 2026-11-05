@@ -6,6 +6,7 @@ import {
 } from "../services/kilometrajeMensual";
 import { detalleDeMeses, listaDeMeses } from "../services/mesesEtiqueta";
 import { listarEmpresas } from "../services/data";
+import TotalFlotaKm from "../components/TotalFlotaKm";
 import type { Empresa } from "../types";
 
 /**
@@ -213,6 +214,16 @@ export default function RankingKilometraje() {
           </button>
         </div>
       </div>
+
+      {/*
+        El total de la flota va ARRIBA del ranking, no debajo.
+
+        La pregunta «¿cuántos kilómetros ha hecho la flota?» es más frecuente
+        que «¿cuál es el autobús que más rueda?», y hasta ahora había que
+        sumarla a mano o salir a consultar la base. El ranking sigue donde
+        estaba; esto solo contesta antes lo que se pregunta antes.
+      */}
+      {empresaId && <TotalFlotaKm empresaId={empresaId} />}
 
       {error && <div className="mb-3 rounded-lg bg-red-500/10 p-3 text-sm text-red-300">{error}</div>}
       {avisoRevision && <div className="mb-3 rounded-lg bg-emerald-500/10 p-3 text-sm text-emerald-300">{avisoRevision}</div>}
