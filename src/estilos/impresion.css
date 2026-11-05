@@ -1,0 +1,185 @@
+/*
+ * Cómo se imprime un informe de TyreControl.
+ *
+ * ── El problema que esto resuelve ───────────────────────────────────────────
+ *
+ * «Imprimir» llamaba a `window.print()` sobre la pantalla entera y no había
+ * ni una regla de impresión, así que el navegador imprimía lo que veía: la
+ * barra de navegación, los filtros vacíos, las catorce pestañas, la fila de
+ * iconos, el nombre del usuario y la versión del panel. El informe empezaba a
+ * media página 1, y la primera hoja que recibía el cliente era el menú.
+ *
+ * ── Cómo se marca lo que no se imprime ──────────────────────────────────────
+ *
+ * Con la clase `no-imprimir`. Se eligió una clase propia y no `print:hidden`
+ * de Tailwind porque esto hay que ponerlo en sitios que no son del informe
+ * —la cabecera del panel, el menú lateral—, y una clase con nombre se
+ * entiende sin tener que saber qué significan los prefijos de Tailwind.
+ *
+ * ── Y por qué hay que forzar los colores ────────────────────────────────────
+ *
+ * El panel es oscuro: texto claro sobre fondo oscuro. Al imprimir, el
+ * navegador quita los fondos por su cuenta pero NO los colores del texto, así
+ * que salía gris claro sobre blanco: legible a duras penas y peor aún
+ * fotocopiado. Aquí se devuelve la tinta a negro y se dejan en color solo las
+ * tres cosas que significan algo: el rojo de lo vencido, el ámbar del aviso y
+ * el verde de lo correcto.
+ */
+
+@media print {
+  /* ── Márgenes de la hoja ──────────────────────────────────────────────────
+   *
+   * Lo que NO se puede quitar desde aquí: la fecha, el título y la URL que el
+   * navegador pone arriba y abajo. Eso es la casilla «Encabezados y pies de
+   * página» del diálogo de impresión y la decide quien imprime. Los márgenes
+   * de abajo dejan sitio para la cabecera y el pie propios del informe.
+   */
+  @page {
+    size: A4 portrait;
+    margin: 14mm 12mm 16mm;
+  }
+
+  html, body {
+    background: #fff !important;
+    color: #0f172a !important;
+    font-size: 10.5pt;
+  }
+
+  /* Fuera todo lo que no es el informe. */
+  .no-imprimir { display: none !important; }
+
+  /* El panel mete el contenido en contenedores con scroll y posición fija;
+     impresos, recortarían el informe a la altura de la ventana. */
+  .zona-impresion,
+  .zona-impresion * {
+    overflow: visible !important;
+    max-height: none !important;
+  }
+  .zona-impresion {
+    position: static !important;
+    width: 100% !important;
+    margin: 0 !important;
+  }
+
+  /* ── La tinta ─────────────────────────────────────────────────────────────
+   *
+   * Todo a negro menos dos excepciones: los tonos que significan algo, y lo
+   * que va DENTRO de la banda oscura. Sin esa segunda excepción el nombre
+   * «Mobilink TyreControl» se imprimía en negro sobre la banda negra, o sea
+   * que no se imprimía. Se vio sacando el PDF; leyendo el CSS no se ve.
+   */
+  /*
+   * Ojo con la ESPECIFICIDAD, que costó un PDF descubrirlo: tres `:not()` de
+   * clase suman tanto que esta regla le ganaba a `.imprimir-fondo *` aunque
+   * las dos llevaran `!important`, y el nombre de la banda seguía saliendo
+   * en negro sobre negro. Por eso la banda se excluye AQUÍ en vez de
+   * intentar pisarla después.
+   */
+  .zona-impresion
+    :not(.tono-ok):not(.tono-aviso):not(.tono-mal):not(.imprimir-fondo):not(.imprimir-fondo *) {
+    color: #0f172a !important;
+  }
+  .imprimir-fondo, .imprimir-fondo * { color: #fff !important; }
+  .imprimir-fondo .tinta-azul  { color: #60a5fa !important; }
+  .imprimir-fondo .tinta-verde { color: #4ade80 !important; }
+  .imprimir-fondo .tinta-suave { color: #94a3b8 !important; }
+  .zona-impresion .tono-ok    { color: #15803d !important; }
+  .zona-impresion .tono-aviso { color: #b45309 !important; }
+  .zona-impresion .tono-mal   { color: #b91c1c !important; }
+
+  /* ── Los fondos oscuros ───────────────────────────────────────────────────
+   *
+   * Esto va SIN acotar a `.zona-impresion`, y el motivo se vio imprimiendo de
+   * verdad: el fondo oscuro no lo pone el informe, lo pone un contenedor de
+   * MÁS ARRIBA (`div.min-h-screen.bg-slate-900`), que es antepasado y no
+   * descendiente. Acotada, la hoja salía azul marino entera con el texto
+   * negro encima, invisible.
+   *
+   * Solo pasa si quien imprime activa «Gráficos de fondo», que por defecto
+   * está apagado… pero hay que activarlo para que salga la banda de
+   * cabecera. O sea que este caso no es el raro: es el que vamos a pedirle.
+   */
+  [class*="bg-slate-"]:not(.imprimir-fondo),
+  [class*="bg-gray-"]:not(.imprimir-fondo),
+  [class*="bg-zinc-"]:not(.imprimir-fondo),
+  [class*="bg-neutral-"]:not(.imprimir-fondo),
+  [class*="bg-black"]:not(.imprimir-fondo) {
+    background: #fff !important;
+    background-image: none !important;
+  }
+  .imprimir-fondo {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Las cajas del panel, en papel, son un filete. */
+  .zona-impresion .rounded-lg,
+  .zona-impresion .rounded-xl {
+    border: 0.4pt solid #cbd5e1 !important;
+    border-radius: 3pt !important;
+  }
+
+  /* ── Los saltos de página ─────────────────────────────────────────────────
+   *
+   * Sin esto una sección se parte y la hoja siguiente abre con tres números
+   * sueltos sin su título: «11,7 mm · 3,3 · 36%» no significa nada.
+   */
+  .bloque-informe {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .bloque-informe h2,
+  .bloque-informe h3 {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+  table { break-inside: auto; }
+  tr, img, svg { break-inside: avoid; }
+  thead { display: table-header-group; }
+  tfoot { display: table-footer-group; }
+
+  /* ── Cabecera y pie propios, en todas las hojas ───────────────────────────
+   *
+   * `position: fixed` dentro de una página impresa se repite en cada hoja.
+   * Es la única manera de conseguirlo sin generar el PDF en el servidor.
+   */
+  .cabecera-corrida,
+  .pie-corrido {
+    position: fixed;
+    left: 0; right: 0;
+    display: flex !important;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 7.5pt;
+    color: #64748b !important;
+  }
+  .cabecera-corrida {
+    top: 0;
+    padding-bottom: 2mm;
+    border-bottom: 0.4pt solid #cbd5e1;
+  }
+  .pie-corrido {
+    bottom: 0;
+    padding-top: 2mm;
+    border-top: 0.4pt solid #cbd5e1;
+  }
+  /* ── Por qué el pie NO lleva número de página ─────────────────────────────
+   *
+   * Se intentó con `counter(page)` en el elemento fijo del pie. Chrome lo
+   * imprime como «Página 0»: ese contador solo funciona dentro de las cajas
+   * de margen de `@page`, y ahí no se puede meter HTML. Comprobado sacando
+   * el PDF, no leído en una documentación.
+   *
+   * Así que la numeración la pone el navegador si se deja marcada la casilla
+   * «Encabezados y pies de página» del diálogo. Un pie propio con número
+   * exigiría generar el PDF en el servidor.
+   */
+
+  /* Hueco para que el texto no se meta debajo de la cabecera y el pie fijos. */
+  .zona-impresion { padding-top: 9mm !important; padding-bottom: 8mm !important; }
+
+  a { text-decoration: none !important; color: inherit !important; }
+}
+
+/* En pantalla, la cabecera y el pie corridos no existen. */
+.cabecera-corrida, .pie-corrido { display: none; }
