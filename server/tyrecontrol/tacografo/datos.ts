@@ -147,3 +147,58 @@ export async function leerBloqueadasDeLote(loteId: string): Promise<any[]> {
       .order("fila_origen", { ascending: true })
       .range(desde, hasta));
 }
+
+// ── Fase 4: lo que necesitan la pantalla de control y la ficha ──────────────
+
+/** Las intervenciones de una empresa, o las de un vehículo. Paginadas. */
+export async function leerIntervenciones(
+  empresa: string, vehiculoId?: string,
+): Promise<any[]> {
+  return paginar<any>((desde, hasta) => {
+    let q = supabase
+      .from("tc_tacografo_intervenciones")
+      .select("id, vehiculo_id, id_origen, fecha, tipo_operacion, resultado, "
+        + "medida_neumatico, medida_neumatico_norm, km_nuevo, km_sospechoso, "
+        + "param_l, param_w, param_k, referencia, version, num_serie, num_sensor, "
+        + "tipo_tacografo, fabricante, tecnico, observaciones")
+      .eq("empresa_id", empresa);
+    if (vehiculoId) q = q.eq("vehiculo_id", vehiculoId);
+    return q.order("id", { ascending: true }).range(desde, hasta);
+  });
+}
+
+/** La flota con su delegación, para poder filtrar por base. */
+export async function leerFlotaConBase(empresa: string): Promise<any[]> {
+  return paginar<any>((desde, hasta) =>
+    supabase
+      .from("tc_vehiculos")
+      .select("id, matricula, numero_unidad, activo, delegacion_id, "
+        + "delegacion:tc_delegaciones(id, nombre)")
+      .eq("empresa_id", empresa)
+      .order("id", { ascending: true })
+      .range(desde, hasta));
+}
+
+/** Un vehículo suelto, para la sección de su ficha. */
+export async function leerVehiculo(empresa: string, vehiculoId: string): Promise<any | null> {
+  const { data, error } = await supabase
+    .from("tc_vehiculos")
+    .select("id, matricula, numero_unidad, activo, delegacion_id, "
+      + "delegacion:tc_delegaciones(id, nombre)")
+    .eq("empresa_id", empresa)
+    .eq("id", vehiculoId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ?? null;
+}
+
+/** Las bases de la empresa, para el desplegable del filtro. */
+export async function leerBases(empresa: string): Promise<Array<{ id: string; nombre: string }>> {
+  const { data, error } = await supabase
+    .from("tc_delegaciones")
+    .select("id, nombre")
+    .eq("empresa_id", empresa)
+    .order("nombre");
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((d: any) => ({ id: String(d.id), nombre: String(d.nombre ?? "") }));
+}

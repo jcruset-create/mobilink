@@ -4083,3 +4083,96 @@ export async function bloqueadasDeLoteTacografo(
     + `?empresa=${encodeURIComponent(empresaId)}`);
   return j.bloqueadas;
 }
+
+// ── Tacógrafo · control de la flota y sección de la ficha ───────────────────
+
+export type EstadoTacografo = "vigente" | "proxima" | "vencida" | "sin_datos";
+
+export interface FilaTacografo {
+  vehiculoId: string;
+  matricula: string | null;
+  numeroUnidad: string | null;
+  baseId: string | null;
+  base: string | null;
+  activo: boolean;
+  estado: EstadoTacografo;
+  ultima: string | null;
+  proxima: string | null;
+  diasRestantes: number | null;
+  ultimoTipo: string | null;
+  ultimoResultado: string | null;
+  intervenciones: number;
+}
+
+export interface ReglaTacografo {
+  meses: number; avisoDias: number;
+  tiposReinician: string[] | null; resultadosReinician: string[] | null;
+}
+
+export interface ControlTacografos {
+  ok: true;
+  empresaId: string;
+  regla: ReglaTacografo;
+  bases: Array<{ id: string; nombre: string }>;
+  filas: FilaTacografo[];
+  resumen: Record<EstadoTacografo, number>;
+  total: number;
+  mostrados: number;
+}
+
+export interface FiltrosTacografo {
+  empresaId: string;
+  base?: string | null;
+  texto?: string | null;
+  estado?: EstadoTacografo[] | null;
+  venceAntesDe?: string | null;
+  incluirBaja?: boolean;
+}
+
+export async function controlTacografos(f: FiltrosTacografo): Promise<ControlTacografos> {
+  const q = new URLSearchParams({ empresa: f.empresaId });
+  if (f.base) q.set("base", f.base);
+  if (f.texto) q.set("texto", f.texto);
+  if (f.estado?.length) q.set("estado", f.estado.join(","));
+  if (f.venceAntesDe) q.set("venceAntesDe", f.venceAntesDe);
+  if (f.incluirBaja) q.set("incluirBaja", "1");
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/tacografo/control?${q}`, {
+    headers: { Authorization: `Bearer ${await tokenSesion()}` },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || `Error ${r.status}`);
+  return j as ControlTacografos;
+}
+
+export interface Fechado { valor: string; fecha: string; idOrigen: string }
+
+export interface IntervencionTacografo {
+  id: string; idOrigen: string; fecha: string;
+  tipoOperacion: string | null; resultado: string | null;
+  medidaNorm: string | null; medidaOrigen: string | null;
+  kmNuevo: number | null; kmSospechoso: boolean;
+  paramL: string | null; paramW: string | null; paramK: string | null;
+  referencia: string | null; version: string | null;
+  numSerie: string | null; numSensor: string | null;
+  tipoTacografo: string | null; fabricante: string | null;
+  tecnico: string | null; observaciones: string | null;
+}
+
+export interface FichaTacografo {
+  ok: true;
+  regla: ReglaTacografo;
+  fila: FilaTacografo;
+  tecnicos: Record<string, Fechado | null>;
+  historico: IntervencionTacografo[];
+}
+
+/** La sección Tacógrafo de un vehículo. Mismo cálculo que el control. */
+export async function fichaTacografo(empresaId: string, vehiculoId: string): Promise<FichaTacografo> {
+  const r = await fetch(
+    `${WF_API_BASE}/api/tyrecontrol/tacografo/vehiculo/${encodeURIComponent(vehiculoId)}`
+    + `?empresa=${encodeURIComponent(empresaId)}`,
+    { headers: { Authorization: `Bearer ${await tokenSesion()}` } });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || `Error ${r.status}`);
+  return j as FichaTacografo;
+}

@@ -44,9 +44,14 @@ import { createHash } from "node:crypto";
 
 import { empresaDelInforme } from "../informes/alcance.ts";
 import {
-  SISTEMA_ORIGEN, leerBloqueadasDeLote, leerFilasDeLote, leerLote, leerLotes,
-  leerPropuestasDeLote, leerRegla, leerVehiculos, leerYaImportados,
+  SISTEMA_ORIGEN, leerBases, leerBloqueadasDeLote, leerFilasDeLote, leerFlotaConBase,
+  leerIntervenciones, leerLote, leerLotes, leerPropuestasDeLote, leerRegla,
+  leerVehiculo, leerVehiculos, leerYaImportados,
 } from "./datos.ts";
+import {
+  construirControl, fichaDe, type IntervencionTac, type VehiculoTac,
+} from "./control.ts";
+import type { EstadoTacografo } from "./vencimiento.ts";
 import { evaluar } from "./deshacer.ts";
 import { borrarLote, cerrarLote, crearLote, guardarBloqueadas, insertarFilas } from "./escribir.ts";
 import { preparar } from "./importar.ts";
@@ -81,6 +86,50 @@ function leerDelCuerpo(req: any): { lectura: Lectura; archivo: string; sha: stri
     archivo: archivo.originalname,
     sha: createHash("sha256").update(archivo.buffer).digest("hex"),
   };
+}
+
+
+const ESTADOS: EstadoTacografo[] = ["vigente", "proxima", "vencida", "sin_datos"];
+
+/** Una fila de la base, con los nombres que usa el cálculo. */
+const aIntervencion = (r: any): IntervencionTac => ({
+  id: String(r.id),
+  vehiculoId: r.vehiculo_id ?? null,
+  idOrigen: String(r.id_origen ?? ""),
+  fecha: String(r.fecha ?? "").slice(0, 10),
+  tipoOperacion: r.tipo_operacion ?? null,
+  resultado: r.resultado ?? null,
+  medidaNorm: r.medida_neumatico_norm ?? null,
+  medidaOrigen: r.medida_neumatico ?? null,
+  kmNuevo: r.km_nuevo == null ? null : Number(r.km_nuevo),
+  kmSospechoso: r.km_sospechoso === true,
+  paramL: r.param_l ?? null,
+  paramW: r.param_w ?? null,
+  paramK: r.param_k ?? null,
+  referencia: r.referencia ?? null,
+  version: r.version ?? null,
+  numSerie: r.num_serie ?? null,
+  numSensor: r.num_sensor ?? null,
+  tipoTacografo: r.tipo_tacografo ?? null,
+  fabricante: r.fabricante ?? null,
+  tecnico: r.tecnico ?? null,
+  observaciones: r.observaciones ?? null,
+});
+
+const aVehiculo = (r: any): VehiculoTac => ({
+  id: String(r.id),
+  matricula: r.matricula ?? null,
+  numeroUnidad: r.numero_unidad ?? null,
+  baseId: r.delegacion_id ?? null,
+  base: (r.delegacion as any)?.nombre ?? null,
+  activo: r.activo !== false,
+});
+
+/** Los estados que pide la URL: `?estado=vencida,proxima`. */
+function estadosPedidos(v: unknown): EstadoTacografo[] | null {
+  const partes = String(v ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+  const buenos = partes.filter((x): x is EstadoTacografo => (ESTADOS as string[]).includes(x));
+  return buenos.length > 0 ? buenos : null;
 }
 
 export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): void {
@@ -207,6 +256,74 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
         res.status(500).json({ error: e?.message || "No se ha podido importar" });
       }
     });
+
+  /**
+   * El control de tacógrafos de toda la flota.
+   *
+   * Sale del MISMO cálculo que la sección de la ficha (`control.ts`). Si cada
+   * pantalla lo hiciera por su cuenta, un día la ficha diría una fecha y el
+   * control otra, y a partir de ahí nadie se fiaría de ninguna.
+   */
+  app.get("/api/tyrecontrol/tacografo/control", ...guards, async (req, res) => {
+    try {
+      const alcance = await empresaDelInforme(req, req.query.empresa);
+      if (!alcance.empresa) return res.status(alcance.estado!).json({ error: alcance.error });
+      const empresa = alcance.empresa;
+
+      const [flota, intervenciones, regla, bases] = await Promise.all([
+        leerFlotaConBase(empresa),
+        leerIntervenciones(empresa),
+        leerRegla(empresa),
+        leerBases(empresa),
+      ]);
+
+      const control = construirControl(
+        flota.map(aVehiculo),
+        intervenciones.map(aIntervencion),
+        regla,
+        hoyISO(),
+        {
+          baseId: String(req.query.base ?? "").trim() || null,
+          texto: String(req.query.texto ?? "").trim() || null,
+          estados: estadosPedidos(req.query.estado),
+          venceAntesDe: String(req.query.venceAntesDe ?? "").trim() || null,
+          incluirBaja: String(req.query.incluirBaja ?? "") === "1",
+        },
+      );
+
+      res.json({ ok: true, empresaId: empresa, regla, bases, ...control });
+    } catch (e: any) {
+      console.error("[tacografo-control] error:", e?.message ?? e);
+      res.status(500).json({ error: e?.message || "No se ha podido leer el control" });
+    }
+  });
+
+  /** La sección Tacógrafo de la ficha de un vehículo. */
+  app.get("/api/tyrecontrol/tacografo/vehiculo/:id", ...guards, async (req, res) => {
+    try {
+      const alcance = await empresaDelInforme(req, req.query.empresa);
+      if (!alcance.empresa) return res.status(alcance.estado!).json({ error: alcance.error });
+      const empresa = alcance.empresa;
+      const vehiculoId = String(req.params.id);
+
+      const vehiculo = await leerVehiculo(empresa, vehiculoId);
+      if (!vehiculo) return res.status(404).json({ error: "Ese vehículo no es de esta empresa" });
+
+      const [intervenciones, regla] = await Promise.all([
+        leerIntervenciones(empresa, vehiculoId),
+        leerRegla(empresa),
+      ]);
+
+      res.json({
+        ok: true,
+        regla,
+        ...fichaDe(aVehiculo(vehiculo), intervenciones.map(aIntervencion), regla, hoyISO()),
+      });
+    } catch (e: any) {
+      console.error("[tacografo-ficha] error:", e?.message ?? e);
+      res.status(500).json({ error: e?.message || "No se ha podido leer el tacógrafo" });
+    }
+  });
 
   /** Los lotes de la empresa, del más reciente al más viejo. */
   app.get("/api/tyrecontrol/tacografo/lotes", ...guards, async (req, res) => {
