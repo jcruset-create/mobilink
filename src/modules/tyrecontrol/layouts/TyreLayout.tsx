@@ -57,7 +57,7 @@ export default function TyreLayout() {
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100">
       {/* Topbar */}
-      <header className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-700 bg-slate-900/95 px-3 py-2 backdrop-blur">
+      <header className="no-imprimir sticky top-0 z-30 flex items-center justify-between border-b border-slate-700 bg-slate-900/95 px-3 py-2 backdrop-blur">
         <div className="flex items-center gap-2 md:gap-3">
           <button className="rounded-lg p-1.5 hover:bg-slate-800 md:hidden" onClick={() => setOpen((v) => !v)}>
             <Menu className="h-5 w-5" />
@@ -99,7 +99,7 @@ export default function TyreLayout() {
 
       <div className="mx-auto flex max-w-[1500px]">
         {/* Sidebar */}
-        <aside className={`${open ? "block" : "hidden"} w-52 shrink-0 border-r border-slate-700 bg-slate-900 p-2 md:block`}>
+        <aside className={`no-imprimir ${open ? "block" : "hidden"} w-52 shrink-0 border-r border-slate-700 bg-slate-900 p-2 md:block`}>
           <nav className="flex flex-col gap-1">
             {items.map((item) => {
               const Icon = item.icon;
@@ -131,7 +131,8 @@ export default function TyreLayout() {
         </aside>
 
         {/* Contenido */}
-        <main className="min-w-0 flex-1 p-3">
+        {/* `zona-impresion` es lo ÚNICO que sale en papel. Ver estilos/impresion.css. */}
+        <main className="zona-impresion min-w-0 flex-1 p-3">
           {bloqueada ? (
             <div className="max-w-md rounded-2xl border border-amber-500/40 bg-amber-500/10 p-6 text-sm text-amber-300">
               No tienes acceso a esta pantalla. Contacta con un administrador.
