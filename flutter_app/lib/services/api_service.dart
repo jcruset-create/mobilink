@@ -406,14 +406,18 @@ class ApiService {
   /// La posición de la tablet FUERA de una asistencia, para el Mapa flota.
   /// Sin cola offline: es «dónde está ahora», y una posición que llega tarde
   /// ya no lo dice.
-  Future<void> sendTabletLocation(
+  ///
+  /// Devuelve la asistencia de este operario que la oficina haya puesto en
+  /// camino, si hay alguna: la tablet no refresca su lista sola y así se
+  /// entera de que tiene que mandar a esa asistencia.
+  Future<int?> sendTabletLocation(
     double lat,
     double lng, {
     double? accuracyM,
     double? speedKmh,
   }) async {
     try {
-      await http
+      final res = await http
           .post(
             Uri.parse('$kBackendUrl/api/roadside-operator/location'),
             headers: await _authHeaders(),
@@ -425,8 +429,13 @@ class ApiService {
             }),
           )
           .timeout(const Duration(seconds: 10));
+      if (res.statusCode != 200) return null;
+      final data = jsonDecode(res.body);
+      final id = data is Map ? data['asistenciaEnCamino'] : null;
+      return id is int ? id : null;
     } catch (_) {
       // Silencioso: el mapa no debe interrumpir al técnico.
+      return null;
     }
   }
 

@@ -116,8 +116,12 @@ class SeguimientoUbicacion {
       await api.sendLocation(id, pos.latitude, pos.longitude,
           accuracyM: pos.accuracy, speedKmh: speedKmh);
     } else {
-      await api.sendTabletLocation(pos.latitude, pos.longitude,
+      final enCamino = await api.sendTabletLocation(pos.latitude, pos.longitude,
           accuracyM: pos.accuracy, speedKmh: speedKmh);
+      // La oficina ha puesto en camino una asistencia: a partir de ahora, a ella.
+      if (enCamino != null && _activo && _asistenciaId == null) {
+        await _arrancar(api, enCamino);
+      }
     }
   }
 
