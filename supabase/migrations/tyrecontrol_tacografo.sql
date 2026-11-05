@@ -39,15 +39,15 @@
 create table if not exists tc_tacografo_lotes (
   id              uuid primary key default gen_random_uuid(),
   empresa_id      uuid not null references tc_empresas(id) on delete restrict,
-  archivo_nombre  text,
-  archivo_filas   integer default 0,
-  filas_empresa   integer default 0,
-  importadas      integer default 0,
-  duplicadas      integer default 0,
-  sin_vehiculo    integer default 0,
-  bloqueadas      integer default 0,
+  archivo_nombre  text not null,
+  archivo_filas   integer not null default 0,
+  filas_empresa   integer not null default 0,
+  importadas      integer not null default 0,
+  duplicadas      integer not null default 0,
+  sin_vehiculo    integer not null default 0,
+  bloqueadas      integer not null default 0,
   importado_por   uuid references tc_usuarios(id),
-  created_at      timestamptz default now()
+  created_at      timestamptz not null default now()
 );
 create index if not exists idx_tcg_lotes_empresa on tc_tacografo_lotes (empresa_id);
 
@@ -62,10 +62,13 @@ create table if not exists tc_tacografo_intervenciones (
   -- La identidad de una intervención: de dónde salió y con qué id venía. Sin
   -- el sistema de origen, dos ficheros distintos con la misma numeración se
   -- pisarían.
-  sistema_origen         text default 'informe_intervenciones',
-  id_origen              text,
+  sistema_origen         text not null default 'informe_intervenciones',
+  id_origen              text not null,
 
-  fecha                  date,
+  -- NOT NULL, y tiene sentido que lo sea: una intervención sin fecha no se
+  -- puede situar en el histórico ni cuenta para el vencimiento. El importador
+  -- bloquea esas filas y lo dice, en vez de meterlas a medias.
+  fecha                  date not null,
   tipo_operacion         text,
   orden_trabajo          text,
 
@@ -80,7 +83,7 @@ create table if not exists tc_tacografo_intervenciones (
   -- Calibración
   medida_neumatico       text,
   medida_neumatico_norm  text,
-  medida_sospechosa      boolean default false,
+  medida_sospechosa      boolean not null default false,
   param_l                text,
   param_w                text,
   param_k                text,
@@ -111,15 +114,30 @@ create table if not exists tc_tacografo_intervenciones (
   hoja_origen            text,
   fila_origen            integer,
   importado_por          uuid references tc_usuarios(id),
-  importado_en           timestamptz default now(),
-  created_at             timestamptz default now()
+  importado_en           timestamptz not null default now(),
+  created_at             timestamptz not null default now()
 );
 
 -- La idempotencia. Volver a importar el mismo fichero no puede duplicar nada,
 -- y el id del centro no es único por sí solo: lo es dentro de una empresa y un
 -- sistema de origen.
-create unique index if not exists tc_tacografo_interv_origen_uk
-  on tc_tacografo_intervenciones (empresa_id, sistema_origen, id_origen);
+--
+-- Va como RESTRICCIÓN y no como índice único suelto porque así está en
+-- producción. Son equivalentes para lo que hacen, pero si aquí se creara un
+-- índice, una base nueva saldría distinta de la que ya existe, y el día que
+-- alguien compare los dos esquemas tendría que averiguar cuál es el bueno.
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+     where conname = 'tc_tacografo_interv_origen_uk'
+       and conrelid = 'tc_tacografo_intervenciones'::regclass
+  ) then
+    alter table tc_tacografo_intervenciones
+      add constraint tc_tacografo_interv_origen_uk
+      unique (empresa_id, sistema_origen, id_origen);
+  end if;
+end $$;
 
 create index if not exists idx_tcg_interv_empresa    on tc_tacografo_intervenciones (empresa_id);
 create index if not exists idx_tcg_interv_vehiculo   on tc_tacografo_intervenciones (vehiculo_id);
