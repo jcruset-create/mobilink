@@ -46,6 +46,11 @@ describeSiHayBase("posición de las tablets para el Mapa flota", () => {
       .some((t) => t.techName === tecnico)).toBe(false);
   });
 
+  it("la última posición se puede leer para el respaldo de la asistencia", async () => {
+    expect(await mod.ultimaPosicionTablet(tecnico)).toEqual({ lat: 41.2, lng: 1.3, atMs: ahora - 30_000 });
+    expect(await mod.ultimaPosicionTablet(`${tecnico}-nadie`)).toBeNull();
+  });
+
   it("al cerrar sesión desaparece del mapa", async () => {
     await mod.borrarPosicionTablet(tecnico);
     expect(await mia()).toBeUndefined();

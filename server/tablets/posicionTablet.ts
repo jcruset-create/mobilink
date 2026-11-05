@@ -40,6 +40,21 @@ export async function guardarPosicionTablet(techName: string, p: PosicionTablet)
   );
 }
 
+/**
+ * La última posición de la tablet de un operario, sin límite de edad: quien
+ * la use decide si es reciente (ver `core/posicionDoble.ts`).
+ */
+export async function ultimaPosicionTablet(
+  techName: string
+): Promise<{ lat: number; lng: number; atMs: number } | null> {
+  const r = await db.query(
+    `SELECT lat, lng, "atMs" FROM tablet_posicion WHERE "techName" = $1`,
+    [techName]
+  );
+  const row = r.rows[0];
+  return row ? { lat: Number(row.lat), lng: Number(row.lng), atMs: Number(row.atMs) } : null;
+}
+
 export async function borrarPosicionTablet(techName: string): Promise<void> {
   await db.query(`DELETE FROM tablet_posicion WHERE "techName" = $1`, [techName]);
 }
