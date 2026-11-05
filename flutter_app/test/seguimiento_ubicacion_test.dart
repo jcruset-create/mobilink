@@ -30,6 +30,7 @@ class _ApiFingida extends ApiService {
   _ApiFingida() : super(techName: 'Iván', code: '0000');
   final enviados = <int>[];
   int enviadosAlMapa = 0;
+  int? enCaminoDesdeLaOficina;
   @override
   Future<void> sendLocation(int id, double lat, double lng,
       {double? accuracyM, double? speedKmh}) async {
@@ -37,9 +38,10 @@ class _ApiFingida extends ApiService {
   }
 
   @override
-  Future<void> sendTabletLocation(double lat, double lng,
+  Future<int?> sendTabletLocation(double lat, double lng,
       {double? accuracyM, double? speedKmh}) async {
     enviadosAlMapa++;
+    return enCaminoDesdeLaOficina;
   }
 }
 
@@ -118,6 +120,19 @@ void main() {
     await seguimiento.iniciar(api, 8);
     await seguimiento.alCambiarEstado(api, 9, 'en_punto');
     expect(seguimiento.asistenciaActiva, 8);
+  });
+
+  test('si la oficina pone una asistencia en camino, la tablet pasa a mandarle a ella', () async {
+    await seguimiento.sincronizar(api, []);
+    api.enCaminoDesdeLaOficina = 188;
+    gps.controlador!.add(_pos());
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+    expect(seguimiento.asistenciaActiva, 188);
+
+    gps.controlador!.add(_pos());
+    await Future<void>.delayed(Duration.zero);
+    expect(api.enviados, [188]);
   });
 
   test('al cerrar sesión, para del todo', () async {

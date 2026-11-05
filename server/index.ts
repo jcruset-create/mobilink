@@ -15,7 +15,12 @@ import { supabase, supabaseAnonAuth, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_
 import { fallaAlFirmar, firmarEnFilas, firmarUrls } from "./core/fotosFirmadas.ts";
 import { descargarMedioTwilio, rescatarMedioDeTwilio } from "./core/medioTwilio.ts";
 import { elegirPosicion, horaWebfleet, type PosicionElegida } from "./core/posicionDoble.ts";
-import { borrarPosicionTablet, guardarPosicionTablet, listarTabletsEnMapa } from "./tablets/posicionTablet.ts";
+import {
+  borrarPosicionTablet,
+  guardarPosicionTablet,
+  listarTabletsEnMapa,
+  ultimaPosicionTablet,
+} from "./tablets/posicionTablet.ts";
 import { guardarCodigoErp, SISTEMAS_NO_ERP } from "./clientes/codigoErp.ts";
 import { OTF_EN_ESPERA_SQL } from "./otf/espera.ts";
 import {
@@ -1557,12 +1562,27 @@ async function posicionDeAsistencia(row: any): Promise<
       console.warn(`Webfleet sin posición para asistencia #${row.id}: ${err?.message ?? err}`);
     }
   }
+  /*
+   * La tablet, de dos sitios: lo que mandó a ESTA asistencia y la última
+   * posición de la tablet del operario asignado (la del Mapa flota). La
+   * segunda hace falta porque, si la asistencia se pone «En camino» desde el
+   * panel, la tablet no se entera hasta que el operario refresca su lista, y
+   * mientras tanto manda su posición a la ruta general, no a la asistencia.
+   */
   const tLat = normalizeNullableNumber(row?.tabletLat);
   const tLng = normalizeNullableNumber(row?.tabletLng);
-  const tablet =
+  let tablet =
     tLat != null && tLng != null && row?.tabletLocationAtMs != null
       ? { lat: tLat, lng: tLng, atMs: Number(row.tabletLocationAtMs) }
       : null;
+  if (row?.assignedTechName) {
+    try {
+      const deLaTablet = await ultimaPosicionTablet(String(row.assignedTechName));
+      if (deLaTablet && (!tablet || deLaTablet.atMs > tablet.atMs)) tablet = deLaTablet;
+    } catch (err: any) {
+      console.warn(`Sin posición de tablet para ${row.assignedTechName}: ${err?.message ?? err}`);
+    }
+  }
 
   const elegida = elegirPosicion({ furgoneta, tablet, ahoraMs: ahora });
   if (!elegida) return null;
@@ -7655,7 +7675,21 @@ app.post("/api/roadside-operator/location", requireRoadsideOperator, async (req,
       accuracyM: normalizeNullableNumber(req.body?.accuracyM ?? req.body?.accuracy),
       speedKmh: normalizeNullableNumber(req.body?.speedKmh ?? req.body?.speed),
     });
-    res.json({ ok: true });
+    /*
+     * Si la oficina ha puesto en camino una asistencia de este operario, se le
+     * dice a la tablet: no refresca su lista sola, y sin esto seguiría
+     * mandando aquí en vez de a la asistencia (sin rastro ni kilómetros).
+     */
+    const enCamino = await db.query(
+      `SELECT id FROM roadside_assistances
+        WHERE "assignedTechName" = $1 AND status IN ('en_camino', 'en_camino_base')
+        ORDER BY "updatedAtMs" DESC NULLS LAST LIMIT 1`,
+      [operator.techName]
+    );
+    res.json({
+      ok: true,
+      asistenciaEnCamino: enCamino.rows[0] ? Number(enCamino.rows[0].id) : null,
+    });
   } catch (error) {
     console.error("POST /api/roadside-operator/location error:", error);
     res.status(500).json({ error: "Error guardando ubicacion" });
@@ -15767,7 +15801,7 @@ async function checkWebfleetWorkshopArrival() {
   try {
     // Busca asistencias en_camino_base con furgoneta Webfleet asignada
     const result = await db.query(`
-      SELECT ra.id, ra."webfleetVehicleId", ra."workshopId",
+      SELECT ra.id, ra."webfleetVehicleId", ra."workshopId", ra."assignedTechName",
              ra."tabletLat", ra."tabletLng", ra."tabletLocationAtMs"
       FROM roadside_assistances ra
       WHERE ra.status = 'en_camino_base'
