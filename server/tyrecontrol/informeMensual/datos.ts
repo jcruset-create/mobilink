@@ -23,6 +23,7 @@
 import { supabase } from "../../supabase.ts";
 import { PAGINA, paginar } from "../informes/paginar.ts";
 import type { MedicionRef, RevisionRef, VehiculoRef } from "./armar.ts";
+import type { NeumaticoRef } from "./matrices.ts";
 
 /**
  * Tope de páginas para las mediciones.
@@ -143,7 +144,7 @@ export async function leerMediciones(
       supabase
         .from("revisiones_neumaticos_detalle")
         .select("revision_id, vehiculo_id, posicion_id, profundidad_mm, "
-              + "neumatico_ausente, no_accesible")
+              + "neumatico_id, estado_visual, neumatico_ausente, no_accesible")
         .eq("empresa_id", empresa)
         .in("revision_id", tanda)
         .order("id", { ascending: true })
@@ -156,6 +157,8 @@ export async function leerMediciones(
         vehiculoId: String(m.vehiculo_id),
         posicion: m.posicion_id ? (orden.get(String(m.posicion_id)) ?? null) : null,
         profundidadMm: m.profundidad_mm == null ? null : Number(m.profundidad_mm),
+        neumaticoId: m.neumatico_id ? String(m.neumatico_id) : null,
+        estadoVisual: m.estado_visual ?? null,
         // Las dos cuentan como «aquí no se ha medido una rueda»: una porque no
         // la hay y otra porque no se pudo llegar. Para un recuento de
         // neumáticos revisados, las dos son lo mismo.
@@ -175,3 +178,85 @@ export async function leerNombreEmpresa(empresa: string): Promise<string | null>
 }
 
 export { PAGINA };
+
+// ── Fase 2: lo que hace falta para las rejillas ────────────────────────────
+
+/**
+ * Los neumáticos que llevaban puestos las ruedas del mes.
+ *
+ * Se piden por id y no la tabla entera: de 6.541 neumáticos de Plana, en un
+ * mes se miden unos 2.100.
+ */
+export async function leerNeumaticos(
+  empresa: string, ids: string[],
+): Promise<Map<string, NeumaticoRef>> {
+  const m = new Map<string, NeumaticoRef>();
+  if (ids.length === 0) return m;
+  const unicos = [...new Set(ids)];
+
+  for (let i = 0; i < unicos.length; i += 200) {
+    const tanda = unicos.slice(i, i + 200);
+    const { data, error } = await supabase
+      .from("tc_neumaticos")
+      .select("id, marca, modelo, medida, reesculturado")
+      .eq("empresa_id", empresa)
+      .in("id", tanda);
+    if (error) throw new Error(`No se han podido leer los neumáticos: ${error.message}`);
+    for (const n of data ?? []) {
+      m.set(String(n.id), {
+        id: String(n.id),
+        marca: (n as any).marca ?? null,
+        modelo: (n as any).modelo ?? null,
+        medida: (n as any).medida ?? null,
+        reesculturado: (n as any).reesculturado === true,
+      });
+    }
+  }
+  return m;
+}
+
+/**
+ * Si cada goma es nueva, usada o recauchutada, según su último montaje.
+ *
+ * «Recauchutada» no es un campo del neumático: es la condición con la que se
+ * montó (`shared/condicionNeumatico.ts`), y solo consta cuando el montaje vino
+ * del histórico de albaranes importado o salió del almacén de usados. En Plana
+ * consta para 1.419 de 6.541 gomas, todas «nueva».
+ *
+ * Se queda con la del montaje MÁS RECIENTE: una goma puede haberse montado
+ * varias veces y lo que vale es cómo entró la última.
+ *
+ * Las operaciones anuladas no cuentan: una operación anulada es una que no
+ * ocurrió.
+ */
+export async function leerCondicionDeNeumaticos(
+  empresa: string, ids: string[],
+): Promise<Map<string, string>> {
+  const m = new Map<string, string>();
+  if (ids.length === 0) return m;
+  const unicos = [...new Set(ids)];
+
+  // La más reciente primero; como se recorre en ese orden, la primera que
+  // llega de cada neumático es la que manda y las demás se descartan.
+  for (let i = 0; i < unicos.length; i += 200) {
+    const tanda = unicos.slice(i, i + 200);
+    const filas = await paginar<any>((desde, hasta) =>
+      supabase
+        .from("operaciones_neumaticos")
+        .select("neumatico_id, condicion, fecha_operacion, created_at, is_anulada")
+        .eq("empresa_id", empresa)
+        .in("neumatico_id", tanda)
+        .not("condicion", "is", null)
+        .order("fecha_operacion", { ascending: false, nullsFirst: false })
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: false })
+        .range(desde, hasta));
+
+    for (const o of filas) {
+      if (o.is_anulada === true) continue;
+      const id = String(o.neumatico_id);
+      if (!m.has(id)) m.set(id, String(o.condicion));
+    }
+  }
+  return m;
+}

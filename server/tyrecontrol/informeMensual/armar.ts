@@ -145,6 +145,10 @@ export interface RevisionRef {
 export interface MedicionRef {
   revisionId: string;
   vehiculoId: string;
+  /** Qué goma se midió. `null` cuando la medición no la identificó. */
+  neumaticoId: string | null;
+  /** El estado visual que apuntó el técnico, si apuntó alguno. */
+  estadoVisual: string | null;
   /** `orden_visual` de la posición, 1..N. `null` si la posición no se conoce. */
   posicion: number | null;
   profundidadMm: number | null;
@@ -230,6 +234,9 @@ export interface RuedaDelMes {
   vehiculoId: string;
   posicion: number;
   profundidadMm: number | null;
+  /** La goma que llevaba puesta cuando se midió, no la que lleve hoy. */
+  neumaticoId: string | null;
+  estadoVisual: string | null;
   /** La fecha de la revisión de la que sale el dato. */
   fecha: string;
   revisionId: string;
@@ -289,6 +296,7 @@ export function ruedasDelMes(
       mejor.set(clave, {
         vehiculoId: m.vehiculoId, posicion: m.posicion,
         profundidadMm: m.profundidadMm, fecha, revisionId: m.revisionId,
+        neumaticoId: m.neumaticoId, estadoVisual: m.estadoVisual,
       });
     }
   }
