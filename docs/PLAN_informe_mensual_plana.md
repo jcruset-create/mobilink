@@ -241,3 +241,50 @@ ni `km_actual`. Es un informe.
 4. Las 81 páginas o la versión corta.
 
 Con eso empiezo por la fase 1.
+
+---
+
+## Apéndice · Lo que los datos corrigieron del plan (fase 1)
+
+Al construir la fase 1 y contrastarla contra producción apareció algo que este
+documento daba por hecho y estaba mal.
+
+### Una rueda no es una medición: son once
+
+En octubre de 2026, Plana tiene **24.379 mediciones de 2.116 ruedas**. El arco
+de CheckPoint mide cada vez que el autobús pasa por delante, unas **once veces
+al mes**.
+
+El original dice «TOTAL NEUMÁTICOS REVISADOS 3.604» para 590 autobuses: seis
+por autobús, o sea **cada rueda una vez**. Contar mediciones habría impreso
+24.379 donde debe poner 2.116 — un número once veces mayor, lo bastante
+verosímil como para colarse hasta que alguien lo divide entre la flota.
+
+Así que la unidad del informe es la **rueda**, no la medición: de cada
+(vehículo, posición) se queda la medición **más reciente** del mes. Y es la
+que hace falta igualmente, porque el original enseña una profundidad por
+posición, que es la última. A igualdad de fecha —once pasadas el mismo día son
+normales— desempata el id de la revisión: no es una fecha, pero es estable, y
+sin desempate dos ejecuciones del informe podrían dar profundidades distintas.
+
+Esto afecta a **todos los bloques**, no solo al recuento: las bandas de
+profundidad, las matrices por posición y el detalle por vehículo salen de ese
+mismo conjunto de ruedas.
+
+### Y de paso, los números de verdad de octubre de 2026
+
+Calculados con el módulo de la fase 1, no estimados:
+
+| | |
+|---|---:|
+| Flota controlada | 717 |
+| Flota revisada | 340 — **47,42 %** |
+| Pendientes de revisar | 377 — 52,58 % |
+| Neumáticos revisados | 2.116 |
+
+Por posición: 340 en las cuatro primeras, 331 en la quinta y la sexta, 47 en
+la séptima y la octava (los de tres ejes). La misma forma que el original, que
+tenía 570 / 571 / 571 / 571 / 559 / 559 / 99 / 98.
+
+La cobertura del 47 % frente al 100 % del original es la que ya se avisaba más
+arriba, ahora medida.
