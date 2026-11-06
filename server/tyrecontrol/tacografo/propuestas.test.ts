@@ -130,6 +130,32 @@ describe("decidir", () => {
     expect(d.motivo).toBe("el_vehiculo_cambio");
   });
 
+  // Los 35 casos de «solo el marcado»: el vehículo ya tiene esa medida y el
+  // tacógrafo solo la escribe con la C. Aceptar cierra la propuesta sin
+  // cambiar el dato, y hay que decirlo: si no, alguien busca qué va a
+  // cambiar, no lo encuentra, y la rechaza creyendo que le pisaba la medida.
+  it("dice cuando aceptar no va a cambiar nada, porque ya es esa medida", () => {
+    const d = decidir(
+      prop({ caso: "solo_marcado", medidaNorm: "225/75R16C",
+             medidaActual: "225/75R16", medidaActualId: "m-225" }),
+      CAT, "225/75R16",
+    );
+    expect(d.puede).toBe(true);
+    expect(d.resuelta?.medida.id).toBe("m-225");
+    expect(d.explicacion).toContain("Ya es la medida que tiene");
+    expect(d.explicacion).toContain("no cambia el dato");
+  });
+
+  it("y cuando SÍ va a cambiarlo no dice que no cambia nada", () => {
+    const d = decidir(
+      prop({ caso: "discrepa", medidaActual: "225/75R16", medidaActualId: "m-225" }),
+      CAT, "225/75R16",
+    );
+    expect(d.puede).toBe(true);
+    expect(d.resuelta?.medida.id).toBe("m-295");
+    expect(d.explicacion).not.toContain("no cambia el dato");
+  });
+
   it("acepta una discrepancia real si nada ha cambiado: individual, sí", () => {
     const d = decidir(
       prop({ caso: "discrepa", medidaActual: "215/75R17.5", medidaActualId: "m-215", seguraParaBloque: false }),

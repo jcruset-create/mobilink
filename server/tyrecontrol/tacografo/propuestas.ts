@@ -176,6 +176,19 @@ export function decidir(
     };
   }
 
+  // El caso `solo_marcado`: el catálogo no escribe la C y el vehículo ya
+  // tiene esa misma entrada. Aceptar no cambia el dato, solo cierra la
+  // propuesta. Decirlo evita que alguien busque qué va a cambiar y no lo
+  // encuentre, y evita que lo rechace creyendo que iba a pisarle la medida.
+  if (r.medida.id === p.medidaActualId) {
+    return {
+      puede: true, resuelta: r,
+      explicacion: `Ya es la medida que tiene: el tacógrafo solo la escribe con la `
+        + `${r.marcadoIgnorado ?? "designación completa"}. Aceptar no cambia el dato, `
+        + "solo quita el aviso.",
+    };
+  }
+
   return {
     puede: true, resuelta: r,
     explicacion: r.exacta
