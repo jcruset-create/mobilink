@@ -20,9 +20,14 @@
 export const PAGINA = 500;
 
 /**
- * Tope de vueltas. No es un límite de negocio: es el seguro para que un
- * error de paginación no se convierta en un bucle contra la base. 40 páginas
- * son 20.000 filas, muy por encima de cualquier flota que tengamos.
+ * Tope de vueltas POR DEFECTO. No es un límite de negocio: es el seguro para
+ * que un error de paginación no se convierta en un bucle contra la base. 40
+ * páginas son 20.000 filas, muy por encima de cualquier flota que tengamos.
+ *
+ * Hay lecturas que sí pasan de ahí sin que nada vaya mal: las mediciones de
+ * un mes son seis por vehículo revisado, y un mes bueno de Plana son 23.000
+ * filas. Para esas se pasa un tope mayor a `paginar`, a propósito y por
+ * escrito, en vez de subir este número para todo el mundo.
  */
 export const MAX_PAGINAS = 40;
 
@@ -31,9 +36,10 @@ type Respuesta = { data: unknown; error: { message: string } | null };
 /** Pide páginas hasta que una venga incompleta. */
 export async function paginar<T>(
   pedir: (desde: number, hasta: number) => PromiseLike<Respuesta>,
+  maxPaginas: number = MAX_PAGINAS,
 ): Promise<T[]> {
   const out: T[] = [];
-  for (let p = 0; p < MAX_PAGINAS; p += 1) {
+  for (let p = 0; p < maxPaginas; p += 1) {
     const desde = p * PAGINA;
     const { data, error } = await pedir(desde, desde + PAGINA - 1);
     if (error) throw new Error(error.message);
@@ -41,7 +47,7 @@ export async function paginar<T>(
     out.push(...pagina);
     if (pagina.length < PAGINA) return out;
   }
-  // Se queda corto en silencio solo si la flota supera las 20.000 filas; si
-  // eso pasa, es mejor saberlo por una excepción que por un informe a medias.
-  throw new Error(`Demasiadas filas: se han leído ${MAX_PAGINAS * PAGINA} y aún hay más`);
+  // Se queda corto en silencio solo si se supera el tope; si eso pasa, es
+  // mejor saberlo por una excepción que por un informe a medias.
+  throw new Error(`Demasiadas filas: se han leído ${maxPaginas * PAGINA} y aún hay más`);
 }

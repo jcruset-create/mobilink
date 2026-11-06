@@ -142,6 +142,7 @@ import { mountParte } from "./tyrecontrol/parte/index.ts";
 import { mountInformeFlota } from "./tyrecontrol/informeFlota/index.ts";
 import { mountInformeRevisiones } from "./tyrecontrol/informeRevisiones/index.ts";
 import { mountInformePendientes } from "./tyrecontrol/informePendientes/index.ts";
+import { mountInformeMensual } from "./tyrecontrol/informeMensual/index.ts";
 import { mountTcTacografo } from "./tyrecontrol/tacografo/index.ts";
 import { masNuevaPrimero } from "./apkVersion.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
@@ -21809,6 +21810,10 @@ mountInformeRevisiones(app, authenticate, requireModule("tyrecontrol"));
 // La hoja del patio: quién está dentro de una base ahora y le toca revisión.
 // Ver server/tyrecontrol/informePendientes/.
 mountInformePendientes(app, authenticate, requireModule("tyrecontrol"));
+
+// Informe mensual de flota: la réplica del informe del centro técnico.
+// De momento la cabecera y los recuentos. Ver server/tyrecontrol/informeMensual/.
+mountInformeMensual(app, authenticate, requireModule("tyrecontrol"));
 
 // Tacógrafo de TyreControl: simular, importar por lotes, deshacer, el control
 // de flota y las propuestas de medida. Ver server/tyrecontrol/tacografo/.

@@ -51,3 +51,32 @@ describe("paginar", () => {
     expect(pedir).toHaveBeenCalledTimes(MAX_PAGINAS);
   });
 });
+
+describe("el tope de páginas se puede subir cuando la lectura lo pide", () => {
+  /**
+   * Las mediciones de un mes son seis por vehículo revisado: un mes bueno de
+   * Plana pasa de 20.000 filas sin que nada vaya mal. Subir el tope por
+   * defecto para todos sería quitarle el seguro a las demás lecturas, así
+   * que el tope se pasa donde hace falta.
+   */
+  const fuente = (total: number) =>
+    (desde: number, hasta: number) => Promise.resolve({
+      data: Array.from({ length: Math.max(0, Math.min(hasta - desde + 1, total - desde)) },
+                       (_, i) => ({ i: desde + i })),
+      error: null,
+    });
+
+  it("con el tope por defecto, 20.001 filas revientan en vez de salir a medias", async () => {
+    await expect(paginar(fuente(20_001))).rejects.toThrow(/Demasiadas filas/);
+  });
+
+  it("y con un tope mayor se leen enteras", async () => {
+    const filas = await paginar<{ i: number }>(fuente(20_001), 60);
+    expect(filas).toHaveLength(20_001);
+    expect(filas[20_000].i).toBe(20_000);
+  });
+
+  it("el mensaje dice cuántas se leyeron de verdad, no las 20.000 de siempre", async () => {
+    await expect(paginar(fuente(5_001), 10)).rejects.toThrow("se han leído 5000");
+  });
+});
