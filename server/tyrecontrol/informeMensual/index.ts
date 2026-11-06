@@ -27,8 +27,14 @@ import {
   ruedasDelMes, type CabeceraMensual,
 } from "./armar.ts";
 import {
-  leerMediciones, leerNombreEmpresa, leerOrdenDePosiciones, leerRevisiones, leerVehiculos,
+  leerCondicionDeNeumaticos, leerMediciones, leerNeumaticos, leerNombreEmpresa,
+  leerOrdenDePosiciones, leerRevisiones, leerVehiculos,
 } from "./datos.ts";
+import {
+  avisosDeCondicion, completar, condicionPorPosicion, marcaPorPosicion,
+  medidaPorMarca, medidaPorMilimetro, medidaPorPosicion, profundidadPorPosicion,
+  type Matriz,
+} from "./matrices.ts";
 
 /** El mes en curso, para cuando no se pide ninguno. */
 const mesActual = (): string => new Date().toISOString().slice(0, 7);
@@ -73,15 +79,42 @@ export function mountInformeMensual(app: Express, ...guards: RequestHandler[]): 
       const ruedas = ruedasDelMes(revisiones, mediciones, periodo, contados);
       const neumaticos = neumaticosRevisados(ruedas);
 
+      /*
+       * Las rejillas necesitan saber qué goma llevaba cada rueda: marca,
+       * modelo, medida y si estaba reesculturada o recauchutada. Las dos
+       * lecturas van por id y no enteras: de 6.541 neumáticos de Plana, en un
+       * mes se miden unos 2.100.
+       */
+      const idsNeumatico = ruedas.ruedas
+        .map((r) => r.neumaticoId).filter((x): x is string => !!x);
+      const [neumaticosRef, condiciones] = await Promise.all([
+        leerNeumaticos(empresa, idsNeumatico),
+        leerCondicionDeNeumaticos(empresa, idsNeumatico),
+      ]);
+      const completas = completar(ruedas.ruedas, neumaticosRef, condiciones);
+      const pos = neumaticos.posiciones;
+
+      const rejillas: Record<string, Matriz> = {
+        marcaPorPosicion: marcaPorPosicion(completas, pos),
+        medidaPorPosicion: medidaPorPosicion(completas, pos),
+        condicionPorPosicion: condicionPorPosicion(completas, pos),
+        profundidadPorPosicion: profundidadPorPosicion(completas, pos),
+        medidaPorMilimetro: medidaPorMilimetro(completas),
+        medidaPorMarca: medidaPorMarca(completas),
+      };
+
       const cabecera: CabeceraMensual = {
         empresa,
         empresaNombre,
         periodo,
         recuentos: cuentas,
         neumaticos,
-        avisos: avisosDelMes(vehiculos, neumaticos, posiciones.repetidas, incluirBaja),
+        avisos: [
+          ...avisosDelMes(vehiculos, neumaticos, posiciones.repetidas, incluirBaja),
+          ...avisosDeCondicion(completas),
+        ],
       };
-      res.json({ ok: true, ...cabecera });
+      res.json({ ok: true, ...cabecera, rejillas });
     } catch (e: any) {
       console.error("[informe-mensual] error:", e?.message ?? e);
       res.status(500).json({ error: e?.message || "No se ha podido generar el informe mensual" });

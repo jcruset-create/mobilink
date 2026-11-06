@@ -18,7 +18,8 @@ const rev = (id: string, vehiculoId: string, fecha: string, estado = "completada
 
 const med = (revisionId: string, vehiculoId: string, posicion: number | null,
              o: Partial<MedicionRef> = {}): MedicionRef =>
-  ({ revisionId, vehiculoId, posicion, profundidadMm: 8, ausente: false, ...o });
+  ({ revisionId, vehiculoId, posicion, profundidadMm: 8, ausente: false,
+     neumaticoId: `n-${vehiculoId}-${posicion}`, estadoVisual: null, ...o });
 
 describe("periodoDeMes()", () => {
   it("da los dos extremos del mes, inclusive", () => {
