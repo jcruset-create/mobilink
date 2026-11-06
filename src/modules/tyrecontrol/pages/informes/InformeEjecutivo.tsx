@@ -368,11 +368,21 @@ export default function InformeEjecutivo() {
         {/* La pista se enseña según lo que diga el error, no siempre. Antes se
             leía "falta ejecutar la migración" ante CUALQUIER fallo, y con una
             caducidad —donde la función está y funciona, solo tarda— mandaba a
-            buscar donde no era. */}
+            buscar donde no era.
+
+            Y la pista de la caducidad nombraba UNA migración concreta como si
+            fuera el remedio seguro. Lo fue en agosto; en noviembre esa ya
+            estaba aplicada y la causa era otra —el coste de la RLS fila a
+            fila—, así que mandó a aplicar algo que ya estaba puesto. Una pista
+            que nombra la cura equivocada cuesta más tiempo que no dar ninguna:
+            ahora dice qué ha pasado y dónde mirar, no qué fichero ejecutar. */}
         {/statement timeout|caduc|tiempo de espera/i.test(error) ? (
           <p className="mt-2 text-[12px] text-rose-300/80">
-            El informe ha tardado más de lo que la base de datos permite. La migración
-            <code> tyrecontrol_informe_ejecutivo_jit.sql</code> lo deja en menos de un segundo.
+            El informe ha tardado más de lo que la base de datos permite. No es que falte
+            ningún dato: es que la consulta se ha pasado de tiempo. Suele ser cosa de las
+            migraciones de rendimiento de <code>supabase/migrations/</code> —las de JIT y
+            la de la RLS por empresa—; conviene comprobar cuáles están aplicadas antes de
+            volver a ejecutar ninguna.
           </p>
         ) : /tc_informe_ejecutivo/i.test(error) ? (
           <p className="mt-2 text-[12px] text-rose-300/80">
