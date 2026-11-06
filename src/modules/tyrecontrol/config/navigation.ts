@@ -23,6 +23,7 @@ export const NAV: NavItem[] = [
   { key: "ranking-kilometraje", path: "ranking-kilometraje", label: "Kilómetros por vehículo", icon: Gauge, roles: ["administrador"] },
   { key: "disponibles-revisar", path: "disponibles-revisar", label: "Disponibles para revisar", icon: CalendarCheck, roles: ["administrador"] },
   { key: "control-tacografos", path: "control-tacografos", label: "Control de tacógrafos", icon: Gauge, roles: ["administrador"] },
+  { key: "propuestas-medida", path: "propuestas-medida", label: "Propuestas de medida", icon: Ruler, roles: ["administrador"] },
   { key: "planificacion", path: "planificacion", label: "Planificación de revisiones", icon: ClipboardList, roles: ["administrador"] },
   { key: "incidencias", path: "incidencias", label: "Incidencias", icon: AlertTriangle, roles: ["administrador"] },
   { key: "historico-revisiones", path: "historico-revisiones", label: "Histórico de revisiones", icon: History, roles: ["administrador"] },

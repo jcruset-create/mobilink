@@ -21810,8 +21810,10 @@ mountInformeRevisiones(app, authenticate, requireModule("tyrecontrol"));
 // Ver server/tyrecontrol/informePendientes/.
 mountInformePendientes(app, authenticate, requireModule("tyrecontrol"));
 
-// Tacógrafo: de momento solo la simulación del informe de intervenciones,
-// que no escribe nada. Ver server/tyrecontrol/tacografo/.
+// Tacógrafo de TyreControl: simular, importar por lotes, deshacer, el control
+// de flota y las propuestas de medida. Ver server/tyrecontrol/tacografo/.
+// Ojo: `mountTacografos`, en plural, es el módulo de expedientes del anexo II
+// y no tiene nada que ver con esto.
 mountTcTacografo(app, authenticate, requireModule("tyrecontrol"));
 
 /*

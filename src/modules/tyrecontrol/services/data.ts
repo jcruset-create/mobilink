@@ -4176,3 +4176,93 @@ export async function fichaTacografo(empresaId: string, vehiculoId: string): Pro
   if (!r.ok) throw new Error((j as any)?.error || `Error ${r.status}`);
   return j as FichaTacografo;
 }
+
+// ── Tacógrafo · propuestas de medida ───────────────────────────────────────
+
+export type CasoMedidaTacografo = "sin_medida" | "solo_marcado" | "discrepa" | "sin_vehiculo";
+
+export interface PropuestaTacografo {
+  id: string;
+  vehiculoId: string | null;
+  matriculaNorm: string;
+  caso: CasoMedidaTacografo;
+  /** Lo que dice el tacógrafo: normalizado y tal cual venía en el informe. */
+  medidaNorm: string;
+  medidaOrigen: string | null;
+  fecha: string | null;
+  idOrigen: string | null;
+  /** Lo que TyreControl tenía cuando se creó la propuesta. */
+  medidaActual: string | null;
+  medidaActualId: string | null;
+  estado: string;
+  seguraParaBloque: boolean;
+
+  /** La decisión la toma el servidor; la pantalla solo la enseña. */
+  puedeAceptar: boolean;
+  motivo: string | null;
+  explicacion: string | null;
+  /** Qué se escribiría exactamente, para que nadie acepte a ciegas. */
+  seEscribira: {
+    medidaId: string; valor: string; exacta: boolean; marcadoIgnorado: string | null;
+  } | null;
+  entraEnBloque: boolean;
+}
+
+export interface PropuestasTacografo {
+  total: number;
+  porCaso: Record<CasoMedidaTacografo, number>;
+  aceptablesEnBloque: number;
+  propuestas: PropuestaTacografo[];
+}
+
+export async function propuestasTacografo(
+  empresaId: string, estado: "pendiente" | "aceptada" | "rechazada" | "todas" = "pendiente",
+): Promise<PropuestasTacografo> {
+  const q = new URLSearchParams({ empresa: empresaId, estado });
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/tacografo/propuestas?${q}`, {
+    headers: { Authorization: `Bearer ${await tokenSesion()}` },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || `Error ${r.status}`);
+  return j as PropuestasTacografo;
+}
+
+/**
+ * Resuelve una propuesta. El servidor vuelve a decidir con la base delante:
+ * entre que se pintó el botón y alguien lo pulsó, la medida del vehículo
+ * puede haber cambiado, y entonces se niega en vez de pisarla.
+ */
+export async function resolverPropuestaTacografo(
+  empresaId: string, id: string, accion: "aceptar" | "rechazar", nota?: string,
+): Promise<{ ok: true; accion: string; escrito?: { medida: string; exacta: boolean } }> {
+  return tcg(`/api/tyrecontrol/tacografo/propuestas/${encodeURIComponent(id)}`
+    + `?empresa=${encodeURIComponent(empresaId)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accion, nota: nota ?? null }),
+    });
+}
+
+export interface ResultadoBloqueTacografo {
+  ok: true;
+  aceptadas: Array<{ id: string; matricula: string; medida: string; exacta: boolean }>;
+  falladas: Array<{ id: string; matricula: string; motivo: string }>;
+  excluidas: Array<{ id: string; matricula: string; caso: CasoMedidaTacografo; motivo: string }>;
+}
+
+/**
+ * Acepta en bloque. Mandar ids NO salta el filtro: el servidor vuelve a
+ * aplicar «solo las coincidencias seguras», así que una discrepancia enviada
+ * a mano sale en `excluidas` con su motivo en vez de aceptarse.
+ */
+export async function aceptarBloqueTacografo(
+  empresaId: string, ids?: string[],
+): Promise<ResultadoBloqueTacografo> {
+  return tcg(`/api/tyrecontrol/tacografo/propuestas-bloque?empresa=${encodeURIComponent(empresaId)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(ids ? { ids } : {}),
+    });
+}
