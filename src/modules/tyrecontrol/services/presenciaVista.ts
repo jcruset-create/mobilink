@@ -12,7 +12,8 @@ import type {
   RevisionEstado,
   VehiculoWebfleetEstado,
 } from "../types";
-import type { VehiculoPresencia } from "./presenciaBases";
+import type { EstadoPresencia as EstadoPresenciaVista, VehiculoPresencia }
+  from "./presenciaBases";
 // El criterio de «pendiente» vive en su propio módulo porque lo comparte el
 // servidor (la hoja del patio en PDF). Se reexporta para que nada de lo que ya
 // lo importaba de aquí tenga que cambiar.
@@ -94,16 +95,96 @@ export function revisablesEnBase(
   vehiculos: VehiculoPresencia[],
   revisiones: Map<string, RevisionEstado>,
 ): VehiculoPresencia[] {
-  return vehiculos
-    .filter((v) => v.estado === "IN_BASE" && tieneRevisionPendiente(revisiones.get(v.vehiculo_id)))
-    .sort((a, b) => {
-      const pa = prioridadRevision(revisiones.get(a.vehiculo_id)?.estado);
-      const pb = prioridadRevision(revisiones.get(b.vehiculo_id)?.estado);
-      if (pa !== pb) return pa - pb;
-      const da = revisiones.get(a.vehiculo_id)?.dias_vencido ?? 0;
-      const db = revisiones.get(b.vehiculo_id)?.dias_vencido ?? 0;
-      return db - da;
-    });
+  return ordenarPorUrgencia(
+    vehiculos.filter(
+      (v) => v.estado === "IN_BASE" && tieneRevisionPendiente(revisiones.get(v.vehiculo_id)),
+    ),
+    revisiones,
+  );
+}
+
+/**
+ * El orden de las tres listas de pendientes: primero el que más falta hace.
+ *
+ * Por prioridad y, a igualdad, por lo vencido que esté: el de 40 días de
+ * retraso antes que el de 3. Está extraído para que la lista de los que están
+ * en base, la de los que andan por ahí y la de los que no se sabe se ordenen
+ * igual. Tres criterios distintos para la misma pregunta serían tres órdenes
+ * que nadie podría explicar.
+ */
+function ordenarPorUrgencia(
+  vehiculos: VehiculoPresencia[],
+  revisiones: Map<string, RevisionEstado>,
+): VehiculoPresencia[] {
+  return [...vehiculos].sort((a, b) => {
+    const pa = prioridadRevision(revisiones.get(a.vehiculo_id)?.estado);
+    const pb = prioridadRevision(revisiones.get(b.vehiculo_id)?.estado);
+    if (pa !== pb) return pa - pb;
+    const da = revisiones.get(a.vehiculo_id)?.dias_vencido ?? 0;
+    const db = revisiones.get(b.vehiculo_id)?.dias_vencido ?? 0;
+    return db - da;
+  });
+}
+
+/**
+ * Pendientes de revisar que están FUERA de todas las bases.
+ *
+ * El hermano de `revisablesEnBase`, y el que contesta la otra mitad de la
+ * pregunta: «¿cuánto trabajo pendiente tengo que NO puedo hacer hoy porque el
+ * autobús está por ahí?». Sin este número, la pantalla enseña 98 pendientes en
+ * base y da la sensación de que ese es el trabajo atrasado; en esta flota hay
+ * varias veces más circulando.
+ *
+ * Solo `OUTSIDE_BASES`, que es exactamente el criterio del contador «Fuera de
+ * las bases» de arriba: posición RECIENTE y fuera de todas. Un vehículo con la
+ * posición vieja no está aquí aunque su última posición fuera una carretera:
+ * de ese no se sabe dónde está, y eso es `revisablesSinUbicacion`.
+ *
+ * Mismo orden que en base: primero el que más falta hace.
+ */
+export function revisablesFueraDeBase(
+  vehiculos: VehiculoPresencia[],
+  revisiones: Map<string, RevisionEstado>,
+): VehiculoPresencia[] {
+  return ordenarPorUrgencia(
+    vehiculos.filter(
+      (v) => v.estado === "OUTSIDE_BASES" && tieneRevisionPendiente(revisiones.get(v.vehiculo_id)),
+    ),
+    revisiones,
+  );
+}
+
+/**
+ * Pendientes de revisar de los que no se sabe dónde están.
+ *
+ * Son los tres estados que no afirman nada: posición vieja —esté donde esté—,
+ * sin posición y posición no válida.
+ *
+ * Existe para que las cuentas cuadren. Con solo «en base» y «fuera de base»,
+ * la suma no da el total de pendientes y la diferencia desaparece sin que
+ * nadie la vea; en esta flota una quinta parte de los equipos lleva más de un
+ * día sin emitir, así que el hueco no es pequeño. Un pendiente escondido en
+ * una resta es un pendiente que no se revisa nunca.
+ *
+ * Ojo con la posición vieja DENTRO de una base: `estadoUbicacion` la cuenta
+ * como «en base» —el equipo de un autobús aparcado se duerme— y aquí no. No es
+ * una contradicción, son dos preguntas distintas: allí se clasifica un vehículo
+ * en la lista general, y aquí se decide a quién se manda buscar al patio. Para
+ * eso, «probablemente siga ahí» no vale, y así lo viene haciendo
+ * `agruparPorBase` desde el principio. La tarjeta de cada vehículo dice su
+ * estado y, cuando lo hay, la base donde se le vio.
+ */
+export function revisablesSinUbicacion(
+  vehiculos: VehiculoPresencia[],
+  revisiones: Map<string, RevisionEstado>,
+): VehiculoPresencia[] {
+  const INCIERTOS: EstadoPresenciaVista[] = ["STALE_POSITION", "NO_POSITION", "INVALID_POSITION"];
+  return ordenarPorUrgencia(
+    vehiculos.filter(
+      (v) => INCIERTOS.includes(v.estado) && tieneRevisionPendiente(revisiones.get(v.vehiculo_id)),
+    ),
+    revisiones,
+  );
 }
 
 /** Cuánto lleva desde un instante, en palabras. `—` si no hay instante. */
@@ -123,6 +204,35 @@ export function minutosEnPalabras(min: number | null | undefined): string {
   if (min < 60) return `${min} min`;
   const h = Math.floor(min / 60);
   return h < 24 ? `${h} h` : `${Math.floor(h / 24)} d`;
+}
+
+/**
+ * Una distancia en metros, dicha como la diría una persona.
+ *
+ * Por debajo del kilómetro, metros: «420 m» se entiende de un vistazo y «0,4
+ * km» no. Por encima, kilómetros, con un decimal hasta 100 y redondo a partir
+ * de ahí: a 127 km el centenar de metros no cambia ninguna decisión.
+ */
+export function distanciaCorta(m: number | null | undefined): string {
+  if (m == null || !Number.isFinite(m)) return "—";
+  if (m < 1000) return `${Math.round(m)} m`;
+  const km = m / 1000;
+  return km < 100
+    ? `${km.toFixed(1).replace(".", ",")} km`
+    : `${Math.round(km)} km`;
+}
+
+/**
+ * La velocidad, para saber si el autobús está haciendo algo o aparcado.
+ *
+ * Por debajo de 3 km/h se dice «Parado» en vez de «1 km/h»: un GPS quieto
+ * nunca da cero limpio, y enseñar «2 km/h» de un autobús aparcado hace dudar
+ * de si se está moviendo despacio. El umbral es bajo a propósito: a 3 km/h ya
+ * se va andando, así que no esconde ningún movimiento real.
+ */
+export function velocidadCorta(kmh: number | null | undefined): string {
+  if (kmh == null || !Number.isFinite(kmh)) return "—";
+  return kmh < 3 ? "Parado" : `${Math.round(kmh)} km/h`;
 }
 
 /**

@@ -10,6 +10,8 @@ import { describe, expect, it } from "vitest";
 import {
   agruparPorBase,
   desde,
+  distanciaCorta,
+  velocidadCorta,
   fechaCorta,
   dormidosPorBase,
   minutosEnPalabras,
@@ -23,7 +25,9 @@ import {
   sinPeriodicidad,
   sinPeriodicidadEnBase,
   revisablesEnBase,
+  revisablesFueraDeBase,
   revisablesPorBase,
+  revisablesSinUbicacion,
   tieneRevisionPendiente,
 } from "./presenciaVista";
 import type { VehiculoPresencia } from "./presenciaBases";
@@ -148,6 +152,104 @@ describe("revisablesEnBase()", () => {
   });
 });
 
+describe("revisablesFueraDeBase() y revisablesSinUbicacion()", () => {
+  /**
+   * La flota de prueba: un pendiente en cada estado, y un «al día» fuera de
+   * base para comprobar que estar en la carretera no convierte a nadie en
+   * pendiente.
+   */
+  const flota = () => [
+    veh("enBase"),
+    veh("fuera1", { estado: "OUTSIDE_BASES", delegacion_id: null, distancia_m: 18200 }),
+    veh("fuera2", { estado: "OUTSIDE_BASES", delegacion_id: null, distancia_m: 400 }),
+    veh("fueraAlDia", { estado: "OUTSIDE_BASES", delegacion_id: null }),
+    veh("dormidoEnBase", { estado: "STALE_POSITION" }),
+    veh("dormidoFuera", { estado: "STALE_POSITION", delegacion_id: null }),
+    veh("sinPos", { estado: "NO_POSITION", delegacion_id: null, motivo: "sin_enlace" }),
+    veh("posMala", { estado: "INVALID_POSITION", delegacion_id: null }),
+  ];
+  const revisiones = () => new Map([
+    ["enBase", rev("vencida", 10)],
+    ["fuera1", rev("vencida", 90)],
+    ["fuera2", rev("proxima")],
+    ["fueraAlDia", rev("al_dia")],
+    ["dormidoEnBase", rev("vencida", 80)],
+    ["dormidoFuera", rev("sin_revision")],
+    ["sinPos", rev("vencida", 5)],
+    ["posMala", rev("vencida", 1)],
+  ]);
+
+  it("fuera de base son solo los de posición reciente y fuera de todas", () => {
+    const r = revisablesFueraDeBase(flota(), revisiones());
+    expect(r.map((v) => v.vehiculo_id)).toEqual(["fuera1", "fuera2"]);
+  });
+
+  it("estar en la carretera no hace pendiente a nadie", () => {
+    const ids = revisablesFueraDeBase(flota(), revisiones()).map((v) => v.vehiculo_id);
+    expect(ids).not.toContain("fueraAlDia");
+  });
+
+  // El reparto es la razón de ser de las dos funciones: un pendiente que no
+  // cae en ninguna de las tres listas es un pendiente que nadie revisa.
+  it("los de posición incierta NO se cuelan entre los de fuera", () => {
+    const ids = revisablesFueraDeBase(flota(), revisiones()).map((v) => v.vehiculo_id);
+    for (const id of ["dormidoEnBase", "dormidoFuera", "sinPos", "posMala"]) {
+      expect(ids, `${id} no está confirmado fuera de base`).not.toContain(id);
+    }
+  });
+
+  it("y sí salen todos en los de ubicación incierta, dentro o fuera", () => {
+    const r = revisablesSinUbicacion(flota(), revisiones());
+    expect(r.map((v) => v.vehiculo_id).sort())
+      .toEqual(["dormidoEnBase", "dormidoFuera", "posMala", "sinPos"]);
+  });
+
+  /**
+   * La propiedad que de verdad importa: en base + fuera + incierta tiene que
+   * ser EXACTAMENTE el total de pendientes, sin repetidos ni huecos. Si
+   * alguien añade un estado nuevo al barrido y se olvida de repartirlo, esto
+   * salta.
+   */
+  it("las tres listas reparten todos los pendientes, sin repetir ni perder", () => {
+    const vs = flota();
+    const rs = revisiones();
+    const tres = [
+      ...revisablesEnBase(vs, rs),
+      ...revisablesFueraDeBase(vs, rs),
+      ...revisablesSinUbicacion(vs, rs),
+    ].map((v) => v.vehiculo_id);
+    const pendientes = vs
+      .filter((v) => tieneRevisionPendiente(rs.get(v.vehiculo_id)))
+      .map((v) => v.vehiculo_id);
+
+    expect(new Set(tres).size, "ningún vehículo en dos listas").toBe(tres.length);
+    expect(tres.sort()).toEqual(pendientes.sort());
+  });
+
+  it("primero el que más falta hace, igual que en base", () => {
+    const vs = [
+      veh("poco", { estado: "OUTSIDE_BASES", delegacion_id: null }),
+      veh("mucho", { estado: "OUTSIDE_BASES", delegacion_id: null }),
+      veh("proxima", { estado: "OUTSIDE_BASES", delegacion_id: null }),
+    ];
+    const rs = new Map([
+      ["poco", rev("vencida", 3)],
+      ["mucho", rev("vencida", 40)],
+      ["proxima", rev("proxima")],
+    ]);
+    expect(revisablesFueraDeBase(vs, rs).map((v) => v.vehiculo_id))
+      .toEqual(["mucho", "poco", "proxima"]);
+  });
+
+  it("no toca el array que recibe", () => {
+    const vs = flota();
+    const antes = vs.map((v) => v.vehiculo_id);
+    revisablesFueraDeBase(vs, revisiones());
+    revisablesSinUbicacion(vs, revisiones());
+    expect(vs.map((v) => v.vehiculo_id)).toEqual(antes);
+  });
+});
+
 describe("desde() y minutosEnPalabras()", () => {
   const ahora = new Date("2026-09-13T12:00:00Z").getTime();
 
@@ -168,6 +270,44 @@ describe("desde() y minutosEnPalabras()", () => {
 
   it("un instante en el futuro no se enseña como una duración negativa", () => {
     expect(desde("2026-09-13T12:30:00Z", ahora)).toBe("—");
+  });
+});
+
+describe("distanciaCorta() y velocidadCorta()", () => {
+  it("sin dato no se inventa un número", () => {
+    expect(distanciaCorta(null)).toBe("—");
+    expect(distanciaCorta(undefined)).toBe("—");
+    expect(distanciaCorta(Number.NaN)).toBe("—");
+    expect(velocidadCorta(null)).toBe("—");
+    expect(velocidadCorta(undefined)).toBe("—");
+  });
+
+  it("por debajo del kilómetro, metros", () => {
+    expect(distanciaCorta(0)).toBe("0 m");
+    expect(distanciaCorta(420)).toBe("420 m");
+    expect(distanciaCorta(999)).toBe("999 m");
+  });
+
+  it("por encima, kilómetros con coma decimal", () => {
+    expect(distanciaCorta(1000)).toBe("1,0 km");
+    expect(distanciaCorta(18_200)).toBe("18,2 km");
+  });
+
+  it("y a partir de 100 km, redondo: el centenar de metros ya no decide nada", () => {
+    expect(distanciaCorta(127_400)).toBe("127 km");
+  });
+
+  // Un GPS quieto nunca da cero limpio, y «2 km/h» en un autobús aparcado
+  // hace dudar de si se mueve.
+  it("por debajo de 3 km/h es «Parado», no un número", () => {
+    expect(velocidadCorta(0)).toBe("Parado");
+    expect(velocidadCorta(2)).toBe("Parado");
+    expect(velocidadCorta(2.9)).toBe("Parado");
+  });
+
+  it("y a partir de ahí, la velocidad redondeada", () => {
+    expect(velocidadCorta(3)).toBe("3 km/h");
+    expect(velocidadCorta(82.6)).toBe("83 km/h");
   });
 });
 
