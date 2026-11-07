@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  type LineaPdf, comoElExcel, copiasDelInforme, decimalDe, leerInformePdf, marcada,
-  sinCerosDelante, titularDe, valorDe, valorLargoDe, versionesDe,
+  type LineaPdf, comoElExcel, copiasDelInforme, decimalDe, leerInformePdf,
+  leerInformesDelPdf, marcada, sinCerosDelante, titularDe, valorDe, valorLargoDe,
+  versionesDe,
 } from "./informePdf.ts";
 
 /**
@@ -48,6 +49,8 @@ function siNo(codSi: string, codNo: string, y: number, marca: "si" | "no" | "nin
 }
 
 interface Opciones {
+  a1?: string;
+  matricula?: string;
   tipo?: string;
   resultado?: "favorable" | "desfavorable" | "ninguna" | "ambas";
   km?: { e27: string; s78: string };
@@ -67,9 +70,9 @@ function impreso(o: Opciones = {}): LineaPdf[] {
     l.push(...campo(etiqueta, valor, y, x, p));
   };
 
-  pon("A1. Nº de orden de la intervención:", "E943009005405X", 60);
+  pon("A1. Nº de orden de la intervención:", o.a1 ?? "E943009005405X", 60);
   pon("A3. Fecha:", "04-11-2026 11:22:37", 80);
-  pon("E22.Matrícula:", "8235JDF", 100);
+  pon("E22.Matrícula:", o.matricula ?? "8235JDF", 100);
   pon("E23.Bastidor:", "YV3T7U520FA170454", 120);
   pon("E25. Marca:", "Volvo", 140);
   pon("E27. Lectura del cuentakilómetros:", o.km?.e27 ?? "652259", 160);
@@ -442,5 +445,115 @@ describe("leerInformePdf()", () => {
       expect(r.copias).toBe(0);
       expect(r.problemas[0].motivo).toContain("no tiene texto");
     });
+  });
+});
+
+describe("leerInformesDelPdf(), varias intervenciones en un PDF", () => {
+  /*
+   * El centro entrega los informes de uno en uno, pero nada impide juntar el
+   * mes entero en un fichero y reenviarlo tal cual. Agrupar por A1 —y no por
+   * «cada dos copias, una»— es lo que hace que esto funcione aunque los
+   * ejemplares vengan desordenados o falte uno.
+   */
+  const dos = () => [
+    ...impreso({ pagina: 1 }),
+    ...impreso({ pagina: 2 }),
+    ...impreso({ pagina: 3, a1: "E943009005411D", matricula: "9832LXT" }),
+    ...impreso({ pagina: 4, a1: "E943009005411D", matricula: "9832LXT" }),
+  ];
+
+  it("dos intervenciones con sus dos ejemplares cada una", () => {
+    const r = leerInformesDelPdf(dos());
+    expect(r).toHaveLength(2);
+    expect(r.map((x) => x.fila!.idOrigen)).toEqual(["E943009005405X", "E943009005411D"]);
+    expect(r.map((x) => x.copias)).toEqual([2, 2]);
+    expect(r.flatMap((x) => x.problemas)).toEqual([]);
+  });
+
+  // Las páginas de ESTA intervención, no las del fichero entero: lo que se
+  // guarda del documento tiene que hablar del informe, no del sobre.
+  it("cada una cuenta sus páginas, no las del PDF entero", () => {
+    expect(leerInformesDelPdf(dos()).map((x) => x.paginas)).toEqual([2, 2]);
+  });
+
+  it("cada una con su matrícula, no la de la primera", () => {
+    const r = leerInformesDelPdf(dos());
+    expect(r.map((x) => x.fila!.matriculaNorm)).toEqual(["8235JDF", "9832LXT"]);
+  });
+
+  it("aunque los ejemplares vengan mezclados", () => {
+    const mezclado = [
+      ...impreso({ pagina: 1 }),
+      ...impreso({ pagina: 2, a1: "E943009005411D", matricula: "9832LXT" }),
+      ...impreso({ pagina: 3 }),
+      ...impreso({ pagina: 4, a1: "E943009005411D", matricula: "9832LXT" }),
+    ];
+    const r = leerInformesDelPdf(mezclado);
+    expect(r).toHaveLength(2);
+    expect(r.every((x) => x.copias === 2)).toBe(true);
+  });
+
+  it("y un ejemplar suelto también es una intervención", () => {
+    const r = leerInformesDelPdf([
+      ...impreso({ pagina: 1 }),
+      ...impreso({ pagina: 2, a1: "E943009005411D", matricula: "9832LXT" }),
+    ]);
+    expect(r).toHaveLength(2);
+    expect(r.map((x) => x.copias)).toEqual([1, 1]);
+  });
+
+  /*
+   * Y lo importante: una que no se puede leer NO se lleva por delante a las
+   * demás. Un fichero con diez informes y uno roto importa nueve y dice qué
+   * pasa con el décimo.
+   */
+  it("una intervención con las copias discrepantes no tumba a las demás", () => {
+    const r = leerInformesDelPdf([
+      ...impreso({ pagina: 1 }),
+      ...impreso({ pagina: 2, km: { e27: "999999", s78: "652266" } }),
+      ...impreso({ pagina: 3, a1: "E943009005411D", matricula: "9832LXT" }),
+      ...impreso({ pagina: 4, a1: "E943009005411D", matricula: "9832LXT" }),
+    ]);
+    expect(r).toHaveLength(2);
+    expect(r[0].fila).toBeNull();
+    expect(r[0].problemas.some((p) => p.motivo.includes("no dicen lo mismo"))).toBe(true);
+    expect(r[1].fila!.idOrigen).toBe("E943009005411D");
+  });
+
+  it("una copia ilegible se queda con su problema y no se pierde", () => {
+    const r = leerInformesDelPdf([
+      ...impreso({ pagina: 1 }),
+      ...impreso({ pagina: 2, sin: ["A1"] }),
+    ]);
+    expect(r).toHaveLength(2);
+    expect(r[0].fila!.idOrigen).toBe("E943009005405X");
+    expect(r[1].fila).toBeNull();
+    expect(r[1].problemas[0].motivo).toContain("A1");
+  });
+
+  it("un PDF sin texto lo dice una sola vez", () => {
+    const r = leerInformesDelPdf([]);
+    expect(r).toHaveLength(1);
+    expect(r[0].problemas[0].motivo).toContain("no tiene texto");
+  });
+});
+
+describe("leerInformePdf(), el de la ficha: una y solo una", () => {
+  it("con una, la devuelve", () => {
+    expect(leerInformePdf(impreso()).fila!.idOrigen).toBe("E943009005405X");
+  });
+
+  /*
+   * Elegir la primera dejaría las demás sin adjuntar y sin que nadie se
+   * entere, que es peor que no hacer nada.
+   */
+  it("con varias no elige: lo dice y manda a la importación", () => {
+    const r = leerInformePdf([
+      ...impreso({ pagina: 1 }),
+      ...impreso({ pagina: 2, a1: "E943009005411D", matricula: "9832LXT" }),
+    ]);
+    expect(r.fila).toBeNull();
+    expect(r.problemas[0].motivo).toContain("2 intervenciones");
+    expect(r.problemas[0].motivo).toContain("E943009005411D");
   });
 });
