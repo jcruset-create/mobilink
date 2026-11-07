@@ -55,7 +55,8 @@ export interface PropuestaDelLote {
 
 export type MotivoNegativa =
   | "no_existe" | "otra_empresa" | "ya_deshecho"
-  | "filas_modificadas" | "vinculadas_a_mano" | "propuestas_aceptadas";
+  | "filas_modificadas" | "vinculadas_a_mano" | "propuestas_aceptadas"
+  | "informes_adjuntos";
 
 export interface Veredicto {
   puede: boolean;
@@ -83,6 +84,12 @@ export function evaluar(
   empresaPedida: string,
   filas: FilaDelLote[],
   propuestas: PropuestaDelLote[],
+  /**
+   * Cuántos informes técnicos en PDF cuelgan de las intervenciones del lote.
+   * Va con valor por defecto porque el adjunto llegó después que el deshacer,
+   * y un lote sin informes es el caso normal.
+   */
+  informesAdjuntos = 0,
 ): Veredicto {
   if (!lote) {
     return { puede: false, motivo: "no_existe", aBorrar: 0,
@@ -95,6 +102,24 @@ export function evaluar(
   if (lote.estado === "deshecho") {
     return { puede: false, motivo: "ya_deshecho", aBorrar: 0,
       explicacion: "Ese lote ya se deshizo." };
+  }
+
+  /*
+   * Un informe en PDF adjunto es trabajo de una persona, igual que una
+   * vinculación a mano: alguien abrió la ficha, subió el papel y lo dejó
+   * donde se consulta. Borrar la intervención deja el documento huérfano
+   * —la clave ajena es `on delete set null`, no cascade, justamente para que
+   * el PDF no se vaya con ella—, y un informe que ya no sabe de qué revisión
+   * es sirve de bastante poco.
+   */
+  if (informesAdjuntos > 0) {
+    return {
+      puede: false, motivo: "informes_adjuntos", aBorrar: filas.length,
+      explicacion: `${informesAdjuntos} intervención(es) de este lote tienen adjunto su `
+        + "informe técnico en PDF, que subió una persona. Deshacer el lote dejaría esos "
+        + "informes sin la revisión que documentan: quítalos primero si de verdad quieres "
+        + "borrar el lote.",
+    };
   }
 
   const vinculadas = filas.filter((f) => f.vinculadoEn != null);

@@ -19,6 +19,7 @@ import { Router, json, type Request, type Response } from "express";
 
 import { supabase } from "../../supabase.ts";
 import { LectorParteIA, type LectorParte } from "./lector.ts";
+import { empresaDeSesion } from "../alcance.ts";
 import { comprobarFichero } from "./fichero.ts";
 
 async function usuarioDe(req: Request): Promise<{ userId: string } | null> {
@@ -52,6 +53,8 @@ export function createParteProveedorRouter(lector: LectorParte = new LectorParte
       const lectura = await lector.leer({
         dataUri,
         nombre: String((req.body as { nombre?: string })?.nombre ?? "parte.pdf").slice(0, 120),
+        // Para imputar el gasto. La sesión ya está validada arriba.
+        empresaId: await empresaDeSesion(usuario.userId),
       });
 
       // Del papel no se registra nada: ni matrícula, ni cliente, ni filas.

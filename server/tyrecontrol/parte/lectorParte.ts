@@ -12,7 +12,12 @@ import { prepararParte, type ParteLeido, type Parte } from "./parte.ts";
  * PROPONE. No guarda nada. Lo confirma el técnico.
  */
 export interface LectorParte {
-  leer(imagenes: string[]): Promise<Parte>;
+  /**
+   * A quién se le imputa el gasto de esta lectura. Opcional a propósito: si no
+   * llega, la llamada se apunta sin empresa (y sin tope por cliente) en vez de
+   * fallar. Ver server/tyrecontrol/alcance.ts.
+   */
+  leer(imagenes: string[], empresaId?: string | null): Promise<Parte>;
 }
 
 const CAMPO = {
@@ -77,12 +82,13 @@ REGLAS QUE NO PUEDES SALTARTE:
    la banda de rodadura. Solo texto leído.`;
 
 export class LectorParteIA implements LectorParte {
-  async leer(imagenes: string[]): Promise<Parte> {
+  async leer(imagenes: string[], empresaId?: string | null): Promise<Parte> {
     if (!imagenes.length) {
       return { ...prepararParte(null), warnings: ["No se ha enviado ninguna fotografía"] };
     }
     const r = await pedirIA<ParteLeido>({
       prompt: INSTRUCCIONES,
+      empresaId: empresaId ?? null,
       imagenes: imagenes.map((url) => ({ url })),
       proposito: "documento",
       esquema: { nombre: "parte_servicio", schema: ESQUEMA as unknown as Record<string, unknown> },

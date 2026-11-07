@@ -102,4 +102,26 @@ describe("cuándo se NIEGA, y lo dice", () => {
       [fila({ idOrigen: "A" }), fila({ idOrigen: "B", vinculadoEn: T0 })], []);
     expect(v.aBorrar).toBe(2);
   });
+
+  /*
+   * El adjunto llegó después que el deshacer, y es la misma clase de estorbo
+   * que una vinculación a mano: alguien abrió la ficha y subió el papel.
+   */
+  describe("los informes en PDF adjuntos", () => {
+    it("un lote con informes adjuntos no se deshace", () => {
+      const v = evaluar(LOTE, "emp-1", [fila({ idOrigen: "A" })], [], 2);
+      expect(v.puede).toBe(false);
+      expect(v.motivo).toBe("informes_adjuntos");
+      expect(v.explicacion).toContain("2 intervención(es)");
+    });
+
+    it("y sin informes se deshace como siempre", () => {
+      expect(evaluar(LOTE, "emp-1", [fila({ idOrigen: "A" })], [], 0).puede).toBe(true);
+    });
+
+    // Que el lote no exista se dice antes: es un error más básico.
+    it("pero un lote que no existe sigue diciendo que no existe", () => {
+      expect(evaluar(null, "emp-1", [], [], 5).motivo).toBe("no_existe");
+    });
+  });
 });

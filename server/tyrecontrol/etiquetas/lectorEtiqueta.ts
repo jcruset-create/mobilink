@@ -33,7 +33,12 @@ export interface LecturaEtiqueta {
 }
 
 export interface LectorSerie {
-  leer(imagenUrl: string): Promise<LecturaEtiqueta>;
+  /**
+   * A quién se le imputa el gasto de esta lectura. Opcional a propósito: si no
+   * llega, la llamada se apunta sin empresa (y sin tope por cliente) en vez de
+   * fallar. Ver server/tyrecontrol/alcance.ts.
+   */
+  leer(imagenUrl: string, empresaId?: string | null): Promise<LecturaEtiqueta>;
 }
 
 const ESQUEMA = {
@@ -94,9 +99,10 @@ REGLAS:
    en primer plano y dilo en aviso.`;
 
 export class LectorSerieIA implements LectorSerie {
-  async leer(imagenUrl: string): Promise<LecturaEtiqueta> {
+  async leer(imagenUrl: string, empresaId?: string | null): Promise<LecturaEtiqueta> {
     const r = await pedirIA<LecturaEtiqueta>({
       prompt: INSTRUCCIONES,
+      empresaId: empresaId ?? null,
       imagenes: [{ url: imagenUrl }],
       proposito: "documento",
       esquema: { nombre: "numero_serie_etiqueta", schema: ESQUEMA as unknown as Record<string, unknown> },

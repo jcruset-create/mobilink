@@ -3665,6 +3665,61 @@ export async function asignarBaseHabitual(
   return (data ?? {}) as ResultadoAsignarBase;
 }
 
+// ── Resumen IA de la ficha de vehículo ──────────────────────────
+// Se genera SOLO al pulsar el botón: abrir la ficha no llama a la IA. Cada
+// hecho viene con sus evidencias, y la ruta de cada evidencia la construye el
+// servidor (el modelo no escribe enlaces).
+
+export interface EvidenciaResumen {
+  ref: string;
+  tipo: string;
+  id: string;
+  etiqueta: string;
+  ruta: string;
+}
+
+export interface HechoResumen {
+  texto: string;
+  evidencias: EvidenciaResumen[];
+}
+
+export interface ResumenVehiculoIA {
+  ok: boolean;
+  origen: "ia" | "cache" | "sin_datos";
+  generado_at: string;
+  caduca_at?: string;
+  ventana: { meses: number; desde: string };
+  titular: string;
+  ultimas_actuaciones: HechoResumen[];
+  incidencias_abiertas: HechoResumen[];
+  trabajos_pendientes: HechoResumen[];
+  datos_que_faltan: { clave: string; texto: string }[];
+  avisos: string[];
+}
+
+/** ¿Tiene esta empresa el resumen IA activado y el servidor con IA? */
+export async function resumenIaDisponible(): Promise<boolean> {
+  try {
+    const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/resumen-vehiculo/estado`, {
+      headers: await authHeaders(),
+    });
+    const j = await r.json().catch(() => ({}));
+    return r.ok && (j as any)?.disponible === true;
+  } catch {
+    return false;   // sin respuesta, no se ofrece el botón
+  }
+}
+
+export async function pedirResumenVehiculo(vehiculoId: string, refrescar = false): Promise<ResumenVehiculoIA> {
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/vehiculos/${vehiculoId}/resumen`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ refrescar }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || "No se ha podido generar el resumen");
+  return j as ResumenVehiculoIA;
+}
 
 // ── Importación del histórico de albaranes ──────────────────────────────────
 // Todo pasa por dos RPC (tc_importar_historico, tc_deshacer_importacion) que
@@ -4265,4 +4320,67 @@ export async function aceptarBloqueTacografo(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(ids ? { ids } : {}),
     });
+}
+
+// ── Tacógrafo · los informes técnicos en PDF ───────────────────────────────
+
+export interface InformeTacografo {
+  id: string;
+  /** La intervención que documenta. `null` si su lote se deshizo. */
+  intervencionId: string | null;
+  nombre: string;
+  paginas: number | null;
+  bytes: number | null;
+  subidoEn: string | null;
+  /** URL firmada, válida una hora. Para abrir o descargar. */
+  url: string | null;
+}
+
+export interface ResultadoAdjuntarInforme {
+  ok: true;
+  /** `creada_y_adjuntada` si la revisión no estaba dada de alta. */
+  accion: "creada_y_adjuntada" | "adjuntada";
+  intervencionId: string;
+  documentoId: string;
+  idOrigen: string;
+  fecha: string | null;
+  url: string | null;
+  avisos: string[];
+}
+
+/** Los informes adjuntos de un vehículo, por intervención. */
+export async function informesTacografo(
+  empresaId: string, vehiculoId: string,
+): Promise<InformeTacografo[]> {
+  const r = await tcg<{ informes: InformeTacografo[] }>(
+    `/api/tyrecontrol/tacografo/informes?empresa=${encodeURIComponent(empresaId)}`
+    + `&vehiculo=${encodeURIComponent(vehiculoId)}`);
+  return r.informes ?? [];
+}
+
+/**
+ * Adjunta un informe a la ficha de un vehículo.
+ *
+ * `confirmar` solo cuando el servidor ha dicho que la matrícula del impreso
+ * no es la del vehículo abierto y una persona lo ha mirado. La pantalla NO lo
+ * manda por su cuenta: el servidor es quien decide si hace falta.
+ */
+export async function adjuntarInformeTacografo(
+  empresaId: string, vehiculoId: string, archivo: File, confirmar = false,
+): Promise<ResultadoAdjuntarInforme> {
+  const fd = new FormData();
+  fd.append("archivo", archivo);
+  return tcg<ResultadoAdjuntarInforme>(
+    `/api/tyrecontrol/tacografo/informe-pdf?empresa=${encodeURIComponent(empresaId)}`
+    + `&vehiculo=${encodeURIComponent(vehiculoId)}${confirmar ? "&confirmar=1" : ""}`,
+    { method: "POST", body: fd });
+}
+
+/** Una URL nueva para un informe: la firmada caduca en una hora. */
+export async function urlInformeTacografo(
+  empresaId: string, documentoId: string,
+): Promise<{ url: string | null; nombre: string }> {
+  return tcg<{ url: string | null; nombre: string }>(
+    `/api/tyrecontrol/tacografo/informes/${encodeURIComponent(documentoId)}`
+    + `?empresa=${encodeURIComponent(empresaId)}`);
 }

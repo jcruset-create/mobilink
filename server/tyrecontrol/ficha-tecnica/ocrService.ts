@@ -8,8 +8,13 @@ import { pedirIA } from "../../core/openaiService.ts";
  * matrículas), y mañana se puede cambiar sin tocar los endpoints ni el parser.
  */
 export interface FichaTecnicaOcr {
-  /** Extrae los campos de una ficha técnica a partir de sus páginas. */
-  extraer(imagenes: string[]): Promise<ResultadoOcr>;
+  /**
+   * Extrae los campos de una ficha técnica a partir de sus páginas.
+   *
+   * `empresaId` sale del documento, que siempre la lleva: aquí la atribución
+   * del gasto es exacta, no depende de quién pulse.
+   */
+  extraer(imagenes: string[], empresaId?: string | null): Promise<ResultadoOcr>;
 }
 
 /** Un dato leído del documento, con su código original y su fiabilidad. */
@@ -104,11 +109,12 @@ Reglas estrictas:
  * Outputs). El modelo NO se escribe aquí: lo decide OPENAI_DOCUMENT_MODEL.
  */
 export class OpenAiFichaTecnicaOcr implements FichaTecnicaOcr {
-  async extraer(imagenes: string[]): Promise<ResultadoOcr> {
+  async extraer(imagenes: string[], empresaId?: string | null): Promise<ResultadoOcr> {
     if (!imagenes.length) throw new Error("No hay páginas que procesar");
 
     const r = await pedirIA<any>({
       operacion: "tyrecontrol.ficha-tecnica.ocr",
+      empresaId: empresaId ?? null,
       proposito: "documento",
       prompt: INSTRUCCIONES,
       imagenes: imagenes.map((url) => ({ url })),

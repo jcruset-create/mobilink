@@ -1,6 +1,7 @@
 import type { Express, RequestHandler } from "express";
 import { hayIA } from "../../core/openaiService.ts";
 import { LectorFlancoIA, type LectorFlanco } from "./lectorFlanco.ts";
+import { empresaDeSesion } from "../alcance.ts";
 
 /**
  * Identificar un neumático por la foto de su flanco, durante una revisión.
@@ -55,7 +56,11 @@ export function mountFlanco(app: Express, ...guards: RequestHandler[]): void {
       const malaFoto = motivoFotoNoValida(imagenUrl);
       if (malaFoto) return res.status(malaFoto.estado).json({ error: malaFoto.error });
 
-      const propuesta = await lector.leer(imagenUrl);
+      // A quién se le apunta el gasto: la empresa de la sesión, ya validada
+      // contra tc_usuarios. Si no se puede resolver, la lectura SALE igual y
+      // se apunta sin empresa: una foto no se queda sin leer por el contador.
+      const empresaId = await empresaDeSesion((req as any).authCtx?.userId);
+      const propuesta = await lector.leer(imagenUrl, empresaId);
       // 200 aunque no se haya podido leer: no es un error del servidor, es una
       // foto que no da. El APK enseña el aviso y deja seguir a mano.
       res.json(propuesta);

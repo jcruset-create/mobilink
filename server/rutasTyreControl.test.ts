@@ -52,7 +52,7 @@ describe("orden de las rutas de /api/tyrecontrol", () => {
   });
 
   const MONTAJES = [
-    "mountAsistente", "mountFlanco", "mountParte", "mountEtiquetas",
+    "mountAsistente", "mountResumenVehiculo", "mountFlanco", "mountParte", "mountEtiquetas",
     // Los informes cuelgan de la misma raíz y se montaron después: si alguien
     // los mueve por debajo del router del panel, el jefe de taller se queda
     // sin PDF con un 401 que no explica nada.
