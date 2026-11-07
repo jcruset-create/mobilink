@@ -4329,3 +4329,57 @@ export async function urlInformeTacografo(
     `/api/tyrecontrol/tacografo/informes/${encodeURIComponent(documentoId)}`
     + `?empresa=${encodeURIComponent(empresaId)}`);
 }
+
+// ── Tacógrafo · importar informes en PDF desde el panel ────────────────────
+
+export type AccionInformePdf =
+  | "creada_y_adjuntada"
+  | "adjuntada"
+  | "ya_estaba"
+  | "no_se_puede";
+
+export interface ResultadoInformePdf {
+  archivo: string;
+  idOrigen: string | null;
+  fecha: string | null;
+  matricula: string | null;
+  accion: AccionInformePdf;
+  motivo?: string;
+  intervencionId?: string;
+  documentoId?: string;
+  vehiculoId?: string | null;
+  avisos: string[];
+}
+
+export interface ResultadoImportarInformesPdf {
+  ok: true;
+  archivos: number;
+  /** Intervenciones encontradas en total: un PDF puede traer varias. */
+  informes: number;
+  resumen: {
+    creadasYAdjuntadas: number;
+    adjuntadas: number;
+    yaEstaban: number;
+    conProblema: number;
+    /** De las colocadas, las que esperan a que su autobús se dé de alta. */
+    sinVehiculo: number;
+  };
+  resultados: ResultadoInformePdf[];
+}
+
+/**
+ * Sube informes técnicos en PDF y los coloca solos.
+ *
+ * Sin paso de simular, a diferencia del Excel: esto no escribe mil filas, son
+ * los informes que alguien acaba de recibir, y lo que ha hecho con cada uno
+ * se cuenta después con su nombre y su motivo.
+ */
+export async function importarInformesPdf(
+  empresaId: string, archivos: File[],
+): Promise<ResultadoImportarInformesPdf> {
+  const fd = new FormData();
+  for (const a of archivos) fd.append("archivos", a);
+  return tcg<ResultadoImportarInformesPdf>(
+    `/api/tyrecontrol/tacografo/informes-pdf?empresa=${encodeURIComponent(empresaId)}`,
+    { method: "POST", body: fd });
+}

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { aFilaInsert } from "./importar.ts";
-import { leerInformePdf, lineasDeInforme } from "./informePdf.ts";
+import { leerInformePdf, leerInformesDelPdf, lineasDeInforme } from "./informePdf.ts";
 
 /**
  * El parser contra los informes de verdad.
@@ -241,6 +241,58 @@ describe.skipIf(!DIR)("el parser contra los informes reales del centro", () => {
         lote_id: null,
         creada_de_pdf: true,
       });
+    });
+  });
+
+  /*
+   * Un PDF con VARIAS intervenciones dentro, montado con informes de verdad.
+   *
+   * Es el caso del panel de importación: el centro manda los informes de uno
+   * en uno, pero el mes entero junto en un fichero es lo que llega por
+   * correo. Las pruebas sintéticas fijan la regla de agrupar por A1; esta
+   * comprueba que la regla sobrevive a los PDF reales, que traen 7 páginas
+   * por informe con una en blanco en medio.
+   */
+  describe.skipIf(!DIR)("un PDF con el mes entero dentro", () => {
+    /** Tres informes reales en un solo fichero, como los junta un correo. */
+    async function juntar(ids: string[]): Promise<Buffer> {
+      const { PDFDocument } = await import("pdf-lib");
+      const salida = await PDFDocument.create();
+      for (const id of ids) {
+        const origen = await PDFDocument.load(readFileSync(ruta(id)));
+        for (const p of await salida.copyPages(origen, origen.getPageIndices())) salida.addPage(p);
+      }
+      return Buffer.from(await salida.save());
+    }
+
+    const IDS = ["E943009005405X", "E943009005411D", "E943009005308E"];
+
+    it("saca las tres intervenciones, cada una con sus dos ejemplares", async () => {
+      const r = leerInformesDelPdf(await lineasDeInforme(await juntar(IDS)));
+      expect(r.map((x) => x.fila?.idOrigen)).toEqual(IDS);
+      expect(r.map((x) => x.copias)).toEqual([2, 2, 2]);
+      expect(r.map((x) => x.paginas)).toEqual([6, 6, 6]);
+      expect(r.flatMap((x) => x.problemas)).toEqual([]);
+    });
+
+    // Y cada una con lo suyo: tres vehículos, dos tipos y dos resultados
+    // distintos en el mismo fichero.
+    it("y no se contagian los datos de unas a otras", async () => {
+      const r = leerInformesDelPdf(await lineasDeInforme(await juntar(IDS)));
+      expect(r.map((x) => x.fila!.matriculaNorm)).toEqual(["8235JDF", "9832LXT", "9204HMM"]);
+      expect(r.map((x) => x.fila!.fecha)).toEqual(["2026-11-04", "2026-11-07", "2026-10-02"]);
+      expect(r.map((x) => x.fila!.resultado)).toEqual(["Favorable", "Favorable", "-----"]);
+      expect(r[2].fila!.tipoOperacion)
+        .toBe("Transferencia / Certificado de intransferibilidad / Sustitución");
+    });
+
+    // La ficha de un vehículo adjunta UN informe: con un fichero así no
+    // elige, porque elegir dejaría las otras dos sin adjuntar y sin que
+    // nadie se entere.
+    it("la ficha de un vehículo se niega a elegir una de las tres", async () => {
+      const r = leerInformePdf(await lineasDeInforme(await juntar(IDS)));
+      expect(r.fila).toBeNull();
+      expect(r.problemas[0].motivo).toContain("3 intervenciones");
     });
   });
 

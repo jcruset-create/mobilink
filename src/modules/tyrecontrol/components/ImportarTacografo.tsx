@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle2, FileSpreadsheet, Info, Undo2, Upload } from "lucide-react";
+import {
+  AlertTriangle, CheckCircle2, FileSpreadsheet, FileText, Info, Paperclip, Undo2, Upload,
+} from "lucide-react";
 
 import {
-  bloqueadasDeLoteTacografo, importarTacografo, listarEmpresas, listarLotesTacografo,
-  deshacerLoteTacografo, simularTacografo,
-  type LoteTacografo, type RespuestaSimulacionTacografo, type ResultadoImportTacografo,
+  bloqueadasDeLoteTacografo, importarInformesPdf, importarTacografo, listarEmpresas,
+  listarLotesTacografo, deshacerLoteTacografo, simularTacografo,
+  type AccionInformePdf, type LoteTacografo, type RespuestaSimulacionTacografo,
+  type ResultadoImportTacografo, type ResultadoImportarInformesPdf,
 } from "../services/data";
 import type { Empresa } from "../types";
 import { TableWrap, tdCls, thCls } from "./ui";
@@ -26,6 +29,17 @@ import { TableWrap, tdCls, thCls } from "./ui";
  * NIEGA si alguien vinculó una intervención a mano, aceptó una propuesta de
  * medida o editó una fila: eso es trabajo de una persona y no se tira sin
  * mirarlo.
+ *
+ * ── Y los informes en PDF, que van por otro camino ──────────────────────────
+ *
+ * El Excel es la exportación del mes: miles de filas, y por eso se simula
+ * antes de escribir. Los informes en PDF son los papeles que el centro manda
+ * de uno en uno —o el mes entero en un fichero—, y ahí simular no aporta
+ * nada: se suben, cada intervención se da de alta si no estaba, el PDF se
+ * adjunta, y lo que ha pasado con cada una se cuenta después con su nombre.
+ *
+ * El mismo PDF dos veces no duplica nada: se reconoce por su huella y se
+ * dice que ya estaba.
  */
 
 const ETIQUETA_CASO: Record<string, string> = {
@@ -33,6 +47,21 @@ const ETIQUETA_CASO: Record<string, string> = {
   solo_marcado: "Misma medida, distinto marcado",
   discrepa: "Discrepa",
   sin_vehiculo: "Sin vehículo en TyreControl",
+};
+
+/** Lo que se ha hecho con cada informe, dicho para una persona. */
+const ETIQUETA_PDF: Record<AccionInformePdf, string> = {
+  creada_y_adjuntada: "Dada de alta y adjuntada",
+  adjuntada: "Ya estaba: solo adjuntado",
+  ya_estaba: "Este mismo PDF ya estaba",
+  no_se_puede: "No se ha podido",
+};
+
+const TONO_PDF: Record<AccionInformePdf, string> = {
+  creada_y_adjuntada: "font-bold text-emerald-300",
+  adjuntada: "text-sky-300",
+  ya_estaba: "text-slate-400",
+  no_se_puede: "font-bold text-rose-300",
 };
 
 const Cifra = ({ n, de, tono = "" }: { n: number; de: string; tono?: string }) => (
@@ -52,6 +81,9 @@ export default function ImportarTacografo() {
   const [bloqueadas, setBloqueadas] = useState<{ lote: string; filas: any[] } | null>(null);
   const [cargando, setCargando] = useState(false);
   const [importando, setImportando] = useState(false);
+  const [pdfs, setPdfs] = useState<File[]>([]);
+  const [subiendoPdfs, setSubiendoPdfs] = useState(false);
+  const [resPdf, setResPdf] = useState<ResultadoImportarInformesPdf | null>(null);
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
 
@@ -103,6 +135,25 @@ export default function ImportarTacografo() {
     } catch (e: any) {
       setError(e?.message || "No se ha podido importar");
     } finally { setImportando(false); }
+  }
+
+  /**
+   * Subir los informes en PDF. Sin simular y sin preguntar: cada informe se
+   * coloca solo, y lo que ha pasado con cada uno sale en la tabla de abajo.
+   */
+  async function subirPdfs() {
+    if (!pdfs.length || !empresaId) return;
+    setSubiendoPdfs(true); setError(""); setMsg(""); setResPdf(null);
+    try {
+      const r = await importarInformesPdf(empresaId, pdfs);
+      setResPdf(r);
+      const n = r.resumen;
+      setMsg(`${r.informes} intervención(es) en ${r.archivos} fichero(s): `
+        + `${n.creadasYAdjuntadas} dadas de alta y adjuntadas, ${n.adjuntadas} solo adjuntadas, `
+        + `${n.yaEstaban} que ya estaban.`);
+    } catch (e: any) {
+      setError(e?.message || "No se han podido importar los informes");
+    } finally { setSubiendoPdfs(false); }
   }
 
   async function deshacer(lote: LoteTacografo) {
@@ -193,6 +244,90 @@ export default function ImportarTacografo() {
             </button>
           )}
         </div>
+      </div>
+
+      {/* ── Los informes técnicos en PDF ──────────────────────────────── */}
+      <div className="rounded-xl border border-slate-700 bg-slate-800/30 p-4">
+        <h2 className="flex items-center gap-2 text-sm font-black">
+          <FileText size={16} /> Informes técnicos en PDF
+        </h2>
+        <p className="mt-1 text-xs text-slate-400">
+          Los papeles que manda el centro técnico. Se colocan solos: si la intervención no está
+          dada de alta <b className="text-slate-200">se crea con los datos del informe</b>, y en
+          cualquier caso el PDF queda adjunto a su revisión, con un clip en la ficha del vehículo.
+          Un fichero puede traer <b className="text-slate-200">varias intervenciones</b>, y el
+          mismo PDF dos veces no duplica nada. Si el autobús todavía no está dado de alta, el
+          informe se guarda igual y aparece en su ficha el día que lo esté.
+        </p>
+
+        <div className="mt-3 flex flex-wrap items-end gap-2">
+          <label className="text-xs text-slate-400">
+            <span className="mb-1 block">Informes (PDF, hasta 20)</span>
+            <input
+              type="file" accept="application/pdf" multiple
+              onChange={(e) => { setPdfs([...(e.target.files ?? [])]); setResPdf(null); }}
+              className="block text-sm text-slate-300 file:mr-3 file:rounded-lg file:border-0
+                         file:bg-slate-700 file:px-3 file:py-2 file:text-sm file:font-bold file:text-slate-100"
+            />
+          </label>
+          <button
+            onClick={() => void subirPdfs()}
+            disabled={!pdfs.length || !empresaId || subiendoPdfs}
+            className="rounded-lg border border-emerald-600 px-3 py-2 text-sm font-bold text-emerald-300
+                       hover:bg-emerald-500/10 disabled:opacity-40"
+          >
+            <Paperclip className="mr-1 inline h-4 w-4" />
+            {subiendoPdfs
+              ? "Leyendo los informes…"
+              : `Importar ${pdfs.length || ""} informe(s)`}
+          </button>
+        </div>
+
+        {resPdf && (
+          <div className="mt-4">
+            <div className="mb-2 grid grid-cols-2 gap-2 sm:grid-cols-5">
+              <Cifra n={resPdf.resumen.creadasYAdjuntadas} de="dadas de alta y adjuntadas" tono="text-emerald-300" />
+              <Cifra n={resPdf.resumen.adjuntadas} de="ya estaban: solo adjuntado" />
+              <Cifra n={resPdf.resumen.yaEstaban} de="el mismo PDF otra vez" tono="text-slate-400" />
+              <Cifra n={resPdf.resumen.sinVehiculo} de="esperando el alta del vehículo"
+                     tono={resPdf.resumen.sinVehiculo ? "text-amber-300" : ""} />
+              <Cifra n={resPdf.resumen.conProblema} de="no se han podido"
+                     tono={resPdf.resumen.conProblema ? "text-rose-300" : ""} />
+            </div>
+
+            {/*
+              Una fila por INTERVENCIÓN y no por fichero: un PDF con el mes
+              entero son diez líneas, y cada una tuvo su suerte.
+            */}
+            <TableWrap>
+              <thead><tr>
+                <th className={thCls}>Nº de orden</th>
+                <th className={thCls}>Fecha</th>
+                <th className={thCls}>Matrícula</th>
+                <th className={thCls}>Qué se ha hecho</th>
+                <th className={thCls}>Fichero</th>
+              </tr></thead>
+              <tbody>
+                {resPdf.resultados.map((r, i) => (
+                  <tr key={`${r.archivo}-${r.idOrigen ?? i}`}>
+                    <td className={`${tdCls} font-semibold`}>{r.idOrigen ?? "—"}</td>
+                    <td className={tdCls}>{r.fecha ?? "—"}</td>
+                    <td className={tdCls}>{r.matricula ?? "—"}</td>
+                    <td className={tdCls}>
+                      <span className={TONO_PDF[r.accion]}>{ETIQUETA_PDF[r.accion]}</span>
+                      {(r.motivo || r.avisos.length > 0) && (
+                        <div className="mt-0.5 text-[11px] text-slate-400">
+                          {[r.motivo, ...r.avisos].filter(Boolean).join(" ")}
+                        </div>
+                      )}
+                    </td>
+                    <td className={`${tdCls} text-[11px] text-slate-500`}>{r.archivo}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </TableWrap>
+          </div>
+        )}
       </div>
 
       {error && <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 text-sm text-rose-200">{error}</div>}

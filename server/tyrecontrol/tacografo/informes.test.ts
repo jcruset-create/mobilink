@@ -136,3 +136,78 @@ describe("decidirInforme()", () => {
     });
   });
 });
+
+/*
+ * Desde el panel de importación no hay ficha abierta: el vehículo se BUSCA
+ * por la matrícula del impreso, así que no puede no coincidir, y puede no
+ * haberlo.
+ */
+describe("decidirInforme() desde el panel de importación", () => {
+  const panel = (o: Partial<Situacion> = {}): Situacion =>
+    situacion({ matriculaVehiculo: null, ...o });
+
+  it("con vehículo encontrado, se crea y se adjunta como siempre", () => {
+    const d = decidirInforme(panel());
+    expect(d.accion).toBe("crear_y_adjuntar");
+    expect(d.vehiculoDelInforme).toBe("veh-1");
+  });
+
+  it("sin ficha abierta no hay matrícula que confirmar", () => {
+    // La misma situación que desde la ficha pedía confirmación.
+    expect(decidirInforme(panel({ vehiculoId: "veh-1" })).accion).toBe("crear_y_adjuntar");
+  });
+
+  /*
+   * Sin vehículo, la intervención se crea igual —es historia del centro y el
+   * autobús puede darse de alta mañana, igual que hace el importador del
+   * Excel— y el PDF se guarda colgando de ella. Tirarlo obligaría a que
+   * alguien se acordara de volver a subirlo semanas después, y el papel que
+   * se pierde es el que nadie echa de menos hasta que hace falta.
+   */
+  it("sin vehículo: se crea, el PDF se guarda igual, y se avisa", () => {
+    const d = decidirInforme(panel({ vehiculoId: null }));
+    expect(d.accion).toBe("crear_y_adjuntar");
+    expect(d.vehiculoDelInforme).toBeNull();
+    expect(d.avisos.some((a) => a.includes("no está en TyreControl"))).toBe(true);
+    expect(d.avisos.some((a) => a.includes("8235JDF"))).toBe(true);
+    expect(d.avisos.some((a) => a.includes("en cuanto se dé de alta"))).toBe(true);
+  });
+
+  it("y si la intervención ya estaba sin vehículo, se adjunta igual y se avisa", () => {
+    const d = decidirInforme(panel({
+      vehiculoId: null,
+      existente: { id: "int-9", vehiculoId: null, fecha: "2026-11-04", creadaDePdf: false },
+    }));
+    expect(d.accion).toBe("solo_adjuntar");
+    expect(d.intervencionId).toBe("int-9");
+    expect(d.vehiculoDelInforme).toBeNull();
+    expect(d.avisos.some((a) => a.includes("no está en TyreControl"))).toBe(true);
+  });
+
+  // Y con vehículo no se avisa de nada: el aviso es para el caso raro.
+  it("con vehículo, ningún aviso de ese tipo", () => {
+    expect(decidirInforme(panel()).avisos).toEqual([]);
+  });
+
+  // El clip tiene que salir donde está la intervención, no donde casó la
+  // matrícula: si la intervención ya cuelga de un vehículo, ese manda.
+  it("el PDF se archiva bajo el vehículo de la intervención que ya existía", () => {
+    const d = decidirInforme(panel({
+      vehiculoId: "veh-1",
+      existente: { id: "int-9", vehiculoId: "veh-VIEJO", fecha: "2026-11-04", creadaDePdf: false },
+    }));
+    // Vinculada a otro: eso sigue sin tocarse, hay que mirarlo.
+    expect(d.accion).toBe("no_se_puede");
+    expect(d.motivo).toContain("OTRO vehículo");
+  });
+
+  it("una intervención sin vehículo se vincula al que casó la matrícula", () => {
+    const d = decidirInforme(panel({
+      vehiculoId: "veh-1",
+      existente: { id: "int-9", vehiculoId: null, fecha: "2026-11-04", creadaDePdf: false },
+    }));
+    expect(d.accion).toBe("solo_adjuntar");
+    expect(d.vincular).toBe(true);
+    expect(d.vehiculoDelInforme).toBe("veh-1");
+  });
+});

@@ -70,7 +70,7 @@ import { aFilaInsert, parcheParaCompletar, preparar } from "./importar.ts";
 import { ErrorFichero, leerHoja, type Lectura } from "./parser.ts";
 import { simular } from "./simular.ts";
 import { decidirInforme } from "./informes.ts";
-import { leerInformePdf, lineasDeInforme } from "./informePdf.ts";
+import { leerInformePdf, leerInformesDelPdf, lineasDeInforme } from "./informePdf.ts";
 
 /**
  * El informe del centro son 3,3 MB con cinco años dentro. Veinte deja sitio
@@ -79,6 +79,18 @@ import { leerInformePdf, lineasDeInforme } from "./informePdf.ts";
 const subida = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024, files: 1 },
+});
+
+/**
+ * Los PDF del panel de importación: varios de golpe.
+ *
+ * Un informe ronda los 330 KB y lo normal es subir los del mes. Veinte
+ * ficheros de 25 MB es un techo que nadie va a rozar con informes de verdad y
+ * que impide que una subida equivocada se lleve la memoria del proceso.
+ */
+const subidaPdfs = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024, files: 20 },
 });
 
 const hoyISO = () => new Date().toISOString().slice(0, 10);
@@ -457,10 +469,12 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
         const lectura = leerInformePdf(lineas);
         const sha = createHash("sha256").update(archivo.buffer).digest("hex");
 
-        const [existente, mismoFichero] = await Promise.all([
-          lectura.fila ? leerIntervencionPorOrigen(empresa, lectura.fila.idOrigen) : null,
-          leerInformePorHash(vehiculoId, sha),
-        ]);
+        // El orden importa: «este informe ya está» se pregunta POR LA
+        // INTERVENCIÓN, así que primero hay que saber cuál es.
+        const existente = lectura.fila
+          ? await leerIntervencionPorOrigen(empresa, lectura.fila.idOrigen)
+          : null;
+        const mismoFichero = existente ? await leerInformePorHash(existente.id, sha) : null;
 
         const decision = decidirInforme({
           fila: lectura.fila,
@@ -503,7 +517,7 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
         const doc = await guardarInformePdf({
           empresa, vehiculoId, intervencionId: intervencionId!,
           pdf: archivo.buffer, nombreOriginal: archivo.originalname, sha256: sha,
-          paginas: lineas.reduce((m, l) => Math.max(m, l.pagina), 0) || null,
+          paginas: lectura.paginas || null,
           idOrigen: fila.idOrigen, usuarioId,
         });
 
@@ -520,6 +534,163 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
       } catch (e: any) {
         console.error("[tacografo-informe-pdf] error:", e?.message ?? e);
         res.status(500).json({ error: e?.message || "No se ha podido adjuntar el informe" });
+      }
+    });
+
+  /**
+   * Importar informes técnicos en PDF, desde el panel.
+   *
+   * La diferencia con adjuntar desde la ficha de un vehículo son dos cosas:
+   *
+   *   · Un fichero puede traer VARIAS intervenciones —el centro manda los
+   *     informes de uno en uno, pero el mes entero junto en un PDF es lo que
+   *     llega por correo—, y se tratan una a una.
+   *   · No hay ficha abierta, así que el vehículo se BUSCA por la matrícula
+   *     del impreso en vez de comprobarse contra uno. Por eso aquí no hay
+   *     nada que confirmar: no puede no coincidir.
+   *
+   * Y no hay paso de simular. Esto no escribe 1.744 filas de un Excel: son
+   * los informes que alguien acaba de recibir, y lo que hace con cada uno
+   * —crearla, adjuntarlo, decir que ya estaba— se cuenta después, con su
+   * nombre y su motivo.
+   */
+  app.post("/api/tyrecontrol/tacografo/informes-pdf", ...guards, subidaPdfs.array("archivos", 20),
+    async (req, res) => {
+      try {
+        const alcance = await empresaDelInforme(req, req.query.empresa ?? (req as any).body?.empresa);
+        if (!alcance.empresa) return res.status(alcance.estado!).json({ error: alcance.error });
+        const empresa = alcance.empresa;
+        const usuarioId = usuarioDe(req);
+
+        const archivos = ((req as any).files ?? []) as Array<{ buffer: Buffer; originalname: string }>;
+        if (archivos.length === 0) return res.status(400).json({ error: "No se ha recibido ningún PDF" });
+
+        // La flota, una vez para todos los informes: son pocas matrículas y
+        // muchas lecturas.
+        const vehiculos = await leerVehiculos(empresa);
+        const porMatricula = new Map<string, { id: string }>();
+        for (const v of vehiculos) if (!porMatricula.has(v.matriculaNorm)) porMatricula.set(v.matriculaNorm, v);
+
+        const resultados: any[] = [];
+
+        for (const archivo of archivos) {
+          const nombre = archivo.originalname;
+          if (!archivo.buffer?.length || archivo.buffer.subarray(0, 5).toString("latin1") !== "%PDF-") {
+            resultados.push({ archivo: nombre, accion: "no_se_puede", avisos: [],
+              motivo: "Eso no es un PDF." });
+            continue;
+          }
+
+          const sha = createHash("sha256").update(archivo.buffer).digest("hex");
+          let informes;
+          try {
+            informes = leerInformesDelPdf(await lineasDeInforme(archivo.buffer));
+          } catch (e: any) {
+            resultados.push({ archivo: nombre, accion: "no_se_puede", avisos: [],
+              motivo: `No se ha podido leer el PDF: ${e?.message ?? e}` });
+            continue;
+          }
+
+          for (const lectura of informes) {
+            const fila = lectura.fila;
+            const base = {
+              archivo: nombre,
+              idOrigen: fila?.idOrigen ?? null,
+              fecha: fila?.fecha ?? null,
+              matricula: fila?.matriculaOrigen ?? fila?.matriculaNorm ?? null,
+            };
+
+            const existente = fila ? await leerIntervencionPorOrigen(empresa, fila.idOrigen) : null;
+            const mismoFichero = existente ? await leerInformePorHash(existente.id, sha) : null;
+
+            const decision = decidirInforme({
+              fila,
+              problemas: lectura.problemas,
+              // Sin ficha abierta: el vehículo sale de la matrícula del impreso.
+              vehiculoId: fila ? (porMatricula.get(fila.matriculaNorm)?.id ?? null) : null,
+              matriculaVehiculo: null,
+              existente,
+              mismoFichero,
+            });
+
+            if (decision.accion === "no_se_puede") {
+              resultados.push({ ...base, accion: "no_se_puede", motivo: decision.motivo,
+                avisos: decision.avisos });
+              continue;
+            }
+            if (decision.accion === "duplicado") {
+              resultados.push({ ...base, accion: "ya_estaba", motivo: decision.motivo,
+                documentoId: decision.documentoId, intervencionId: decision.intervencionId,
+                avisos: decision.avisos });
+              continue;
+            }
+
+            let intervencionId = decision.intervencionId ?? null;
+            let creada = false;
+            if (decision.accion === "crear_y_adjuntar") {
+              const r = await insertarIntervencionDePdf(aFilaInsert(fila!, {
+                empresa, sistemaOrigen: SISTEMA_ORIGEN,
+                vehiculoId: decision.vehiculoDelInforme ?? null,
+                loteId: null, archivo: nombre, hoja: null,
+                usuarioId, kmSospechoso: false, creadaDePdf: true,
+              }));
+              intervencionId = r.id;
+              creada = !r.yaEstaba;
+              if (r.yaEstaba) {
+                decision.avisos.push("Alguien la había importado mientras se subía el informe: "
+                  + "el PDF se adjunta a la que ya estaba.");
+              }
+            } else if (decision.vincular && intervencionId && decision.vehiculoDelInforme) {
+              await vincularIntervencion(intervencionId, decision.vehiculoDelInforme, usuarioId);
+            }
+
+            /*
+             * Cada intervención se queda con SU copia del fichero, aunque un
+             * PDF con el mes entero se guarde varias veces. Son 330 KB, y así
+             * borrar el informe de una no deja a las otras con un clip que no
+             * abre nada.
+             *
+             * `vehiculoId` puede ir a null: un informe de un autobús que
+             * todavía no está dado de alta se guarda igual y aparece en su
+             * ficha el día que exista.
+             */
+            const doc = await guardarInformePdf({
+              empresa, vehiculoId: decision.vehiculoDelInforme ?? null, intervencionId: intervencionId!,
+              pdf: archivo.buffer, nombreOriginal: nombre, sha256: sha,
+              paginas: lectura.paginas || null,
+              idOrigen: fila!.idOrigen, usuarioId,
+            });
+
+            resultados.push({
+              ...base,
+              accion: creada ? "creada_y_adjuntada" : "adjuntada",
+              intervencionId,
+              documentoId: doc.id,
+              vehiculoId: decision.vehiculoDelInforme ?? null,
+              avisos: decision.avisos,
+            });
+          }
+        }
+
+        const cuenta = (a: string) => resultados.filter((r) => r.accion === a).length;
+        res.json({
+          ok: true,
+          archivos: archivos.length,
+          informes: resultados.length,
+          resumen: {
+            creadasYAdjuntadas: cuenta("creada_y_adjuntada"),
+            adjuntadas: cuenta("adjuntada"),
+            yaEstaban: cuenta("ya_estaba"),
+            conProblema: cuenta("no_se_puede"),
+            /** De las anteriores, las que esperan a que su autobús se dé de alta. */
+            sinVehiculo: resultados.filter((r) => r.vehiculoId === null
+              && r.accion !== "no_se_puede").length,
+          },
+          resultados,
+        });
+      } catch (e: any) {
+        console.error("[tacografo-informes-pdf] error:", e?.message ?? e);
+        res.status(500).json({ error: e?.message || "No se han podido importar los informes" });
       }
     });
 

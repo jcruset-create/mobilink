@@ -382,7 +382,13 @@ export async function completarDePdf(
 
 export interface InformeParaGuardar {
   empresa: string;
-  vehiculoId: string;
+  /**
+   * `null` cuando la matrícula del impreso no está en TyreControl. El informe
+   * se guarda igual, colgando de su intervención: tirarlo obligaría a que
+   * alguien se acordara de volver a subirlo semanas después, y el papel que
+   * se pierde es el que nadie echa de menos hasta que hace falta.
+   */
+  vehiculoId: string | null;
   intervencionId: string;
   pdf: Buffer;
   nombreOriginal: string;
@@ -402,7 +408,9 @@ export interface InformeParaGuardar {
  * `vigente` se queda como venga y `ocr_*` sin tocar: ver la migración.
  */
 export async function guardarInformePdf(i: InformeParaGuardar): Promise<{ id: string; ruta: string }> {
-  const ruta = `${i.empresa}/${i.vehiculoId}/tacografo/${i.idOrigen}-${Date.now()}.pdf`;
+  // Sin vehículo, bajo «sin-vehiculo»: la carpeta tiene que existir igual, y
+  // así se ve de un vistazo en el bucket lo que está esperando un alta.
+  const ruta = `${i.empresa}/${i.vehiculoId ?? "sin-vehiculo"}/tacografo/${i.idOrigen}-${Date.now()}.pdf`;
   const { error: subida } = await supabase.storage
     .from(SUPABASE_DOCS_BUCKET)
     .upload(ruta, i.pdf, { contentType: "application/pdf", upsert: false });
