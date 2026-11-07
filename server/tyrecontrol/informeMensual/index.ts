@@ -38,6 +38,9 @@ import {
 import {
   mesesHasta, quesitoDeBandas, quesitoDeCondicion, recortar, serieMensual,
 } from "./evolucion.ts";
+import {
+  avisosDeListados, filasDelMes, listaPlanificacion, listadosPorBanda,
+} from "./fichas.ts";
 
 /** El mes en curso, para cuando no se pide ninguno. */
 const mesActual = (): string => new Date().toISOString().slice(0, 7);
@@ -106,6 +109,16 @@ export function mountInformeMensual(app: Express, ...guards: RequestHandler[]): 
         medidaPorMarca: medidaPorMarca(completas),
       };
 
+      /*
+       * Los listados del patio: seis por banda de profundidad y la lista de
+       * planificación del mes siguiente. Salen de las MISMAS ruedas que las
+       * rejillas, así que no pueden discrepar con ellas.
+       */
+      const filas = filasDelMes(
+        vehiculos.filter((v) => contados.has(v.id)), completas, pos);
+      const listados = listadosPorBanda(filas);
+      const planificacion = listaPlanificacion(filas, periodo, contados.size);
+
       const cabecera: CabeceraMensual = {
         empresa,
         empresaNombre,
@@ -115,9 +128,10 @@ export function mountInformeMensual(app: Express, ...guards: RequestHandler[]): 
         avisos: [
           ...avisosDelMes(vehiculos, neumaticos, posiciones.repetidas, incluirBaja),
           ...avisosDeCondicion(completas),
+          ...avisosDeListados(listados, planificacion),
         ],
       };
-      res.json({ ok: true, ...cabecera, rejillas });
+      res.json({ ok: true, ...cabecera, rejillas, listados, planificacion });
     } catch (e: any) {
       console.error("[informe-mensual] error:", e?.message ?? e);
       res.status(500).json({ error: e?.message || "No se ha podido generar el informe mensual" });
