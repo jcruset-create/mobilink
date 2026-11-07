@@ -88,6 +88,16 @@ export default function VehiculoDetalle() {
   const [modalOps, setModalOps] = useState(false);
   const [filtroOps, setFiltroOps] = useState("");
   const [intervenciones, setIntervenciones] = useState<Intervencion[]>([]);
+  /*
+   * El bastidor que dice el tacógrafo, cuando el vehículo no lo tiene.
+   *
+   * El centro técnico lo apunta en cada intervención (E23 del impreso) y en
+   * TyreControl falta en 682 autobuses de la flota. Mientras no se pase a la
+   * ficha de verdad, se enseña de dónde sale y de cuándo es, en vez de un
+   * guion que esconde un dato que SÍ está en el sistema.
+   */
+  const [bastidorTaco, setBastidorTaco] =
+    useState<{ valor: string; fecha: string } | null>(null);
   const [verInterv, setVerInterv] = useState<null | { interv: Intervencion; ops: OperacionNeumatico[] }>(null);
   const [recargarItv, setRecargarItv] = useState(0); // fuerza recarga del bloque ITV al aplicar una ficha
   // Imagen de chasis propia de la marca para esta configuración (un 2x4 de
@@ -302,7 +312,27 @@ export default function VehiculoDetalle() {
           {dato("Empresa", v.empresa?.nombre)}{dato("Delegación", v.delegacion?.nombre)}
           {dato("Nº de unidad", v.numero_unidad)}
           {dato("Marca", v.marca)}{dato("Modelo", v.modelo)}
-          {dato("Tipo", v.tipo?.descripcion ?? v.tipo?.nombre)}{dato("Bastidor", v.bastidor)}
+          {dato("Tipo", v.tipo?.descripcion ?? v.tipo?.nombre)}
+          {v.bastidor
+            ? dato("Bastidor", v.bastidor)
+            : (
+              <div>
+                <div className="text-[10px] text-slate-400">Bastidor</div>
+                {bastidorTaco
+                  ? (
+                    <>
+                      <div className="text-sm text-slate-200">{bastidorTaco.valor}</div>
+                      <div
+                        className="text-[10px] text-amber-300/80"
+                        title="Lo dice el centro técnico en el informe de esa intervención. Todavía no está guardado en la ficha del vehículo."
+                      >
+                        del tacógrafo, de la del {bastidorTaco.fecha.split("-").reverse().join("/")}
+                      </div>
+                    </>
+                  )
+                  : <div className="text-sm text-slate-200">—</div>}
+              </div>
+            )}
           {dato("Fecha matriculación", v.fecha_matriculacion)}{dato("Webfleet ID", v.webfleet_vehicle_id)}
         </div>
       </div>
@@ -319,7 +349,7 @@ export default function VehiculoDetalle() {
           Es de solo lectura también para el admin: aquí no se registra nada,
           los datos entran por la importación del taller. */}
       <div className="mt-3">
-        <SeccionTacografo empresaId={v.empresa_id} vehiculoId={v.id} />
+        <SeccionTacografo empresaId={v.empresa_id} vehiculoId={v.id} onBastidor={setBastidorTaco} />
       </div>
 
       {/* Webfleet: enlazar vehículo y sincronizar km/posición */}

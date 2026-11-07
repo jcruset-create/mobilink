@@ -167,7 +167,10 @@ export async function leerIntervenciones(
       .select("id, vehiculo_id, id_origen, fecha, tipo_operacion, resultado, "
         + "medida_neumatico, medida_neumatico_norm, km_nuevo, km_sospechoso, "
         + "param_l, param_w, param_k, referencia, version, num_serie, num_sensor, "
-        + "tipo_tacografo, fabricante, tecnico, observaciones")
+        // `bastidor_origen` es del VEHÍCULO y no del aparato, pero el centro
+        // lo apunta en cada intervención y en TyreControl falta en 682
+        // autobuses: es la única parte del sistema que lo tiene.
+        + "tipo_tacografo, fabricante, bastidor_origen, tecnico, observaciones")
       .eq("empresa_id", empresa);
     if (vehiculoId) q = q.eq("vehiculo_id", vehiculoId);
     return q.order("id", { ascending: true }).range(desde, hasta);
