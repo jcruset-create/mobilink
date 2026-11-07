@@ -55,11 +55,21 @@ producción:
 | `E943009005396O` | 7555JNT | **sí** | 2026-11-02 |
 | `E943009005397P` | 8318JVM | **sí** | 2026-11-02 |
 | `E943009005405X` | 8235JDF | **sí** | 2026-11-04 |
+| `E943009005308E` | 9204HMM | **sí** (transferencia) | 2026-10-02 |
 | `E943009005411D` | 9832LXT | **NO** | 2026-11-07 (hoy) |
 
 Es decir: la muestra que se ha subido contiene **los dos casos que se piden**,
-cuatro para adjuntar sin más y uno para dar de alta. No hay que inventarse el
+cinco para adjuntar sin más y uno para dar de alta. No hay que inventarse el
 caso de prueba, ya está encima de la mesa.
+
+Y los dos últimos no son relleno:
+
+- `E943009005308E` es una **transferencia de datos + sustitución**, el otro
+  tipo de intervención del impreso. Trae vacíos todos los campos de calibrado
+  —km, medida, parámetros, equipos, precintos— y el resultado en blanco. Sin
+  ella, el parser solo estaría probado contra calibrados.
+- `E943009005411D` es el único con un tacógrafo **Stoneridge** en vez de un
+  VDO, y el único que trae la versión de software dentro del impreso.
 
 Y el nombre del fichero (`InfTec_E943009005411D.pdf`) repite el A1, lo que da
 una comprobación cruzada gratis: si el A1 del contenido y el del nombre no
@@ -228,13 +238,24 @@ digital, no hay otro— y por eso se puede poner `Digital` sin inventarse nada.
 El día que llegue un impreso de otro tipo, el reconocimiento de la cabecera
 fallará y el parser lo dirá, que es lo que tiene que pasar.
 
-El tercero es distinto: el PDF dice la verdad de hoy (VDO pasó a llamarse
-Aumovio), y el Excel dice `VDO` en 1.744 filas. Si el PDF escribe
-`Aumovio Germany GmbH`, la ficha de ese vehículo dirá un fabricante y la de su
-gemelo otro. **Propuesta:** guardar `I41` tal cual en `fabricante` y NO
-inventar una tabla de equivalencias de nombres comerciales; es un dato
-fechado, y la ficha ya enseña de cuándo es cada uno. Queda anotado como
-pregunta en §9 por si se prefiere lo contrario.
+El tercero es distinto, y al medirlo se resolvió solo. El impreso pone en I41
+la **razón social** («Aumovio Germany GmbH», «Stoneridge Electronics AB») y el
+Excel guarda la **marca**. Y la lista de marcas de producción es de tres:
+
+```
+VDO         1.665 filas
+STONERIDGE     78
+ASELSAN         1
+```
+
+Con tres valores y una correspondencia evidente —VDO es hoy Aumovio: la
+división de tacógrafos de Continental cambió de nombre—, **se traduce**. No es
+una tabla de equivalencias inventada: es que la ficha coge cada dato técnico
+de la intervención más reciente que lo traía, y un vehículo con «Aumovio
+Germany GmbH» al lado de otro con «VDO» obliga a quien lo lea a averiguar si
+cambió el aparato o cambió el nombre de la empresa. La razón social literal no
+se pierde: está en el PDF que se queda adjunto, que es de lo que va todo esto.
+Un fabricante que no esté en la lista se guarda tal cual y se avisa.
 
 ### Trampa 6 · el tipo de intervención es más fino en el PDF que en el Excel
 
@@ -255,16 +276,22 @@ Transferencia / Certificado de intransferibilidad /    201
 Sustitución
 ```
 
-«Control periódico + Calibrado» cae en el primero, y eso se puede afirmar
-porque los cuatro informes que ya están en la base tienen exactamente ese
-`tipo_operacion`. Lo que **no** se puede afirmar es cómo titula el impreso una
-instalación o una transferencia: no hay ningún PDF de esos en la muestra.
+De las tres, **dos están comprobadas** contra informes que ya estaban
+importados:
 
-**Regla:** se mapea lo que se ha visto, y lo que no se ha visto **se rechaza
-con un mensaje claro** («el tipo de intervención del informe no se reconoce:
-"…"»), en vez de meterlo en la categoría más probable. Un tipo mal asignado
-mueve el vencimiento de un vehículo, que es lo único que esta pantalla sirve
-para mirar.
+| El impreso dice (bloque D) | El Excel guarda |
+|---|---|
+| «Control periódico de un tacógrafo + Calibrado de un tacógrafo» | Calibrado o Parametrización / Control / Reparación |
+| «Transferencia de datos + Sustitución de un tacógrafo» | Transferencia / Certificado de intransferibilidad / Sustitución |
+
+La tercera, **instalación**, NO: no hay ningún PDF de una instalación entre los
+ejemplos, así que sus pistas son las palabras del propio impreso y nada más.
+
+**Regla:** se mapea lo que se ha visto, y lo que no encaja en ninguna familia
+—o encaja en dos— **se deja sin categoría y se dice** («el tipo de intervención
+del informe no se reconoce: "…"»), en vez de meterlo en la más probable. Un
+tipo mal asignado mueve el vencimiento de un vehículo, que es lo único que esa
+pantalla sirve para mirar.
 
 ## 6 · Decisiones de diseño, con recomendación
 
@@ -343,12 +370,45 @@ duplicado: es una versión nueva, se adjunta y se dice que ya había otra.
 
 ## 7 · Las fases
 
-**Fase 1 · el parser, a solas y con los cuatro informes como juez.**
-`server/tyrecontrol/tacografo/informePdf.ts`: de un Buffer a una `Lectura` con
-los mismos nombres de campo que usa `parser.ts` (así `importar.ts` y
-`escribir.ts` no se enteran de por dónde entró el dato). Test que exige que los
-cuatro informes ya importados produzcan, campo a campo, lo que el Excel dejó en
-la base, y que los dos ejemplares de cada PDF concuerden. Sin tocar la base.
+**Fase 1 · el parser, a solas y con los informes reales como juez. HECHA.**
+`server/tyrecontrol/tacografo/informePdf.ts`: de un Buffer a una
+`FilaTacografo`, la misma que produce el Excel (así `importar.ts` y
+`escribir.ts` no se enteran de por dónde entró el dato). Sin tocar la base.
+
+Resultado de contrastarlo contra producción, informe a informe:
+
+| Informe | Campos comparados | Resultado |
+|---|---|---|
+| `E943009005028K` | 37 columnas + el jsonb | **idéntico** |
+| `E943009005396O` | 37 columnas + el jsonb | **idéntico** |
+| `E943009005397P` | 37 columnas + el jsonb | **idéntico** |
+| `E943009005405X` | 37 columnas + el jsonb | **idéntico** |
+| `E943009005308E` (transferencia) | 37 columnas + el jsonb | idéntico, y **además** trae el bastidor y el modelo que el Excel dejó vacíos |
+| `E943009005411D` | — | no está en la base; se lee entero y sin avisos |
+
+Lo que hizo falta para llegar ahí, y que ninguna de las dos lecturas de texto
+plano habría dado: leer líneas con su caja y emparejar cada cruz con la casilla
+en la que CAE; separar las dos copias del impreso y exigir que concuerden;
+distinguir las cabeceras de bloque (cuerpo 10) del contenido (cuerpo 8), porque
+si no la fecha de caducidad de la tarjeta del técnico acaba valiendo
+«INSTALACIÓN DEL»; y reproducir las normalizaciones del Excel una por una
+—puntos de los códigos largos, ceros de delante del equipo de calibrado,
+espacios de los precintos, `0,0` → `0`, la marca del fabricante—.
+
+Las pruebas van en dos ficheros, y a propósito: `informePdf.test.ts` construye
+impresos de pega con la geometría real y cubre las trampas una a una (38
+pruebas, se ejecutan siempre), y `informePdf.reales.test.ts` compara contra las
+cifras de producción usando los PDF de verdad. Estos **no están en el
+repositorio**: llevan matrículas, bastidores y el nombre y la tarjeta
+profesional del técnico, y subirlos sería publicarlos en el historial de git
+para siempre. Se ejecuta apuntando a donde estén:
+
+```bash
+TACOGRAFO_INFORMES_DIR=/ruta/a/los/informes npx vitest run informePdf.reales
+```
+
+Sin la variable se salta y lo dice, en vez de pasar en verde sin haber
+comprobado nada.
 
 **Fase 2 · la migración.** Las dos columnas de §6 (`intervencion_id`,
 `creada_de_pdf`), un índice parcial por `intervencion_id`, y las políticas RLS
@@ -395,9 +455,10 @@ más adelante.
 
 ## 9 · Preguntas abiertas
 
-1. **Fabricante.** ¿`Aumovio Germany GmbH` tal cual (lo que dice el impreso de
-   hoy), o normalizado a `VDO` para que cuadre con las 1.744 filas? Propuesta:
-   tal cual.
+1. ~~**Fabricante.**~~ Resuelto al medirlo: solo hay tres marcas en
+   producción y la correspondencia con la razón social del impreso es
+   evidente, así que se traduce (ver trampa 5). Si se prefiere la razón social
+   literal, es un cambio de una línea.
 2. **Propuestas de medida desde el PDF.** ¿Se generan ya en la fase 3, o
    primero solo se adjunta y se crea, y las propuestas vienen después?
    Propuesta: después, para no mezclar dos pantallas en una entrega.
