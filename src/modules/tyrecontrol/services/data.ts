@@ -4102,6 +4102,25 @@ export interface FilaTacografo {
   ultimoTipo: string | null;
   ultimoResultado: string | null;
   intervenciones: number;
+  /** La generación del tacógrafo, deducida en el servidor de la versión. */
+  generacion: GeneracionTacografo;
+}
+
+/**
+ * La generación la decide el SERVIDOR, no esta pantalla.
+ *
+ * Se puede leer de la versión de software, pero NO de la referencia, por más
+ * que el número de pieza lo parezca: `1381.4521402002` es un digital 3.0 y
+ * `1381.1521343002` es un inteligente. Si el panel lo dedujera por su cuenta
+ * tendría que repetir esa regla, y el día que cambiara habría dos.
+ */
+export type GeneracionTacografoClave =
+  "digital" | "inteligente_v1" | "inteligente_v2" | "desconocida";
+
+export interface GeneracionTacografo {
+  generacion: GeneracionTacografoClave;
+  etiqueta: string;
+  detalle: string;
 }
 
 export interface ReglaTacografo {
@@ -4116,6 +4135,8 @@ export interface ControlTacografos {
   bases: Array<{ id: string; nombre: string }>;
   filas: FilaTacografo[];
   resumen: Record<EstadoTacografo, number>;
+  /** Recuento por generación de la flota ENTERA, no de lo filtrado. */
+  porGeneracion: Record<GeneracionTacografoClave, number>;
   total: number;
   mostrados: number;
 }
@@ -4127,6 +4148,7 @@ export interface FiltrosTacografo {
   estado?: EstadoTacografo[] | null;
   venceAntesDe?: string | null;
   incluirBaja?: boolean;
+  generacion?: GeneracionTacografoClave[] | null;
 }
 
 export async function controlTacografos(f: FiltrosTacografo): Promise<ControlTacografos> {
@@ -4136,6 +4158,7 @@ export async function controlTacografos(f: FiltrosTacografo): Promise<ControlTac
   if (f.estado?.length) q.set("estado", f.estado.join(","));
   if (f.venceAntesDe) q.set("venceAntesDe", f.venceAntesDe);
   if (f.incluirBaja) q.set("incluirBaja", "1");
+  if (f.generacion?.length) q.set("generacion", f.generacion.join(","));
   const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/tacografo/control?${q}`, {
     headers: { Authorization: `Bearer ${await tokenSesion()}` },
   });

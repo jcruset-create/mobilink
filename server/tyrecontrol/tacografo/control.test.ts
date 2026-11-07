@@ -242,3 +242,85 @@ describe("la ficha y el control salen del mismo cálculo", () => {
     expect(t.paramK!.valor).toBe("11076");
   });
 });
+
+/*
+ * La generación va en la fila de la flota porque la pregunta que se hace con
+ * ella es de flota: cuántos autobuses llevan todavía un digital del
+ * reglamento viejo.
+ */
+describe("la generación del tacógrafo en la fila", () => {
+  it("sale de la versión, y de la intervención más reciente que la traía", () => {
+    const f = filaDe(veh({ id: "v1" }), [
+      i({ idOrigen: "A", fecha: "2026-11-04", version: null, fabricante: null }),
+      i({ idOrigen: "B", fecha: "2026-05-01", version: "41026", fabricante: "VDO" }),
+    ], regla(), HOY);
+    expect(f.generacion.generacion).toBe("inteligente_v2");
+    expect(f.generacion.etiqueta).toBe("DTCO 4.1 · inteligente 2.ª gen.");
+  });
+
+  it("sin ninguna versión en el histórico, desconocida", () => {
+    const f = filaDe(veh({ id: "v1" }), [i({ idOrigen: "A", fecha: "2026-05-01" })], regla(), HOY);
+    expect(f.generacion.generacion).toBe("desconocida");
+  });
+
+  // Y sigue cumpliéndose lo de siempre: la ficha y el control dicen lo mismo,
+  // porque salen de la misma función.
+  it("la ficha dice exactamente lo mismo que la flota", () => {
+    const is = [i({ idOrigen: "A", fecha: "2026-05-01", version: "30041", fabricante: "VDO" })];
+    expect(fichaDe(veh({ id: "v1" }), is, regla(), HOY).fila.generacion)
+      .toEqual(filaDe(veh({ id: "v1" }), is, regla(), HOY).generacion);
+  });
+});
+
+describe("filtrar la flota por generación", () => {
+  const flota = () => construirControl(
+    [veh({ id: "v1" }), veh({ id: "v2" }), veh({ id: "v3" }), veh({ id: "v4" })],
+    [
+      i({ idOrigen: "A", fecha: "2026-05-01", vehiculoId: "v1", version: "30041", fabricante: "VDO" }),
+      i({ idOrigen: "B", fecha: "2026-05-01", vehiculoId: "v2", version: "40042", fabricante: "VDO" }),
+      i({ idOrigen: "C", fecha: "2026-05-01", vehiculoId: "v3", version: "41026", fabricante: "VDO" }),
+      i({ idOrigen: "D", fecha: "2026-05-01", vehiculoId: "v4", version: null }),
+    ],
+    regla(), HOY, {});
+
+  it("cuenta la flota por generación", () => {
+    expect(flota().porGeneracion).toEqual({
+      digital: 1, inteligente_v1: 1, inteligente_v2: 1, desconocida: 1,
+    });
+  });
+
+  // La pregunta real: cuántos autobuses llevan todavía un digital del
+  // reglamento viejo, para saber cuántos hay que renovar.
+  it("se puede uno quedar solo con los digitales", () => {
+    const c = construirControl(
+      [veh({ id: "v1" }), veh({ id: "v2" })],
+      [
+        i({ idOrigen: "A", fecha: "2026-05-01", vehiculoId: "v1", version: "30041", fabricante: "VDO" }),
+        i({ idOrigen: "B", fecha: "2026-05-01", vehiculoId: "v2", version: "41026", fabricante: "VDO" }),
+      ],
+      regla(), HOY, { generaciones: ["digital"] });
+    expect(c.filas.map((f) => f.vehiculoId)).toEqual(["v1"]);
+  });
+
+  /*
+   * Y el recuento NO se encoge al filtrar, igual que el de estados: si al
+   * quedarse con los digitales el contador dijera «1 inteligente», parecería
+   * que los otros han desaparecido.
+   */
+  it("pero el recuento sigue siendo el de la flota entera", () => {
+    const c = construirControl(
+      [veh({ id: "v1" }), veh({ id: "v2" })],
+      [
+        i({ idOrigen: "A", fecha: "2026-05-01", vehiculoId: "v1", version: "30041", fabricante: "VDO" }),
+        i({ idOrigen: "B", fecha: "2026-05-01", vehiculoId: "v2", version: "41026", fabricante: "VDO" }),
+      ],
+      regla(), HOY, { generaciones: ["digital"] });
+    expect(c.filas).toHaveLength(1);
+    expect(c.porGeneracion.inteligente_v2).toBe(1);
+    expect(c.total).toBe(2);
+  });
+
+  it("sin filtro de generación, salen todos", () => {
+    expect(flota().filas).toHaveLength(4);
+  });
+});

@@ -187,3 +187,33 @@ const SIN_VEHICULO = (fila: FilaTacografo) =>
   `La matrícula del informe (${fila.matriculaOrigen ?? fila.matriculaNorm}) no está en `
   + "TyreControl: la intervención se da de alta sin vincular y el informe queda guardado. "
   + "Aparecerá en la ficha del vehículo en cuanto se dé de alta.";
+
+/**
+ * Si estos informes son del cliente que se ha elegido, o de otro.
+ *
+ * Pasó el primer día que se usó: el selector de cliente del panel estaba en
+ * una empresa y los diez informes eran de otra. Como ninguna de las diez
+ * matrículas estaba en la flota elegida, las diez entraron como «autobús
+ * todavía no dado de alta» —que es la regla buena para UN informe suelto— y
+ * se crearon diez intervenciones en el cliente equivocado.
+ *
+ * La diferencia entre los dos casos no es sutil: un autobús nuevo es UNA
+ * matrícula desconocida entre varias conocidas. Que NO se reconozca NINGUNA
+ * de una tanda no es una flota que ha crecido, es el cliente equivocado.
+ *
+ * Con un solo informe no se puede distinguir, y por eso el umbral son dos:
+ * con uno se sigue adelante, porque negarse ahí impediría dar de alta el
+ * primer autobús de un cliente nuevo.
+ */
+export function pareceOtroCliente(
+  matriculas: string[], flota: Set<string>,
+): { para: boolean; motivo?: string } {
+  const reconocidas = matriculas.filter((m) => flota.has(m)).length;
+  if (matriculas.length < 2 || reconocidas > 0) return { para: false };
+  return {
+    para: true,
+    motivo: `Ninguna de las ${matriculas.length} matrículas de estos informes está en la flota `
+      + "del cliente elegido. Eso no es un autobús sin dar de alta: casi seguro que el cliente "
+      + "del selector no es el correcto. No se ha escrito nada.",
+  };
+}
