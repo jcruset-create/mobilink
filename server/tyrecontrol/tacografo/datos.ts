@@ -22,6 +22,12 @@ import { claveDe, type MedidaCatalogo } from "./propuestas.ts";
 export const SISTEMA_ORIGEN = "informe_intervenciones";
 
 /**
+ * El `tipo` con el que los informes de tacógrafo viven en
+ * `tc_vehiculo_documentos`, al lado de las fichas técnicas.
+ */
+export const TIPO_DOC_INFORME = "informe_tacografo";
+
+/**
  * Los vehículos de la empresa, con su medida habitual ya resuelta.
  *
  * Entran los de baja también: una intervención de 2022 sobre un autobús que
@@ -325,4 +331,141 @@ export async function leerIdsPorOrigen(loteId: string): Promise<Map<string, stri
       .order("id", { ascending: true })
       .range(desde, hasta));
   return new Map(filas.map((f) => [String(f.id_origen), String(f.id)]));
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Los informes técnicos en PDF
+// ════════════════════════════════════════════════════════════════════════════
+
+/** La intervención con ese nº de orden, si ya está. Es la pregunta del adjunto. */
+export async function leerIntervencionPorOrigen(
+  empresa: string, idOrigen: string,
+): Promise<{ id: string; vehiculoId: string | null; fecha: string | null; creadaDePdf: boolean } | null> {
+  const { data, error } = await supabase
+    .from("tc_tacografo_intervenciones")
+    .select("id, vehiculo_id, fecha, creada_de_pdf")
+    .eq("empresa_id", empresa)
+    .eq("sistema_origen", SISTEMA_ORIGEN)
+    .eq("id_origen", idOrigen)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) return null;
+  return {
+    id: String((data as any).id),
+    vehiculoId: (data as any).vehiculo_id ?? null,
+    fecha: (data as any).fecha ?? null,
+    creadaDePdf: (data as any).creada_de_pdf === true,
+  };
+}
+
+/**
+ * Un informe ya adjunto a este vehículo con el mismo sha256.
+ *
+ * Por vehículo y no por empresa: el mismo PDF en dos fichas distintas es una
+ * cosa que hay que mirar, no un duplicado que silenciar.
+ */
+export async function leerInformePorHash(
+  vehiculoId: string, sha: string,
+): Promise<{ id: string; intervencionId: string | null } | null> {
+  const { data, error } = await supabase
+    .from("tc_vehiculo_documentos")
+    .select("id, intervencion_id")
+    .eq("vehiculo_id", vehiculoId)
+    .eq("tipo", TIPO_DOC_INFORME)
+    .eq("hash_sha256", sha)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) return null;
+  return { id: String((data as any).id), intervencionId: (data as any).intervencion_id ?? null };
+}
+
+/** Los informes adjuntos de un vehículo, el más reciente primero. */
+export async function leerInformesDeVehiculo(empresa: string, vehiculoId: string): Promise<any[]> {
+  const { data, error } = await supabase
+    .from("tc_vehiculo_documentos")
+    .select("id, intervencion_id, storage_path, nombre_original, tamano_bytes, paginas, created_at")
+    .eq("empresa_id", empresa)
+    .eq("vehiculo_id", vehiculoId)
+    .eq("tipo", TIPO_DOC_INFORME)
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as any[];
+}
+
+/** Un informe suelto, para servirlo con su URL firmada. */
+export async function leerInforme(empresa: string, documentoId: string): Promise<any | null> {
+  const { data, error } = await supabase
+    .from("tc_vehiculo_documentos")
+    .select("id, empresa_id, vehiculo_id, intervencion_id, storage_path, nombre_original, mime_type")
+    .eq("empresa_id", empresa)
+    .eq("tipo", TIPO_DOC_INFORME)
+    .eq("id", documentoId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ?? null;
+}
+
+/**
+ * Los `id_origen` de las intervenciones que creó un informe en PDF y siguen
+ * a medias. Se leen en cada importación para completarlas en vez de
+ * saltárselas. Son pocas: el índice parcial las encuentra sin recorrer nada.
+ */
+export async function leerCreadasDePdf(empresa: string): Promise<Set<string>> {
+  const filas = await paginar<any>((desde, hasta) =>
+    supabase
+      .from("tc_tacografo_intervenciones")
+      .select("id_origen")
+      .eq("empresa_id", empresa)
+      .eq("creada_de_pdf", true)
+      .order("id_origen", { ascending: true })
+      .range(desde, hasta));
+  return new Set(filas.map((f) => String(f.id_origen)));
+}
+
+/** Cuántos informes cuelgan de las intervenciones de un lote. Ver `deshacer.ts`. */
+export async function contarInformesDeLote(loteId: string): Promise<number> {
+  const { data, error } = await supabase
+    .from("tc_tacografo_intervenciones")
+    .select("id")
+    .eq("lote_id", loteId);
+  if (error) throw new Error(error.message);
+  const ids = (data ?? []).map((r: any) => String(r.id));
+  if (ids.length === 0) return 0;
+
+  let total = 0;
+  // Las intervenciones de un lote son 1.744 y la lista de `in` tiene un
+  // límite práctico en la URL: de 200 en 200, como escribe el importador.
+  for (let i = 0; i < ids.length; i += 200) {
+    const { count, error: e } = await supabase
+      .from("tc_vehiculo_documentos")
+      .select("id", { count: "exact", head: true })
+      .eq("tipo", TIPO_DOC_INFORME)
+      .in("intervencion_id", ids.slice(i, i + 200));
+    if (e) throw new Error(e.message);
+    total += count ?? 0;
+  }
+  return total;
+}
+
+/**
+ * Una intervención ENTERA, con todas sus columnas.
+ *
+ * Hace falta para completar las que creó un informe en PDF: el parche solo
+ * rellena lo que está a null, y para saber qué está a null hay que mirarlo.
+ * `select("*")` aquí es lo correcto y no un atajo: el parche recorre todas
+ * las columnas que trae una fila, y una lista escrita a mano se quedaría
+ * corta el día que se añada una.
+ */
+export async function leerIntervencionCompleta(
+  empresa: string, idOrigen: string,
+): Promise<Record<string, unknown> | null> {
+  const { data, error } = await supabase
+    .from("tc_tacografo_intervenciones")
+    .select("*")
+    .eq("empresa_id", empresa)
+    .eq("sistema_origen", SISTEMA_ORIGEN)
+    .eq("id_origen", idOrigen)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return (data as Record<string, unknown> | null) ?? null;
 }

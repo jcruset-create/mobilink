@@ -4266,3 +4266,66 @@ export async function aceptarBloqueTacografo(
       body: JSON.stringify(ids ? { ids } : {}),
     });
 }
+
+// ── Tacógrafo · los informes técnicos en PDF ───────────────────────────────
+
+export interface InformeTacografo {
+  id: string;
+  /** La intervención que documenta. `null` si su lote se deshizo. */
+  intervencionId: string | null;
+  nombre: string;
+  paginas: number | null;
+  bytes: number | null;
+  subidoEn: string | null;
+  /** URL firmada, válida una hora. Para abrir o descargar. */
+  url: string | null;
+}
+
+export interface ResultadoAdjuntarInforme {
+  ok: true;
+  /** `creada_y_adjuntada` si la revisión no estaba dada de alta. */
+  accion: "creada_y_adjuntada" | "adjuntada";
+  intervencionId: string;
+  documentoId: string;
+  idOrigen: string;
+  fecha: string | null;
+  url: string | null;
+  avisos: string[];
+}
+
+/** Los informes adjuntos de un vehículo, por intervención. */
+export async function informesTacografo(
+  empresaId: string, vehiculoId: string,
+): Promise<InformeTacografo[]> {
+  const r = await tcg<{ informes: InformeTacografo[] }>(
+    `/api/tyrecontrol/tacografo/informes?empresa=${encodeURIComponent(empresaId)}`
+    + `&vehiculo=${encodeURIComponent(vehiculoId)}`);
+  return r.informes ?? [];
+}
+
+/**
+ * Adjunta un informe a la ficha de un vehículo.
+ *
+ * `confirmar` solo cuando el servidor ha dicho que la matrícula del impreso
+ * no es la del vehículo abierto y una persona lo ha mirado. La pantalla NO lo
+ * manda por su cuenta: el servidor es quien decide si hace falta.
+ */
+export async function adjuntarInformeTacografo(
+  empresaId: string, vehiculoId: string, archivo: File, confirmar = false,
+): Promise<ResultadoAdjuntarInforme> {
+  const fd = new FormData();
+  fd.append("archivo", archivo);
+  return tcg<ResultadoAdjuntarInforme>(
+    `/api/tyrecontrol/tacografo/informe-pdf?empresa=${encodeURIComponent(empresaId)}`
+    + `&vehiculo=${encodeURIComponent(vehiculoId)}${confirmar ? "&confirmar=1" : ""}`,
+    { method: "POST", body: fd });
+}
+
+/** Una URL nueva para un informe: la firmada caduca en una hora. */
+export async function urlInformeTacografo(
+  empresaId: string, documentoId: string,
+): Promise<{ url: string | null; nombre: string }> {
+  return tcg<{ url: string | null; nombre: string }>(
+    `/api/tyrecontrol/tacografo/informes/${encodeURIComponent(documentoId)}`
+    + `?empresa=${encodeURIComponent(empresaId)}`);
+}
