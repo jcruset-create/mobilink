@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { aFilaInsert } from "./importar.ts";
 import { leerInformePdf, lineasDeInforme } from "./informePdf.ts";
 
 /**
@@ -208,6 +209,40 @@ describe.skipIf(!DIR)("el parser contra los informes reales del centro", () => {
     });
   });
 });
+
+  /*
+   * Y el tramo que de verdad escribe: del PDF a la fila de la tabla, por el
+   * mismo `aFilaInsert()` que usa el importador del Excel. Si esto se
+   * rompiera, el parser seguiría en verde y la intervención entraría mal.
+   */
+  describe.skipIf(!DIR)("de un informe real a la fila que se insertaría", () => {
+    it("lleva la clave del Excel, sin lote y marcada como creada de un PDF", async () => {
+      const r = leerInformePdf(await lineasDeInforme(readFileSync(ruta("E943009005411D"))));
+      const insert = aFilaInsert(r.fila!, {
+        empresa: "emp-1", sistemaOrigen: "informe_intervenciones", vehiculoId: "veh-1",
+        loteId: null, archivo: "InfTec_E943009005411D.pdf", hoja: null,
+        usuarioId: "u-1", kmSospechoso: false, creadaDePdf: true,
+      });
+      expect(insert).toMatchObject({
+        empresa_id: "emp-1",
+        vehiculo_id: "veh-1",
+        // La MISMA clave que el Excel: de eso vive que no se pueda duplicar.
+        sistema_origen: "informe_intervenciones",
+        id_origen: "E943009005411D",
+        fecha: "2026-11-07",
+        matricula_norm: "9832LXT",
+        resultado: "Favorable",
+        medida_neumatico_norm: "315/80R22.5",
+        km_anterior: 586971,
+        km_nuevo: 586966,
+        param_w: "8895",
+        fabricante: "STONERIDGE",
+        version: "PABF.S0L",
+        lote_id: null,
+        creada_de_pdf: true,
+      });
+    });
+  });
 
 describe.skipIf(!!DIR)("los informes reales", () => {
   it("se saltan porque no se ha dicho dónde están (TACOGRAFO_INFORMES_DIR)", () => {
