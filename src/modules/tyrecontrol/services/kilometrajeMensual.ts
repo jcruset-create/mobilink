@@ -183,6 +183,9 @@ export interface VehiculoDelRanking {
   kmMesActual: number | null;
   mesesSinDato: number;
   mesesConError: number;
+  /** CUÁLES son esos meses: el recuento alarma, el mes es lo que se arregla. */
+  mesesConErrorDetalle: Array<{ year: number; month: number; error: string | null }>;
+  mesesSinDatoDetalle: Array<{ year: number; month: number }>;
 }
 
 export interface Ranking {
@@ -192,6 +195,25 @@ export interface Ranking {
   sinDatos: Array<{ vehiculoId: string; matricula: string | null; numeroUnidad: string | null }>;
   totales: { vehiculosConDato: number; kmAnualTotal: number; kmAnualMedio: number | null };
 }
+
+/** Lo que contesta el botón de rehacer los meses que le faltan a un vehículo. */
+export interface HuecosVehiculo {
+  vehiculoId: string;
+  matricula: string | null;
+  huecos: Array<{ year: number; month: number; clase: "error" | "sin_dato" | "ausente"; error?: string | null }>;
+  porClase: { error: number; sin_dato: number; ausente: number };
+  pedidos: number;
+  sincronizacion: unknown | null;
+}
+
+/**
+ * Rehace los meses que le faltan a UN vehículo.
+ *
+ * Qué meses son lo decide el servidor leyendo las filas de ese vehículo: el
+ * navegador no manda la lista, así que no puede mandarla mal.
+ */
+export const rehacerHuecosVehiculo = (b: { vehiculoId: string; empresaId?: string; incluirSinDato?: boolean }) =>
+  pedir<HuecosVehiculo>("/huecos-vehiculo", { method: "POST", body: JSON.stringify(b) });
 
 export const rankingKilometraje = (empresaId?: string) =>
   pedir<Ranking>(`/ranking${empresaId ? `?empresa=${encodeURIComponent(empresaId)}` : ""}`);
@@ -215,7 +237,6 @@ export interface RevisionCoherencia {
 export const revisarCoherencia = (b: { empresaId?: string; aplicar?: boolean }) =>
   pedir<RevisionCoherencia>("/coherencia", { method: "POST", body: JSON.stringify(b) });
 
-/** «sep 2026». */
-export function nombreDeMes(year: number, month: number): string {
-  return new Date(Date.UTC(year, month - 1, 15)).toLocaleDateString("es-ES", { month: "short", year: "numeric", timeZone: "UTC" });
-}
+// El texto de los meses vive en su propio módulo, sin red, para poder
+// probarlo. Se reexporta para no romper a quien ya lo importaba de aquí.
+export { nombreDeMes, mesCorto, listaDeMeses, detalleDeMeses } from "./mesesEtiqueta";

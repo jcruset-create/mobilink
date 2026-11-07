@@ -245,6 +245,11 @@ export type RoadsideTrackingResponse = {
     lng: number;
     speedKmh?: number | null;
     moving?: boolean | null;
+    /** «furgoneta» = GPS de Webfleet; «tablet» = la del operario, de respaldo. */
+    fuente?: "furgoneta" | "tablet";
+    /** Ninguna de las dos tenía una posición de los últimos minutos. */
+    antigua?: boolean;
+    atMs?: number;
   } | null;
   etaWarning?: string | null;
   expired: boolean;

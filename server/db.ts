@@ -347,6 +347,18 @@ export async function initDb() {
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "operatorLocationAtMs" BIGINT;
 
+    -- La última posición de la TABLET, aparte: operatorLat/Lng la pisan
+    -- también las lecturas de Webfleet, y para usarla de respaldo hay que
+    -- saber de dónde viene (server/core/posicionDoble.ts).
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "tabletLat" DOUBLE PRECISION;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "tabletLng" DOUBLE PRECISION;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "tabletLocationAtMs" BIGINT;
+
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "plateMismatch" BOOLEAN NOT NULL DEFAULT false;
 
@@ -608,6 +620,20 @@ export async function initDb() {
     CREATE TABLE IF NOT EXISTS processed_actions (
       action_id TEXT PRIMARY KEY,
       "createdAtMs" BIGINT NOT NULL
+    );
+
+    /*
+     * La última posición de la tablet de cada operario, para el Mapa flota.
+     * Una fila por operario: se pisa con cada envío y se borra al cerrar
+     * sesión (server/tablets/posicionTablet.ts).
+     */
+    CREATE TABLE IF NOT EXISTS tablet_posicion (
+      "techName" TEXT PRIMARY KEY,
+      lat DOUBLE PRECISION NOT NULL,
+      lng DOUBLE PRECISION NOT NULL,
+      "accuracyM" DOUBLE PRECISION,
+      "speedKmh" DOUBLE PRECISION,
+      "atMs" BIGINT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS roadside_operator_track (

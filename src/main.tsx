@@ -5,6 +5,7 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 
 import "./index.css";
+import "./estilos/impresion.css";
 
 if (
   import.meta.env.VITE_NATIVE_MOBILE_APP === "true" &&

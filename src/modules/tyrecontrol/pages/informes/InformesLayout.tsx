@@ -1,5 +1,6 @@
 import { createContext, useContext } from "react";
 import { NavLink, Outlet } from "react-router-dom";
+import type { Empresa } from "../../types";
 import type { FiltrosInformes } from "../../types/informes";
 import { useFiltrosInformes } from "../../hooks/useFiltrosInformes";
 import { FiltroBarInformes } from "../../components/informes/FiltroBarInformes";
@@ -8,6 +9,8 @@ interface Ctx {
   filtros: FiltrosInformes;
   setFiltros: (f: FiltrosInformes) => void;
   esCliente: boolean;
+  /** Para que la cabecera pueda escribir el NOMBRE del cliente, no su id. */
+  empresas: Empresa[];
 }
 const InformesCtx = createContext<Ctx | null>(null);
 
@@ -26,6 +29,7 @@ export function useInformesFiltros(): Ctx {
 // añade un informe interno aquí, hay que añadirlo TAMBIÉN allí.
 const TABS = [
   { to: "/tyrecontrol/informes/ejecutivo", label: "Ejecutivo" },
+  { to: "/tyrecontrol/informes/mensual", label: "Mensual de flota" },
   { to: "/tyrecontrol/informes/alertas", label: "Alertas" },
   { to: "/tyrecontrol/informes/estado-flota", label: "Estado de flota" },
   { to: "/tyrecontrol/informes/control-revisiones", label: "Control de revisiones" },
@@ -36,6 +40,7 @@ const TABS = [
   { to: "/tyrecontrol/informes/presiones", label: "Presiones" },
   { to: "/tyrecontrol/informes/productividad", label: "Productividad", interna: true },
   { to: "/tyrecontrol/informes/operaciones-informe", label: "Operaciones", interna: true },
+  { to: "/tyrecontrol/informes/montajes", label: "Montajes de neumáticos", interna: true },
   { to: "/tyrecontrol/informes/historial-neumatico", label: "Historial neumático", interna: true },
   { to: "/tyrecontrol/informes/historial-vehiculo", label: "Historial vehículo" },
 ];
@@ -44,13 +49,13 @@ export default function InformesLayout() {
   const { filtros, setFiltros, esCliente, empresas } = useFiltrosInformes();
 
   return (
-    <InformesCtx.Provider value={{ filtros, setFiltros, esCliente }}>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+    <InformesCtx.Provider value={{ filtros, setFiltros, esCliente, empresas }}>
+      <div className="no-imprimir mb-3 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-lg font-black">Informes</h1>
         <FiltroBarInformes filtros={filtros} setFiltros={setFiltros} esCliente={esCliente} empresas={empresas} />
       </div>
 
-      <div className="mb-4 flex flex-wrap gap-1 border-b border-slate-700">
+      <div className="no-imprimir mb-4 flex flex-wrap gap-1 border-b border-slate-700">
         {TABS.filter((t) => !esCliente || !t.interna).map((t) => (
           <NavLink
             key={t.to}

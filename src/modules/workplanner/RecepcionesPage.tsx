@@ -20,6 +20,7 @@ import {
   loadTechsFromBackend,
 } from "../workshopApi";
 import { getAdminHeaders } from "../adminHeaders";
+import { etiquetaDeFoto, fotosOrdenadas } from "../fotosDeRecepcion";
 import { DEFAULT_WORKSHOP_ID, getWorkshopById, normalizeWorkshopId } from "../workshops";
 import { htmlDelResguardo } from "./resguardoRecepcion";
 import {
@@ -532,18 +533,32 @@ export default function RecepcionesPage() {
                       </p>
                     )}
 
-                    {actual.fotos.length > 0 && (
-                      <div className="flex flex-wrap gap-2">
-                        {actual.fotos.map((f, i) => (
-                          <a key={i} href={f.url} target="_blank" rel="noreferrer">
+                    {fotosOrdenadas(actual.fotos).length > 0 ? (
+                      <div className="flex flex-wrap gap-3">
+                        {fotosOrdenadas(actual.fotos).map((f, i) => (
+                          <a
+                            key={i}
+                            href={f.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            title="Abrir a tamaño completo"
+                            className="overflow-hidden rounded-xl border border-slate-700 bg-slate-900"
+                          >
                             <img
                               src={f.url}
-                              alt={f.nombre ?? "Foto de la recepción"}
-                              className="h-20 w-28 rounded-lg border border-slate-700 object-cover"
+                              alt={etiquetaDeFoto(f)}
+                              className="h-36 w-52 object-cover"
                             />
+                            <div className="px-2 py-1 text-[11px] font-bold uppercase tracking-wide text-slate-300">
+                              {etiquetaDeFoto(f)}
+                            </div>
                           </a>
                         ))}
                       </div>
+                    ) : (
+                      <p className="text-xs text-slate-500">
+                        Sin fotos: la APK no llegó a subirlas (sin cobertura al enviar, o fallo al subir).
+                      </p>
                     )}
 
                     {propuesta && (

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/models.dart';
+import '../models/tipo_llanta.dart';
 import '../models/umbrales.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
@@ -199,18 +200,7 @@ class _VehiculoFichaScreenState extends State<VehiculoFichaScreen> {
   String _llantaLabel(String? id) {
     if (id == null) return '—';
     final l = _llantas.where((x) => x['id'] == id).firstOrNull;
-    if (l == null) return '—';
-    final material = (l['material'] as String?) ?? '';
-    final partes = <String>[
-      if (material.isNotEmpty)
-        material[0].toUpperCase() + material.substring(1),
-      if ((l['medida'] as String?)?.isNotEmpty == true) l['medida'] as String,
-      if (l['agujeros'] != null) '${l['agujeros']} aguj.',
-      if ((l['centrado'] as String?)?.isNotEmpty == true)
-        l['centrado'] as String,
-      (l['tapacubo'] as bool?) == true ? 'c/tapacubo' : 's/tapacubo',
-    ];
-    return partes.isEmpty ? '—' : partes.join(' · ');
+    return l == null ? '—' : nombreTipoLlanta(l);
   }
 
   @override

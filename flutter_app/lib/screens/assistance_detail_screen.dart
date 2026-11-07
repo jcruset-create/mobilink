@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../main.dart' show exteriorMode;
 import '../services/api_service.dart';
 import '../services/offline_store.dart';
+import '../services/seguimiento_ubicacion.dart';
 import '../theme/app_theme.dart';
 import '../widgets/plate_badge.dart';
 import 'arrival_photos_screen.dart';
@@ -28,7 +29,6 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
   late Map<String, dynamic> _a;
   bool _loading = false;
   bool _navigating = false; // evita doble pulsación en acciones con navegación
-  Timer? _locationTimer;
   Map<String, dynamic>? _whatsappCapture;
   bool _loadingCapture = false;
   Map<String, dynamic>? _cobro;
@@ -43,11 +43,8 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
     _loadCobro();
   }
 
-  @override
-  void dispose() {
-    _locationTimer?.cancel();
-    super.dispose();
-  }
+  // Sin dispose propio: el seguimiento de la ubicación NO se para al salir de
+  // esta pantalla. Vive en `SeguimientoUbicacion` y se para con el estado.
 
   Future<void> _loadCobro() async {
     setState(() => _loadingCobro = true);
@@ -92,44 +89,10 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
     }
   }
 
+  /// La ubicación se manda desde `SeguimientoUbicacion`, que sigue enviando
+  /// con la pantalla apagada o fuera de la app.
   void _startLocationTracking() {
-    _locationTimer?.cancel();
-    _sendLocation(); // envío inmediato
-    _locationTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-      // Seguimos enviando en 'en_camino' y 'en_camino_base' (vuelta al taller para geofencing)
-      if (_status == 'en_camino' || _status == 'en_camino_base') {
-        _sendLocation();
-      } else {
-        _locationTimer?.cancel();
-      }
-    });
-  }
-
-  Future<void> _sendLocation() async {
-    try {
-      final permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
-        await Geolocator.requestPermission();
-        return;
-      }
-      final pos = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          timeLimit: Duration(seconds: 10),
-        ),
-      );
-      await widget.api.sendLocation(
-        _a['id'] as int,
-        pos.latitude,
-        pos.longitude,
-        accuracyM: pos.accuracy,
-        // Geolocator la da en m/s; el resto del sistema habla en km/h
-        speedKmh: pos.speed >= 0 ? pos.speed * 3.6 : null,
-      );
-    } catch (_) {
-      // silencioso — no interrumpir al técnico por un fallo de GPS
-    }
+    SeguimientoUbicacion.instancia.iniciar(widget.api, _a['id'] as int);
   }
 
   Future<void> _changeStatus(String status, {int? serviceKm}) async {
@@ -138,12 +101,11 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
       final updated =
           await widget.api.updateStatus(_a['id'] as int, status, serviceKm: serviceKm);
       setState(() => _a = updated);
-      // El servidor auto-transiciona 'finalizada' → 'en_camino_base'; arrancar GPS tracking
-      if (updated['status'] == 'en_camino_base') {
-        _startLocationTracking();
-      } else {
-        _locationTimer?.cancel();
-      }
+      // El servidor auto-transiciona 'finalizada' → 'en_camino_base': ahí
+      // sigue el seguimiento para la vuelta al taller. Fuera de esos estados
+      // se para.
+      await SeguimientoUbicacion.instancia.alCambiarEstado(
+          widget.api, _a['id'] as int, updated['status'] as String?);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(

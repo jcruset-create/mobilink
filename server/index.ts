@@ -14,6 +14,13 @@ import db, { initDb } from "./db.ts";
 import { supabase, supabaseAnonAuth, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_BUCKET } from "./supabase.ts";
 import { fallaAlFirmar, firmarEnFilas, firmarUrls } from "./core/fotosFirmadas.ts";
 import { descargarMedioTwilio, rescatarMedioDeTwilio } from "./core/medioTwilio.ts";
+import { elegirPosicion, horaWebfleet, type PosicionElegida } from "./core/posicionDoble.ts";
+import {
+  borrarPosicionTablet,
+  guardarPosicionTablet,
+  listarTabletsEnMapa,
+  ultimaPosicionTablet,
+} from "./tablets/posicionTablet.ts";
 import { guardarCodigoErp, SISTEMAS_NO_ERP } from "./clientes/codigoErp.ts";
 import { OTF_EN_ESPERA_SQL } from "./otf/espera.ts";
 import {
@@ -45,6 +52,7 @@ import { toFile } from "openai";
 import { findUserByPassword } from "./modules/users";
 import twilio from "twilio";
 import Stripe from "stripe";
+import { stripeOCortar } from "./core/stripeCliente.ts";
 import { initIntegrationHub, mountIntegrationHub, startIntegrationWorker } from "./integration-hub/index.ts";
 import { initCash, mountCash, startCashErpWorker, startCashEventWorker } from "./cash/index.ts";
 import { initTacografos, mountTacografos } from "./tacografos/index.ts";
@@ -132,6 +140,11 @@ import { mountResumenVehiculo } from "./tyrecontrol/resumenVehiculo/router.ts";
 import { mountFlanco } from "./tyrecontrol/flanco/index.ts";
 import { mountEtiquetas } from "./tyrecontrol/etiquetas/index.ts";
 import { mountParte } from "./tyrecontrol/parte/index.ts";
+import { mountInformeFlota } from "./tyrecontrol/informeFlota/index.ts";
+import { mountInformeRevisiones } from "./tyrecontrol/informeRevisiones/index.ts";
+import { mountInformePendientes } from "./tyrecontrol/informePendientes/index.ts";
+import { mountInformeMensual } from "./tyrecontrol/informeMensual/index.ts";
+import { mountTcTacografo } from "./tyrecontrol/tacografo/index.ts";
 import { masNuevaPrimero } from "./apkVersion.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
@@ -209,6 +222,8 @@ app.post(
   express.raw({ type: "application/json" }),
   async (req, res) => {
     const sig = req.headers["stripe-signature"];
+    const stripe = stripeOCortar(res);
+    if (!stripe) return;
 
     try {
       const event = stripe.webhooks.constructEvent(
@@ -371,6 +386,8 @@ app.post("/api/payments/create-deposit", authenticate, requireModule("administra
 
     const desc = String(description || "").trim();
 
+    const stripe = stripeOCortar(res);
+    if (!stripe) return;
     const session = await stripe.checkout.sessions.create({
             line_items: [
         {
@@ -770,9 +787,10 @@ const PORT = process.env.PORT || 4000;
 // El cliente de OpenAI vive en core/openaiService.ts: aquí no se crea ninguno.
 // Toda la IA de la plataforma pasa por pedirIA() / transcribirAudio().
 console.log("KEY:", process.env.OPENAI_API_KEY ? "OK" : "NO CARGADA");
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
-  apiVersion: "2026-04-22.dahlia",
-});
+// Stripe vive en core/stripeCliente.ts: aquí no se construye ninguno. Sin
+// STRIPE_SECRET_KEY el servidor arranca igual y las rutas de cobro responden
+// 503 antes de intentar nada (antes, el cliente se creaba en el arranque con
+// la clave vacía y la librería tumbaba el proceso entero).
 /* =========================================================
    HELPERS
 ========================================================= */
@@ -1523,6 +1541,58 @@ async function getWebfleetVehiclePosition(vehicleId: string): Promise<{
     speedKmh,
     moving,
   };
+}
+
+/*
+ * La posición de la furgoneta de una asistencia con doble fuente: Webfleet y,
+ * si falla o va con retraso, la tablet del operario. La regla está en
+ * `core/posicionDoble.ts`. Recibe la fila tal cual sale de la base.
+ */
+async function posicionDeAsistencia(row: any): Promise<
+  (PosicionElegida & { speedKmh: number | null; moving: boolean | null }) | null
+> {
+  const ahora = Date.now();
+  let furgoneta: { lat: number; lng: number; atMs: number } | null = null;
+  let speedKmh: number | null = null;
+  let moving: boolean | null = null;
+  if (row?.webfleetVehicleId) {
+    try {
+      const pos = await getWebfleetVehiclePosition(String(row.webfleetVehicleId));
+      furgoneta = { lat: pos.lat, lng: pos.lng, atMs: horaWebfleet(pos.timestamp, ahora) };
+      speedKmh = pos.speedKmh;
+      moving = pos.moving;
+    } catch (err: any) {
+      console.warn(`Webfleet sin posición para asistencia #${row.id}: ${err?.message ?? err}`);
+    }
+  }
+  /*
+   * La tablet, de dos sitios: lo que mandó a ESTA asistencia y la última
+   * posición de la tablet del operario asignado (la del Mapa flota). La
+   * segunda hace falta porque, si la asistencia se pone «En camino» desde el
+   * panel, la tablet no se entera hasta que el operario refresca su lista, y
+   * mientras tanto manda su posición a la ruta general, no a la asistencia.
+   */
+  const tLat = normalizeNullableNumber(row?.tabletLat);
+  const tLng = normalizeNullableNumber(row?.tabletLng);
+  let tablet =
+    tLat != null && tLng != null && row?.tabletLocationAtMs != null
+      ? { lat: tLat, lng: tLng, atMs: Number(row.tabletLocationAtMs) }
+      : null;
+  if (row?.assignedTechName) {
+    try {
+      const deLaTablet = await ultimaPosicionTablet(String(row.assignedTechName));
+      if (deLaTablet && (!tablet || deLaTablet.atMs > tablet.atMs)) tablet = deLaTablet;
+    } catch (err: any) {
+      console.warn(`Sin posición de tablet para ${row.assignedTechName}: ${err?.message ?? err}`);
+    }
+  }
+
+  const elegida = elegirPosicion({ furgoneta, tablet, ahoraMs: ahora });
+  if (!elegida) return null;
+  // Velocidad y «en marcha» solo los da Webfleet.
+  return elegida.fuente === "furgoneta"
+    ? { ...elegida, speedKmh, moving }
+    : { ...elegida, speedKmh: null, moving: null };
 }
 
 // ── Webfleet: viajes y recorrido para informe de seguimiento ──────────────────
@@ -6170,24 +6240,22 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
 
     // Recalcular ETA en tiempo real si la furgoneta está en camino
     let etaWarning: string | null = null;
-    let vehiclePosition: {
-      lat: number;
-      lng: number;
-      speedKmh: number | null;
-      moving: boolean | null;
-    } | null = null;
+    let vehiclePosition: Awaited<ReturnType<typeof posicionDeAsistencia>> = null;
 
-    // En camino al punto (en_camino) o de vuelta al taller (en_camino_base)
+    // En camino al punto (en_camino) o de vuelta al taller (en_camino_base).
+    // Sin furgoneta de Webfleet también: la tablet puede dar la posición.
     const enCaminoBase = assistance.status === "en_camino_base";
     const canRecalculate =
       (assistance.status === "en_camino" || enCaminoBase) &&
-      assistance.webfleetVehicleId &&
       assistance.latitude != null &&
       assistance.longitude != null;
 
     if (canRecalculate) {
       try {
-        vehiclePosition = await getWebfleetVehiclePosition(assistance.webfleetVehicleId!);
+        vehiclePosition = await posicionDeAsistencia(assistanceResult.rows[0]);
+        if (!vehiclePosition) {
+          throw new Error("Sin posición: ni Webfleet ni la tablet del operario");
+        }
 
         // Destino: si vuelve al taller, ETA al taller; si no, al punto de avería
         let destino = { lat: assistance.latitude!, lng: assistance.longitude! };
@@ -6309,6 +6377,10 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
             lng: Math.round(vehiclePosition.lng * 1000) / 1000,
             speedKmh: vehiclePosition.speedKmh,
             moving: vehiclePosition.moving,
+            // De dónde sale: «furgoneta» (Webfleet) o «tablet» (el operario).
+            fuente: vehiclePosition.fuente,
+            antigua: vehiclePosition.antigua,
+            atMs: vehiclePosition.atMs,
           }
         : null,
       etaWarning,
@@ -7200,12 +7272,9 @@ async function ponerAsistenciaEnCamino(
       };
     }
 
-    let origen: { lat: number; lng: number };
-    if (row.webfleetVehicleId) {
-      origen = await getWebfleetVehiclePosition(row.webfleetVehicleId);
-    } else {
-      origen = { lat: 41.1452, lng: 1.3987 };
-    }
+    // Webfleet o, si falla, la tablet. Sin ninguna, el taller como origen.
+    const posicion = await posicionDeAsistencia(row);
+    const origen: { lat: number; lng: number } = posicion ?? { lat: 41.1452, lng: 1.3987 };
 
     const destino = { lat: destLat, lng: destLng };
     const eta = await calcularETA(origen, destino);
@@ -7506,11 +7575,19 @@ app.post(
       await db.query(
         `
           UPDATE roadside_assistances
-          SET "operatorLat" = $2, "operatorLng" = $3, "operatorLocationAtMs" = $4
+          SET "operatorLat" = $2, "operatorLng" = $3, "operatorLocationAtMs" = $4,
+              "tabletLat" = $2, "tabletLng" = $3, "tabletLocationAtMs" = $4
           WHERE id = $1
         `,
         [id, lat, lng, ahora]
       );
+      // Y la del operario en el Mapa flota: dentro de una asistencia la tablet
+      // manda solo a esta ruta, no a la general.
+      await guardarPosicionTablet(operator.techName, {
+        lat, lng, atMs: ahora,
+        accuracyM: normalizeNullableNumber(req.body?.accuracyM ?? req.body?.accuracy),
+        speedKmh: normalizeNullableNumber(req.body?.speedKmh ?? req.body?.speed),
+      });
 
       /*
        * Y la posición se GUARDA como rastro, no solo se pisa la última.
@@ -7587,6 +7664,68 @@ app.post(
   }
 );
 
+/*
+ * La posición de la tablet fuera de una asistencia, para el Mapa flota. La
+ * manda la APK mientras el operario tiene la sesión abierta; al cerrar sesión
+ * la borra (DELETE) y deja de salir en el mapa. Ver tablets/posicionTablet.ts.
+ */
+app.post("/api/roadside-operator/location", requireRoadsideOperator, async (req, res) => {
+  try {
+    const operator = (req as any).roadsideOperator as { techName: string };
+    const lat = normalizeNullableNumber(req.body?.lat);
+    const lng = normalizeNullableNumber(req.body?.lng);
+    if (lat == null || lng == null) {
+      return res.status(400).json({ error: "Coordenadas no validas" });
+    }
+    await guardarPosicionTablet(operator.techName, {
+      lat, lng, atMs: Date.now(),
+      accuracyM: normalizeNullableNumber(req.body?.accuracyM ?? req.body?.accuracy),
+      speedKmh: normalizeNullableNumber(req.body?.speedKmh ?? req.body?.speed),
+    });
+    /*
+     * Si la oficina ha puesto en camino una asistencia de este operario, se le
+     * dice a la tablet: no refresca su lista sola, y sin esto seguiría
+     * mandando aquí en vez de a la asistencia (sin rastro ni kilómetros).
+     */
+    const enCamino = await db.query(
+      `SELECT id FROM roadside_assistances
+        WHERE "assignedTechName" = $1 AND status IN ('en_camino', 'en_camino_base')
+        ORDER BY "updatedAtMs" DESC NULLS LAST LIMIT 1`,
+      [operator.techName]
+    );
+    res.json({
+      ok: true,
+      asistenciaEnCamino: enCamino.rows[0] ? Number(enCamino.rows[0].id) : null,
+    });
+  } catch (error) {
+    console.error("POST /api/roadside-operator/location error:", error);
+    res.status(500).json({ error: "Error guardando ubicacion" });
+  }
+});
+
+app.delete("/api/roadside-operator/location", requireRoadsideOperator, async (req, res) => {
+  try {
+    const operator = (req as any).roadsideOperator as { techName: string };
+    await borrarPosicionTablet(operator.techName);
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("DELETE /api/roadside-operator/location error:", error);
+    res.status(500).json({ error: "Error borrando ubicacion" });
+  }
+});
+
+app.get("/api/tablets/posiciones", exigirCredencial(requirePanelRole), async (req, res) => {
+  try {
+    // Igual que las furgonetas: las de otro taller se ven, marcadas como ajenas.
+    const panelUser = await getAssistPanelUser(req);
+    const miTallerId = panelUser && !panelUser.esAdmin ? panelUser.tallerId : null;
+    res.json(await listarTabletsEnMapa(miTallerId ?? null));
+  } catch (error) {
+    console.error("GET /api/tablets/posiciones error:", error);
+    res.status(500).json({ error: "Error listando tablets" });
+  }
+});
+
 // Lote de posiciones capturadas offline (migas de pan). Se envían al recuperar señal.
 app.post(
   "/api/roadside-operator/assistances/:id/locations-batch",
@@ -7645,9 +7784,16 @@ app.post(
       if (valid.length > 0) {
         const last = valid[valid.length - 1];
         await db.query(
-          `UPDATE roadside_assistances SET "operatorLat" = $2, "operatorLng" = $3, "operatorLocationAtMs" = $4 WHERE id = $1`,
+          `UPDATE roadside_assistances
+              SET "operatorLat" = $2, "operatorLng" = $3, "operatorLocationAtMs" = $4,
+                  "tabletLat" = $2, "tabletLng" = $3, "tabletLocationAtMs" = $4
+            WHERE id = $1 AND COALESCE("tabletLocationAtMs", 0) <= $4`,
           [id, last.lat, last.lng, last.ts]
         );
+        await guardarPosicionTablet(operator.techName, {
+          lat: last.lat, lng: last.lng, atMs: last.ts,
+          accuracyM: last.accuracyM, speedKmh: last.speedKmh,
+        });
         const cfg = await getWorkshopConfig();
         const tLat = parseFloat(cfg.taller_lat), tLng = parseFloat(cfg.taller_lng);
         const radioM = parseFloat(cfg.taller_radio_m) || 300;
@@ -8097,6 +8243,8 @@ app.post(
       if (!reference) return res.status(400).json({ success: false, message: "Referencia obligatoria" });
       if (!amountCents || amountCents < 100) return res.status(400).json({ success: false, message: "Importe mínimo 1 €" });
 
+      const stripe = stripeOCortar(res);
+      if (!stripe) return;
       const session = await stripe.checkout.sessions.create({
         line_items: [{
           price_data: {
@@ -8503,10 +8651,6 @@ app.get("/api/roadside-assistances/:id/live-position", exigirCredencial(authenti
     if (r.rows.length === 0) return res.status(404).json({ error: "Asistencia no encontrada" });
     const a = normalizeRoadsideAssistanceRow(r.rows[0]);
 
-    if (!a.webfleetVehicleId) {
-      return res.json({ available: false, reason: "sin_furgoneta" });
-    }
-
     const enCaminoBase = a.status === "en_camino_base";
     let destino: { lat: number; lng: number } | null = null;
     if (enCaminoBase) {
@@ -8518,7 +8662,13 @@ app.get("/api/roadside-assistances/:id/live-position", exigirCredencial(authenti
       destino = { lat: a.latitude, lng: a.longitude };
     }
 
-    const pos = await getWebfleetVehiclePosition(a.webfleetVehicleId);
+    const pos = await posicionDeAsistencia(r.rows[0]);
+    if (!pos) {
+      return res.json({
+        available: false,
+        reason: a.webfleetVehicleId ? "sin_posicion" : "sin_furgoneta",
+      });
+    }
 
     let etaMinutos: number | null = null;
     let etaKm: string | null = null;
@@ -8539,6 +8689,9 @@ app.get("/api/roadside-assistances/:id/live-position", exigirCredencial(authenti
       etaMinutos,
       etaKm,
       destino: enCaminoBase ? "taller" : "punto",
+      fuente: pos.fuente,
+      antigua: pos.antigua,
+      posicionAtMs: pos.atMs,
       updatedAtMs: Date.now(),
     });
   } catch (error: any) {
@@ -15655,7 +15808,8 @@ async function checkWebfleetWorkshopArrival() {
   try {
     // Busca asistencias en_camino_base con furgoneta Webfleet asignada
     const result = await db.query(`
-      SELECT ra.id, ra."webfleetVehicleId", ra."workshopId"
+      SELECT ra.id, ra."webfleetVehicleId", ra."workshopId", ra."assignedTechName",
+             ra."tabletLat", ra."tabletLng", ra."tabletLocationAtMs"
       FROM roadside_assistances ra
       WHERE ra.status = 'en_camino_base'
         AND ra."arrivedAtWorkshopMs" IS NULL
@@ -15672,19 +15826,23 @@ async function checkWebfleetWorkshopArrival() {
         const radioM = parseFloat(cfg.taller_radio_m) || 300;
         if (!isFinite(tallerLat) || !isFinite(tallerLng)) continue;
 
-        const pos = await getWebfleetVehiclePosition(row.webfleetVehicleId);
+        // Webfleet y, si falla o va con retraso, la tablet del operario: así
+        // la llegada se detecta aunque el equipo de la furgoneta esté caído.
+        const pos = await posicionDeAsistencia(row);
+        if (!pos) continue;
         const distM = haversineDistanceM(pos.lat, pos.lng, tallerLat, tallerLng);
-        console.log(`Webfleet geofence check #${row.id} (${row.webfleetVehicleId}): ${Math.round(distM)}m al taller`);
+        console.log(`Geofence taller #${row.id} (${pos.fuente}${pos.antigua ? ", antigua" : ""}): ${Math.round(distM)}m al taller`);
 
         // Actualizar posición del operario para que el mapa del panel esté en vivo
         await db.query(
           `UPDATE roadside_assistances
            SET "operatorLat" = $2, "operatorLng" = $3, "operatorLocationAtMs" = $4
            WHERE id = $1 AND status = 'en_camino_base'`,
-          [row.id, pos.lat, pos.lng, Date.now()]
+          [row.id, pos.lat, pos.lng, pos.atMs]
         );
 
-        if (distM <= radioM) {
+        // Con una posición antigua no se cierra nada: no dice dónde está AHORA.
+        if (!pos.antigua && distM <= radioM) {
           const now = Date.now();
           const upd = await db.query(
             `UPDATE roadside_assistances
@@ -15695,17 +15853,19 @@ async function checkWebfleetWorkshopArrival() {
           );
           await db.query(
             `INSERT INTO roadside_assistance_events ("assistanceId", status, note, "createdBy", "createdAtMs")
-             VALUES ($1, 'llegada_taller', 'Llegada al taller detectada por Webfleet GPS', 'sistema', $2)`,
-            [row.id, now]
+             VALUES ($1, 'llegada_taller', $3, 'sistema', $2)`,
+            [row.id, now, pos.fuente === "tablet"
+              ? "Llegada al taller detectada por la tablet del operario"
+              : "Llegada al taller detectada por Webfleet GPS"]
           );
           // Liberar al técnico al cerrar la asistencia
           if (upd.rows[0]?.assignedTechName) {
             await freeTechFromRoadside(upd.rows[0].assignedTechName, row.id);
           }
-          console.log(`✓ Asistencia #${row.id} → llegada_taller (Webfleet geofence)`);
+          console.log(`✓ Asistencia #${row.id} → llegada_taller (${pos.fuente})`);
         }
       } catch (err) {
-        console.warn(`Webfleet geofence error para asistencia #${row.id}:`, err);
+        console.warn(`Geofence taller: error en asistencia #${row.id}:`, err);
       }
     }
   } catch (err) {
@@ -21658,6 +21818,22 @@ mountEtiquetas(app, authenticate, requireModule("tyrecontrol"));
 // guardar lo decide el técnico, y aterriza en la intervención y los montajes
 // que ya existen.
 mountParte(app, authenticate, requireModule("tyrecontrol"));
+mountInformeFlota(app, authenticate, requireModule("tyrecontrol"));
+mountInformeRevisiones(app, authenticate, requireModule("tyrecontrol"));
+
+// La hoja del patio: quién está dentro de una base ahora y le toca revisión.
+// Ver server/tyrecontrol/informePendientes/.
+mountInformePendientes(app, authenticate, requireModule("tyrecontrol"));
+
+// Informe mensual de flota: la réplica del informe del centro técnico.
+// De momento la cabecera y los recuentos. Ver server/tyrecontrol/informeMensual/.
+mountInformeMensual(app, authenticate, requireModule("tyrecontrol"));
+
+// Tacógrafo de TyreControl: simular, importar por lotes, deshacer, el control
+// de flota y las propuestas de medida. Ver server/tyrecontrol/tacografo/.
+// Ojo: `mountTacografos`, en plural, es el módulo de expedientes del anexo II
+// y no tiene nada que ver con esto.
+mountTcTacografo(app, authenticate, requireModule("tyrecontrol"));
 
 /*
  * Lectura de TyreControl desde Assist. Solo lectura: en esta fase el módulo no

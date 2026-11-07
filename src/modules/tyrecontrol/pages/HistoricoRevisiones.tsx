@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { listarRevisionesHistorico, listarEmpresas, listarUsuarios, listarDetalleRevision, listarIncidenciasDeRevision, listarTiposIncidencia, listarMotivosPendiente } from "../services/data";
+import { listarRevisionesHistorico, listarEmpresas, listarUsuarios, listarDetalleRevision, listarIncidenciasDeRevision, listarTiposIncidencia, listarMotivosPendiente, abrirInformeRevisionesPdf } from "../services/data";
 import type { Empresa, Perfil, RevisionDetalle } from "../types";
 import type { MontajeSnapshot } from "../services/data";
 import { presionTxt } from "../types";
@@ -81,6 +81,8 @@ function fechaCorta(iso: string): string {
   return y && m && dd ? `${dd}/${m}/${y}` : iso;
 }
 
+type FormatoPdf = "resumen" | "detalle" | "vehiculo";
+
 export default function HistoricoRevisiones() {
   const navigate = useNavigate();
   const [empresas, setEmpresas] = useState<Empresa[]>([]);
@@ -114,6 +116,34 @@ export default function HistoricoRevisiones() {
   const [hasta, setHasta] = useState(hoyISO());
   const [fEmpresa, setFEmpresa] = useState("");
   const [fTecnico, setFTecnico] = useState("");
+  const [formatoPdf, setFormatoPdf] = useState<FormatoPdf>("resumen");
+  const [generandoPdf, setGenerandoPdf] = useState(false);
+  // Por defecto NO se filtra: dejar de imprimir revisiones que existen es
+  // decisión de quien pide el informe, y se avisa en el propio PDF.
+  const [soloConDatos, setSoloConDatos] = useState(false);
+
+  /*
+   * Abre el PDF en otra pestaña.
+   *
+   * Va por `window.open` y no por `fetch` + Blob porque el navegador ya sabe
+   * enseñar un PDF y así el usuario puede imprimirlo o guardarlo con sus
+   * propios botones. La sesión viaja en la cookie, igual que el resto del
+   * panel.
+   */
+  async function abrirPdf(ambito: "cliente" | "interno") {
+    if (!fEmpresa || generandoPdf) return;
+    setGenerandoPdf(true); setError("");
+    try {
+      await abrirInformeRevisionesPdf({
+        empresaId: fEmpresa, desde, hasta, formato: formatoPdf, ambito,
+        soloConMediciones: soloConDatos,
+      });
+    } catch (e: unknown) {
+      setError(e instanceof Error && e.message ? e.message : "No se ha podido generar el informe");
+    } finally {
+      setGenerandoPdf(false);
+    }
+  }
 
   useEffect(() => {
     Promise.all([listarEmpresas(), listarUsuarios()])
@@ -239,6 +269,47 @@ export default function HistoricoRevisiones() {
           {topeAlcanzado ? "Primeras " : ""}{resumen.total} revisión(es) · {resumen.conInc} con incidencias · {resumen.pend} con incidencia pendiente
           {topeAlcanzado && <span className="ml-1 text-amber-400">· hay más: acota las fechas</span>}
         </span>
+      </div>
+
+      {/*
+        El informe en PDF, con el MISMO periodo y el MISMO cliente que la
+        tabla de abajo. Se reutilizan los filtros a propósito: un informe que
+        se configura aparte acaba sacando un periodo distinto del que el
+        usuario está mirando, y nadie se da cuenta hasta que lo ha enviado.
+
+        Hace falta elegir cliente: un PDF de «todos los clientes» mezclaría
+        flotas de empresas distintas en un documento que se manda a una.
+      */}
+      <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-slate-700 bg-slate-800/60 p-2">
+        <span className="text-[11px] font-bold uppercase text-slate-400">Informe PDF</span>
+        {!fEmpresa ? (
+          <span className="text-[12px] text-amber-300">Elige un cliente arriba para poder sacarlo.</span>
+        ) : (
+          <>
+            <select className={`${inputCls} w-auto`} value={formatoPdf}
+                    onChange={(e) => setFormatoPdf(e.target.value as FormatoPdf)}>
+              <option value="resumen">Resumen · una línea por revisión</option>
+              <option value="detalle">Detalle · rueda a rueda</option>
+              <option value="vehiculo">Agrupado por vehículo</option>
+            </select>
+            <button onClick={() => void abrirPdf("cliente")} disabled={generandoPdf}
+              className="rounded-lg bg-sky-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-sky-500 disabled:opacity-50">
+              {generandoPdf ? "Generando…" : "Para el cliente"}
+            </button>
+            <button onClick={() => void abrirPdf("interno")} disabled={generandoPdf}
+              className="rounded-lg border border-slate-500 px-3 py-1.5 text-[12px] font-bold text-slate-200 hover:bg-slate-700 disabled:opacity-50">
+              Interno
+            </button>
+            <label className="flex items-center gap-1.5 text-[12px] text-slate-300"
+                   title="Deja fuera las revisiones que no tienen ninguna medición guardada. El PDF dice cuántas se han quitado.">
+              <input type="checkbox" checked={soloConDatos} onChange={(e) => setSoloConDatos(e.target.checked)} />
+              Solo las que tienen mediciones
+            </label>
+            <span className="text-[11px] text-slate-500">
+              Del {desde || "—"} al {hasta || "—"}. El del cliente no lleva técnicos, códigos internos ni revisiones sin terminar.
+            </span>
+          </>
+        )}
       </div>
 
       {porQuien.length > 0 && (

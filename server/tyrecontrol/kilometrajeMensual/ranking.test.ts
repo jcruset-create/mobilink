@@ -25,6 +25,7 @@ function fila(
   month: number,
   km: number | null,
   estado: MonthlyMileageRow["sync_status"] = "ok",
+  ultimoError: string | null = null,
 ): MonthlyMileageRow {
   return {
     id: 1, tenant_id: "emp-1", system: "movertis", account_key: "plana",
@@ -32,7 +33,7 @@ function fila(
     period_start_ms: 0, period_end_ms: 0, timezone: "Europe/Madrid",
     distance_km: km, initial_odometer_km: null, final_odometer_km: null,
     trips: null, source: "summarytrips", sync_status: estado, closed: true,
-    synced_at_ms: 0, last_error: null,
+    synced_at_ms: 0, last_error: ultimoError,
   };
 }
 
@@ -93,6 +94,51 @@ describe("rankingDeKilometraje()", () => {
     const r = rankingDeKilometraje(filas, [bus("a")], ACTUAL);
     expect(r.vehiculos[0].meses).toBe(1);
     expect(r.vehiculos[0].mesesConError).toBe(1);
+  });
+
+  /*
+   * «1 con error» alarma pero no se puede arreglar: hay que saber de QUÉ mes
+   * se trata. No es lo mismo un error de hace un año, ya cerrado, que el del
+   * mes pasado.
+   */
+  it("dice CUÁLES son los meses en error, en orden y con lo que contestó el proveedor", () => {
+    const filas = [
+      fila("a", 2026, 7, null, "error", "timeout del proveedor"),
+      fila("a", 2026, 1, 10_000),
+      fila("a", 2026, 3, null, "error", "vehículo no encontrado"),
+    ];
+    const r = rankingDeKilometraje(filas, [bus("a")], ACTUAL);
+    expect(r.vehiculos[0].mesesConErrorDetalle).toEqual([
+      { year: 2026, month: 3, error: "vehículo no encontrado" },
+      { year: 2026, month: 7, error: "timeout del proveedor" },
+    ]);
+  });
+
+  it("los meses sin dato también se nombran, y no arrastran mensaje de error", () => {
+    const filas = [
+      fila("a", 2026, 2, null, "empty"),
+      fila("a", 2026, 1, 10_000),
+    ];
+    const r = rankingDeKilometraje(filas, [bus("a")], ACTUAL);
+    expect(r.vehiculos[0].mesesSinDatoDetalle).toEqual([{ year: 2026, month: 2 }]);
+    expect(r.vehiculos[0].mesesConErrorDetalle).toEqual([]);
+  });
+
+  it("el orden es cronológico aunque las filas lleguen revueltas y crucen el año", () => {
+    const filas = [
+      fila("a", 2026, 1, null, "error"),
+      fila("a", 2025, 12, null, "error"),
+      fila("a", 2026, 2, 10_000),
+    ];
+    const r = rankingDeKilometraje(filas, [bus("a")], ACTUAL);
+    expect(r.vehiculos[0].mesesConErrorDetalle.map((m) => `${m.year}-${m.month}`))
+      .toEqual(["2025-12", "2026-1"]);
+  });
+
+  it("sin errores ni huecos, las listas vienen vacías y no hay que adivinarlo", () => {
+    const r = rankingDeKilometraje([fila("a", 2026, 1, 10_000)], [bus("a")], ACTUAL);
+    expect(r.vehiculos[0].mesesConErrorDetalle).toEqual([]);
+    expect(r.vehiculos[0].mesesSinDatoDetalle).toEqual([]);
   });
 
   it("el mes EN CURSO no entra en la media: está a medias", () => {

@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { Download, Gauge, Search, ShieldCheck, TriangleAlert } from "lucide-react";
+import { Download, Gauge, RefreshCw, Search, ShieldCheck, TriangleAlert } from "lucide-react";
 import {
-  rankingKilometraje, revisarCoherencia,
+  rankingKilometraje, rehacerHuecosVehiculo, revisarCoherencia,
   type Ranking, type VehiculoDelRanking,
 } from "../services/kilometrajeMensual";
+import { detalleDeMeses, listaDeMeses } from "../services/mesesEtiqueta";
 import { listarEmpresas } from "../services/data";
 import type { Empresa } from "../types";
 
@@ -43,6 +44,10 @@ export default function RankingKilometraje() {
   const [datos, setDatos] = useState<Ranking | null>(null);
   const [error, setError] = useState("");
   const [cargando, setCargando] = useState(true);
+  /* Se incrementa cuando una fila rehace sus meses: el ranking se vuelve a
+     pedir entero, porque al cambiar un vehículo cambia la media de la flota
+     y el puesto de los demás. */
+  const [recarga, setRecarga] = useState(0);
   const [busqueda, setBusqueda] = useState("");
   const [empresas, setEmpresas] = useState<Empresa[]>([]);
   const [empresaId, setEmpresaId] = useState("");
@@ -59,6 +64,8 @@ export default function RankingKilometraje() {
       .catch((e) => { setError(e.message); setCargando(false); });
   }, []);
 
+  // Se incrementa cuando una fila rehace sus meses: el ranking se vuelve a
+  // pedir entero porque la media de la flota también se mueve.
   useEffect(() => {
     if (!empresaId) return;
     let vivo = true;
@@ -74,7 +81,7 @@ export default function RankingKilometraje() {
       }
     })();
     return () => { vivo = false; };
-  }, [empresaId]);
+  }, [empresaId, recarga]);
 
   const filtrados = useMemo(() => {
     const q = busqueda.trim().toLowerCase();
@@ -129,10 +136,17 @@ export default function RankingKilometraje() {
 
   function exportar() {
     if (!datos) return;
-    const cab = "puesto;matricula;unidad;km_anual;meses;km_anio_actual;meses_del_anio;meses_sin_dato;meses_con_error";
+    // Los meses van con nombre y no solo contados: un CSV con «2» obliga a
+    // volver a la pantalla para saber de qué dos meses habla.
+    const mesesCsv = (ms: Array<{ year: number; month: number }>) =>
+      ms.map((m) => `${m.year}-${String(m.month).padStart(2, "0")}`).join(" ");
+    const cab = "puesto;matricula;unidad;km_anual;meses;km_anio_actual;meses_del_anio;"
+      + "meses_sin_dato;cuales_sin_dato;meses_con_error;cuales_con_error";
     const filas = datos.vehiculos.map((v, i) =>
       [i + 1, v.matricula ?? "", v.numeroUnidad ?? "", v.kmAnual ?? "", v.meses,
-       v.kmAnioActual, v.mesesDelAnio, v.mesesSinDato, v.mesesConError].join(";"),
+       v.kmAnioActual, v.mesesDelAnio,
+       v.mesesSinDato, mesesCsv(v.mesesSinDatoDetalle ?? []),
+       v.mesesConError, mesesCsv(v.mesesConErrorDetalle ?? [])].join(";"),
     );
     const csv = [cab, ...filas].join("\n");
     const url = URL.createObjectURL(new Blob([`﻿${csv}`], { type: "text/csv;charset=utf-8" }));
@@ -219,6 +233,7 @@ export default function RankingKilometraje() {
                   <th className="px-3 py-2 text-right">Año en curso</th>
                   <th className="px-3 py-2 text-right">Mes actual</th>
                   <th className="px-3 py-2 text-left">Huecos</th>
+                  <th className="px-3 py-2 text-right"></th>
                 </tr>
               </thead>
               <tbody>
@@ -226,10 +241,11 @@ export default function RankingKilometraje() {
                     filtrada: buscar una matrícula no puede cambiar en qué
                     posición va ese autobús. */}
                 {filtrados.map((v) => (
-                  <Fila key={v.vehiculoId} v={v} puesto={datos.vehiculos.indexOf(v) + 1} num={num} />
+                  <Fila key={v.vehiculoId} v={v} puesto={datos.vehiculos.indexOf(v) + 1} num={num}
+                        empresaId={empresaId} onRehecho={() => setRecarga((n) => n + 1)} />
                 ))}
                 {filtrados.length === 0 && (
-                  <tr><td colSpan={8} className="px-3 py-6 text-center text-slate-500">
+                  <tr><td colSpan={9} className="px-3 py-6 text-center text-slate-500">
                     {busqueda
                       ? "Ningún vehículo con esa matrícula o unidad."
                       : `Todavía no hay kilómetros sincronizados${nombreEmpresa ? ` en ${nombreEmpresa}` : ""}.`}
@@ -262,11 +278,47 @@ export default function RankingKilometraje() {
   );
 }
 
-function Fila({ v, puesto, num }: {
+function Fila({ v, puesto, num, empresaId, onRehecho }: {
   v: VehiculoDelRanking;
   puesto: number;
   num: (n: number | null | undefined) => string;
+  empresaId: string;
+  onRehecho: () => void;
 }) {
+  const [rehaciendo, setRehaciendo] = useState(false);
+  const [aviso, setAviso] = useState("");
+  const huecosConocidos = v.mesesSinDato + v.mesesConError;
+
+  /*
+   * Rehacer SOLO los meses que le faltan a este vehículo.
+   *
+   * Qué meses son lo decide el servidor leyendo sus filas: aquí no se manda
+   * una lista, así que no se puede mandar mal. Y si no falta ninguno, el
+   * servidor contesta sin llamar al proveedor: pulsar dos veces no cuesta
+   * una petición de más.
+   */
+  async function rehacer() {
+    setRehaciendo(true); setAviso("");
+    try {
+      const r = await rehacerHuecosVehiculo({ vehiculoId: v.vehiculoId, empresaId });
+      if (r.pedidos === 0) {
+        setAviso("No le falta ningún mes");
+      } else {
+        const partes = [
+          r.porClase.error ? `${r.porClase.error} con error` : "",
+          r.porClase.sin_dato ? `${r.porClase.sin_dato} sin dato` : "",
+          r.porClase.ausente ? `${r.porClase.ausente} sin pedir` : "",
+        ].filter(Boolean);
+        setAviso(`Pedidos ${r.pedidos} meses (${partes.join(", ")})`);
+        onRehecho();
+      }
+    } catch (e: unknown) {
+      setAviso(e instanceof Error && e.message ? e.message : "No se ha podido rehacer");
+    } finally {
+      setRehaciendo(false);
+    }
+  }
+
   // Pocos meses detrás de la cifra: se avisa en la propia fila, en vez de
   // dejar que un 96.000 sobre dos meses parezca lo mismo que sobre doce.
   const flojo = v.meses < 3;
@@ -283,10 +335,61 @@ function Fila({ v, puesto, num }: {
         {num(v.kmAnioActual)} <span className="text-slate-500">({v.mesesDelAnio})</span>
       </td>
       <td className="px-3 py-1.5 text-right text-slate-400">{num(v.kmMesActual)}</td>
+      {/*
+        Qué meses, no solo cuántos.
+
+        «1 con error» alarma y no se puede arreglar: para arreglarlo hay que
+        saber de qué mes se trata —no es lo mismo uno de hace un año, ya
+        cerrado, que el del mes pasado— y qué contestó el proveedor. El mes
+        va en la celda y el motivo en el título, que es donde cabe.
+      */}
       <td className="px-3 py-1.5 text-slate-400">
-        {v.mesesSinDato > 0 && <span className="mr-2">{v.mesesSinDato} sin dato</span>}
-        {v.mesesConError > 0 && <span className="text-amber-300">{v.mesesConError} con error</span>}
+        {v.mesesSinDato > 0 && (
+          <span className="mr-2" title={detalleDeMeses(v.mesesSinDatoDetalle ?? [])}>
+            {v.mesesSinDato} sin dato
+            {(v.mesesSinDatoDetalle?.length ?? 0) > 0 && (
+              <span className="ml-1 capitalize text-slate-500">· {listaDeMeses(v.mesesSinDatoDetalle)}</span>
+            )}
+          </span>
+        )}
+        {v.mesesConError > 0 && (
+          <span
+            className="text-amber-300"
+            title={detalleDeMeses(v.mesesConErrorDetalle ?? []) || "El proveedor no dijo por qué"}
+          >
+            {v.mesesConError} con error
+            {(v.mesesConErrorDetalle?.length ?? 0) > 0 && (
+              <span className="ml-1 capitalize text-amber-200/70">· {listaDeMeses(v.mesesConErrorDetalle)}</span>
+            )}
+          </span>
+        )}
         {v.mesesSinDato === 0 && v.mesesConError === 0 && "—"}
+      </td>
+      {/*
+        El botón de la fila: rehace los meses que le faltan A ESTE vehículo y
+        a ninguno más. Las dos alternativas no servían: el relleno recorre la
+        flota entera y tarda horas, y pedir un rango a mano arrastra meses que
+        ya están bien, que es cupo del proveedor gastado en vano.
+      */}
+      <td className="px-3 py-1.5 text-right">
+        <div className="flex items-center justify-end gap-2">
+          {aviso && <span className="text-[11px] text-slate-400">{aviso}</span>}
+          <button
+            onClick={() => void rehacer()}
+            disabled={rehaciendo || !empresaId}
+            title={huecosConocidos > 0
+              ? "Vuelve a pedir al proveedor solo los meses que le faltan a este vehículo"
+              : "Vuelve a pedir los meses que le falten. Si no falta ninguno, no se llama al proveedor"}
+            className={`rounded-lg border px-2 py-1 text-[11px] font-bold disabled:opacity-40 ${
+              huecosConocidos > 0
+                ? "border-amber-500 text-amber-300 hover:bg-amber-500/10"
+                : "border-slate-600 text-slate-400 hover:bg-slate-700/40"
+            }`}
+          >
+            <RefreshCw className={`inline h-3 w-3 ${rehaciendo ? "animate-spin" : ""}`} />
+            <span className="ml-1">{rehaciendo ? "Pidiendo…" : "Rehacer"}</span>
+          </button>
+        </div>
       </td>
     </tr>
   );

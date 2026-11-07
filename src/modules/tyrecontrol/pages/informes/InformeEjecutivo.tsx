@@ -4,6 +4,10 @@ import { useInformesFiltros } from "./InformesLayout";
 import { obtenerInformeEjecutivo } from "../../services/informes";
 import type { InformeEjecutivo as Datos, NivelDesgaste, Semaforo } from "../../types/informes";
 import { KpiCard } from "../../components/informes/KpiCard";
+import {
+  CabeceraCorrida, CabeceraInforme, PieCorrido,
+} from "../../components/informes/CabeceraInforme";
+import { useTyreAuth } from "../../contexts/TyreAuthContext";
 import { Donut, BarList, ColumnChart, LineChart } from "../../components/informes/charts";
 
 /**
@@ -202,7 +206,9 @@ function Tendencia({ pct, mejorSiBaja = false }: { pct: number | null; mejorSiBa
 
 function Seccion({ titulo, sub, children }: { titulo: string; sub?: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-lg bg-slate-800 p-4">
+    // `bloque-informe` impide que la sección se parta entre dos hojas: sin
+    // esto, una página abría con tres números sueltos sin su título.
+    <section className="bloque-informe rounded-lg bg-slate-800 p-4">
       <h2 className="text-sm font-black text-slate-100">{titulo}</h2>
       {sub && <p className="mb-3 mt-0.5 text-[11px] text-slate-400">{sub}</p>}
       <div className={sub ? "" : "mt-3"}>{children}</div>
@@ -334,7 +340,8 @@ function conclusiones(d: Datos): string[] {
 }
 
 export default function InformeEjecutivo() {
-  const { filtros } = useInformesFiltros();
+  const { filtros, empresas } = useInformesFiltros();
+  const { perfil } = useTyreAuth();
   const [d, setD] = useState<Datos | null>(null);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -361,11 +368,21 @@ export default function InformeEjecutivo() {
         {/* La pista se enseña según lo que diga el error, no siempre. Antes se
             leía "falta ejecutar la migración" ante CUALQUIER fallo, y con una
             caducidad —donde la función está y funciona, solo tarda— mandaba a
-            buscar donde no era. */}
+            buscar donde no era.
+
+            Y la pista de la caducidad nombraba UNA migración concreta como si
+            fuera el remedio seguro. Lo fue en agosto; en noviembre esa ya
+            estaba aplicada y la causa era otra —el coste de la RLS fila a
+            fila—, así que mandó a aplicar algo que ya estaba puesto. Una pista
+            que nombra la cura equivocada cuesta más tiempo que no dar ninguna:
+            ahora dice qué ha pasado y dónde mirar, no qué fichero ejecutar. */}
         {/statement timeout|caduc|tiempo de espera/i.test(error) ? (
           <p className="mt-2 text-[12px] text-rose-300/80">
-            El informe ha tardado más de lo que la base de datos permite. La migración
-            <code> tyrecontrol_informe_ejecutivo_jit.sql</code> lo deja en menos de un segundo.
+            El informe ha tardado más de lo que la base de datos permite. No es que falte
+            ningún dato: es que la consulta se ha pasado de tiempo. Suele ser cosa de las
+            migraciones de rendimiento de <code>supabase/migrations/</code> —las de JIT y
+            la de la RLS por empresa—; conviene comprobar cuáles están aplicadas antes de
+            volver a ejecutar ninguna.
           </p>
         ) : /tc_informe_ejecutivo/i.test(error) ? (
           <p className="mt-2 text-[12px] text-rose-300/80">
@@ -379,6 +396,19 @@ export default function InformeEjecutivo() {
 
   const c = d.cabecera;
   const cob = d.cobertura;
+
+  /**
+   * Quién emite y para quién.
+   *
+   * El CENTRO es la empresa del usuario que ha entrado: quien imprime es
+   * quien lo emite. El CLIENTE, la empresa elegida en los filtros; sin
+   * filtro son todas, y entonces no se nombra a ninguna en vez de inventarse
+   * un nombre.
+   */
+  const centro = perfil?.empresa?.nombre ?? null;
+  const cliente = filtros.empresaId
+    ? (empresas.find((e) => e.id === filtros.empresaId)?.nombre ?? null)
+    : null;
   // El titular es la flota al día con su periodicidad. "Revisados en el
   // periodo" sigue estando, pero como dato de actividad, no como nota.
   const alDia = cob && cob.total > 0 ? ((cob.al_dia + cob.proximos) / cob.total) * 100 : null;
@@ -399,22 +429,31 @@ export default function InformeEjecutivo() {
 
   return (
     <div className="flex flex-col gap-4 print:gap-3">
+      {/* ── Cabecera y pie que se repiten en cada hoja impresa ── */}
+      <CabeceraCorrida titulo="Informe ejecutivo" cliente={cliente} />
+      <PieCorrido
+        centro={centro} titulo="Informe ejecutivo" cliente={cliente}
+        desde={d.periodo.desde} hasta={d.periodo.hasta}
+      />
+
       {/* ── Portada ── */}
-      <div className="flex flex-wrap items-end justify-between gap-3 rounded-lg bg-slate-800 p-4">
-        <div>
-          <h1 className="text-xl font-black text-slate-100">Informe ejecutivo de flota</h1>
-          <p className="text-[12px] text-slate-400">
-            Periodo {d.periodo.desde} → {d.periodo.hasta} · generado el{" "}
-            {new Date(d.generado).toLocaleDateString("es-ES")}
-          </p>
-        </div>
-        <button
-          onClick={() => window.print()}
-          className="flex items-center gap-1 rounded-lg bg-slate-700 px-3 py-1.5 text-[12px] font-semibold hover:bg-slate-600 print:hidden"
-        >
-          <Printer className="h-4 w-4" /> Imprimir / PDF
-        </button>
-      </div>
+      <CabeceraInforme
+        titulo="Informe ejecutivo"
+        subtitulo="de flota"
+        centro={centro}
+        cliente={cliente}
+        desde={d.periodo.desde}
+        hasta={d.periodo.hasta}
+        generado={d.generado}
+        acciones={
+          <button
+            onClick={() => window.print()}
+            className="flex items-center gap-1 rounded-lg bg-slate-700 px-3 py-1.5 text-[12px] font-semibold hover:bg-slate-600"
+          >
+            <Printer className="h-4 w-4" /> Imprimir / PDF
+          </button>
+        }
+      />
 
       {/* ── KPIs con tendencia ── */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">

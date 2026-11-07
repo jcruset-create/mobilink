@@ -52,6 +52,14 @@ export interface IntervencionFila {
 
 export interface ServicioFila { servicio: string; cantidad: number }
 
+/** Un montaje histórico (albarán importado), para la hoja aparte del papel. */
+export interface HistoricoFila {
+  posicion?: string | null;
+  descripcion?: string | null;
+  condicion?: string | null;
+  km?: number | null;
+}
+
 /**
  * Zona horaria del papel. Los timestamps de la base de datos van en UTC y el
  * servidor de Render también: sin esto, un parte cerrado a las 17:53 en
@@ -150,6 +158,8 @@ export function armarParte(
   i: IntervencionFila,
   movimientos: MovimientoFila[],
   servicios: ServicioFila[] = [],
+  historicos: HistoricoFila[] = [],
+  historicosSalidas = 0,
 ): PartePdf {
   // Un cambio de posición es un desmontaje Y un montaje en el papel, pero en
   // la base de datos es UN movimiento. Se cuenta en las dos tablas: el parte
@@ -193,5 +203,8 @@ export function armarParte(
     cliente_nombre: i.firma_cliente_nombre ?? null,
     cliente_dni: i.firma_cliente_dni ?? null,
     tecnico_nombre: i.firma_tecnico_nombre ?? null,
+    historicos: historicos.length ? historicos : undefined,
+    historicos_salidas: historicosSalidas || undefined,
+    historico_etiqueta: (i as { historico_etiqueta?: string | null }).historico_etiqueta ?? null,
   };
 }

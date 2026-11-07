@@ -1,11 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   listarVehiculos, actualizarVehiculo, listarEmpresas, listarDelegaciones, listarTiposVehiculo,
   listarMedidas,
   listarEstadoWebfleet, listarPresenciaEnBases, sincronizarWebfleet, listarRevisionEstado,
   listarVehiculosPendientes, validarVehiculo, eliminarVehiculo,
+  calcularBaseHabitual, type BaseHabitual,
 } from "../services/data";
+import { motivoSinBase } from "../services/baseHabitual";
+import {
+  compararMatricula, compararPosicion, ordenarPendientes, recuentoPorGrupo,
+  sitioDeVehiculo, type FilaPendiente, type OrdenPendientes,
+} from "../services/ordenPendientes";
 import EditorVehiculo from "../components/EditorVehiculo";
 import ModalBaseHabitual from "../components/ModalBaseHabitual";
 import type {
@@ -59,12 +65,57 @@ export default function Vehiculos() {
   const [baseHabitual, setBaseHabitual] = useState(false);
   const [validando, setValidando] = useState<string | null>(null);
   const [msgPend, setMsgPend] = useState("");
+  // Con 87 en la lista, el orden decide si sirve para salir a buscarlos o
+  // solo para mirarla. Por matrícula es el de siempre; por posición agrupa
+  // por base, que es como se hace la ruta.
+  const [ordenPend, setOrdenPend] = useState<OrdenPendientes>("matricula");
 
   async function cargarPendientes() {
     try { setPendientes(await listarVehiculosPendientes()); }
     catch { /* la columna puede no estar aún: el listado sigue siendo útil */ }
   }
   useEffect(() => { void cargarPendientes(); }, []);
+
+  /*
+   * Por qué a un vehículo pendiente le falta la base.
+   *
+   * El cálculo de la base habitual deja sin tocar las decisiones dudosas y
+   * las que no tienen histórico, y eso está bien —una base mal puesta manda a
+   * un técnico al patio equivocado—, pero quien mira la lista se queda con un
+   * hueco y sin saber si esto se arregla volviendo a pasar el cálculo, lo
+   * tiene que decidir él, o hay que escribirlo a mano.
+   *
+   * Va APARTE y después de pintar, por dos razones: recorre el histórico de
+   * presencia de un mes y no debe retrasar la lista, y es una explicación —si
+   * falla, se calla y no rompe nada—. Se pide una vez por empresa y se
+   * recuerda; si no, validar un vehículo volvería a lanzarlo entero.
+   */
+  const [sinBase, setSinBase] = useState<Map<string, BaseHabitual>>(new Map());
+  const empresasConsultadas = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const faltan = new Set(
+      pendientes.filter((v) => !v.delegacion_id && v.empresa_id).map((v) => v.empresa_id as string),
+    );
+    const nuevas = [...faltan].filter((e) => !empresasConsultadas.current.has(e));
+    if (nuevas.length === 0) return;
+    let vivo = true;
+    void (async () => {
+      for (const empresaId of nuevas) {
+        empresasConsultadas.current.add(empresaId);
+        try {
+          const filas = await calcularBaseHabitual(empresaId);
+          if (!vivo) return;
+          setSinBase((antes) => {
+            const m = new Map(antes);
+            for (const f of filas) m.set(f.vehiculo_id, f);
+            return m;
+          });
+        } catch { /* es una explicación: si no se puede dar, no se da */ }
+      }
+    })();
+    return () => { vivo = false; };
+  }, [pendientes]);
 
   async function validar(v: Vehiculo) {
     setValidando(v.id); setMsgPend("");
@@ -261,7 +312,39 @@ export default function Vehiculos() {
   }
 
   const estadoDe = (id: string): EstadoWebfleet => ubicacionDe(id);
+
+  /** id → nombre de delegación, para no recorrer la lista en cada fila. */
+  const nombreDelegacion = useMemo(
+    () => new Map(delegaciones.map((d) => [d.id, d.nombre])),
+    [delegaciones],
+  );
   const telematicaPorVehiculo = useMemo(() => porVehiculo(enlacesTel), [enlacesTel]);
+
+  /*
+   * Los pendientes, en el orden elegido.
+   *
+   * El sitio sale de las MISMAS dos funciones que pintan la chapa de cada
+   * fila —`etiquetaBase` para «en qué base está» y `ubicacionDeVehiculo`
+   * para el resto—, así que la lista se ordena por lo que el usuario está
+   * leyendo y no por un criterio paralelo que algún día se despiste.
+   */
+  const filasPendientes = useMemo<FilaPendiente[]>(
+    () => pendientes.map((v) => ({
+      id: v.id, matricula: v.matricula, unidad: v.numero_unidad ?? null,
+      sitio: sitioDeVehiculo(presencias.get(v.id), estados.get(v.id)),
+    })),
+    [pendientes, presencias, estados],
+  );
+
+  const pendientesOrdenados = useMemo(() => {
+    const porId = new Map(pendientes.map((v) => [v.id, v]));
+    return ordenarPendientes(filasPendientes, ordenPend)
+      .map((f) => porId.get(f.id))
+      .filter((v): v is Vehiculo => !!v);
+  }, [pendientes, filasPendientes, ordenPend]);
+
+  /** Cuántos hay a mano y cuántos no, para decirlo en vez de contar a ojo. */
+  const recuentoPend = useMemo(() => recuentoPorGrupo(filasPendientes), [filasPendientes]);
 
   // KPIs: en base, pendientes en base, vencidas en base, en ruta, sin conexión.
   const kpis = useMemo(() => {
@@ -300,7 +383,7 @@ export default function Vehiculos() {
 
   // ── Orden por columna ──────────────────────────────────────────────
   // Se pulsa la cabecera: primera vez ascendente, segunda descendente.
-  type Columna = "empresa" | "matricula" | "unidad" | "delegacion" | "marca" | "config" | "medida" | "km" | "estado";
+  type Columna = "empresa" | "matricula" | "unidad" | "delegacion" | "marca" | "config" | "medida" | "km" | "estado" | "posicion";
   const [orden, setOrden] = useState<{ col: Columna; asc: boolean }>({ col: "matricula", asc: true });
 
   function ordenarPor(col: Columna) {
@@ -327,10 +410,21 @@ export default function Vehiculos() {
         case "medida": return medidaDe(v);
         case "km": return Number(v.km_actual) || 0;
         case "estado": return v.activo ? "Activo" : "Inactivo";
+        // La posición no es un valor que se pueda comparar como texto: se
+        // ordena por grupos y tiene su propio comparador, más abajo.
+        case "posicion": return "";
       }
     };
     const signo = orden.asc ? 1 : -1;
     return [...filtrados].sort((a, b) => {
+      if (orden.col === "posicion") {
+        const porSitio = compararPosicion(
+          sitioDeVehiculo(presencias.get(a.id), estados.get(a.id)),
+          sitioDeVehiculo(presencias.get(b.id), estados.get(b.id)),
+        );
+        if (porSitio !== 0) return porSitio * signo;
+        return compararMatricula(a.matricula, b.matricula);
+      }
       const va = valor(a), vb = valor(b);
       // Lo que no tiene dato siempre al final, se ordene como se ordene.
       const vacioA = va === "" || va == null, vacioB = vb === "" || vb == null;
@@ -338,7 +432,7 @@ export default function Vehiculos() {
       if (typeof va === "number" && typeof vb === "number") return (va - vb) * signo;
       return String(va).localeCompare(String(vb), "es", { numeric: true, sensitivity: "base" }) * signo;
     });
-  }, [filtrados, orden, medidas]);
+  }, [filtrados, orden, medidas, presencias, estados]);
 
 
   return (
@@ -373,10 +467,56 @@ export default function Vehiculos() {
             camión ya estaba dado de alta con la matrícula escrita de otra manera.
           </p>
           {msgPend && <div className="mt-2 text-[12px] text-red-300">{msgPend}</div>}
+
+          {/* Con decenas en la lista, el orden es lo que decide si sirve para
+              salir a buscarlos. Por posición se agrupan por base: se cogen
+              todos los de Reus de una vez. */}
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <span className="text-[11px] font-bold uppercase text-amber-200/70">Ordenar por</span>
+            {([
+              ["matricula", "Matrícula"],
+              ["unidad", "Nº unidad"],
+              ["posicion", "Posición"],
+            ] as [OrdenPendientes, string][]).map(([clave, texto]) => (
+              <button
+                key={clave}
+                onClick={() => setOrdenPend(clave)}
+                className={`rounded-full px-3 py-1 text-[12px] font-bold ${
+                  ordenPend === clave
+                    ? "bg-amber-500/25 text-amber-100"
+                    : "border border-slate-700 text-slate-300 hover:bg-slate-800"
+                }`}
+              >
+                {texto}
+              </button>
+            ))}
+            {ordenPend === "posicion" && (
+              <span className="text-[11px] text-amber-200/70">
+                {recuentoPend.enBase} en base · {recuentoPend.ultimaVez} última vez en base ·{" "}
+                {recuentoPend.enRuta} en ruta · {recuentoPend.sinSenal} sin saber dónde
+              </span>
+            )}
+            {ordenPend === "unidad" && recuentoPend.enBase + recuentoPend.ultimaVez + recuentoPend.enRuta + recuentoPend.sinSenal > 0 && (
+              <span className="text-[11px] text-amber-200/70">
+                Los que no tienen número de unidad van al final.
+              </span>
+            )}
+          </div>
+
           <div className="mt-3 flex flex-col gap-2">
-            {pendientes.map((v) => (
+            {pendientesOrdenados.map((v) => (
               <div key={v.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded border border-slate-700 bg-slate-900/40 px-3 py-2">
                 <span className="font-mono text-sm font-bold text-slate-100">{v.matricula}</span>
+                {/* El número de unidad es como se llama al camión por radio;
+                    la matrícula es como lo llama Tráfico. Quien sale a
+                    buscarlo usa el primero, así que va pegado al segundo. Si
+                    no lo tiene se dice, en vez de dejar un hueco que parece
+                    un fallo de carga. */}
+                {v.numero_unidad
+                  ? <span className="rounded bg-slate-700/70 px-1.5 py-0.5 font-mono text-[12px] font-bold text-slate-200" title="Número de unidad">
+                      nº {v.numero_unidad}
+                    </span>
+                  : <span className="text-[11px] italic text-slate-600" title="Este vehículo no tiene número de unidad en su ficha">sin nº unidad</span>}
                 <span className="text-[12px] text-slate-400">{v.empresa?.nombre ?? "—"}</span>
                 <span className="text-[12px] text-slate-500">{v.tipo?.nombre ?? "sin tipo"}</span>
                 {/*
@@ -387,21 +527,49 @@ export default function Vehiculos() {
                 */}
                 {(() => {
                   const donde = etiquetaBase(presencias.get(v.id), estados.get(v.id));
-                  if (!donde) return null;
+                  if (donde) {
+                    return (
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                          donde.ahora
+                            ? "bg-emerald-500/15 text-emerald-300"
+                            : "bg-slate-700/60 text-slate-300"
+                        }`}
+                        title={
+                          donde.ahora
+                            ? "Está en esta base ahora mismo"
+                            : "Aquí se le vio por última vez; su equipo lleva rato sin emitir"
+                        }
+                      >
+                        📍 {donde.ahora ? "En" : "Última vez en"} {donde.base}
+                      </span>
+                    );
+                  }
+                  /*
+                    No está en ninguna base, y hasta ahora eso se enseñaba
+                    como un hueco. Un hueco mezclaba tres cosas distintas —en
+                    ruta, sin conexión y sin posición— y justo la primera es
+                    la que se puede ir a buscar. Se dice cuál de las tres es,
+                    con el mismo texto y el mismo tono que la ficha, que ya lo
+                    resolvía.
+                  */
+                  const u = ubicacionDeVehiculo({
+                    presencia: presencias.get(v.id),
+                    webfleet: estados.get(v.id),
+                  });
                   return (
                     <span
                       className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
-                        donde.ahora
-                          ? "bg-emerald-500/15 text-emerald-300"
-                          : "bg-slate-700/60 text-slate-300"
+                        u.tono === "ruta"
+                          ? "bg-sky-500/15 text-sky-300"
+                          : u.tono === "viejo"
+                            ? "bg-amber-500/15 text-amber-300"
+                            : "bg-slate-700/60 text-slate-400"
                       }`}
-                      title={
-                        donde.ahora
-                          ? "Está en esta base ahora mismo"
-                          : "Aquí se le vio por última vez; su equipo lleva rato sin emitir"
-                      }
+                      title={u.detalle ?? ""}
                     >
-                      📍 {donde.ahora ? "En" : "Última vez en"} {donde.base}
+                      {u.tono === "ruta" ? "🛣 " : ""}{u.texto}
+                      {u.detalle ? <span className="ml-1 font-normal opacity-70">· {u.detalle}</span> : null}
                     </span>
                   );
                 })()}
@@ -412,7 +580,44 @@ export default function Vehiculos() {
                     .filter(Boolean).join(", ") || "nada obvio"}
                   {" pendiente"}
                 </span>
-                <div className="ml-auto flex gap-2">
+                <div className="ml-auto flex items-center gap-2">
+                  {/*
+                    La base que tiene ASIGNADA en su ficha, que no es lo mismo
+                    que dónde está ahora: la chapa de arriba dice dónde se le
+                    ve, esto dice a qué base pertenece. Si no la tiene, no se
+                    escribe nada: el aviso de la izquierda ya dice que la
+                    delegación está pendiente.
+                  */}
+                  {(() => {
+                    const base = v.delegacion_id ? nombreDelegacion.get(v.delegacion_id) : null;
+                    if (base) {
+                      return (
+                        <span
+                          className="text-[12px] text-slate-300"
+                          title="Base asignada en la ficha del vehículo. No es dónde está ahora."
+                        >
+                          🏠 {base}
+                        </span>
+                      );
+                    }
+                    /*
+                      Sin base: se dice POR QUÉ, que es lo que decide qué hacer
+                      con él. Mientras el cálculo no haya llegado no se escribe
+                      nada: un hueco es mejor que un motivo a medias.
+                    */
+                    const motivo = motivoSinBase(sinBase.get(v.id));
+                    if (!motivo) return null;
+                    return (
+                      <span
+                        className={`text-[12px] ${
+                          motivo.clase === "propuesta" ? "text-emerald-300/80" : "text-slate-500"
+                        }`}
+                        title={motivo.detalle}
+                      >
+                        🏠 {motivo.texto}
+                      </span>
+                    );
+                  })()}
                   {/*
                     Dónde está, en el mapa. Aquí es donde más falta hace: a
                     estos vehículos les falta la marca y el modelo, y para
@@ -545,7 +750,13 @@ export default function Vehiculos() {
               {label}{orden.col === col && <span className="ml-1 text-sky-300">{orden.asc ? "▲" : "▼"}</span>}
             </th>
           ))}
-          <th className={thCls}>Telemática</th>
+          {/* La columna de telemática es donde se lee DÓNDE está el
+              vehículo, así que es la que ordena por posición: no se agrupa
+              por el texto de la chapa, sino por a dónde habría que ir. */}
+          <th className={`${thCls} cursor-pointer select-none hover:text-slate-100`}
+            onClick={() => ordenarPor("posicion")} title="Ordenar por dónde está: primero los que están en una base, juntos por base">
+            Telemática{orden.col === "posicion" && <span className="ml-1 text-sky-300">{orden.asc ? "▲" : "▼"}</span>}
+          </th>
           <th className={`${thCls} cursor-pointer select-none hover:text-slate-100`}
             onClick={() => ordenarPor("estado")} title="Ordenar por estado">
             Estado{orden.col === "estado" && <span className="ml-1 text-sky-300">{orden.asc ? "▲" : "▼"}</span>}

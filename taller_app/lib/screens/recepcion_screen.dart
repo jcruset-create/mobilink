@@ -50,7 +50,11 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
   double? _confianzaKmOcr;
 
   List<Map<String, dynamic>> _catalogo = [];
-  final List<XFile> _fotos = [];
+
+  /// Cada foto con lo que es: `matricula`, `kilometros` o `estado`. El panel
+  /// las enseña con esa etiqueta para que en oficina se vea la matrícula y el
+  /// cuadro sin adivinar cuál es cuál.
+  final List<FotoRecepcion> _fotos = [];
   bool _leyendo = false;
   bool _leyendoKm = false;
   bool _enviando = false;
@@ -139,7 +143,7 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
       final confianza = (leido['confianza'] as num?)?.toDouble() ?? 0;
 
       setState(() {
-        _fotos.add(shot);
+        _fotos.add(FotoRecepcion(shot.path, 'matricula'));
         _leyendo = false;
         if (matricula.isNotEmpty) {
           /*
@@ -242,7 +246,7 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
       final km = _kmSensatos(leido['kilometros']);
 
       setState(() {
-        _fotos.add(shot);
+        _fotos.add(FotoRecepcion(shot.path, 'kilometros'));
         _leyendoKm = false;
         if (km != null) {
           _kmCtrl.text = km.toString();
@@ -271,7 +275,7 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
       maxWidth: 1600,
     );
     if (shot == null || !mounted) return;
-    setState(() => _fotos.add(shot));
+    setState(() => _fotos.add(FotoRecepcion(shot.path, 'estado')));
   }
 
   Future<void> _buscarVehiculo() async {
@@ -330,15 +334,16 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
         'vehiculoOrigen': _vehiculoOrigen,
         'matriculaOcr': _matriculaOcr,
         'confianzaOcr': _confianzaOcr,
-      });
+      }, fotos: _fotos);
 
       // Las fotos se cuelgan después, porque hasta ahora no había recepción a
-      // la que colgarlas. Si la recepción quedó en la cola no hay id todavía,
-      // y eso se dice en pantalla en vez de dejar creer que se enviaron.
+      // la que colgarlas. Si la recepción quedó en la cola, se van con ella y
+      // se suben cuando vuelva la cobertura.
       var fotosFallidas = 0;
       if (recepcionId != null) {
         for (final foto in _fotos) {
-          final ok = await widget.api.subirFotoRecepcion(recepcionId, foto.path);
+          final ok = await widget.api
+              .subirFotoRecepcion(recepcionId, foto.path, tipo: foto.tipo);
           if (!ok) fotosFallidas++;
         }
       }
@@ -348,7 +353,7 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
       if (recepcionId == null) {
         mensaje = _fotos.isEmpty
             ? 'Sin cobertura: guardado y se enviará solo al recuperarla.'
-            : 'Sin cobertura: guardado sin las fotos, se enviará solo al '
+            : 'Sin cobertura: guardado con las fotos, se enviará solo al '
                 'recuperarla.';
       } else if (fotosFallidas > 0) {
         mensaje = 'Recibido, pero $fotosFallidas foto(s) no han subido. '

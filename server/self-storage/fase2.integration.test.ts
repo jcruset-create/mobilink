@@ -491,7 +491,13 @@ describe.skipIf(!RUN)("Self Storage · fase 2 contra PostgreSQL", () => {
     it("⚑ una mensualidad SEPA en processing no es un impago; ⚑ un fallo real sí, y ⚑ el pago levanta SÓLO el bloqueo de impago", async () => {
       const s = await contratoStripe("sepa", "allow_while_processing");
       await webhook("checkout.session.completed", { id: "cs_4", mode: "subscription", payment_status: "unpaid", amount_total: 12000, subscription: s.sub, invoice: "in_p1", metadata: { ss_kind: "contract_subscription", ss_contract_id: s.k.id, ss_empresa_id: EMPRESA } });
-      await webhook("invoice.paid", facturaStripe({ id: "in_p1", sub: s.sub, contractId: s.k.id, pagada: true, lineas: [{ product: s.prodAlquiler, amount: 6000 }, { product: s.prodFianza, amount: 6000 }] }));
+      // La primera mensualidad lleva su periodo ESCRITO (octubre), no el de
+      // hoy. Con el de hoy, esta prueba se rompía el 1 de noviembre y solo
+      // ese día: la segunda factura fija noviembre, y un contrato no puede
+      // tener dos facturas de alquiler del mismo periodo
+      // (self_storage_invoices_rent_period_uq). Un fallo que aparece una vez
+      // al año es peor que uno permanente: nadie se acuerda de por qué.
+      await webhook("invoice.paid", facturaStripe({ id: "in_p1", sub: s.sub, contractId: s.k.id, pagada: true, lineas: [{ product: s.prodAlquiler, amount: 6000, start: 1790812800, end: 1793491200 }, { product: s.prodFianza, amount: 6000 }] }));
 
       // Mensualidad: Stripe la emite y el SEPA queda en proceso varios días.
       const mes = facturaStripe({ id: "in_p2", sub: s.sub, contractId: s.k.id, lineas: [{ product: s.prodAlquiler, amount: 6000, start: 1793491200, end: 1796083200 }] });

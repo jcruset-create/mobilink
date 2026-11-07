@@ -14,6 +14,8 @@ import RankingKilometraje from "./pages/RankingKilometraje";
 import VehiculosEnBases from "./pages/VehiculosEnBases";
 import VehiculoDetalle from "./pages/VehiculoDetalle";
 import DisponiblesRevisar from "./pages/DisponiblesRevisar";
+import ControlTacografos from "./pages/ControlTacografos";
+import PropuestasMedida from "./pages/PropuestasMedida";
 import PlanificacionRevisiones from "./pages/PlanificacionRevisiones";
 import Incidencias from "./pages/Incidencias";
 import HistoricoRevisiones from "./pages/HistoricoRevisiones";
@@ -48,6 +50,7 @@ import Importar from "./pages/Importar";
 import ParteProveedor from "./pages/ParteProveedor";
 import InformesLayout from "./pages/informes/InformesLayout";
 import InformeEjecutivo from "./pages/informes/InformeEjecutivo";
+import InformeMensual from "./pages/informes/InformeMensual";
 import InformeAlertas from "./pages/informes/InformeAlertas";
 import InformeInventario from "./pages/informes/InformeInventario";
 import InformeEstadoFlota from "./pages/informes/InformeEstadoFlota";
@@ -60,6 +63,8 @@ import InformeDesgaste from "./pages/informes/InformeDesgaste";
 import InformePresiones from "./pages/informes/InformePresiones";
 import InformeProductividad from "./pages/informes/InformeProductividad";
 import InformeOperaciones from "./pages/informes/InformeOperaciones";
+import InformeMontajes from "./pages/informes/InformeMontajes";
+import UnidadesPorIdentificar from "./pages/UnidadesPorIdentificar";
 
 export default function TyreControlApp() {
   return (
@@ -92,6 +97,7 @@ export default function TyreControlApp() {
             <Route path="informes" element={<InformesLayout />}>
               <Route index element={<Navigate to="/tyrecontrol/informes/ejecutivo" replace />} />
               <Route path="ejecutivo" element={<InformeEjecutivo />} />
+              <Route path="mensual" element={<InformeMensual />} />
               <Route path="alertas" element={<InformeAlertas />} />
               <Route path="estado-flota" element={<InformeEstadoFlota />} />
               <Route path="control-revisiones" element={<InformeControlRevisiones />} />
@@ -108,6 +114,7 @@ export default function TyreControlApp() {
                 <Route path="rankings" element={<InformeRankings />} />
                 <Route path="productividad" element={<InformeProductividad />} />
                 <Route path="operaciones-informe" element={<InformeOperaciones />} />
+                <Route path="montajes" element={<InformeMontajes />} />
                 <Route path="historial-neumatico" element={<InformeHistorialNeumatico />} />
               </Route>
             </Route>
@@ -131,6 +138,8 @@ export default function TyreControlApp() {
               <Route path="vehiculos-en-bases" element={<VehiculosEnBases />} />
               <Route path="ranking-kilometraje" element={<RankingKilometraje />} />
               <Route path="disponibles-revisar" element={<DisponiblesRevisar />} />
+              <Route path="control-tacografos" element={<ControlTacografos />} />
+              <Route path="propuestas-medida" element={<PropuestasMedida />} />
               <Route path="planificacion" element={<PlanificacionRevisiones />} />
               <Route path="incidencias" element={<Incidencias />} />
               <Route path="tipos-incidencia" element={<TiposIncidencia />} />
@@ -154,6 +163,7 @@ export default function TyreControlApp() {
               <Route path="sonda" element={<SondaTLGX />} />
               <Route path="configuracion" element={<Configuracion />} />
               <Route path="importar" element={<Importar />} />
+              <Route path="importar/identificar" element={<UnidadesPorIdentificar />} />
               <Route path="parte-proveedor" element={<ParteProveedor />} />
             </Route>
           </Route>

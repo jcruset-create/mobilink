@@ -18,13 +18,22 @@
  * van en su propio apartado: en esta flota una quinta parte de los equipos
  * lleva más de un día sin emitir, y decir que esos autobuses no están en la
  * base sería afirmar algo que nadie ha comprobado.
+ *
+ * ── Los pendientes se reparten en TRES cuadros, y la suma cuadra ────────────
+ *
+ * En base, fuera de base y de ubicación desconocida. Con solo el primero, los
+ * 98 de la base parecían todo el trabajo atrasado cuando son una fracción:
+ * hay varias veces más circulando. Y sin el tercero la resta no daría, porque
+ * los de posición antigua no caen en ninguno de los dos primeros y
+ * desaparecerían sin que nadie los viera. Hay una prueba que fija justo eso:
+ * los tres juntos son exactamente todos los pendientes, sin repetir ni perder.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { MapPin, RefreshCw, Truck } from "lucide-react";
+import { HelpCircle, MapPin, Printer, RefreshCw, Route, Truck } from "lucide-react";
 
-import { listarEmpresas, listarRevisionEstado } from "../services/data";
+import { abrirPendientesEnBasePdf, listarEmpresas, listarRevisionEstado } from "../services/data";
 import {
   ETIQUETA_PRESENCIA,
   barrerBases,
@@ -36,15 +45,19 @@ import {
 import {
   agruparPorBase,
   desde,
+  distanciaCorta,
   fechaCorta,
   dormidosPorBase,
   minutosEnPalabras,
   quienRevisó,
   revisablesEnBase,
+  revisablesFueraDeBase,
+  revisablesSinUbicacion,
   sinPeriodicidad,
   sinPeriodicidadEnBase,
   revisablesPorBase,
   tieneRevisionPendiente,
+  velocidadCorta,
 } from "../services/presenciaVista";
 import type { Empresa, RevisionEstado } from "../types";
 import { ESTADO_PERIODICIDAD_LABELS } from "../types";
@@ -66,6 +79,7 @@ export default function VehiculosEnBases() {
   const [baseSel, setBaseSel] = useState<string | null>(null);
   const [cargando, setCargando] = useState(false);
   const [barriendo, setBarriendo] = useState(false);
+  const [imprimiendo, setImprimiendo] = useState(false);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
 
@@ -99,6 +113,19 @@ export default function VehiculosEnBases() {
     void cargar();
   }, [cargar]);
 
+  /**
+   * La base seleccionada, cuando lo seleccionado ES una base.
+   *
+   * El filtro de arriba mezcla bases con sentinelas —«fuera de base», «sin
+   * ubicación», «sin periodicidad»—, y hay dos sitios donde confundirlos hace
+   * daño: el recuento «por base» y, sobre todo, el PDF, al que se le pediría
+   * una base inexistente y devolvería una hoja vacía sin decir por qué.
+   */
+  const baseReal = useMemo(
+    () => (datos?.bases.some((b) => b.id === baseSel) ? baseSel : null),
+    [datos, baseSel],
+  );
+
   async function barrer() {
     setBarriendo(true);
     setMsg("");
@@ -112,6 +139,33 @@ export default function VehiculosEnBases() {
       setError(e.message);
     } finally {
       setBarriendo(false);
+    }
+  }
+
+  /**
+   * La hoja del patio, en papel.
+   *
+   * Sale con la base que esté filtrada arriba: si el jefe de taller está
+   * mirando Tarragona, imprime Tarragona. Sin filtro salen todas, agrupadas.
+   *
+   * No se arma aquí con lo que hay en pantalla. Lo arma el servidor pidiendo
+   * los datos de nuevo, porque el PDF lleva más de lo que se enseña —medida,
+   * configuración de ejes, profundidad mínima, ruedas montadas— y porque lo
+   * que se imprime tiene que ser de ahora, no del barrido que se cargó al
+   * abrir la pestaña hace veinte minutos.
+   */
+  async function imprimir() {
+    setImprimiendo(true);
+    setError("");
+    try {
+      // `baseSel` puede ser un sentinela («fuera de base», «sin periodicidad»).
+      // Mandárselo al informe pediría una base inexistente y devolvería una
+      // hoja vacía sin decir por qué, así que solo se manda una base de verdad.
+      await abrirPendientesEnBasePdf({ empresaId, baseId: baseReal });
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setImprimiendo(false);
     }
   }
 
@@ -141,18 +195,35 @@ export default function VehiculosEnBases() {
     [datos, revisiones],
   );
 
+  // Las otras dos mitades del trabajo pendiente. Las tres listas juntas son
+  // exactamente todos los pendientes: hay una prueba que lo fija.
+  const fueraDeBase = useMemo(
+    () => revisablesFueraDeBase(datos?.vehiculos ?? [], revisiones),
+    [datos, revisiones],
+  );
+  const sinUbicacion = useMemo(
+    () => revisablesSinUbicacion(datos?.vehiculos ?? [], revisiones),
+    [datos, revisiones],
+  );
+
   const sinEnlace = (datos?.vehiculos ?? []).filter((v) => v.motivo === "sin_enlace").length;
   const lista =
     baseSel === "__sin_periodicidad__"
       ? huerfanos
-      : baseSel
-        ? (enBase.get(baseSel) ?? [])
-        : revisables;
-  const pendientesEnLista = baseSel ? (pendientesPorBase.get(baseSel) ?? 0) : lista.length;
+      : baseSel === "__fuera_de_base__"
+        ? fueraDeBase
+        : baseSel === "__sin_ubicacion__"
+          ? sinUbicacion
+          : baseSel
+            ? (enBase.get(baseSel) ?? [])
+            : revisables;
+  const pendientesEnLista = baseReal ? (pendientesPorBase.get(baseReal) ?? 0) : lista.length;
 
   function Ficha({ v }: { v: VehiculoPresencia }) {
     const rev = revisiones.get(v.vehiculo_id);
     const pendiente = tieneRevisionPendiente(rev);
+    const enBaseAhora = v.estado === "IN_BASE";
+    const base = v.delegacion?.nombre ?? nombreBase.get(v.delegacion_id ?? "") ?? null;
     // Un «al día» sin periodicidad definida no es un «al día»: es que nadie ha
     // dicho cada cuánto toca. Se marca aparte para que se pueda arreglar, en
     // vez de dejar al vehículo fuera del ciclo para siempre.
@@ -173,8 +244,17 @@ export default function VehiculosEnBases() {
               {v.vehiculo?.matricula ?? "—"}
             </div>
             <div className="truncate text-[12px] text-slate-400">
-              {v.delegacion?.nombre ?? nombreBase.get(v.delegacion_id ?? "") ?? "—"}
-              {v.es_su_base === false && " · de paso"}
+              {/*
+                Para uno de fuera no hay base que poner, y una raya no dice
+                nada. Se pone dónde está: «Fuera de las bases», «Posición
+                antigua»… Y si de uno con posición vieja se sabe la base donde
+                se le vio, se dice así, que no es lo mismo que estar allí.
+              */}
+              {base
+                ? v.estado === "IN_BASE"
+                  ? `${base}${v.es_su_base === false ? " · de paso" : ""}`
+                  : `Última vez en ${base}`
+                : ETIQUETA_PRESENCIA[v.estado]}
             </div>
           </div>
           {rev && (
@@ -208,13 +288,32 @@ export default function VehiculosEnBases() {
           )}
         </div>
 
+        {/*
+          Los cuatro datos cambian según dónde esté, porque las etiquetas
+          mienten si no cambian: «distancia al centro» es al centro de SU base
+          cuando está dentro, y a la base MÁS CERCANA cuando está fuera. Son
+          dos cosas distintas con el mismo número, y llamarlas igual hace que
+          un autobús a 18 km parezca uno aparcado lejos del portón.
+
+          Y a uno que circula se le pone la velocidad en lugar del tiempo que
+          lleva en la base, que para él no existe: «parado» o «a 83 km/h» es
+          lo que decide si tiene sentido llamar al conductor.
+        */}
         <div className="mt-3 grid grid-cols-2 gap-2 text-[12px]">
-          {[
-            ["Lleva en la base", desde(v.entrada_base_at)],
-            ["Posición de hace", minutosEnPalabras(v.antiguedad_min)],
-            ["Estado", ETIQUETA_PRESENCIA[v.estado]],
-            ["Distancia al centro", v.distancia_m == null ? "—" : `${v.distancia_m} m`],
-          ].map(([l, val]) => (
+          {(enBaseAhora
+            ? [
+                ["Lleva en la base", desde(v.entrada_base_at)],
+                ["Posición de hace", minutosEnPalabras(v.antiguedad_min)],
+                ["Estado", ETIQUETA_PRESENCIA[v.estado]],
+                ["Distancia al centro", v.distancia_m == null ? "—" : `${v.distancia_m} m`],
+              ]
+            : [
+                ["Posición de hace", minutosEnPalabras(v.antiguedad_min)],
+                ["Estado", ETIQUETA_PRESENCIA[v.estado]],
+                ["Base más cercana", distanciaCorta(v.distancia_m)],
+                ["Velocidad", velocidadCorta(v.velocidad_kmh)],
+              ]
+          ).map(([l, val]) => (
             <div key={l} className="rounded-lg bg-slate-900/60 p-2">
               <div className="text-[10px] uppercase text-slate-500">{l}</div>
               <div className="truncate text-slate-200">{val}</div>
@@ -222,16 +321,33 @@ export default function VehiculosEnBases() {
           ))}
         </div>
 
+        {/*
+          El botón verde solo para los que están en la base.
+
+          No se esconde «Iniciar revisión» en los demás —si el técnico está
+          donde el autobús, puede revisarlo— pero deja de ser la acción
+          destacada: un botón verde y grande en un autobús que va por la
+          autopista invita a bajar al patio a buscarlo.
+        */}
         <div className="mt-3 flex flex-wrap gap-2">
           <button
             onClick={() => navigate(`/tyrecontrol/revision-vehiculo?vehiculo=${v.vehiculo_id}&empresa=${empresaId}`)}
-            className="rounded-lg bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-emerald-500"
+            title={enBaseAhora ? undefined : "Este vehículo no está en una base ahora mismo"}
+            className={
+              enBaseAhora
+                ? "rounded-lg bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-emerald-500"
+                : "rounded-lg border border-slate-600 px-3 py-1.5 text-[12px] text-slate-300 hover:bg-slate-700"
+            }
           >
             Iniciar revisión
           </button>
           <button
             onClick={() => navigate(`/tyrecontrol/vehiculos/${v.vehiculo_id}`)}
-            className="rounded-lg border border-slate-600 px-3 py-1.5 text-[12px] text-slate-200 hover:bg-slate-700"
+            className={
+              enBaseAhora
+                ? "rounded-lg border border-slate-600 px-3 py-1.5 text-[12px] text-slate-200 hover:bg-slate-700"
+                : "rounded-lg bg-slate-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-slate-500"
+            }
           >
             Ver ficha
           </button>
@@ -271,6 +387,17 @@ export default function VehiculosEnBases() {
               ))}
             </select>
           )}
+          <button
+            onClick={imprimir}
+            disabled={imprimiendo || !empresaId}
+            title={baseReal
+              ? `Hoja de los pendientes de revisar que están en ${nombreBase.get(baseReal) ?? "esa base"}`
+              : "Hoja de los pendientes de revisar que están EN BASE, por base. Los de fuera no salen: no se les puede mirar la rueda hoy."}
+            className="flex items-center gap-2 rounded-lg border border-slate-600 px-3 py-2 text-sm font-bold text-slate-200 hover:bg-slate-700/40 disabled:opacity-50"
+          >
+            <Printer size={14} />
+            {imprimiendo ? "Generando…" : "Imprimir pendientes"}
+          </button>
           <button
             onClick={barrer}
             disabled={barriendo || !empresaId}
@@ -356,6 +483,48 @@ export default function VehiculosEnBases() {
               <div className="font-bold">Con revisión pendiente</div>
               <div className="text-slate-400">{revisables.length} en base ahora</div>
             </button>
+            {/*
+              Fuera de base: la otra mitad del trabajo atrasado.
+
+              En gris y con el icono de carretera, no en verde: no es trabajo
+              que se pueda hacer hoy, es trabajo que hay que planificar. Darle
+              el mismo verde que a los de la base invitaría a bajar al patio a
+              buscar un autobús que está en la AP-7.
+            */}
+            <button
+              onClick={() => setBaseSel("__fuera_de_base__")}
+              className={`rounded-xl border px-3 py-2 text-left text-[12px] ${
+                baseSel === "__fuera_de_base__"
+                  ? "border-sky-500 bg-sky-500/10 text-sky-200"
+                  : "border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700"
+              }`}
+            >
+              <div className="flex items-center gap-1.5 font-bold">
+                <Route size={12} /> Pendientes fuera de base
+              </div>
+              <div className="text-slate-400">{fueraDeBase.length} circulando ahora</div>
+            </button>
+            {/*
+              Y los que no caen en ninguno de los dos. Sin este cuadro la suma
+              no da, y lo que no suma desaparece: en esta flota son 140 equipos
+              con la posición vieja, no cuatro.
+            */}
+            {sinUbicacion.length > 0 && (
+              <button
+                onClick={() => setBaseSel("__sin_ubicacion__")}
+                title="Posición antigua, sin posición o posición no válida: de estos no se sabe dónde están, así que no se puede decir ni que estén en base ni que no."
+                className={`rounded-xl border px-3 py-2 text-left text-[12px] ${
+                  baseSel === "__sin_ubicacion__"
+                    ? "border-slate-400 bg-slate-500/10 text-slate-100"
+                    : "border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700"
+                }`}
+              >
+                <div className="flex items-center gap-1.5 font-bold">
+                  <HelpCircle size={12} /> Pendientes sin ubicación
+                </div>
+                <div className="text-slate-400">{sinUbicacion.length} sin saber dónde</div>
+              </button>
+            )}
             {huerfanos.length > 0 && (
               <button
                 onClick={() => setBaseSel("__sin_periodicidad__")}
@@ -409,19 +578,27 @@ export default function VehiculosEnBases() {
             <Truck size={14} />
             {baseSel === "__sin_periodicidad__"
               ? `${lista.length} vehículo(s) en base revisados pero sin periodicidad definida`
-              : baseSel
-                ? `${lista.length} vehículo(s) en ${nombreBase.get(baseSel) ?? "la base"}` +
-                  (pendientesEnLista > 0 ? ` · ${pendientesEnLista} con revisión pendiente, los primeros` : "")
-                : `${lista.length} vehículo(s) en base y con revisión pendiente`}
+              : baseSel === "__fuera_de_base__"
+                ? `${lista.length} vehículo(s) con revisión pendiente circulando fuera de las bases`
+                : baseSel === "__sin_ubicacion__"
+                  ? `${lista.length} vehículo(s) con revisión pendiente de los que no se sabe dónde están`
+                  : baseReal
+                    ? `${lista.length} vehículo(s) en ${nombreBase.get(baseReal) ?? "la base"}` +
+                      (pendientesEnLista > 0 ? ` · ${pendientesEnLista} con revisión pendiente, los primeros` : "")
+                    : `${lista.length} vehículo(s) en base y con revisión pendiente`}
           </div>
 
           {lista.length === 0 ? (
             <div className="rounded-2xl border border-slate-700 bg-slate-800 p-8 text-center text-slate-400">
               {baseSel === "__sin_periodicidad__"
                 ? "Ningún vehículo en base está en ese caso ahora mismo."
-                : baseSel
-                  ? "Ahora mismo no hay ningún vehículo con posición reciente dentro de esta base."
-                  : "Ningún vehículo en base tiene revisión pendiente ahora mismo."}
+                : baseSel === "__fuera_de_base__"
+                  ? "Ningún vehículo con revisión pendiente está circulando ahora mismo. Todo lo pendiente está en base o no emite posición."
+                  : baseSel === "__sin_ubicacion__"
+                    ? "De todos los vehículos con revisión pendiente se sabe dónde están."
+                    : baseReal
+                      ? "Ahora mismo no hay ningún vehículo con posición reciente dentro de esta base."
+                      : "Ningún vehículo en base tiene revisión pendiente ahora mismo."}
             </div>
           ) : (
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">

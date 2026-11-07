@@ -876,6 +876,24 @@ class TyreControlApi {
         .toList();
   }
 
+  /// Los tipos de llanta del catálogo, para elegir en el alta.
+  ///
+  /// Aparte de `listarTiposLlantaCat`, que es para pintar etiquetas y se traga
+  /// los errores: en un selector, una lista vacía por un fallo de red se lee
+  /// como «no hay catálogo» y el técnico se queda sin saber qué ha pasado.
+  static Future<List<Map<String, dynamic>>> tiposLlantaParaAlta() async {
+    final data = await _db
+        .from('tc_tipos_llanta')
+        // Todo el detalle: lo que distingue dos llantas que por lo demás se
+        // llaman igual son los agujeros, el centrado y el tapacubo.
+        .select('id, material, medida, agujeros, centrado, tapacubo, orden')
+        .eq('activo', true)
+        .order('orden')
+        .order('material')
+        .order('medida');
+    return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
   /// Las medidas del catálogo del vehículo (que NO es el de los neumáticos:
   /// tc_vehiculos.medida_id apunta a tc_cat_medidas_neumatico).
   static Future<List<Map<String, dynamic>>> listarMedidasVehiculo() async {
@@ -1891,23 +1909,28 @@ class TyreControlApi {
     return altaPendienteCount.value;
   }
 
-  /// Pone el tipo de vehículo durante el alta operativa.
+  /// Completa la ficha operativa de un vehículo desde la tablet: tipo,
+  /// medida de neumático y tipo de llanta, en una sola llamada.
   ///
-  /// Va por una RPC y no por un `update` porque la escritura de `tc_vehiculos`
-  /// es solo para administradores, y eso no se amplía: dársela al técnico para
-  /// que pueda poner un tipo le daría de paso la matrícula, la empresa y el
-  /// estado de baja.
+  /// Lo guarda `tc_alta_operativa_ficha`, que delega el tipo en la función de
+  /// siempre (`tc_alta_operativa_tipo`) y hereda de ella los permisos y la
+  /// regla que evita el destrozo: con neumáticos montados no se cambia el
+  /// tipo, porque sus montajes quedarían en posiciones de otro plano.
   ///
-  /// La base se niega a cambiar el tipo si el vehículo ya tiene neumáticos
-  /// montados —sus montajes quedarían en posiciones de otro plano— y repetir
-  /// la misma petición no escribe nada, así que un doble toque es inocuo.
-  static Future<Map<String, dynamic>> ponerTipoDeAlta({
+  /// [medidaId] y [tipoLlantaId] en null significan «no se ha preguntado» y
+  /// dejan lo que hubiera. Desde el patio se rellena, no se vacía: para borrar
+  /// un dato de la ficha está el panel.
+  static Future<Map<String, dynamic>> guardarFichaDeAlta({
     required String vehiculoId,
     required String tipoId,
+    String? medidaId,
+    String? tipoLlantaId,
   }) async {
-    final data = await _db.rpc('tc_alta_operativa_tipo', params: {
+    final data = await _db.rpc('tc_alta_operativa_ficha', params: {
       'p_vehiculo': vehiculoId,
       'p_tipo': tipoId,
+      'p_medida': medidaId,
+      'p_llanta': tipoLlantaId,
     });
     return Map<String, dynamic>.from(data as Map);
   }

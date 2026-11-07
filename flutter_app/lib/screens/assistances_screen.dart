@@ -9,6 +9,7 @@ import '../services/biometria.dart';
 import '../services/sesion_segura.dart';
 import '../services/api_service.dart';
 import '../services/offline_store.dart';
+import '../services/seguimiento_ubicacion.dart';
 import '../theme/app_theme.dart';
 import '../widgets/plate_badge.dart';
 import 'assistance_detail_screen.dart';
@@ -103,6 +104,9 @@ class _AssistancesScreenState extends State<AssistancesScreen>
     try {
       final data = await widget.api.getAssistances();
       setState(() => _assistances = data);
+      // El envío de la ubicación se retoma solo: a la asistencia en camino si
+      // la hay, o al Mapa flota si no (p. ej. tras reiniciar la tablet).
+      unawaited(SeguimientoUbicacion.instancia.sincronizar(widget.api, data));
     } catch (e) {
       setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
     } finally {
@@ -125,6 +129,9 @@ class _AssistancesScreenState extends State<AssistancesScreen>
       ),
     );
     if (confirmed != true) return;
+    // Sin sesión no se manda la ubicación, y la tablet sale del Mapa flota.
+    await SeguimientoUbicacion.instancia.detener();
+    await widget.api.clearTabletLocation();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('techName');
     await prefs.remove('code');

@@ -586,8 +586,11 @@ class ApiService {
   /// Ojo con el null: sin id no se pueden colgar las fotos de la recepción,
   /// porque el servidor todavía no sabe a cuál. Quien llama tiene que decirlo
   /// en pantalla, no callárselo.
-  Future<int?> crearRecepcion(Map<String, dynamic> datos) async {
+  Future<int?> crearRecepcion(Map<String, dynamic> datos,
+      {List<FotoRecepcion> fotos = const []}) async {
     final clave = OfflineStore.nuevaClave('rc');
+    // Si se queda en la cola, las fotos van con ella: antes se perdían.
+    final fotosCola = fotos.map((f) => f.aMapa()).toList();
     try {
       final res = await http
           .post(
@@ -604,11 +607,11 @@ class ApiService {
         throw Exception(_errorDe(res.body, 'No se pudo enviar la recepción'));
       }
       // 5xx: el servidor está mal, no la petición. A la cola.
-      await OfflineStore.enqueueRecepcion(datos);
+      await OfflineStore.enqueueRecepcion(datos, fotos: fotosCola);
       return null;
     } catch (e) {
       if (!_isNetworkError(e)) rethrow;
-      await OfflineStore.enqueueRecepcion(datos);
+      await OfflineStore.enqueueRecepcion(datos, fotos: fotosCola);
       return null;
     }
   }
@@ -618,7 +621,8 @@ class ApiService {
   /// No se encola si falla: sin recepción en el servidor no hay dónde
   /// colgarla, y una foto perdida es mucho menos grave que una recepción
   /// perdida. Devuelve false y quien llama lo dice en pantalla.
-  Future<bool> subirFotoRecepcion(int recepcionId, String path) async {
+  Future<bool> subirFotoRecepcion(int recepcionId, String path,
+      {String tipo = 'estado'}) async {
     try {
       final comprimida = await FlutterImageCompress.compressWithFile(
         path,
@@ -634,6 +638,8 @@ class ApiService {
       );
       req.headers.addAll(_operatorHeaders);
       req.headers['x-idempotency-key'] = OfflineStore.nuevaClave('rf');
+      // Cuál es: matrícula, kilómetros o estado. El panel la etiqueta con esto.
+      req.fields['tipo'] = tipo;
       req.files.add(http.MultipartFile.fromBytes(
         'file',
         bytes,
@@ -697,6 +703,20 @@ class ApiService {
             if (accionPorRespuesta(tipo: type, codigo: res.statusCode) ==
                 AccionCola.quitar) {
               await OfflineStore.removePending(entry.key);
+              // Las fotos que se quedaron con ella. Se suben una vez: si una
+              // falla no se reintenta, como cuando se envía con cobertura.
+              if (res.statusCode == 200) {
+                final data = jsonDecode(res.body);
+                final id = data is Map ? (data['id'] as num?)?.toInt() : null;
+                final fotos = (item['fotos'] as List?) ?? const [];
+                if (id != null) {
+                  for (final f in fotos) {
+                    final foto = FotoRecepcion.deMapa(Map<String, dynamic>.from(f as Map));
+                    if (!File(foto.path).existsSync()) continue;
+                    await subirFotoRecepcion(id, foto.path, tipo: foto.tipo);
+                  }
+                }
+              }
             }
           } else {
             // Tipo desconocido (versión anterior de la app): fuera, o se queda
@@ -715,4 +735,19 @@ class ApiService {
       _flushing = false;
     }
   }
+}
+
+/// Una foto de la recepción todavía en el móvil, con lo que es.
+///
+/// `tipo` es `matricula`, `kilometros` o `estado`; el servidor la guarda con
+/// esa etiqueta y el panel la enseña así.
+class FotoRecepcion {
+  final String path;
+  final String tipo;
+  const FotoRecepcion(this.path, this.tipo);
+
+  Map<String, dynamic> aMapa() => {'path': path, 'tipo': tipo};
+
+  static FotoRecepcion deMapa(Map<String, dynamic> m) =>
+      FotoRecepcion(m['path'].toString(), (m['tipo'] ?? 'estado').toString());
 }

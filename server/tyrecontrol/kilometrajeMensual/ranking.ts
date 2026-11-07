@@ -54,6 +54,17 @@ export interface VehiculoDelRanking {
   /** Meses que el proveedor no supo contestar. Explica una cifra corta. */
   mesesSinDato: number;
   mesesConError: number;
+  /**
+   * CUÁLES son esos meses, en orden.
+   *
+   * El recuento solo sirve para alarmar; para arreglarlo hay que saber de qué
+   * mes se trata —no es lo mismo un error de hace un año, ya cerrado, que el
+   * del mes pasado— y, en el caso del error, qué contestó el proveedor. Por
+   * eso el error viaja con su mensaje y el hueco no: un `empty` no tiene más
+   * explicación que la ausencia.
+   */
+  mesesConErrorDetalle: Array<{ year: number; month: number; error: string | null }>;
+  mesesSinDatoDetalle: Array<{ year: number; month: number }>;
 }
 
 export interface Ranking {
@@ -81,6 +92,14 @@ export interface VehiculoDeFlota {
  * comprobar la parte que de verdad decide —quién va delante de quién— sin
  * levantar nada.
  */
+/**
+ * Del más viejo al más nuevo. Las filas llegan en el orden que las devuelva
+ * la consulta, y una lista de meses desordenada se lee fatal.
+ */
+function enOrden(filas: MonthlyMileageRow[]): MonthlyMileageRow[] {
+  return [...filas].sort((a, b) => a.year - b.year || a.month - b.month);
+}
+
 export function rankingDeKilometraje(
   filas: MonthlyMileageRow[],
   flota: VehiculoDeFlota[],
@@ -123,6 +142,10 @@ export function rankingDeKilometraje(
       kmMesActual: r.mesActual?.km ?? null,
       mesesSinDato: suyas.filter((f) => f.sync_status === "empty").length,
       mesesConError: suyas.filter((f) => f.sync_status === "error").length,
+      mesesConErrorDetalle: enOrden(suyas.filter((f) => f.sync_status === "error"))
+        .map((f) => ({ year: f.year, month: f.month, error: f.last_error })),
+      mesesSinDatoDetalle: enOrden(suyas.filter((f) => f.sync_status === "empty"))
+        .map((f) => ({ year: f.year, month: f.month })),
     });
   }
 

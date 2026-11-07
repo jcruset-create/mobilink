@@ -107,12 +107,15 @@ class OfflineStore {
   // A diferencia de las otras dos, esta NO lleva `jobId`: una recepción no es
   // un trabajo todavía. Por eso `flushOutbox` lee el `jobId` dentro de cada
   // rama y no antes de mirar el tipo.
-  static Future<String> enqueueRecepcion(Map<String, dynamic> datos) async {
+  static Future<String> enqueueRecepcion(Map<String, dynamic> datos,
+      {List<Map<String, dynamic>> fotos = const []}) async {
     final clave = nuevaClave('rc');
     await _outbox.add({
       'actionId': clave,
       'type': 'recepcion',
       'datos': datos,
+      // Rutas locales de las fotos y su tipo; se suben al enviar la recepción.
+      'fotos': fotos,
       'ts': DateTime.now().millisecondsSinceEpoch,
     });
     pendingCount.value = _outbox.length;

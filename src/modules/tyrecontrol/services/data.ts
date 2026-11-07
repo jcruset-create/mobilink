@@ -490,9 +490,13 @@ export async function cambiarPasswordUsuario(id: string, password: string): Prom
 // ── Neumáticos ───────────────────────────────────────────────
 const NEU_SELECT = "*, empresa:tc_empresas(*)";
 
-export async function listarNeumaticos(filtros?: { empresaId?: string }): Promise<Neumatico[]> {
+export async function listarNeumaticos(filtros?: { empresaId?: string; incluirHistoricas?: boolean }): Promise<Neumatico[]> {
   let q = supabase.from("tc_neumaticos").select(NEU_SELECT).order("codigo_interno");
   if (filtros?.empresaId) q = q.eq("empresa_id", filtros.empresaId);
+  // Las fichas de la reconstrucción histórica no son existencias: dan
+  // identidad a un montaje de hace años. Fuera del listado salvo que se
+  // pidan a posta (ver shared/historicoAlbaran.ts para el criterio).
+  if (!filtros?.incluirHistoricas) q = q.is("importacion_lote_id", null);
   const { data, error } = await q;
   if (error) throw new Error(error.message);
   return (data ?? []) as unknown as Neumatico[];
@@ -768,6 +772,70 @@ export async function buscarNeumaticosParaCorregir(empresaId: string, texto: str
   const { data, error } = await q.order("codigo_interno").limit(50);
   if (error) throw new Error(error.message);
   return (data ?? []) as unknown as Neumatico[];
+}
+
+/**
+ * Da de alta la ficha de la goma encontrada Y corrige el montaje, en la misma
+ * llamada.
+ *
+ * Van juntas a propósito y no es un atajo: una ficha que se creara y no
+ * llegara a montarse por un fallo de red quedaría huérfana en el inventario,
+ * contando como stock que no existe.
+ */
+export async function corregirMontadoNuevaFicha(params: {
+  montajeId: string; marca: string; modelo?: string | null; medida: string;
+  dot?: string | null; numeroSerie?: string | null; observaciones?: string | null;
+  revisionId?: string | null; metodo?: string | null;
+}): Promise<{ neumatico_id: string; operacion_id: string }> {
+  const { data, error } = await supabase.rpc("tc_corregir_montado_nueva_ficha", {
+    p_montaje: params.montajeId,
+    p_marca: params.marca, p_modelo: params.modelo ?? null, p_medida: params.medida,
+    p_dot: params.dot ?? null, p_numero_serie: params.numeroSerie ?? null,
+    p_obs: params.observaciones ?? null,
+    p_revision: params.revisionId ?? null, p_metodo: params.metodo ?? null,
+  });
+  if (error) throw new Error(error.message);
+  return data as { neumatico_id: string; operacion_id: string };
+}
+
+/**
+ * Apunta el neumático que YA ESTABA montado en una posición, con su medición.
+ *
+ * No es una venta, ni un trabajo facturable, ni una salida de almacén: es
+ * reconocer lo que ya está ahí. La base no descuenta stock y marca el origen
+ * como `carga_inicial`.
+ *
+ * Si la posición ya tiene goma, la llamada CORRIGE la medición y no monta
+ * nada: cambiar qué neumático hay tiene su propio camino.
+ */
+export async function inventarioInicialPosicion(params: {
+  vehiculoId: string; posicionId: string;
+  /** null cuando la posición ya tiene goma: entonces esto solo mide. */
+  referenciaId: string | null;
+  datos: Record<string, string>;
+}): Promise<{ revision_id: string; neumatico_id: string; numero_interno: string | null; hechas: number; total: number }> {
+  const { data, error } = await supabase.rpc("tc_inventario_inicial_posicion", {
+    p_vehiculo: params.vehiculoId, p_posicion: params.posicionId,
+    p_referencia: params.referenciaId ?? null, p_datos: params.datos,
+  });
+  if (error) throw new Error(error.message);
+  return data as { revision_id: string; neumatico_id: string; numero_interno: string | null; hechas: number; total: number };
+}
+
+/**
+ * Cierra el inventario inicial y deja el vehículo operativo.
+ *
+ * La base exige goma y profundidad en TODAS las posiciones y dice cuáles
+ * faltan. Los km solo suben, nunca bajan.
+ */
+export async function inventarioInicialFinalizar(params: {
+  vehiculoId: string; km?: number | null; origenKm?: string;
+}): Promise<{ revision_id: string; ya_estaba: boolean; posiciones?: number }> {
+  const { data, error } = await supabase.rpc("tc_inventario_inicial_finalizar", {
+    p_vehiculo: params.vehiculoId, p_km: params.km ?? null, p_origen_km: params.origenKm ?? "manual",
+  });
+  if (error) throw new Error(error.message);
+  return data as { revision_id: string; ya_estaba: boolean; posiciones?: number };
 }
 
 export async function historialNeumatico(neumaticoId: string): Promise<HistorialMontaje[]> {
@@ -1217,6 +1285,13 @@ export interface Intervencion {
   empresa?: { nombre?: string | null } | null;
   vehiculo?: { matricula?: string | null } | null;
   tecnico?: { nombre?: string | null } | null;
+  /** Histórico de albaranes importado: ver shared/historicoAlbaran.ts. */
+  importacion_lote_id?: string | null;
+  origen_sistema?: string | null;
+  origen_doc?: string | null;
+  /** cerrada_at es la medianoche del albarán, no una hora real. */
+  hora_desconocida?: boolean | null;
+  mecanico_km?: number | null;
 }
 
 /** Estado visible de una intervención, derivado (no hay columna de estado):
@@ -1242,7 +1317,11 @@ export async function listarIntervencionesPagina(
   const desde = Math.max(0, pagina) * tamano;
   let q = supabase.from("tc_intervenciones")
     .select("*, empresa:tc_empresas(nombre), vehiculo:tc_vehiculos(matricula), tecnico:tc_usuarios(nombre)", { count: "exact" })
-    .order("created_at", { ascending: false })
+    // Por la fecha del TRABAJO y no por la de registro: el histórico de
+    // albaranes se importa hoy pero es de hace meses, y no puede salir encima
+    // de lo de esta mañana. created_at desempata y sigue siendo la fecha real
+    // en que se grabó.
+    .order("fecha", { ascending: false }).order("created_at", { ascending: false })
     .range(desde, desde + tamano - 1);
   if (filtros?.empresaId) q = q.eq("empresa_id", filtros.empresaId);
   if (filtros?.vehiculoId) q = q.eq("vehiculo_id", filtros.vehiculoId);
@@ -1305,7 +1384,8 @@ export async function listarIntervenciones(vehiculoId: string): Promise<Interven
     () => undefined,
     () => undefined,
   );
-  const { data, error } = await supabase.from("tc_intervenciones").select("*").eq("vehiculo_id", vehiculoId).order("created_at", { ascending: false });
+  const { data, error } = await supabase.from("tc_intervenciones").select("*").eq("vehiculo_id", vehiculoId)
+    .order("fecha", { ascending: false }).order("created_at", { ascending: false });
   if (error) throw new Error(error.message);
   return (data ?? []) as Intervencion[];
 }
@@ -1342,7 +1422,8 @@ function filtrarOperaciones<T>(q: T, f?: FiltrosOperaciones): T {
 
 export async function listarOperaciones(filtros?: FiltrosOperaciones): Promise<OperacionNeumatico[]> {
   const q = filtrarOperaciones(
-    supabase.from("operaciones_neumaticos").select(OPERACION_SELECT).order("created_at", { ascending: false }).limit(200),
+    // Fecha del trabajo primero; created_at desempata (ver listarIntervencionesPagina).
+    supabase.from("operaciones_neumaticos").select(OPERACION_SELECT).order("fecha_operacion", { ascending: false }).order("created_at", { ascending: false }).limit(200),
     filtros,
   );
   const { data, error } = await q;
@@ -1371,7 +1452,7 @@ export async function listarOperacionesPagina(
   const q = filtrarOperaciones(
     supabase.from("operaciones_neumaticos")
       .select(OPERACION_SELECT, { count: "exact" })
-      .order("created_at", { ascending: false })
+      .order("fecha_operacion", { ascending: false }).order("created_at", { ascending: false })
       .range(desde, desde + tamano - 1),
     filtros,
   );
@@ -1663,6 +1744,109 @@ export async function enlaceParteInterventionPdf(intervencionId: string): Promis
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error((j as any)?.error || "No se ha podido generar el PDF");
   return (j as any).url as string;
+}
+
+/**
+ * Descarga el estado de la flota en Excel.
+ *
+ * Por `fetch` y no por `window.open`: la sesión de TyreControl va en la
+ * cabecera `Authorization` y una navegación del navegador no la lleva.
+ *
+ * Sin empresa salen todas las que el usuario pueda ver; la RLS decide, no
+ * esta llamada.
+ */
+export async function descargarEstadoFlotaExcel(empresaId?: string | null): Promise<void> {
+  const q = empresaId ? `?empresa=${encodeURIComponent(empresaId)}` : "";
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/informes/flota/excel${q}`, {
+    headers: { Authorization: `Bearer ${await tokenSesion()}` },
+  });
+  if (!r.ok) {
+    const j = await r.json().catch(() => ({}));
+    throw new Error((j as any)?.error || `No se ha podido generar el Excel (${r.status})`);
+  }
+  // El nombre del fichero lo pone el servidor; aquí se recupera de la
+  // cabecera para que la descarga no se llame «descarga.xlsx».
+  const cd = r.headers.get("Content-Disposition") ?? "";
+  const nombre = /filename="([^"]+)"/.exec(cd)?.[1] ?? "estado-flota.xlsx";
+  const url = URL.createObjectURL(await r.blob());
+  const a = document.createElement("a");
+  a.href = url; a.download = nombre; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+
+/**
+ * Abre el informe de revisiones en PDF en otra pestaña.
+ *
+ * Por `fetch` y no por `window.open`: una navegación del navegador no lleva
+ * cabeceras, y la sesión de TyreControl va en `Authorization`. Meter el
+ * token en la URL lo dejaría en el historial y en los registros del
+ * servidor, que es justo lo que `pdfConSesion` existe para evitar.
+ */
+/**
+ * La hoja del patio: quién está dentro de una base ahora y le toca revisión.
+ *
+ * `base` es la que esté filtrada en la pantalla; sin ella salen todas,
+ * agrupadas. Se abre en una pestaña porque se imprime: el jefe de taller lo
+ * saca y se lo lleva al patio.
+ */
+export async function abrirPendientesEnBasePdf(p: {
+  empresaId: string; baseId?: string | null;
+}): Promise<void> {
+  const q = new URLSearchParams({ empresa: p.empresaId });
+  if (p.baseId) q.set("base", p.baseId);
+  // La pestaña se abre ANTES del fetch: si se abriera después, el navegador
+  // la trataría como emergente y la bloquearía.
+  const pestana = window.open("", "_blank");
+  try {
+    const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/informes/pendientes-en-base/pdf?${q}`, {
+      headers: { Authorization: `Bearer ${await tokenSesion()}` },
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error((j as any)?.error || `No se ha podido generar la hoja (${r.status})`);
+    }
+    const url = URL.createObjectURL(await r.blob());
+    if (pestana) pestana.location.href = url;
+    else {
+      const a = document.createElement("a");
+      a.href = url; a.download = "pendientes-en-base.pdf"; a.click();
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (e) {
+    pestana?.close();
+    throw e;
+  }
+}
+
+export async function abrirInformeRevisionesPdf(p: {
+  empresaId: string; desde?: string | null; hasta?: string | null;
+  formato: "resumen" | "detalle" | "vehiculo"; ambito: "cliente" | "interno";
+  soloConMediciones?: boolean;
+}): Promise<void> {
+  const q = new URLSearchParams({ empresa: p.empresaId, formato: p.formato, ambito: p.ambito });
+  if (p.desde) q.set("desde", p.desde);
+  if (p.hasta) q.set("hasta", p.hasta);
+  if (p.soloConMediciones) q.set("soloConMediciones", "1");
+  // La pestaña se abre ANTES del fetch: si se abriera después, el navegador
+  // la trataría como emergente y la bloquearía.
+  const pestana = window.open("", "_blank");
+  try {
+    const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/informes/revisiones/pdf?${q}`, {
+      headers: { Authorization: `Bearer ${await tokenSesion()}` },
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error((j as any)?.error || `No se ha podido generar el informe (${r.status})`);
+    }
+    const url = URL.createObjectURL(await r.blob());
+    if (pestana) pestana.location.href = url;
+    else { const a = document.createElement("a"); a.href = url; a.download = "revisiones.pdf"; a.click(); }
+    // No se revoca al instante: la pestaña todavía lo está cargando.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (e) {
+    pestana?.close();
+    throw e;
+  }
 }
 
 export async function listarDocumentosVehiculo(vehiculoId: string): Promise<DocumentoVehiculo[]> {
@@ -3535,4 +3719,605 @@ export async function pedirResumenVehiculo(vehiculoId: string, refrescar = false
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error((j as any)?.error || "No se ha podido generar el resumen");
   return j as ResumenVehiculoIA;
+}
+
+// ── Importación del histórico de albaranes ──────────────────────────────────
+// Todo pasa por dos RPC (tc_importar_historico, tc_deshacer_importacion) que
+// validan permisos, vehículos y catálogo en la base: el navegador solo manda
+// el contenido del albarán ya conciliado. Ver services/importHistorico.ts.
+
+export interface ResultadoAlbaranImport {
+  origen_doc: string;
+  estado: "se_crearia" | "creada" | "ya_presente" | "cambiado" | "bloqueado" | "duplicado_probable";
+  intervencion_id?: string | null;
+  motivo?: string | null;
+  operaciones?: number; servicios?: number; lineas?: number; posiciones_deducidas?: number;
+}
+export interface ResultadoImportHistorico {
+  simulacion: boolean; carga_id: string | null; lote_id: string | null; periodo: string;
+  creadas: number; ya_presentes: number; cambiados: number; bloqueados: number; duplicados_probables: number;
+  albaranes: ResultadoAlbaranImport[];
+}
+
+export async function importarHistorico(
+  empresaId: string, origenSistema: string, lote: Record<string, unknown>, simular: boolean,
+): Promise<ResultadoImportHistorico> {
+  const { data, error } = await supabase.rpc("tc_importar_historico", {
+    p_empresa: empresaId, p_origen_sistema: origenSistema, p_lote: lote, p_simular: simular,
+  });
+  if (error) throw new Error(error.message);
+  return data as ResultadoImportHistorico;
+}
+
+export interface ResultadoDeshacer {
+  simulacion: boolean; lote_id: string; borradas: number; conservadas: number;
+  estado: "deshecho" | "parcialmente_deshecho" | null;
+  detalle: { intervencion_id: string; origen_doc: string; resultado: "borrada" | "conservada"; motivos?: string[] }[];
+}
+export async function deshacerImportacion(loteId: string, excluir: string[], simular: boolean): Promise<ResultadoDeshacer> {
+  const { data, error } = await supabase.rpc("tc_deshacer_importacion", { p_lote: loteId, p_excluir: excluir, p_simular: simular });
+  if (error) throw new Error(error.message);
+  return data as ResultadoDeshacer;
+}
+
+export interface CargaImportacion {
+  id: string; empresa_id: string; origen_sistema: string; fichero: string | null; estado: string;
+  creado_at: string; actualizado_at: string;
+  /** 1 = importada antes de las fichas y las sustituciones; 2 = alcance completo. */
+  alcance?: number;
+  lotes?: LoteImportacion[];
+}
+export interface LoteImportacion {
+  id: string; carga_id: string; periodo: string; estado: string; resumen: Record<string, unknown> | null;
+  aplicado_at: string; deshecho_at: string | null;
+}
+export async function listarCargasImportacion(empresaId: string): Promise<CargaImportacion[]> {
+  const { data, error } = await supabase.from("tc_importacion_cargas")
+    .select("*, lotes:tc_importacion_lotes(*)").eq("empresa_id", empresaId)
+    .order("creado_at", { ascending: false }).limit(50);
+  if (error) throw new Error(error.message);
+  const cargas = (data ?? []) as unknown as CargaImportacion[];
+  for (const c of cargas) c.lotes = [...(c.lotes ?? [])].sort((a, b) => (a.periodo < b.periodo ? -1 : 1));
+  return cargas;
+}
+
+export interface ResultadoAmpliar {
+  simulacion: boolean; carga_id: string; ampliadas: number; sin_ampliar: number;
+  fichas: number; salidas: number;
+  detalle: { origen_doc: string; resultado: string; motivo?: string }[];
+}
+
+/**
+ * Ampliar una carga importada con el alcance antiguo: le añade las fichas de
+ * las unidades nuevas y las salidas por sustitución que le faltan. No duplica
+ * entradas, servicios ni líneas, y se salta las intervenciones que alguien
+ * haya tocado por fuera (la huella manda).
+ */
+export async function ampliarCargaImportacion(cargaId: string, simular: boolean): Promise<ResultadoAmpliar> {
+  const { data, error } = await supabase.rpc("tc_imp_ampliar_carga", { p_carga: cargaId, p_simular: simular });
+  if (error) throw new Error(error.message);
+  return data as ResultadoAmpliar;
+}
+
+export interface UnidadPorIdentificar {
+  id: string; fecha_operacion: string; condicion: string | null;
+  marca_txt: string | null; modelo_txt: string | null; medida_txt: string | null;
+  vehiculo_id: string | null; vehiculo?: { matricula: string } | null;
+  intervencion?: { origen_doc: string | null } | null;
+}
+
+/**
+ * La bandeja: unidades históricas usadas o recauchutadas que se montaron pero
+ * no tienen ficha. No se les asigna identidad sola por parecerse a otra: esto
+ * es trabajo de una persona.
+ */
+export async function listarUnidadesPorIdentificar(empresaId: string): Promise<UnidadPorIdentificar[]> {
+  const { data, error } = await supabase.from("operaciones_neumaticos")
+    .select("id, fecha_operacion, condicion, marca_txt, modelo_txt, medida_txt, vehiculo_id, vehiculo:tc_vehiculos(matricula), intervencion:tc_intervenciones(origen_doc)")
+    .eq("empresa_id", empresaId).not("importacion_lote_id", "is", null)
+    .eq("tipo_operacion", "montaje").is("neumatico_id", null).eq("is_anulada", false)
+    .order("fecha_operacion", { ascending: false }).limit(500);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as UnidadPorIdentificar[];
+}
+
+/**
+ * Candidatas para una unidad: misma empresa, misma medida y sin montaje vivo.
+ * Son PISTAS para quien decide, no una identificación: coincidir en medida no
+ * demuestra que sea la misma goma.
+ */
+export async function listarCandidatasFicha(empresaId: string, medida: string | null): Promise<Neumatico[]> {
+  let q = supabase.from("tc_neumaticos").select(NEU_SELECT)
+    .eq("empresa_id", empresaId).eq("activo", true).is("vehiculo_id", null).limit(50);
+  if (medida) q = q.eq("medida", medida);
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as Neumatico[];
+}
+
+/** Enlaza la unidad con una ficha existente, o crea una. Acción manual y auditada. */
+export async function identificarUnidad(
+  operacionId: string, neumaticoId: string | null, crear: boolean, motivo: string,
+): Promise<{ neumatico_id: string; creada: boolean }> {
+  const { data, error } = await supabase.rpc("tc_imp_identificar_unidad", {
+    p_operacion: operacionId, p_neumatico: neumaticoId, p_crear: crear, p_motivo: motivo,
+  });
+  if (error) throw new Error(error.message);
+  return data as { neumatico_id: string; creada: boolean };
+}
+
+export interface IntervaloReconstruido {
+  id: string; vehiculo_id: string; posicion_id: string | null; neumatico_id: string | null;
+  /** unidad = hay goma identificada; ocupacion = sabemos que la posición
+   *  estuvo calzada, no qué goma. Una ocupación NO es el recorrido de un
+   *  neumático. */
+  clase: "unidad" | "ocupacion";
+  operacion_entrada_id: string | null;
+  fecha_montaje: string; km_montaje: number | null; km_montaje_conocido: boolean;
+  fecha_desmontaje: string | null; km_desmontaje: number | null; km_desmontaje_conocido: boolean;
+  estado: "abierto" | "cerrado" | "interrumpido"; nivel: "confirmado" | "estimado";
+  /** Clasificación AUTOMÁTICA de los kilómetros, sin opinión humana:
+   *  utilizables (recorrido calculable y plausible), anomalos (calculable
+   *  pero el ritmo diario supera el límite; el recorrido se conserva),
+   *  ausentes (falta un extremo), incompatibles (decrecen; se conservan) o
+   *  sin cierre. */
+  km_estado: "utilizables" | "anomalos" | "ausentes" | "incompatibles" | "sin_cierre";
+  recorrido_km: number | null;
+  dias_intervalo: number | null; ritmo_km_dia: number | null; limite_km_dia: number | null;
+  /** Decisión HUMANA, separada de km_estado. Rechazar no cambia los
+   *  kilómetros; aceptar permite usar el intervalo como estimado y nunca lo
+   *  convierte en rendimiento confirmado. */
+  uso_estadistico: "pendiente" | "aceptado" | "rechazado";
+  revisado_por: string | null; revisado_at: string | null; revisado_motivo: string | null;
+  /** Decisión sobre la CONTINUIDAD, independiente de la de los kilómetros:
+   *  aceptar un kilometraje no dice nada sobre si faltó un montaje por medio. */
+  continuidad_decision: "pendiente" | "aceptada" | "rechazada";
+  continuidad_revisada_por: string | null; continuidad_revisada_at: string | null;
+  continuidad_motivo_revision: string | null;
+  /** Montaje y desmontaje el mismo día con recorrido positivo: no consta la
+   *  hora ni el orden, así que no hay ritmo diario que publicar. */
+  orden_desconocido: boolean;
+  /** Albaranes bloqueados (no importados) con evidencia de un posible
+   *  montaje dentro del intervalo: la cadena no se puede dar por limpia. */
+  continuidad_docs: string[] | null; continuidad_motivo: string | null;
+  posicion_fuente: string | null; continuidad_desde: string | null;
+  evidencia: string | null; revisar: boolean; motivo_revision: string | null;
+  origen_doc_montaje: string | null; origen_doc_desmontaje: string | null;
+  /** Las dos los calcula la base (vista tc_reconstruccion_intervalos): si el
+   *  intervalo entra en las medias y, si no, por qué. Pueden ser VARIOS
+   *  motivos a la vez. */
+  en_medias: boolean; motivos_exclusion: string[] | null;
+  neumatico?: { numero_interno: string | null } | null;
+  posicion?: { codigo_posicion: string } | null;
+}
+
+/** Una decisión humana sobre el uso estadístico de un intervalo. Append-only:
+ *  deshacer una importación no la borra, y si la evidencia cambia se marca
+ *  invalidada en vez de desaparecer. */
+export interface RevisionIntervalo {
+  id: string; operacion_entrada_id: string; fecha_montaje: string;
+  ambito: "kilometros" | "continuidad";
+  decision: "aceptado" | "rechazado" | "invalidada";
+  motivo: string; km_estado: string | null; recorrido_km: number | null;
+  ritmo_km_dia: number | null; limite_km_dia: number | null;
+  usuario_id: string | null; creado_at: string;
+  invalidada_at: string | null; motivo_invalidacion: string | null;
+}
+
+/** Cobertura de una media de recorrido estimado: sobre cuántos intervalos se
+ *  calcula y qué ha dejado fuera. Los motivos SE SOLAPAN (un intervalo puede
+ *  tener varios), así que no se suman: para eso están las combinaciones. */
+export interface CoberturaRecorridos {
+  nivel: "estimado"; aviso: string;
+  periodo: { desde: string; hasta: string; origen: string };
+  poblacion: { intervalos: number; vehiculos: number; posiciones: number;
+               cerrados: number; abiertos: number; interrumpidos: number };
+  /** Tener un recorrido que se puede restar no es lo mismo que poder usarlo. */
+  embudo: { con_recorrido_aritmetico: number; elegibles_tras_filtros: number; que_es: string };
+  /** Tres grupos, no dos: una ficha creada por la importación y no
+   *  identificada por nadie no es una unidad identificada, pero tampoco es
+   *  «sin ficha». */
+  identidad: { respaldada: number; reconstruida: number; sin_ficha: number; que_es: string };
+  incluidos: { n: number; respaldada: number; reconstruida: number; sin_ficha: number;
+               aceptados_km: number; aceptados_continuidad: number };
+  recorrido: Record<"identidad_respaldada" | "ficha_reconstruida" | "ocupacion_sin_ficha", {
+    n: number; media: number | null; mediana: number | null;
+    minimo: number | null; maximo: number | null; total_km: number | null; que_es: string }>;
+  excluidos: { n: number; motivos_se_solapan: boolean; nota: string;
+               motivos: { motivo: string; n: number }[];
+               combinaciones: { motivos: string[]; n: number }[] };
+  revision: { km_pendientes: number; km_aceptados: number; km_rechazados: number;
+              continuidad_pendientes: number; continuidad_aceptadas: number; continuidad_rechazadas: number };
+  limite_km_dia: number | null;
+}
+
+/** Los intervalos reconstruidos de un vehículo. Son ESTIMADOS: no alimentan
+ *  los informes de rendimiento confirmado. */
+export async function listarIntervalosReconstruidos(vehiculoId: string): Promise<IntervaloReconstruido[]> {
+  // De la vista, no de la tabla: `en_medias` y `motivos_exclusion` los
+  // calcula la base. El panel no reimplementa esa regla.
+  const { data, error } = await supabase.from("tc_reconstruccion_intervalos")
+    .select("*, neumatico:tc_neumaticos(numero_interno), posicion:tc_posiciones_vehiculo(codigo_posicion)")
+    .eq("vehiculo_id", vehiculoId).order("fecha_montaje", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as IntervaloReconstruido[];
+}
+
+/** Las decisiones humanas de un intervalo, la vigente y las invalidadas. */
+export async function listarRevisionesIntervalo(operacionEntradaId: string): Promise<RevisionIntervalo[]> {
+  const { data, error } = await supabase.from("tc_reconstruccion_revisiones")
+    .select("*").eq("operacion_entrada_id", operacionEntradaId).order("creado_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as RevisionIntervalo[];
+}
+
+/** Aceptar o rechazar un intervalo, en UNO de los dos ámbitos. El motivo es
+ *  obligatorio y queda auditado con usuario y fecha. Aceptar los kilómetros
+ *  permite usarlo como ESTIMADO —no lo convierte en rendimiento confirmado—
+ *  y NO resuelve su continuidad, que se decide aparte. */
+export async function revisarIntervalo(
+  intervaloId: string, ambito: "kilometros" | "continuidad",
+  decision: "aceptado" | "rechazado", motivo: string,
+): Promise<{ uso_estadistico: string; continuidad_decision: string; en_medias: boolean;
+             motivos_exclusion: string[] | null; aviso: string }> {
+  const { data, error } = await supabase.rpc("tc_imp_revisar_intervalo", {
+    p_intervalo: intervaloId, p_ambito: ambito, p_decision: decision, p_motivo: motivo,
+  });
+  if (error) throw new Error(error.message);
+  return data as any;
+}
+
+/** La cobertura de las medias de recorrido estimado. Sin esto, una media no
+ *  se puede publicar: hay que decir sobre cuántos intervalos sale. */
+export async function cargarCoberturaRecorridos(
+  empresaId: string, desde?: string | null, hasta?: string | null, vehiculoId?: string | null,
+): Promise<CoberturaRecorridos> {
+  const { data, error } = await supabase.rpc("tc_informes_recorridos_estimados", {
+    p_empresa: empresaId, p_desde: desde ?? null, p_hasta: hasta ?? null, p_vehiculo: vehiculoId ?? null,
+  });
+  if (error) throw new Error(error.message);
+  return data as unknown as CoberturaRecorridos;
+}
+
+/** El límite de plausibilidad del ritmo diario de la empresa (2.000 km/día
+ *  si no se ha configurado otro). */
+export async function cargarLimiteKmDia(empresaId: string): Promise<number> {
+  const { data, error } = await supabase.rpc("tc_imp_limite_km_dia", { p_empresa: empresaId });
+  if (error) throw new Error(error.message);
+  return Number(data ?? 2000);
+}
+
+/** Cambiar ese límite. Reclasifica los intervalos de la empresa y NO toca
+ *  las decisiones humanas: el límite no es evidencia. */
+export async function fijarLimiteKmDia(empresaId: string, limite: number): Promise<number> {
+  const { data, error } = await supabase.rpc("tc_imp_fijar_limite_km_dia", { p_empresa: empresaId, p_limite: limite });
+  if (error) throw new Error(error.message);
+  return Number(data);
+}
+
+/** Lo conservado de un lote parcialmente deshecho, con su motivo. */
+export async function listarConservadasDeLote(loteId: string): Promise<{ intervencion_id: string; origen_doc: string; motivo_conservada: string | null }[]> {
+  const { data, error } = await supabase.from("tc_importacion_intervenciones")
+    .select("intervencion_id, origen_doc, motivo_conservada").eq("lote_id", loteId).not("conservada_at", "is", null);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as any;
+}
+
+// ── Tacógrafo ───────────────────────────────────────────────────────────────
+
+export interface SimulacionTacografo {
+  archivo: string | null;
+  filasLeidas: number;
+  problemas: Array<{ fila: number; motivo: string; valor?: string }>;
+  nuevas: number;
+  duplicadas: number;
+  sinVehiculo: number;
+  vehiculosEncontrados: number;
+  vehiculosInactivos: number;
+  matriculasSinVehiculo: string[];
+  propuestas: Array<{
+    matriculaNorm: string; matricula: string | null; vehiculoId: string | null;
+    caso: "sin_medida" | "solo_marcado" | "discrepa" | "sin_vehiculo";
+    medidaNorm: string; medidaOrigen: string | null; fecha: string | null;
+    idOrigen: string; medidaActual: string | null; medidaActualId: string | null;
+    seguraParaBloque: boolean;
+  }>;
+  propuestasPorCaso: Record<string, number>;
+  kmSospechosos: Array<{
+    matriculaNorm: string; matricula: string | null; fecha: string | null;
+    idOrigen: string; km: number; kmAnterior: number; fechaAnterior: string | null;
+  }>;
+  conflictosBastidor: Array<{
+    matriculaNorm: string; idOrigen: string; bastidorFichero: string; bastidorVehiculo: string;
+  }>;
+  clientes: Array<{ nombre: string; filas: number }>;
+  vencimientos: Record<string, number>;
+  avisos: string[];
+}
+
+export interface RespuestaSimulacionTacografo {
+  ok: true;
+  lectura: {
+    filaCabecera: number; columnas: number; columnasUsadas: number;
+    columnasDesconocidas: string[]; hoja: string;
+  };
+  regla: { meses: number; avisoDias: number; tiposReinician: string[] | null; resultadosReinician: string[] | null };
+  simulacion: SimulacionTacografo;
+}
+
+/**
+ * Simula la importación del informe de tacógrafo. No escribe nada.
+ *
+ * El fichero se manda entero y lo lee el SERVIDOR: el parser ya vive allí, y
+ * tener otro aquí sería tener dos criterios para el mismo Excel.
+ */
+export async function simularTacografo(
+  empresaId: string, archivo: File,
+): Promise<RespuestaSimulacionTacografo> {
+  const fd = new FormData();
+  fd.append("archivo", archivo);
+  const r = await fetch(
+    `${WF_API_BASE}/api/tyrecontrol/tacografo/simular?empresa=${encodeURIComponent(empresaId)}`,
+    { method: "POST", headers: { Authorization: `Bearer ${await tokenSesion()}` }, body: fd });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || `No se ha podido simular (${r.status})`);
+  return j as RespuestaSimulacionTacografo;
+}
+
+export interface ResultadoImportTacografo {
+  ok: true;
+  loteId: string;
+  resultado: {
+    leidas: number; insertadas: number; yaEstaban: number;
+    duplicadasEnBase: number; sinVehiculo: number; bloqueadas: number;
+  };
+  simulacion: SimulacionTacografo;
+}
+
+export interface LoteTacografo {
+  id: string; archivo_nombre: string; sistema_origen: string;
+  archivo_filas: number; filas_empresa: number; importadas: number;
+  duplicadas: number; sin_vehiculo: number; bloqueadas: number;
+  estado: "aplicado" | "deshecho"; created_at: string; deshecho_en: string | null;
+  nota: string | null;
+}
+
+export interface VeredictoDeshacer {
+  puede: boolean;
+  motivo?: string;
+  explicacion?: string;
+  estorban?: string[];
+  aBorrar: number;
+}
+
+async function tcg<T>(url: string, init: RequestInit = {}): Promise<T> {
+  const r = await fetch(`${WF_API_BASE}${url}`, {
+    ...init,
+    headers: { ...(init.headers ?? {}), Authorization: `Bearer ${await tokenSesion()}` },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || `Error ${r.status}`);
+  return j as T;
+}
+
+/** Importa de verdad. El servidor vuelve a leer el fichero y a cruzar. */
+export async function importarTacografo(
+  empresaId: string, archivo: File,
+): Promise<ResultadoImportTacografo> {
+  const fd = new FormData();
+  fd.append("archivo", archivo);
+  return tcg<ResultadoImportTacografo>(
+    `/api/tyrecontrol/tacografo/importar?empresa=${encodeURIComponent(empresaId)}`,
+    { method: "POST", body: fd });
+}
+
+export async function listarLotesTacografo(empresaId: string): Promise<LoteTacografo[]> {
+  const j = await tcg<{ lotes: LoteTacografo[] }>(
+    `/api/tyrecontrol/tacografo/lotes?empresa=${encodeURIComponent(empresaId)}`);
+  return j.lotes;
+}
+
+/**
+ * Deshacer un lote. Con `comprobar` solo pregunta si se puede: es lo que la
+ * pantalla hace antes de ofrecer el botón, para no ofrecer algo que va a fallar.
+ */
+export async function deshacerLoteTacografo(
+  empresaId: string, loteId: string, comprobar = false,
+): Promise<{ veredicto?: VeredictoDeshacer; borradas?: number }> {
+  return tcg(`/api/tyrecontrol/tacografo/lotes/${encodeURIComponent(loteId)}/deshacer`
+    + `?empresa=${encodeURIComponent(empresaId)}${comprobar ? "&comprobar=1" : ""}`,
+    { method: "POST" });
+}
+
+export async function bloqueadasDeLoteTacografo(
+  empresaId: string, loteId: string,
+): Promise<Array<{ fila_origen: number; id_origen: string | null; matricula: string | null;
+                   fecha: string | null; motivo: string; valor: string | null }>> {
+  const j = await tcg<{ bloqueadas: any[] }>(
+    `/api/tyrecontrol/tacografo/lotes/${encodeURIComponent(loteId)}/bloqueadas`
+    + `?empresa=${encodeURIComponent(empresaId)}`);
+  return j.bloqueadas;
+}
+
+// ── Tacógrafo · control de la flota y sección de la ficha ───────────────────
+
+export type EstadoTacografo = "vigente" | "proxima" | "vencida" | "sin_datos";
+
+export interface FilaTacografo {
+  vehiculoId: string;
+  matricula: string | null;
+  numeroUnidad: string | null;
+  baseId: string | null;
+  base: string | null;
+  activo: boolean;
+  estado: EstadoTacografo;
+  ultima: string | null;
+  proxima: string | null;
+  diasRestantes: number | null;
+  ultimoTipo: string | null;
+  ultimoResultado: string | null;
+  intervenciones: number;
+}
+
+export interface ReglaTacografo {
+  meses: number; avisoDias: number;
+  tiposReinician: string[] | null; resultadosReinician: string[] | null;
+}
+
+export interface ControlTacografos {
+  ok: true;
+  empresaId: string;
+  regla: ReglaTacografo;
+  bases: Array<{ id: string; nombre: string }>;
+  filas: FilaTacografo[];
+  resumen: Record<EstadoTacografo, number>;
+  total: number;
+  mostrados: number;
+}
+
+export interface FiltrosTacografo {
+  empresaId: string;
+  base?: string | null;
+  texto?: string | null;
+  estado?: EstadoTacografo[] | null;
+  venceAntesDe?: string | null;
+  incluirBaja?: boolean;
+}
+
+export async function controlTacografos(f: FiltrosTacografo): Promise<ControlTacografos> {
+  const q = new URLSearchParams({ empresa: f.empresaId });
+  if (f.base) q.set("base", f.base);
+  if (f.texto) q.set("texto", f.texto);
+  if (f.estado?.length) q.set("estado", f.estado.join(","));
+  if (f.venceAntesDe) q.set("venceAntesDe", f.venceAntesDe);
+  if (f.incluirBaja) q.set("incluirBaja", "1");
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/tacografo/control?${q}`, {
+    headers: { Authorization: `Bearer ${await tokenSesion()}` },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || `Error ${r.status}`);
+  return j as ControlTacografos;
+}
+
+export interface Fechado { valor: string; fecha: string; idOrigen: string }
+
+export interface IntervencionTacografo {
+  id: string; idOrigen: string; fecha: string;
+  tipoOperacion: string | null; resultado: string | null;
+  medidaNorm: string | null; medidaOrigen: string | null;
+  kmNuevo: number | null; kmSospechoso: boolean;
+  paramL: string | null; paramW: string | null; paramK: string | null;
+  referencia: string | null; version: string | null;
+  numSerie: string | null; numSensor: string | null;
+  tipoTacografo: string | null; fabricante: string | null;
+  tecnico: string | null; observaciones: string | null;
+}
+
+export interface FichaTacografo {
+  ok: true;
+  regla: ReglaTacografo;
+  fila: FilaTacografo;
+  tecnicos: Record<string, Fechado | null>;
+  historico: IntervencionTacografo[];
+}
+
+/** La sección Tacógrafo de un vehículo. Mismo cálculo que el control. */
+export async function fichaTacografo(empresaId: string, vehiculoId: string): Promise<FichaTacografo> {
+  const r = await fetch(
+    `${WF_API_BASE}/api/tyrecontrol/tacografo/vehiculo/${encodeURIComponent(vehiculoId)}`
+    + `?empresa=${encodeURIComponent(empresaId)}`,
+    { headers: { Authorization: `Bearer ${await tokenSesion()}` } });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || `Error ${r.status}`);
+  return j as FichaTacografo;
+}
+
+// ── Tacógrafo · propuestas de medida ───────────────────────────────────────
+
+export type CasoMedidaTacografo = "sin_medida" | "solo_marcado" | "discrepa" | "sin_vehiculo";
+
+export interface PropuestaTacografo {
+  id: string;
+  vehiculoId: string | null;
+  matriculaNorm: string;
+  caso: CasoMedidaTacografo;
+  /** Lo que dice el tacógrafo: normalizado y tal cual venía en el informe. */
+  medidaNorm: string;
+  medidaOrigen: string | null;
+  fecha: string | null;
+  idOrigen: string | null;
+  /** Lo que TyreControl tenía cuando se creó la propuesta. */
+  medidaActual: string | null;
+  medidaActualId: string | null;
+  estado: string;
+  seguraParaBloque: boolean;
+
+  /** La decisión la toma el servidor; la pantalla solo la enseña. */
+  puedeAceptar: boolean;
+  motivo: string | null;
+  explicacion: string | null;
+  /** Qué se escribiría exactamente, para que nadie acepte a ciegas. */
+  seEscribira: {
+    medidaId: string; valor: string; exacta: boolean; marcadoIgnorado: string | null;
+  } | null;
+  entraEnBloque: boolean;
+}
+
+export interface PropuestasTacografo {
+  total: number;
+  porCaso: Record<CasoMedidaTacografo, number>;
+  aceptablesEnBloque: number;
+  propuestas: PropuestaTacografo[];
+}
+
+export async function propuestasTacografo(
+  empresaId: string, estado: "pendiente" | "aceptada" | "rechazada" | "todas" = "pendiente",
+): Promise<PropuestasTacografo> {
+  const q = new URLSearchParams({ empresa: empresaId, estado });
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/tacografo/propuestas?${q}`, {
+    headers: { Authorization: `Bearer ${await tokenSesion()}` },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || `Error ${r.status}`);
+  return j as PropuestasTacografo;
+}
+
+/**
+ * Resuelve una propuesta. El servidor vuelve a decidir con la base delante:
+ * entre que se pintó el botón y alguien lo pulsó, la medida del vehículo
+ * puede haber cambiado, y entonces se niega en vez de pisarla.
+ */
+export async function resolverPropuestaTacografo(
+  empresaId: string, id: string, accion: "aceptar" | "rechazar", nota?: string,
+): Promise<{ ok: true; accion: string; escrito?: { medida: string; exacta: boolean } }> {
+  return tcg(`/api/tyrecontrol/tacografo/propuestas/${encodeURIComponent(id)}`
+    + `?empresa=${encodeURIComponent(empresaId)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accion, nota: nota ?? null }),
+    });
+}
+
+export interface ResultadoBloqueTacografo {
+  ok: true;
+  aceptadas: Array<{ id: string; matricula: string; medida: string; exacta: boolean }>;
+  falladas: Array<{ id: string; matricula: string; motivo: string }>;
+  excluidas: Array<{ id: string; matricula: string; caso: CasoMedidaTacografo; motivo: string }>;
+}
+
+/**
+ * Acepta en bloque. Mandar ids NO salta el filtro: el servidor vuelve a
+ * aplicar «solo las coincidencias seguras», así que una discrepancia enviada
+ * a mano sale en `excluidas` con su motivo en vez de aceptarse.
+ */
+export async function aceptarBloqueTacografo(
+  empresaId: string, ids?: string[],
+): Promise<ResultadoBloqueTacografo> {
+  return tcg(`/api/tyrecontrol/tacografo/propuestas-bloque?empresa=${encodeURIComponent(empresaId)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(ids ? { ids } : {}),
+    });
 }

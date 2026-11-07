@@ -2,11 +2,12 @@
 // Toda la lógica pesada vive en la base de datos (ver migración
 // tyrecontrol_informes_kpis.sql); aquí solo tipamos y llamamos.
 import { supabase } from "./supabase";
+import { authHeaders } from "./data";
 import type {
   FiltrosInformes, KpisInformes, EstadoFlota, DimensionTotal, MarcaMedidaTotal, ProfundidadDistribucion, Alerta,
   EconomicoInformes, RankingVehiculo, RankingMarca, CosteKmNeumatico, DesgasteNeumatico,
   PresionNeumatico, ProductividadTecnico, OperacionesInforme, InformeEjecutivo,
-  ControlRevision,
+  ControlRevision, MontajesInforme, OrigenMontajes, InventarioResumen,
 } from "../types/informes";
 
 function params(f: FiltrosInformes) {
@@ -110,4 +111,127 @@ export async function obtenerInformeEjecutivo(f: FiltrosInformes): Promise<Infor
   const { data, error } = await supabase.rpc("tc_informe_ejecutivo", params(f));
   if (error) throw new Error(error.message);
   return data as InformeEjecutivo;
+}
+
+/**
+ * Montajes de neumáticos: cuántas gomas se pusieron, por marca, modelo,
+ * medida, condición, vehículo y periodo. `origen` separa el histórico
+ * importado de las operaciones normales.
+ *
+ * Es una RPC NUEVA, con nombre propio: ni tc_informes_kpis ni
+ * tc_informes_operaciones cambian de firma, así que PostgREST no se
+ * encuentra con dos candidatas para la misma llamada.
+ */
+export async function montajesInforme(f: FiltrosInformes, origen: OrigenMontajes = "ambos"): Promise<MontajesInforme> {
+  const { data, error } = await supabase.rpc("tc_informes_montajes", { ...params(f), p_origen: origen });
+  if (error) throw new Error(error.message);
+  return data as MontajesInforme;
+}
+
+/** Cuántas fichas son de verdad, cuántas vienen de la reconstrucción histórica
+ *  y cuántas unidades históricas siguen sin identificar. */
+export async function inventarioResumen(f: FiltrosInformes): Promise<InventarioResumen> {
+  const { data, error } = await supabase.rpc("tc_informes_inventario_resumen", { p_empresa: f.empresaId ?? null });
+  if (error) throw new Error(error.message);
+  return data as InventarioResumen;
+}
+
+// ── Informe mensual de flota ───────────────────────────────────────────────
+//
+// Este informe no es una RPC como los demás: lo calcula el servidor de
+// Mobilink, no la base. Por eso va por `fetch` con el token de la sesión y no
+// por `supabase.rpc`, y por eso necesita su propio ayudante.
+
+const API_MENSUAL = import.meta.env.PROD ? "" : "http://localhost:4000";
+
+async function pedir<T>(ruta: string): Promise<T> {
+  const r = await fetch(`${API_MENSUAL}${ruta}`, { headers: await authHeaders() });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || `Error ${r.status}`);
+  return j as T;
+}
+
+
+export interface MatrizInforme {
+  columnas: string[];
+  filas: Array<{ etiqueta: string; celdas: number[]; total: number; pct: number }>;
+  totalPorColumna: number[];
+  total: number;
+}
+
+export interface FilaFichaInforme {
+  vehiculoId: string;
+  numeroUnidad: string | null;
+  matricula: string | null;
+  base: string | null;
+  profundidades: Array<number | null>;
+  peor: number | null;
+  banda: string | null;
+  medida: string | null;
+  ultimaRevision: string | null;
+}
+
+export interface InformeMensual {
+  ok: true;
+  empresa: string;
+  empresaNombre: string | null;
+  periodo: { mes: string; desde: string; hasta: string; etiqueta: string };
+  recuentos: {
+    flotaControlada: number; flotaRevisada: number; pendientes: number;
+    pctRevisada: number; pctPendientes: number;
+  };
+  neumaticos: {
+    posiciones: number[]; porPosicion: number[]; total: number; sinPosicion: number;
+  };
+  avisos: string[];
+  rejillas: Record<
+    "marcaPorPosicion" | "medidaPorPosicion" | "condicionPorPosicion"
+    | "profundidadPorPosicion" | "medidaPorMilimetro" | "medidaPorMarca",
+    MatrizInforme
+  >;
+  listados: Array<{ banda: string; titulo: string; filas: FilaFichaInforme[] }>;
+  planificacion: {
+    mes: string; etiqueta: string; filas: FilaFichaInforme[]; sinRevisar: number;
+  };
+}
+
+export interface Porcion { etiqueta: string; valor: number; pct: number }
+
+export interface MesEvolucionInforme {
+  mes: string; etiqueta: string;
+  porBanda: number[]; pctPorBanda: number[];
+  total: number; ruedas: number;
+  recauchutadas: number; reesculturadas: number;
+}
+
+export interface EvolucionInforme {
+  ok: true;
+  meses: MesEvolucionInforme[];
+  desde: string | null;
+  mesesVaciosAlPrincipio: number;
+  avisos: string[];
+  quesitos: { bandas: Porcion[]; condicion: Porcion[] } | null;
+}
+
+/** El informe del mes: cabecera, recuentos, rejillas y listados. */
+export async function informeMensual(
+  empresaId: string, mes: string, incluirBaja = false,
+): Promise<InformeMensual> {
+  const q = new URLSearchParams({ empresa: empresaId, mes });
+  if (incluirBaja) q.set("incluirBaja", "1");
+  return pedir<InformeMensual>(`/api/tyrecontrol/informes/mensual?${q}`);
+}
+
+/**
+ * La evolución y los quesitos, en su propia petición.
+ *
+ * Va aparte porque cuesta aparte: son doce meses de mediciones. Así la
+ * pantalla puede enseñar los recuentos y las tablas en cuanto llegan, sin
+ * esperar por las gráficas.
+ */
+export async function evolucionMensual(
+  empresaId: string, mes: string, meses = 12,
+): Promise<EvolucionInforme> {
+  const q = new URLSearchParams({ empresa: empresaId, mes, meses: String(meses) });
+  return pedir<EvolucionInforme>(`/api/tyrecontrol/informes/mensual/evolucion?${q}`);
 }
