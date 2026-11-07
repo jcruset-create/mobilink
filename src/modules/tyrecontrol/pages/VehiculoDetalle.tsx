@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones, listarIntervenciones, listarIntervalosReconstruidos, revisarIntervalo, cargarCoberturaRecorridos, imagenChasisDeMarca, generarPosicionesDeTipo, cotejarPlanoDeTipo, type CotejoPlano, type IntervaloReconstruido, type CoberturaRecorridos } from "../services/data";
 import type { Intervencion } from "../services/data";
 import { resumenMontajes, textoPorCondicion } from "../../../../shared/condicionNeumatico";
@@ -11,6 +11,7 @@ import { resumenOperaciones } from "../services/resumenOperaciones";
 import { ubicacionDeVehiculoBD } from "../services/data";
 import { ubicacionDeVehiculo, coordenadasDeVehiculo, enlaceDeMapa, type Ubicacion, type PosicionMapa } from "../services/presenciaVista";
 import { explicarKm } from "../services/procedenciaKm";
+import { destinoVolver, type DeDondeVengo } from "../services/navegacionVolver";
 import { Badge, Modal, TableWrap, tdCls, thCls } from "../components/ui";
 import VehicleLayoutImage from "../components/VehicleLayoutImage";
 import PlanoSnapshot from "../components/PlanoSnapshot";
@@ -34,8 +35,18 @@ function fechaHora(r: RevisionVehiculoT): string {
 export default function VehiculoDetalle() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
+  /*
+   * De dónde se ha llegado, cuando quien enlaza se molesta en decirlo. La
+   * ficha se abre desde media docena de pantallas y el botón de volver
+   * llevaba siempre al listado general, que desde una lista filtrada no es
+   * volver: es acabar en otro sitio y tener que rehacer el filtro.
+   */
+  const origen = (useLocation().state ?? {}) as DeDondeVengo;
   const { perfil } = useTyreAuth();
   const esCliente = perfil?.rol === "cliente" && !perfil?.es_superadmin;
+  const volver = destinoVolver(origen, esCliente
+    ? { ruta: "/tyrecontrol/mis-vehiculos", etiqueta: "Mis vehículos" }
+    : { ruta: "/tyrecontrol/vehiculos", etiqueta: "Vehículos" });
   const [v, setV] = useState<Vehiculo | null>(null);
   /*
    * Dónde está el vehículo: en base, en ruta o no se sabe.
@@ -194,10 +205,10 @@ export default function VehiculoDetalle() {
     <div>
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <button
-          onClick={() => navigate(esCliente ? "/tyrecontrol/mis-vehiculos" : "/tyrecontrol/vehiculos")}
+          onClick={() => navigate(volver.ruta)}
           className="rounded bg-slate-800 px-3 py-1 text-[12px] text-slate-200"
         >
-          ← {esCliente ? "Mis vehículos" : "Vehículos"}
+          ← {volver.etiqueta}
         </button>
         <h1 className="text-lg font-black">{v.matricula}{v.numero_unidad ? ` · Unidad ${v.numero_unidad}` : ""}</h1>
         <Badge ok={v.activo}>{v.activo ? "Activo" : "Inactivo"}</Badge>
