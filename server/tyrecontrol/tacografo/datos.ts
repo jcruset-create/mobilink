@@ -359,18 +359,20 @@ export async function leerIntervencionPorOrigen(
 }
 
 /**
- * Un informe ya adjunto a este vehículo con el mismo sha256.
+ * Un informe ya adjunto a ESTA intervención con el mismo sha256.
  *
- * Por vehículo y no por empresa: el mismo PDF en dos fichas distintas es una
- * cosa que hay que mirar, no un duplicado que silenciar.
+ * Por intervención y no por vehículo, que es lo que de verdad significa «este
+ * informe ya está»: un PDF que trae el mes entero lleva varias intervenciones
+ * del mismo autobús, y con la clave puesta en el vehículo la segunda se
+ * tomaría por duplicada de la primera por compartir fichero.
  */
 export async function leerInformePorHash(
-  vehiculoId: string, sha: string,
+  intervencionId: string, sha: string,
 ): Promise<{ id: string; intervencionId: string | null } | null> {
   const { data, error } = await supabase
     .from("tc_vehiculo_documentos")
     .select("id, intervencion_id")
-    .eq("vehiculo_id", vehiculoId)
+    .eq("intervencion_id", intervencionId)
     .eq("tipo", TIPO_DOC_INFORME)
     .eq("hash_sha256", sha)
     .maybeSingle();

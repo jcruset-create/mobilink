@@ -133,6 +133,12 @@ export interface LecturaInforme {
   problemas: Problema[];
   /** Cuántas copias del impreso traía el PDF. Lo normal es 2. */
   copias: number;
+  /**
+   * Cuántas páginas del PDF ocupa ESTA intervención. En un fichero con el mes
+   * entero no es el total del PDF, y lo que se guarda del documento tiene que
+   * hablar del informe, no del sobre en el que venía.
+   */
+  paginas: number;
 }
 
 /** Lo que este módulo sabe reconocer. Otro impreso no se adivina. */
@@ -753,44 +759,115 @@ const COMPARABLES = ["idOrigen", "fecha", "tipoOperacion", "resultado", "matricu
   "numSerie", "numSensor", "referencia", "precintos"] as const;
 
 /**
- * El informe, leído.
+ * Los informes que trae un PDF, uno por intervención.
  *
- * Lee las dos copias y exige que coincidan en lo que identifica y mide la
- * intervención. Si discrepan devuelve `null` y dice en qué: es la trampa 2, y
- * un impreso con dos valores distintos del mismo campo no se resuelve
- * eligiendo uno.
+ * ── Un PDF puede traer VARIAS intervenciones ────────────────────────────────
+ *
+ * El centro entrega los informes de uno en uno, pero nada impide juntar el
+ * mes entero en un solo fichero, y quien lo recibe por correo lo reenvía tal
+ * cual. Así que las copias se agrupan por su «A1. Nº de orden»: cada grupo es
+ * una intervención con sus dos ejemplares, y un PDF de 70 páginas son diez
+ * intervenciones, no una de diez copias.
+ *
+ * Agrupar por A1 y no por «cada dos copias, una intervención» es lo que hace
+ * que esto no dependa de que el fichero esté bien montado: si alguien junta
+ * los ejemplares desordenados, o se deja uno, cada A1 sigue encontrando los
+ * suyos.
+ *
+ * ── Y se sigue exigiendo que las copias concuerden ──────────────────────────
+ *
+ * Dentro de cada grupo, los ejemplares tienen que decir lo mismo en lo que
+ * identifica y mide la intervención. Si discrepan, ESA intervención se queda
+ * sin leer y se dice en qué campo —las demás del fichero no tienen por qué
+ * caerse con ella—.
  */
-export function leerInformePdf(lineas: LineaPdf[]): LecturaInforme {
+export function leerInformesDelPdf(lineas: LineaPdf[]): LecturaInforme[] {
   const copias = copiasDelInforme(lineas);
   if (copias.length === 0) {
-    return {
+    return [{
       fila: null,
       copias: 0,
+      paginas: 0,
       problemas: [{ fila: 1, motivo: "El PDF no tiene texto: no se puede leer." }],
+    }];
+  }
+
+  const leidas = copias.map((c, i) => ({
+    ...leerCopia(c, c[0]?.pagina ?? 1),
+    paginasDeLaCopia: new Set(c.map((l) => l.pagina)),
+    orden: i,
+  }));
+
+  /*
+   * Por A1, y en el orden en que aparecen. Las copias que no se han podido
+   * leer no tienen A1 con el que agruparse: van juntas al final, cada una
+   * con su problema, para que no se pierda lo que les pasó.
+   */
+  type Leida = (typeof leidas)[number];
+  const porOrigen = new Map<string, Leida[]>();
+  const sinLeer: Leida[] = [];
+  for (const l of leidas) {
+    if (!l.fila) { sinLeer.push(l); continue; }
+    const lista = porOrigen.get(l.fila.idOrigen) ?? [];
+    lista.push(l);
+    porOrigen.set(l.fila.idOrigen, lista);
+  }
+
+  const paginasDe = (grupo: Leida[]) =>
+    new Set(grupo.flatMap((g) => [...g.paginasDeLaCopia])).size;
+
+  const informes: LecturaInforme[] = [];
+  for (const grupo of porOrigen.values()) {
+    const problemas = grupo.flatMap((g) => g.problemas);
+    const filas = grupo.map((g) => g.fila!);
+    const primera = filas[0];
+
+    const discrepa = filas.slice(1).find((otra) =>
+      COMPARABLES.some((campo) => primera[campo] !== otra[campo]));
+    if (discrepa) {
+      const campo = COMPARABLES.find((c) => primera[c] !== discrepa[c])!;
+      problemas.push({
+        fila: discrepa.fila,
+        motivo: `Las dos copias del impreso no dicen lo mismo en «${campo}»: `
+          + `«${primera[campo] ?? "—"}» y «${discrepa[campo] ?? "—"}». No se elige ninguna.`,
+        valor: primera.idOrigen,
+      });
+      informes.push({ fila: null, copias: grupo.length, paginas: paginasDe(grupo), problemas });
+      continue;
+    }
+
+    // La primera copia es la que se queda, y su `fila` es la página en la que
+    // empieza: en los problemas sirve para señalar dónde mirar.
+    informes.push({ fila: primera, copias: grupo.length, paginas: paginasDe(grupo), problemas });
+  }
+
+  for (const s of sinLeer) {
+    informes.push({ fila: null, copias: 1, paginas: paginasDe([s]), problemas: s.problemas });
+  }
+  return informes;
+}
+
+/**
+ * El informe de un PDF que trae UNA sola intervención.
+ *
+ * Es lo que usa la ficha de un vehículo, donde se adjunta un impreso
+ * concreto. Si el fichero trae varias, aquí no se elige una: se dice, porque
+ * elegir la primera dejaría las demás sin adjuntar y sin que nadie se entere.
+ */
+export function leerInformePdf(lineas: LineaPdf[]): LecturaInforme {
+  const informes = leerInformesDelPdf(lineas);
+  if (informes.length > 1) {
+    const cuales = informes.map((i) => i.fila?.idOrigen).filter(Boolean);
+    return {
+      fila: null,
+      copias: informes.reduce((n, i) => n + i.copias, 0),
+      paginas: informes.reduce((n, i) => n + i.paginas, 0),
+      problemas: [{
+        fila: 1,
+        motivo: `El PDF trae ${informes.length} intervenciones (${cuales.join(", ")}) y aquí se `
+          + "adjunta una. Para un fichero con varias, usa la importación de informes.",
+      }, ...informes.flatMap((i) => i.problemas)],
     };
   }
-
-  const leidas = copias.map((c) => leerCopia(c, c[0]?.pagina ?? 1));
-  const problemas = leidas.flatMap((l) => l.problemas);
-  const buenas = leidas.filter((l) => l.fila != null).map((l) => l.fila!);
-  if (buenas.length === 0) return { fila: null, copias: copias.length, problemas };
-
-  const primera = buenas[0];
-  for (const otra of buenas.slice(1)) {
-    for (const campo of COMPARABLES) {
-      if (primera[campo] !== otra[campo]) {
-        problemas.push({
-          fila: otra.fila,
-          motivo: `Las dos copias del impreso no dicen lo mismo en «${campo}»: `
-            + `«${primera[campo] ?? "—"}» y «${otra[campo] ?? "—"}». No se elige ninguna.`,
-          valor: primera.idOrigen,
-        });
-        return { fila: null, copias: copias.length, problemas };
-      }
-    }
-  }
-
-  // La primera copia es la que se queda, y su `fila` es la página en la que
-  // empieza: en los problemas sirve para señalar dónde mirar.
-  return { fila: primera, copias: copias.length, problemas };
+  return informes[0];
 }
