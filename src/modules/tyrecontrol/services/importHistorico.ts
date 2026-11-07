@@ -208,6 +208,26 @@ function marcaCanon(s: string): string {
   return MARCA_CANON[u] ?? (s.charAt(0).toUpperCase() + s.slice(1).toLowerCase());
 }
 
+/**
+ * La marca que hay al principio del token, y lo que sobra detrás.
+ *
+ * Hace falta porque en los albaranes la marca y el modelo vienen a veces
+ * PEGADOS: «HANKAU04+», «MICHAGILS3», «HANKOAH35». Antes el token entero se
+ * tomaba como marca y salían marcas inventadas —`Hankau04+`, `Michagils3`—
+ * que en el informe mensual aparecen como marcas distintas de Hankook y
+ * Michelin, repartiendo el recuento de una flota entre fantasmas.
+ *
+ * El prefijo tiene que ser el MÁS LARGO que encaje: `MARCAS` lleva `HANKOOK`,
+ * `HANKO` y `HANK`, y quedarse con el primero que coincida convertiría
+ * «HANKOOK» en marca `Hanko` y modelo `OK`.
+ */
+function partirMarca(u: string): { marca: string; resto: string } | null {
+  let prefijo = "";
+  for (const b of MARCAS) if (u.startsWith(b) && b.length > prefijo.length) prefijo = b;
+  if (!prefijo) return null;
+  return { marca: marcaCanon(prefijo), resto: u.slice(prefijo.length) };
+}
+
 /** De «295/80X22.5 HANKOOK AH51 154M» → medida, marca, modelo. */
 export function referenciaDeDescripcion(desc: string): { medida: string | null; marca: string | null; modelo: string | null } {
   const medida = medidaDeTexto(desc);
@@ -221,7 +241,17 @@ export function referenciaDeDescripcion(desc: string): { medida: string | null; 
   const modeloTokens: string[] = [];
   for (const t of tokens) {
     const u = t.toUpperCase().replace(/[.*]/g, "");
-    if (!marca && MARCAS.some((b) => u.startsWith(b))) { marca = marcaCanon(u); continue; }
+    if (!marca) {
+      const p = partirMarca(u);
+      if (p) {
+        marca = p.marca;
+        // Lo que iba pegado detrás de la marca es modelo, no parte del
+        // nombre: «HANKAU04+» son Hankook y AU04+, no una marca llamada
+        // «Hankau04+».
+        if (p.resto) modeloTokens.push(p.resto);
+        continue;
+      }
+    }
     modeloTokens.push(t);
   }
   const modelo = modeloTokens.join(" ").trim() || null;

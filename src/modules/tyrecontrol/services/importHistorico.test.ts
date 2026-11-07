@@ -51,6 +51,61 @@ describe("lectura", () => {
     expect(referenciaDeDescripcion("315/80X22.5 HANKOOK AH51 156L")).toEqual({ medida: "315/80R22.5", marca: "Hankook", modelo: "AH51 156L" });
     expect(medidaDeTexto("295/80R22,5")).toBe("295/80R22.5");
   });
+
+  /*
+   * La marca y el modelo vienen PEGADOS en bastantes albaranes, y antes el
+   * token entero se tomaba como marca: la importación del 03/11/2026 dejó en
+   * producción marcas inventadas —`Hankau04+` (18 gomas), `Hankra30` (6),
+   * `Hankoah35` (2), `Michagilcc113/111r` (4), `Michagils3` (4)— que el
+   * informe mensual cuenta como marcas distintas de Hankook y Michelin,
+   * repartiendo el recuento de una flota entre fantasmas.
+   *
+   * Los cinco casos son literales de la base, no inventados.
+   */
+  it("separa la marca del modelo cuando vienen pegados", () => {
+    expect(referenciaDeDescripcion("275/70X22.5 HANKAU04+ 152J149"))
+      .toEqual({ medida: "275/70R22.5", marca: "Hankook", modelo: "AU04+ 152J149" });
+    expect(referenciaDeDescripcion("205/75X16 HANKRA30 110R108 4S"))
+      .toEqual({ medida: "205/75R16", marca: "Hankook", modelo: "RA30 110R108 4S" });
+    expect(referenciaDeDescripcion("265/70X17.5 HANKOAH35 140M14P"))
+      .toEqual({ medida: "265/70R17.5", marca: "Hankook", modelo: "AH35 140M14P" });
+    expect(referenciaDeDescripcion("205/75X16 MICHAGILCC113/111R"))
+      .toEqual({ medida: "205/75R16", marca: "Michelin", modelo: "AGILCC113/111R" });
+    expect(referenciaDeDescripcion("215/75X16 MICHAGILS3 116/114R"))
+      .toEqual({ medida: "215/75R16", marca: "Michelin", modelo: "AGILS3 116/114R" });
+  });
+
+  // `MARCAS` lleva HANKOOK, HANKO y HANK: quedarse con el primero que
+  // coincida convertiría «HANKOOK» en marca `Hanko` y modelo `OK`.
+  it("y coge el prefijo de marca MÁS LARGO, no el primero que encaje", () => {
+    expect(referenciaDeDescripcion("315/80X22.5 HANKOOK AH51").marca).toBe("Hankook");
+    expect(referenciaDeDescripcion("315/80X22.5 HANKOOK AH51").modelo).toBe("AH51");
+    expect(referenciaDeDescripcion("295/80X22.5 CONTINENTAL HA3").marca).toBe("Continental");
+    expect(referenciaDeDescripcion("295/80X22.5 CONTINENTAL HA3").modelo).toBe("HA3");
+  });
+
+  // El que empezó todo esto: INSATURBO es Insa con el modelo pegado.
+  it("«INSATURBO» es la marca Insa y el modelo TURBO", () => {
+    expect(referenciaDeDescripcion("295/80X22.5 INSATURBO"))
+      .toEqual({ medida: "295/80R22.5", marca: "Insa", modelo: "TURBO" });
+  });
+
+  it("una descripción sin ninguna marca conocida no se inventa una", () => {
+    expect(referenciaDeDescripcion("295/80X22.5 R.CORDOBA CASCO").marca).toBeNull();
+  });
+
+  /*
+   * Ojo con los recauchutados: «R.CORDOBA CASCO MICHELIN» es un recauchutado
+   * hecho por R. Córdoba sobre un casco Michelin, y el parser se queda con
+   * Michelin porque es la única marca que reconoce. No es del todo cierto
+   * —la goma la terminó el recauchutador—, pero tampoco es un invento como
+   * `Hankau04+`, y arreglarlo pide saber qué recauchutadores existen.
+   * Queda fijado para que el día que alguien lo cambie sepa que era así.
+   */
+  it("en un recauchutado se queda con la marca del casco, que es lo único que reconoce", () => {
+    expect(referenciaDeDescripcion("295/80X22.5 R.CORDOBA CASCO MICHELIN"))
+      .toEqual({ medida: "295/80R22.5", marca: "Michelin", modelo: "R.CORDOBA CASCO" });
+  });
   it("clasifica cada línea por su papel", () => {
     expect(papelDe(h1({ codigo: "RF", descripcion: "REVISION DE FLOTA" }))).toBe("revision_flota");
     expect(papelDe(h1({ codigo: "Z1500", descripcion: "KIT UNIFICADO TACOGRAFO***4300" }))).toBe("ignorada");
