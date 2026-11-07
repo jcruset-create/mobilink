@@ -147,6 +147,7 @@ const aIntervencion = (r: any): IntervencionTac => ({
   numSerie: r.num_serie ?? null,
   numSensor: r.num_sensor ?? null,
   tipoTacografo: r.tipo_tacografo ?? null,
+  bastidor: r.bastidor_origen ?? null,
   fabricante: r.fabricante ?? null,
   tecnico: r.tecnico ?? null,
   observaciones: r.observaciones ?? null,

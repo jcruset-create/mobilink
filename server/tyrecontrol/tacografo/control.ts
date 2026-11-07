@@ -52,6 +52,8 @@ export interface IntervencionTac {
   numSensor: string | null;
   tipoTacografo: string | null;
   fabricante: string | null;
+  /** El bastidor tal y como venía en el impreso (E23) o en el Excel. */
+  bastidor: string | null;
   tecnico: string | null;
   observaciones: string | null;
 }
@@ -80,6 +82,16 @@ export interface DatosTecnicos {
   numSerie: Fechado | null;
   numSensor: Fechado | null;
   version: Fechado | null;
+  /**
+   * El bastidor que dice el tacógrafo.
+   *
+   * No es un dato del aparato sino del vehículo, y está aquí porque es la
+   * única parte del sistema que lo trae: el centro técnico lo apunta en cada
+   * intervención (campo E23 del impreso) y en TyreControl 682 autobuses de
+   * la flota lo tienen vacío. Con su fecha, como los demás: un bastidor sin
+   * saber de cuándo es no se puede contrastar con nada.
+   */
+  bastidor: Fechado | null;
   paramL: Fechado | null;
   paramW: Fechado | null;
   paramK: Fechado | null;
@@ -146,6 +158,7 @@ export function datosTecnicos(intervenciones: IntervencionTac[]): DatosTecnicos 
     numSerie: primero((i) => i.numSerie),
     numSensor: primero((i) => i.numSensor),
     version: primero((i) => i.version),
+    bastidor: primero((i) => i.bastidor),
     paramL: primero((i) => i.paramL),
     paramW: primero((i) => i.paramW),
     paramK: primero((i) => i.paramK),

@@ -69,8 +69,17 @@ function Dato({ et, v }: { et: string; v: { valor: string; fecha: string } | nul
 }
 
 export default function SeccionTacografo({
-  empresaId, vehiculoId,
-}: { empresaId: string; vehiculoId: string }) {
+  empresaId, vehiculoId, onBastidor,
+}: {
+  empresaId: string;
+  vehiculoId: string;
+  /**
+   * El bastidor que dice el tacógrafo, para que la ficha pueda enseñarlo
+   * arriba cuando el vehículo no lo tiene. Se avisa desde aquí en vez de
+   * pedir los datos otra vez: esta sección ya los ha traído.
+   */
+  onBastidor?: (b: { valor: string; fecha: string } | null) => void;
+}) {
   const [d, setD] = useState<FichaTacografo | null>(null);
   const [error, setError] = useState("");
   const [cargando, setCargando] = useState(true);
@@ -99,10 +108,19 @@ export default function SeccionTacografo({
       fichaTacografo(empresaId, vehiculoId),
       informesTacografo(empresaId, vehiculoId).catch(() => [] as InformeTacografo[]),
     ])
-      .then(([ficha, docs]) => { if (vivo) { setD(ficha); setInformes(docs); } })
+      .then(([ficha, docs]) => {
+        if (!vivo) return;
+        setD(ficha);
+        setInformes(docs);
+        onBastidor?.(ficha.tecnicos.bastidor ?? null);
+      })
       .catch((e) => { if (vivo) setError(e.message); })
       .finally(() => { if (vivo) setCargando(false); });
     return () => { vivo = false; };
+    // `onBastidor` fuera de las dependencias a propósito: es una función que
+    // la ficha vuelve a crear en cada pintado, y meterla aquí pediría los
+    // datos del tacógrafo en bucle.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [empresaId, vehiculoId]);
 
   async function subir(archivo: File, confirmar = false) {
@@ -226,6 +244,7 @@ export default function SeccionTacografo({
             <Dato et="Referencia" v={t.referencia} />
             <Dato et="Nº de serie" v={t.numSerie} />
             <Dato et="Nº sensor" v={t.numSensor} />
+            <Dato et="Bastidor" v={t.bastidor} />
             {/*
               La generación se lee de la versión de software, no de la
               referencia: `1381.4521402002` tiene un 4 detrás de 1381 y es un

@@ -17,7 +17,7 @@ const i = (p: Partial<IntervencionTac> & { idOrigen: string; fecha: string }): I
   medidaNorm: null, medidaOrigen: null, kmNuevo: null, kmSospechoso: false,
   paramL: null, paramW: null, paramK: null, referencia: null, version: null,
   numSerie: null, numSensor: null, tipoTacografo: null, fabricante: null,
-  tecnico: null, observaciones: null, ...p,
+  bastidor: null, tecnico: null, observaciones: null, ...p,
 });
 
 const veh = (p: Partial<VehiculoTac> & { id: string }): VehiculoTac => ({
@@ -322,5 +322,36 @@ describe("filtrar la flota por generación", () => {
 
   it("sin filtro de generación, salen todos", () => {
     expect(flota().filas).toHaveLength(4);
+  });
+});
+
+/*
+ * El bastidor no es un dato del aparato sino del vehículo, pero el tacógrafo
+ * es la única parte del sistema que lo trae: el centro lo apunta en cada
+ * intervención (E23 del impreso) y en TyreControl falta en 682 autobuses.
+ */
+describe("el bastidor que dice el tacógrafo", () => {
+  it("sale con su fecha, como los demás datos técnicos", () => {
+    const t = datosTecnicos([
+      i({ idOrigen: "A", fecha: "2024-09-30", bastidor: "LA6A1EAK2HB402493" }),
+    ]);
+    expect(t.bastidor).toEqual({
+      valor: "LA6A1EAK2HB402493", fecha: "2024-09-30", idOrigen: "A",
+    });
+  });
+
+  // El más reciente que lo traía, que no tiene por qué ser la última
+  // intervención: una transferencia puede no informarlo.
+  it("el de la intervención más reciente que lo traía", () => {
+    const t = datosTecnicos([
+      i({ idOrigen: "NUEVA", fecha: "2026-10-01", bastidor: null }),
+      i({ idOrigen: "VIEJA", fecha: "2024-09-30", bastidor: "LA6A1EAK2HB402493" }),
+    ]);
+    expect(t.bastidor?.valor).toBe("LA6A1EAK2HB402493");
+    expect(t.bastidor?.fecha).toBe("2024-09-30");
+  });
+
+  it("y si ninguna lo trae, no se inventa", () => {
+    expect(datosTecnicos([i({ idOrigen: "A", fecha: "2024-09-30" })]).bastidor).toBeNull();
   });
 });
