@@ -69,7 +69,8 @@ import {
 import { aFilaInsert, parcheParaCompletar, preparar } from "./importar.ts";
 import { ErrorFichero, leerHoja, type Lectura } from "./parser.ts";
 import { simular } from "./simular.ts";
-import { decidirInforme } from "./informes.ts";
+import { decidirInforme, pareceOtroCliente } from "./informes.ts";
+import type { Generacion } from "./generacion.ts";
 import { leerInformePdf, leerInformesDelPdf, lineasDeInforme } from "./informePdf.ts";
 
 /**
@@ -116,6 +117,15 @@ function leerDelCuerpo(req: any): { lectura: Lectura; archivo: string; sha: stri
 
 
 const ESTADOS: EstadoTacografo[] = ["vigente", "proxima", "vencida", "sin_datos"];
+
+const GENERACIONES: Generacion[] = ["digital", "inteligente_v1", "inteligente_v2", "desconocida"];
+
+/** Las generaciones que pide la pantalla, separadas por coma como los estados. */
+function generacionesPedidas(v: unknown): Generacion[] | null {
+  const partes = String(v ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+  const buenas = partes.filter((x): x is Generacion => (GENERACIONES as string[]).includes(x));
+  return buenas.length > 0 ? buenas : null;
+}
 
 /** Una fila de la base, con los nombres que usa el cálculo. */
 const aIntervencion = (r: any): IntervencionTac => ({
@@ -391,6 +401,7 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
           estados: estadosPedidos(req.query.estado),
           venceAntesDe: String(req.query.venceAntesDe ?? "").trim() || null,
           incluirBaja: String(req.query.incluirBaja ?? "") === "1",
+          generaciones: generacionesPedidas(req.query.generacion),
         },
       );
 
@@ -571,27 +582,48 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
         const porMatricula = new Map<string, { id: string }>();
         for (const v of vehiculos) if (!porMatricula.has(v.matriculaNorm)) porMatricula.set(v.matriculaNorm, v);
 
-        const resultados: any[] = [];
-
+        /*
+         * Antes de escribir nada: ¿son estos informes del cliente elegido?
+         *
+         * Se leen los PDF enteros primero, se juntan sus matrículas y, si no
+         * se reconoce NINGUNA, no se escribe una sola fila. Ver
+         * `pareceOtroCliente()`: pasó el primer día que se usó esto.
+         */
+        const leidos: Array<{ nombre: string; sha: string; informes: any[]; error?: string }> = [];
         for (const archivo of archivos) {
           const nombre = archivo.originalname;
           if (!archivo.buffer?.length || archivo.buffer.subarray(0, 5).toString("latin1") !== "%PDF-") {
-            resultados.push({ archivo: nombre, accion: "no_se_puede", avisos: [],
-              motivo: "Eso no es un PDF." });
+            leidos.push({ nombre, sha: "", informes: [], error: "Eso no es un PDF." });
             continue;
           }
-
           const sha = createHash("sha256").update(archivo.buffer).digest("hex");
-          let informes;
           try {
-            informes = leerInformesDelPdf(await lineasDeInforme(archivo.buffer));
+            leidos.push({ nombre, sha, informes: leerInformesDelPdf(await lineasDeInforme(archivo.buffer)) });
           } catch (e: any) {
-            resultados.push({ archivo: nombre, accion: "no_se_puede", avisos: [],
-              motivo: `No se ha podido leer el PDF: ${e?.message ?? e}` });
+            leidos.push({ nombre, sha, informes: [], error: `No se ha podido leer el PDF: ${e?.message ?? e}` });
+          }
+        }
+
+        const matriculas = leidos
+          .flatMap((l) => l.informes.map((i: any) => i.fila?.matriculaNorm))
+          .filter((m): m is string => !!m);
+        const otroCliente = pareceOtroCliente(matriculas, new Set(porMatricula.keys()));
+        if (otroCliente.para) {
+          return res.status(409).json({ error: otroCliente.motivo, matriculas: [...new Set(matriculas)] });
+        }
+
+        const resultados: any[] = [];
+
+        for (const archivo of archivos) {
+          const leido = leidos.find((l) => l.nombre === archivo.originalname)!;
+          const nombre = leido.nombre;
+          if (leido.error) {
+            resultados.push({ archivo: nombre, accion: "no_se_puede", avisos: [], motivo: leido.error });
             continue;
           }
+          const sha = leido.sha;
 
-          for (const lectura of informes) {
+          for (const lectura of leido.informes) {
             const fila = lectura.fila;
             const base = {
               archivo: nombre,

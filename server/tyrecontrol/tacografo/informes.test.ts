@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { decidirInforme, type Situacion } from "./informes.ts";
+import { decidirInforme, pareceOtroCliente, type Situacion } from "./informes.ts";
 import type { FilaTacografo } from "./parser.ts";
 
 /** Una fila leída del PDF, con lo justo para decidir. */
@@ -209,5 +209,51 @@ describe("decidirInforme() desde el panel de importación", () => {
     expect(d.accion).toBe("solo_adjuntar");
     expect(d.vincular).toBe(true);
     expect(d.vehiculoDelInforme).toBe("veh-1");
+  });
+});
+
+/*
+ * La guardia del cliente equivocado. Pasó el primer día que se usó esto: el
+ * selector estaba en una empresa, los diez informes eran de otra, y como no
+ * se reconoció ninguna matrícula entraron las diez como «autobús todavía no
+ * dado de alta».
+ */
+describe("pareceOtroCliente()", () => {
+  const flota = new Set(["7555JNT", "8318JVM", "8235JDF"]);
+
+  it("ninguna de una tanda reconocida: no es flota nueva, es otro cliente", () => {
+    const r = pareceOtroCliente(["1111AAA", "2222BBB", "3333CCC"], flota);
+    expect(r.para).toBe(true);
+    expect(r.motivo).toContain("3 matrículas");
+    expect(r.motivo).toContain("No se ha escrito nada");
+  });
+
+  /*
+   * Un autobús nuevo es UNA matrícula desconocida entre varias conocidas.
+   * Ese caso tiene que seguir pasando: es la razón de que el informe se
+   * guarde aunque el vehículo no esté.
+   */
+  it("una desconocida entre conocidas sí pasa: es un autobús nuevo", () => {
+    expect(pareceOtroCliente(["7555JNT", "9999ZZZ"], flota).para).toBe(false);
+  });
+
+  // Con una sola no se puede distinguir, y negarse impediría dar de alta el
+  // primer autobús de un cliente nuevo.
+  it("con un solo informe se sigue adelante", () => {
+    expect(pareceOtroCliente(["9999ZZZ"], flota).para).toBe(false);
+  });
+
+  it("y sin matrículas legibles tampoco se bloquea nada", () => {
+    expect(pareceOtroCliente([], flota).para).toBe(false);
+  });
+
+  it("todas conocidas, por supuesto que pasa", () => {
+    expect(pareceOtroCliente(["7555JNT", "8318JVM"], flota).para).toBe(false);
+  });
+
+  // Una flota vacía es un cliente sin vehículos: dos informes ahí tampoco
+  // deberían escribirse a ciegas.
+  it("con la flota vacía y dos informes, también para", () => {
+    expect(pareceOtroCliente(["7555JNT", "8318JVM"], new Set()).para).toBe(true);
   });
 });

@@ -143,6 +143,17 @@ export default function ImportarTacografo() {
    */
   async function subirPdfs() {
     if (!pdfs.length || !empresaId) return;
+    /*
+     * Se confirma con el CLIENTE delante, igual que la importación del Excel
+     * lo hace con el número. El selector está arriba, en la otra tarjeta, y
+     * el primer día que se usó esto estaba en otra empresa: entraron diez
+     * intervenciones en el cliente equivocado sin que nada lo dijera.
+     */
+    if (!window.confirm(
+      `Vas a importar ${pdfs.length} informe(s) en:\n\n    ${nombreCliente}\n\n`
+      + "Las intervenciones que no estén dadas de alta se crearán en ese cliente. "
+      + "¿Es el correcto?")) return;
+
     setSubiendoPdfs(true); setError(""); setMsg(""); setResPdf(null);
     try {
       const r = await importarInformesPdf(empresaId, pdfs);
@@ -183,6 +194,8 @@ export default function ImportarTacografo() {
       setBloqueadas({ lote: lote.archivo_nombre, filas: await bloqueadasDeLoteTacografo(empresaId, lote.id) });
     } catch (e: any) { setError(e.message); }
   }
+
+  const nombreCliente = empresas.find((e) => e.id === empresaId)?.nombre ?? "";
 
   const s = res?.simulacion;
   const seguras = s?.propuestas.filter((p) => p.seguraParaBloque).length ?? 0;
@@ -262,7 +275,12 @@ export default function ImportarTacografo() {
 
         <div className="mt-3 flex flex-wrap items-end gap-2">
           <label className="text-xs text-slate-400">
-            <span className="mb-1 block">Informes (PDF, hasta 20)</span>
+            <span className="mb-1 block">
+              Informes (PDF, hasta 20)
+              {nombreCliente && (
+                <> · se importarán en <b className="text-slate-200">{nombreCliente}</b></>
+              )}
+            </span>
             <input
               type="file" accept="application/pdf" multiple
               onChange={(e) => { setPdfs([...(e.target.files ?? [])]); setResPdf(null); }}

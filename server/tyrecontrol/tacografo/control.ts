@@ -29,6 +29,7 @@
  */
 
 import { calcular, type EstadoTacografo, type Regla } from "./vencimiento.ts";
+import { generacionDeTacografo, type Generacion, type GeneracionTacografo } from "./generacion.ts";
 
 /** Una intervención, reducida a lo que el estado necesita. */
 export interface IntervencionTac {
@@ -101,6 +102,15 @@ export interface FilaControl {
   ultimoTipo: string | null;
   ultimoResultado: string | null;
   intervenciones: number;
+  /**
+   * La generación del tacógrafo, deducida de la versión de software.
+   *
+   * Va en la fila de la flota y no solo en la ficha porque la pregunta que se
+   * hace con esto es de flota: cuántos autobuses llevan todavía un digital
+   * del reglamento viejo. Ver `generacion.ts`: NO se puede sacar de la
+   * referencia, por más que lo parezca.
+   */
+  generacion: GeneracionTacografo;
 }
 
 export interface FichaTacografo {
@@ -173,7 +183,16 @@ export function filaDe(
     ultimoTipo: marcadora?.tipoOperacion ?? null,
     ultimoResultado: marcadora?.resultado ?? null,
     intervenciones: intervenciones.length,
+    // Del MISMO sitio del que sale el dato técnico de la ficha: la
+    // intervención más reciente que informó la versión, que no tiene por qué
+    // ser la última.
+    generacion: generacionDeFicha(datosTecnicos(intervenciones)),
   };
+}
+
+/** La generación a partir de los datos técnicos ya resueltos. */
+function generacionDeFicha(t: DatosTecnicos): GeneracionTacografo {
+  return generacionDeTacografo(t.version?.valor ?? null, t.fabricante?.valor ?? null);
 }
 
 export interface Filtros {
@@ -185,6 +204,12 @@ export interface Filtros {
   venceAntesDe?: string | null;
   /** Por defecto solo los activos: a uno de baja no hay que ir a revisarlo. */
   incluirBaja?: boolean;
+  /**
+   * Generaciones de tacógrafo a enseñar. La pregunta real es «cuántos llevan
+   * todavía un digital del reglamento viejo», y para eso hay que poder
+   * quedarse con esos.
+   */
+  generaciones?: Generacion[] | null;
 }
 
 const normaliza = (s: string) =>
@@ -211,6 +236,8 @@ export interface Control {
   filas: FilaControl[];
   /** Recuento por estado ANTES de filtrar: el resumen no se encoge al filtrar. */
   resumen: Record<EstadoTacografo, number>;
+  /** Y por generación, también antes de filtrar, y por la misma razón. */
+  porGeneracion: Record<Generacion, number>;
   total: number;
   mostrados: number;
 }
@@ -238,7 +265,12 @@ export function construirControl(
   // arreglado solos.
   const resumen: Record<EstadoTacografo, number> =
     { vigente: 0, proxima: 0, vencida: 0, sin_datos: 0 };
-  for (const f of base) resumen[f.estado] += 1;
+  const porGeneracion: Record<Generacion, number> =
+    { digital: 0, inteligente_v1: 0, inteligente_v2: 0, desconocida: 0 };
+  for (const f of base) {
+    resumen[f.estado] += 1;
+    porGeneracion[f.generacion.generacion] += 1;
+  }
 
   const texto = filtros.texto ? normaliza(filtros.texto) : null;
   const filas = base.filter((f) => {
@@ -246,12 +278,14 @@ export function construirControl(
     if (filtros.estados?.length && !filtros.estados.includes(f.estado)) return false;
     if (filtros.venceAntesDe && (!f.proxima || f.proxima > filtros.venceAntesDe)) return false;
     if (texto && !normaliza(`${f.matricula ?? ""}${f.numeroUnidad ?? ""}`).includes(texto)) return false;
+    if (filtros.generaciones?.length && !filtros.generaciones.includes(f.generacion.generacion)) return false;
     return true;
   });
 
   return {
     filas: ordenarPorVencimiento(filas),
     resumen,
+    porGeneracion,
     total: base.length,
     mostrados: filas.length,
   };

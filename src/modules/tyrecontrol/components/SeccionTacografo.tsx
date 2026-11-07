@@ -226,7 +226,25 @@ export default function SeccionTacografo({
             <Dato et="Referencia" v={t.referencia} />
             <Dato et="Nº de serie" v={t.numSerie} />
             <Dato et="Nº sensor" v={t.numSensor} />
-            <Dato et="Software" v={t.version} />
+            {/*
+              La generación se lee de la versión de software, no de la
+              referencia: `1381.4521402002` tiene un 4 detrás de 1381 y es un
+              digital 3.0. La decide el servidor; aquí solo se pinta.
+            */}
+            <div>
+              <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Software</div>
+              <div className="text-sm font-semibold text-slate-100">{t.version?.valor ?? "—"}</div>
+              {f.generacion.generacion !== "desconocida" && (
+                <div
+                  className={`text-[10px] font-bold ${
+                    f.generacion.generacion === "digital" ? "text-slate-400" : "text-sky-300"}`}
+                  title={f.generacion.detalle}
+                >
+                  {f.generacion.etiqueta}
+                </div>
+              )}
+              {t.version && <div className="text-[10px] text-slate-500">de la del {fecha(t.version.fecha)}</div>}
+            </div>
             <Dato et="Parámetro K" v={t.paramK} />
             <Dato et="Parámetro W" v={t.paramW} />
             <Dato et="Parámetro L" v={t.paramL} />

@@ -5,6 +5,7 @@ import { Download, Gauge, Search } from "lucide-react";
 import {
   controlTacografos, listarEmpresas,
   type ControlTacografos as Datos, type EstadoTacografo, type FilaTacografo,
+  type GeneracionTacografoClave,
 } from "../services/data";
 import type { Empresa } from "../types";
 import { TableWrap, tdCls, thCls } from "../components/ui";
@@ -52,6 +53,30 @@ const fecha = (iso?: string | null) => {
   return a && m && d ? `${d}/${m}/${a}` : String(iso);
 };
 
+/**
+ * Las generaciones, para los botones del filtro.
+ *
+ * Corto aquí y largo en el título: en un botón no cabe «inteligente de
+ * segunda generación» y el recuento al lado es lo que de verdad se mira.
+ */
+const ETIQUETA_GEN: Record<GeneracionTacografoClave, string> = {
+  digital: "Digital",
+  inteligente_v1: "Intel. 1.ª",
+  inteligente_v2: "Intel. 2.ª",
+  desconocida: "Sin saber",
+};
+
+const DETALLE_GEN: Record<GeneracionTacografoClave, string> = {
+  digital: "Tacógrafo digital del reglamento anterior (anexo IB, de 2006). "
+    + "Ni GNSS ni DSRC. Son los que antes o después hay que renovar.",
+  inteligente_v1: "Tacógrafo inteligente de primera generación (DTCO 4.0), "
+    + "obligatorio en matriculaciones nuevas desde el 15/06/2019.",
+  inteligente_v2: "Tacógrafo inteligente de segunda generación (DTCO 4.1), "
+    + "obligatorio en matriculaciones nuevas desde el 21/08/2023.",
+  desconocida: "Sus informes no dicen la versión de software, o el aparato no es "
+    + "VDO y numera distinto. No se adivina.",
+};
+
 /** Los días, dichos como los diría una persona. */
 function plazo(f: FilaTacografo): string {
   if (f.diasRestantes == null) return "—";
@@ -70,6 +95,7 @@ export default function ControlTacografos() {
   const [estados, setEstados] = useState<EstadoTacografo[]>([]);
   const [venceAntesDe, setVenceAntesDe] = useState("");
   const [incluirBaja, setIncluirBaja] = useState(false);
+  const [generaciones, setGeneraciones] = useState<GeneracionTacografoClave[]>([]);
   const [d, setD] = useState<Datos | null>(null);
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState("");
@@ -88,26 +114,30 @@ export default function ControlTacografos() {
         empresaId, base: base || null, texto: texto || null,
         estado: estados.length ? estados : null,
         venceAntesDe: venceAntesDe || null, incluirBaja,
+        generacion: generaciones.length ? generaciones : null,
       }));
     } catch (e: any) {
       setError(e.message); setD(null);
     } finally { setCargando(false); }
-  }, [empresaId, base, texto, estados, venceAntesDe, incluirBaja]);
+  }, [empresaId, base, texto, estados, venceAntesDe, incluirBaja, generaciones]);
 
   useEffect(() => { void cargar(); }, [cargar]);
 
   const alternar = (e: EstadoTacografo) =>
     setEstados((a) => a.includes(e) ? a.filter((x) => x !== e) : [...a, e]);
 
+  const alternarGen = (g: GeneracionTacografoClave) =>
+    setGeneraciones((a) => a.includes(g) ? a.filter((x) => x !== g) : [...a, g]);
+
   function exportar() {
     if (!d) return;
     const filas = [
       ["Matrícula", "Unidad", "Base", "Estado", "Última intervención", "Tipo",
-       "Resultado", "Próxima revisión", "Días", "Intervenciones"],
+       "Resultado", "Próxima revisión", "Días", "Intervenciones", "Tacógrafo"],
       ...d.filas.map((f) => [
         f.matricula ?? "", f.numeroUnidad ?? "", f.base ?? "", ETIQUETA[f.estado],
         f.ultima ?? "", f.ultimoTipo ?? "", f.ultimoResultado ?? "",
-        f.proxima ?? "", f.diasRestantes ?? "", f.intervenciones,
+        f.proxima ?? "", f.diasRestantes ?? "", f.intervenciones, f.generacion.etiqueta,
       ]),
     ];
     const csv = filas.map((f) => f.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(";")).join("\n");
@@ -193,13 +223,40 @@ export default function ControlTacografos() {
           <input type="date" value={venceAntesDe} onChange={(e) => setVenceAntesDe(e.target.value)}
             className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-200" />
         </label>
+        {/*
+          La generación. La pregunta que se hace con esto es «cuántos llevan
+          todavía un digital del viejo reglamento», o sea cuántos hay que
+          renovar, así que el filtro va con su recuento al lado.
+        */}
+        <div className="text-[11px] text-slate-400">
+          <span className="mb-1 block">Generación del tacógrafo</span>
+          <div className="flex flex-wrap gap-1">
+            {(Object.keys(ETIQUETA_GEN) as GeneracionTacografoClave[]).map((g) => (
+              <button
+                key={g}
+                onClick={() => alternarGen(g)}
+                title={DETALLE_GEN[g]}
+                className={`rounded-lg border px-2 py-2 text-[11px] font-bold ${
+                  generaciones.includes(g)
+                    ? "border-sky-500 bg-sky-500/10 text-sky-200"
+                    : "border-slate-600 text-slate-300 hover:bg-slate-700/40"}`}
+              >
+                {ETIQUETA_GEN[g]}
+                {d && <span className="ml-1 tabular-nums opacity-70">{d.porGeneracion[g]}</span>}
+              </button>
+            ))}
+          </div>
+        </div>
         <label className="flex items-center gap-2 pb-2 text-[12px] text-slate-300">
           <input type="checkbox" checked={incluirBaja} onChange={(e) => setIncluirBaja(e.target.checked)} />
           Incluir vehículos de baja
         </label>
-        {(base || texto || estados.length > 0 || venceAntesDe || incluirBaja) && (
+        {(base || texto || estados.length > 0 || venceAntesDe || incluirBaja || generaciones.length > 0) && (
           <button
-            onClick={() => { setBase(""); setTexto(""); setEstados([]); setVenceAntesDe(""); setIncluirBaja(false); }}
+            onClick={() => {
+              setBase(""); setTexto(""); setEstados([]); setVenceAntesDe("");
+              setIncluirBaja(false); setGeneraciones([]);
+            }}
             className="rounded-lg border border-slate-600 px-3 py-2 text-[12px] text-slate-300 hover:bg-slate-700"
           >
             Quitar filtros
@@ -223,6 +280,7 @@ export default function ControlTacografos() {
               <th className={thCls}>Base</th><th className={thCls}>Estado</th>
               <th className={thCls}>Última</th><th className={thCls}>Tipo y resultado</th>
               <th className={thCls}>Próxima</th><th className={thCls}>Plazo</th>
+              <th className={thCls}>Tacógrafo</th>
               <th className={thCls}></th>
             </tr></thead>
             <tbody>
@@ -242,6 +300,13 @@ export default function ControlTacografos() {
                   </td>
                   <td className={tdCls}>{fecha(f.proxima)}</td>
                   <td className={`${tdCls} ${TONO[f.estado]}`}>{plazo(f)}</td>
+                  <td className={`${tdCls} text-[11px]`} title={f.generacion.detalle}>
+                    <span className={f.generacion.generacion === "desconocida"
+                      ? "text-slate-500"
+                      : f.generacion.generacion === "digital" ? "text-slate-300" : "text-sky-300"}>
+                      {f.generacion.etiqueta}
+                    </span>
+                  </td>
                   <td className={tdCls}>
                     <button
                       onClick={() => navigate(`/tyrecontrol/vehiculos/${f.vehiculoId}`)}
