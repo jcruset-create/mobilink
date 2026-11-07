@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { Download, Gauge, RefreshCw, Search, ShieldCheck, TriangleAlert } from "lucide-react";
 import {
   rankingKilometraje, rehacerHuecosVehiculo, revisarCoherencia,
@@ -6,6 +7,7 @@ import {
 } from "../services/kilometrajeMensual";
 import { detalleDeMeses, listaDeMeses } from "../services/mesesEtiqueta";
 import { listarEmpresas } from "../services/data";
+import { rutaConFiltros } from "../services/navegacionVolver";
 import type { Empresa } from "../types";
 
 /**
@@ -37,6 +39,19 @@ import type { Empresa } from "../types";
  * Un administrador normal solo verá la suya —`listarEmpresas` ya aplica ese
  * criterio— y para él el selector es una etiqueta con un solo valor.
  *
+ * ── La empresa y la búsqueda viven en la URL ────────────────────────────────
+ *
+ * Porque desde aquí se entra a la ficha de un vehículo, y de la ficha se
+ * vuelve. Si los filtros vivieran solo en memoria, «volver» traería la lista
+ * en blanco: otra empresa y sin la búsqueda, o sea otra lista. Con ellos en la
+ * URL, el botón de volver devuelve exactamente lo que había, y de paso la
+ * dirección se puede guardar o mandar por correo.
+ *
+ * Se escriben con `replace`, no con `push`: si cada letra tecleada en el
+ * buscador dejara una entrada en el historial, volver atrás una vez desde la
+ * ficha devolvería a la lista con media palabra escrita, y haría falta pulsar
+ * «atrás» quince veces para salir de la pantalla.
+ *
  * Los números salen del backend ya calculados, y de la misma función que la
  * ficha de cada vehículo. Aquí no se suma nada.
  */
@@ -48,9 +63,27 @@ export default function RankingKilometraje() {
      pedir entero, porque al cambiar un vehículo cambia la media de la flota
      y el puesto de los demás. */
   const [recarga, setRecarga] = useState(0);
-  const [busqueda, setBusqueda] = useState("");
+  const [params, setParams] = useSearchParams();
   const [empresas, setEmpresas] = useState<Empresa[]>([]);
-  const [empresaId, setEmpresaId] = useState("");
+
+  /**
+   * Cambia un filtro de la URL dejando los demás como están.
+   *
+   * Un valor vacío lo quita en vez de dejar `?q=`, para que la dirección diga
+   * solo lo que de verdad hay puesto.
+   */
+  const ponerFiltro = (clave: string, valor: string) =>
+    setParams((p) => {
+      const nuevo = new URLSearchParams(p);
+      if (valor) nuevo.set(clave, valor);
+      else nuevo.delete(clave);
+      return nuevo;
+    }, { replace: true });
+
+  const busqueda = params.get("q") ?? "";
+  // Mientras la URL no diga otra cosa, la primera empresa: es lo que hacía
+  // esta pantalla antes de que los filtros subieran a la dirección.
+  const empresaId = params.get("empresa") || empresas[0]?.id || "";
   const [revisando, setRevisando] = useState(false);
   const [avisoRevision, setAvisoRevision] = useState("");
 
@@ -58,8 +91,7 @@ export default function RankingKilometraje() {
     listarEmpresas()
       .then((e) => {
         setEmpresas(e);
-        if (e.length) setEmpresaId((actual) => actual || e[0].id);
-        else setCargando(false);
+        if (!e.length) setCargando(false);
       })
       .catch((e) => { setError(e.message); setCargando(false); });
   }, []);
@@ -95,6 +127,15 @@ export default function RankingKilometraje() {
   }, [datos, busqueda]);
 
   const nombreEmpresa = empresas.find((e) => e.id === empresaId)?.nombre ?? "";
+
+  /*
+   * La dirección EXACTA de esta lista, tal y como está ahora mismo. Viaja con
+   * el enlace de cada matrícula para que el botón «volver» de la ficha traiga
+   * de vuelta lo que se dejó —misma empresa, misma búsqueda— y no una lista
+   * parecida.
+   */
+  const volverAqui = rutaConFiltros("/tyrecontrol/ranking-kilometraje",
+    { empresa: empresaId, q: busqueda });
 
   /**
    * Revisar coherencia: primero se cuenta, se enseña el número y solo entonces
@@ -172,7 +213,7 @@ export default function RankingKilometraje() {
         <select
           className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-1.5 text-xs text-slate-200"
           value={empresaId}
-          onChange={(e) => setEmpresaId(e.target.value)}
+          onChange={(e) => ponerFiltro("empresa", e.target.value)}
           aria-label="Empresa"
         >
           {empresas.length === 0 && <option value="">Cargando empresas…</option>}
@@ -191,7 +232,7 @@ export default function RankingKilometraje() {
             <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
             <input
               value={busqueda}
-              onChange={(e) => setBusqueda(e.target.value)}
+              onChange={(e) => ponerFiltro("q", e.target.value)}
               placeholder="Matrícula o unidad"
               className="rounded-lg border border-slate-600 bg-slate-900 py-1.5 pl-7 pr-2 text-xs text-slate-200"
             />
@@ -242,7 +283,8 @@ export default function RankingKilometraje() {
                     posición va ese autobús. */}
                 {filtrados.map((v) => (
                   <Fila key={v.vehiculoId} v={v} puesto={datos.vehiculos.indexOf(v) + 1} num={num}
-                        empresaId={empresaId} onRehecho={() => setRecarga((n) => n + 1)} />
+                        empresaId={empresaId} volverAqui={volverAqui}
+                        onRehecho={() => setRecarga((n) => n + 1)} />
                 ))}
                 {filtrados.length === 0 && (
                   <tr><td colSpan={9} className="px-3 py-6 text-center text-slate-500">
@@ -278,11 +320,13 @@ export default function RankingKilometraje() {
   );
 }
 
-function Fila({ v, puesto, num, empresaId, onRehecho }: {
+function Fila({ v, puesto, num, empresaId, volverAqui, onRehecho }: {
   v: VehiculoDelRanking;
   puesto: number;
   num: (n: number | null | undefined) => string;
   empresaId: string;
+  /** Dónde vuelve la ficha del vehículo. Ver la cabecera del fichero. */
+  volverAqui: string;
   onRehecho: () => void;
 }) {
   const [rehaciendo, setRehaciendo] = useState(false);
@@ -325,7 +369,25 @@ function Fila({ v, puesto, num, empresaId, onRehecho }: {
   return (
     <tr className="border-t border-slate-800 hover:bg-slate-800/40">
       <td className="px-3 py-1.5 text-right text-slate-500">{puesto}</td>
-      <td className="px-3 py-1.5 font-bold">{v.matricula ?? "—"}</td>
+      {/*
+        La matrícula abre la ficha del vehículo, y se lleva de dónde viene:
+        así el botón de volver de la ficha devuelve a ESTA lista y no al
+        listado general de vehículos.
+      */}
+      <td className="px-3 py-1.5 font-bold">
+        {v.matricula
+          ? (
+            <Link
+              to={`/tyrecontrol/vehiculos/${v.vehiculoId}`}
+              state={{ volverA: volverAqui, volverEtiqueta: "Kilómetros por vehículo" }}
+              className="text-sky-300 hover:underline"
+              title="Abrir la ficha del vehículo"
+            >
+              {v.matricula}
+            </Link>
+          )
+          : "—"}
+      </td>
       <td className="px-3 py-1.5 text-slate-400">{v.numeroUnidad ?? "—"}</td>
       <td className="px-3 py-1.5 text-right font-bold">{num(v.kmAnual)}</td>
       <td className={`px-3 py-1.5 text-right ${flojo ? "text-amber-300" : "text-slate-400"}`}>
