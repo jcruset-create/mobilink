@@ -11,7 +11,7 @@ import sharp from "sharp";
 import nodemailer from "nodemailer";
 import { fileURLToPath } from "url";
 import db, { initDb } from "./db.ts";
-import { supabase, supabaseAnonAuth, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_BUCKET } from "./supabase.ts";
+import { supabase, supabaseAnonAuth, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_BUCKET, SUPABASE_DOCS_BUCKET } from "./supabase.ts";
 import { fallaAlFirmar, firmarEnFilas, firmarUrls } from "./core/fotosFirmadas.ts";
 import { descargarMedioTwilio, rescatarMedioDeTwilio } from "./core/medioTwilio.ts";
 import { elegirPosicion, horaWebfleet, type PosicionElegida } from "./core/posicionDoble.ts";
@@ -19822,7 +19822,7 @@ app.post(
    se toca aquí: esto solo deja los datos listos para revisar.
 ========================================================= */
 
-const BUCKET_DOCS = "tc-documentos";
+const BUCKET_DOCS = SUPABASE_DOCS_BUCKET;
 const fichaOcr = new OpenAiFichaTecnicaOcr();
 
 /// URL firmada (el bucket es privado: la ficha lleva VIN y titular).

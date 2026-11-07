@@ -43,11 +43,14 @@ import * as XLSX from "xlsx";
 import { createHash } from "node:crypto";
 
 import { empresaDelInforme } from "../informes/alcance.ts";
+import { normalizarMatricula } from "../matricula.ts";
 import {
-  SISTEMA_ORIGEN, leerBases, leerBloqueadasDeLote, leerCatalogoMedidas, leerClavesDePropuestas,
-  leerFilasDeLote, leerFlotaConBase, leerIdsPorOrigen, leerIntervenciones, leerLote, leerLotes,
-  leerMedidasDeVehiculos, leerPropuesta, leerPropuestas, leerPropuestasDeLote, leerRegla,
-  leerVehiculo, leerVehiculos, leerYaImportados,
+  SISTEMA_ORIGEN, contarInformesDeLote, leerBases, leerBloqueadasDeLote, leerCatalogoMedidas,
+  leerClavesDePropuestas, leerCreadasDePdf, leerFilasDeLote, leerFlotaConBase, leerIdsPorOrigen,
+  leerInforme, leerInformePorHash, leerInformesDeVehiculo, leerIntervenciones,
+  leerIntervencionCompleta,
+  leerIntervencionPorOrigen, leerLote, leerLotes, leerMedidasDeVehiculos, leerPropuesta,
+  leerPropuestas, leerPropuestasDeLote, leerRegla, leerVehiculo, leerVehiculos, leerYaImportados,
 } from "./datos.ts";
 import {
   construirControl, fichaDe, type IntervencionTac, type VehiculoTac,
@@ -55,16 +58,19 @@ import {
 import type { EstadoTacografo } from "./vencimiento.ts";
 import { evaluar } from "./deshacer.ts";
 import {
-  aplicarPropuesta, borrarLote, cerrarLote, crearLote, guardarBloqueadas, insertarFilas,
-  insertarPropuestas, rechazarPropuesta,
+  aplicarPropuesta, borrarLote, cerrarLote, completarDePdf, crearLote, guardarBloqueadas,
+  guardarInformePdf, insertarFilas, insertarIntervencionDePdf, insertarPropuestas,
+  rechazarPropuesta, urlFirmadaDeInforme, vincularIntervencion,
 } from "./escribir.ts";
 import {
   decidir, filasPropuesta, porCaso, separarParaBloque,
   type Candidata, type MedidaCatalogo, type PropuestaGuardada,
 } from "./propuestas.ts";
-import { preparar } from "./importar.ts";
+import { aFilaInsert, parcheParaCompletar, preparar } from "./importar.ts";
 import { ErrorFichero, leerHoja, type Lectura } from "./parser.ts";
 import { simular } from "./simular.ts";
+import { decidirInforme } from "./informes.ts";
+import { leerInformePdf, lineasDeInforme } from "./informePdf.ts";
 
 /**
  * El informe del centro son 3,3 MB con cinco años dentro. Veinte deja sitio
@@ -188,9 +194,10 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
         const { lectura, archivo } = leerDelCuerpo(req);
 
         // Las tres lecturas son independientes: en paralelo.
-        const [vehiculos, yaImportados, regla] = await Promise.all([
+        const [vehiculos, yaImportados, creadasDePdf, regla] = await Promise.all([
           leerVehiculos(empresa),
           leerYaImportados(empresa, SISTEMA_ORIGEN),
+          leerCreadasDePdf(empresa),
           leerRegla(empresa),
         ]);
 
@@ -236,9 +243,10 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
         const { lectura, archivo, sha } = leerDelCuerpo(req);
         const usuarioId = usuarioDe(req);
 
-        const [vehiculos, yaImportados, regla] = await Promise.all([
+        const [vehiculos, yaImportados, creadasDePdf, regla] = await Promise.all([
           leerVehiculos(empresa),
           leerYaImportados(empresa, SISTEMA_ORIGEN),
+          leerCreadasDePdf(empresa),
           leerRegla(empresa),
         ]);
 
@@ -254,9 +262,24 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
         const prep = preparar(lectura.filas, {
           empresa, loteId, sistemaOrigen: SISTEMA_ORIGEN,
           archivo, hoja: lectura.nombreHoja, usuarioId, vehiculos, yaImportados,
+          creadasDePdf,
         });
 
         const { insertadas, duplicadas } = await insertarFilas(prep.insertar);
+
+        /*
+         * Las intervenciones que creó un informe en PDF se COMPLETAN, no se
+         * saltan. Están a medias a propósito —el impreso no trae la versión
+         * de software de las unidades VDO, por ejemplo— y esta es la fila del
+         * centro que les faltaba. Solo se rellena lo que está a null: si el
+         * Excel dice una cosa y la fila otra, se queda lo que ya había.
+         */
+        const yaDePdf = await Promise.all(prep.completar.map(async (c) => {
+          const actual = await leerIntervencionCompleta(empresa, c.idOrigen);
+          return actual ? { idOrigen: c.idOrigen, parche: parcheParaCompletar(actual, c.nueva) } : null;
+        }));
+        const completadas = await completarDePdf(
+          empresa, yaDePdf.filter((x): x is { idOrigen: string; parche: Record<string, unknown> } => x != null));
 
         // Las que el parser no supo leer también se dejan dichas, con su fila.
         const bloqueadas = [
@@ -313,6 +336,8 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
             bloqueadas: bloqueadas.length,
             propuestas: propuestas.insertadas,
             propuestasYaEstaban: simulacion.propuestas.length - propuestas.insertadas,
+            /** De las que ya estaban, las que había creado un PDF y ahora están enteras. */
+            completadasDePdf: completadas,
           },
           simulacion,
         });
@@ -391,6 +416,169 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
     }
   });
 
+  // ── Los informes técnicos en PDF ─────────────────────────────────────────
+
+  /**
+   * Adjuntar un informe técnico a la ficha de un vehículo.
+   *
+   * Dos caminos, y los pidió así el cliente: si la intervención del impreso
+   * no está dada de alta, se crea con los datos del informe; si ya está, solo
+   * se adjunta el PDF. Lo decide el «A1. Nº de orden», que es el mismo
+   * `id_origen` del Excel del centro.
+   *
+   * El orden de escritura es intervención → documento, y no al revés: si falla
+   * lo segundo queda una intervención sin adjunto, que es correcta y se puede
+   * volver a intentar. Al revés quedaría un clip en la ficha que no abre nada.
+   *
+   * Con `?confirmar=1` se acepta un informe cuya matrícula no es la del
+   * vehículo abierto. Sin él, el servidor NO decide: responde con las dos
+   * matrículas, porque subir el informe en la ficha de al lado es el error
+   * fácil y el caro.
+   */
+  app.post("/api/tyrecontrol/tacografo/informe-pdf", ...guards, subida.single("archivo"),
+    async (req, res) => {
+      try {
+        const alcance = await empresaDelInforme(req, req.query.empresa ?? (req as any).body?.empresa);
+        if (!alcance.empresa) return res.status(alcance.estado!).json({ error: alcance.error });
+        const empresa = alcance.empresa;
+        const vehiculoId = String(req.query.vehiculo ?? (req as any).body?.vehiculo ?? "");
+        if (!vehiculoId) return res.status(400).json({ error: "Falta el vehículo" });
+
+        const archivo = (req as any).file as { buffer: Buffer; originalname: string } | undefined;
+        if (!archivo?.buffer?.length) return res.status(400).json({ error: "Falta el fichero" });
+        if (archivo.buffer.subarray(0, 5).toString("latin1") !== "%PDF-") {
+          return res.status(400).json({ error: "Eso no es un PDF" });
+        }
+
+        const vehiculo = await leerVehiculo(empresa, vehiculoId);
+        if (!vehiculo) return res.status(404).json({ error: "Ese vehículo no es de esta empresa" });
+
+        const lineas = await lineasDeInforme(archivo.buffer);
+        const lectura = leerInformePdf(lineas);
+        const sha = createHash("sha256").update(archivo.buffer).digest("hex");
+
+        const [existente, mismoFichero] = await Promise.all([
+          lectura.fila ? leerIntervencionPorOrigen(empresa, lectura.fila.idOrigen) : null,
+          leerInformePorHash(vehiculoId, sha),
+        ]);
+
+        const decision = decidirInforme({
+          fila: lectura.fila,
+          problemas: lectura.problemas,
+          vehiculoId,
+          matriculaVehiculo: normalizarMatricula(String(vehiculo.matricula ?? "")),
+          existente,
+          mismoFichero,
+          confirmado: String(req.query.confirmar ?? (req as any).body?.confirmar ?? "") === "1",
+        });
+
+        if (decision.accion === "no_se_puede") {
+          return res.status(409).json({ error: decision.motivo, decision });
+        }
+        if (decision.accion === "duplicado") {
+          return res.status(409).json({ error: decision.motivo, decision });
+        }
+
+        const usuarioId = usuarioDe(req);
+        const fila = lectura.fila!;
+        let intervencionId = decision.intervencionId ?? null;
+        let creada = false;
+
+        if (decision.accion === "crear_y_adjuntar") {
+          const r = await insertarIntervencionDePdf(aFilaInsert(fila, {
+            empresa, sistemaOrigen: SISTEMA_ORIGEN, vehiculoId,
+            loteId: null, archivo: archivo.originalname, hoja: null,
+            usuarioId, kmSospechoso: false, creadaDePdf: true,
+          }));
+          intervencionId = r.id;
+          creada = !r.yaEstaba;
+          if (r.yaEstaba) {
+            decision.avisos.push("Alguien había importado esa intervención mientras se subía "
+              + "el informe: el PDF se adjunta a la que ya estaba.");
+          }
+        } else if (decision.vincular && intervencionId) {
+          await vincularIntervencion(intervencionId, vehiculoId, usuarioId);
+        }
+
+        const doc = await guardarInformePdf({
+          empresa, vehiculoId, intervencionId: intervencionId!,
+          pdf: archivo.buffer, nombreOriginal: archivo.originalname, sha256: sha,
+          paginas: lineas.reduce((m, l) => Math.max(m, l.pagina), 0) || null,
+          idOrigen: fila.idOrigen, usuarioId,
+        });
+
+        res.json({
+          ok: true,
+          accion: creada ? "creada_y_adjuntada" : "adjuntada",
+          intervencionId,
+          documentoId: doc.id,
+          idOrigen: fila.idOrigen,
+          fecha: fila.fecha,
+          url: await urlFirmadaDeInforme(doc.ruta),
+          avisos: decision.avisos,
+        });
+      } catch (e: any) {
+        console.error("[tacografo-informe-pdf] error:", e?.message ?? e);
+        res.status(500).json({ error: e?.message || "No se ha podido adjuntar el informe" });
+      }
+    });
+
+  /**
+   * Los informes adjuntos de un vehículo, por intervención.
+   *
+   * Va aparte de la ficha y no dentro: la ficha se pide siempre y el clip es
+   * un extra, y así una URL firmada que caduca no obliga a recargar el
+   * histórico entero.
+   */
+  app.get("/api/tyrecontrol/tacografo/informes", ...guards, async (req, res) => {
+    try {
+      const alcance = await empresaDelInforme(req, req.query.empresa);
+      if (!alcance.empresa) return res.status(alcance.estado!).json({ error: alcance.error });
+      const empresa = alcance.empresa;
+      const vehiculoId = String(req.query.vehiculo ?? "");
+      if (!vehiculoId) return res.status(400).json({ error: "Falta el vehículo" });
+
+      const vehiculo = await leerVehiculo(empresa, vehiculoId);
+      if (!vehiculo) return res.status(404).json({ error: "Ese vehículo no es de esta empresa" });
+
+      const docs = await leerInformesDeVehiculo(empresa, vehiculoId);
+      res.json({
+        ok: true,
+        informes: await Promise.all(docs.map(async (d: any) => ({
+          id: String(d.id),
+          intervencionId: d.intervencion_id ?? null,
+          nombre: d.nombre_original ?? "informe.pdf",
+          paginas: d.paginas ?? null,
+          bytes: d.tamano_bytes ?? null,
+          subidoEn: d.created_at ?? null,
+          url: await urlFirmadaDeInforme(String(d.storage_path)),
+        }))),
+      });
+    } catch (e: any) {
+      console.error("[tacografo-informes] error:", e?.message ?? e);
+      res.status(500).json({ error: e?.message || "No se han podido leer los informes" });
+    }
+  });
+
+  /** Una URL nueva para un informe, porque la firmada caduca en una hora. */
+  app.get("/api/tyrecontrol/tacografo/informes/:id", ...guards, async (req, res) => {
+    try {
+      const alcance = await empresaDelInforme(req, req.query.empresa);
+      if (!alcance.empresa) return res.status(alcance.estado!).json({ error: alcance.error });
+      const doc = await leerInforme(alcance.empresa, String(req.params.id));
+      if (!doc) return res.status(404).json({ error: "Ese informe no existe" });
+      res.json({
+        ok: true,
+        id: String(doc.id),
+        nombre: doc.nombre_original ?? "informe.pdf",
+        url: await urlFirmadaDeInforme(String(doc.storage_path)),
+      });
+    } catch (e: any) {
+      console.error("[tacografo-informe] error:", e?.message ?? e);
+      res.status(500).json({ error: e?.message || "No se ha podido leer el informe" });
+    }
+  });
+
   /** Los lotes de la empresa, del más reciente al más viejo. */
   app.get("/api/tyrecontrol/tacografo/lotes", ...guards, async (req, res) => {
     try {
@@ -434,9 +622,11 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
       const loteId = String(req.params.id);
 
       const lote = await leerLote(loteId);
-      const [filas, propuestas] = lote
-        ? await Promise.all([leerFilasDeLote(loteId), leerPropuestasDeLote(loteId)])
-        : [[], []];
+      const [filas, propuestas, informes] = lote
+        ? await Promise.all([
+          leerFilasDeLote(loteId), leerPropuestasDeLote(loteId), contarInformesDeLote(loteId),
+        ])
+        : [[], [], 0];
 
       const veredicto = evaluar(
         lote ? { id: String(lote.id), empresaId: String(lote.empresa_id),
@@ -450,6 +640,7 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
         propuestas.map((p: any) => ({
           id: String(p.id), estado: String(p.estado), matriculaNorm: String(p.matricula_norm),
         })),
+        informes,
       );
 
       if (String(req.query.comprobar ?? "") === "1") {

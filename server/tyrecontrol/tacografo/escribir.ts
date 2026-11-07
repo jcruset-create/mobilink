@@ -3,7 +3,9 @@
  *
  * Está aparte para que se pueda responder sin leer nada más a «¿qué tablas
  * toca esto?». La respuesta es: `tc_tacografo_lotes`,
- * `tc_tacografo_intervenciones` y `tc_tacografo_bloqueados`. Ninguna otra.
+ * `tc_tacografo_intervenciones`, `tc_tacografo_bloqueados`,
+ * `tc_tacografo_medida_propuesta` y —para los informes en PDF—
+ * `tc_vehiculo_documentos` y el bucket privado de documentos. Ninguna otra.
  *
  * ── La idempotencia va en DOS sitios, y hace falta ──────────────────────────
  *
@@ -25,7 +27,8 @@
  * el fichero recoge lo que quede, porque la clave única hace el resto.
  */
 
-import { supabase } from "../../supabase.ts";
+import { supabase, SUPABASE_DOCS_BUCKET } from "../../supabase.ts";
+import { TIPO_DOC_INFORME } from "./datos.ts";
 import type { FilaBloqueada, FilaInsert } from "./importar.ts";
 import type { PropuestaInsert } from "./propuestas.ts";
 
@@ -293,4 +296,141 @@ export async function rechazarPropuesta(
     .select("id");
   if (error) throw new Error(`No se ha podido rechazar la propuesta: ${error.message}`);
   return (data ?? []).length > 0;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Los informes técnicos en PDF
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Una intervención creada leyendo un informe en PDF.
+ *
+ * Va con `onConflict` por lo mismo que el importador: entre comprobar que no
+ * estaba y escribirla, otra persona puede haber importado el Excel. Si la
+ * base dice que ya está, se devuelve la que hay en vez de reventar: lo que
+ * quería quien subió el PDF era adjuntarlo, y eso sigue pudiéndose hacer.
+ */
+export async function insertarIntervencionDePdf(
+  fila: FilaInsert,
+): Promise<{ id: string; yaEstaba: boolean }> {
+  const { data, error } = await supabase
+    .from("tc_tacografo_intervenciones")
+    .insert(fila)
+    .select("id")
+    .single();
+  if (!error) return { id: String((data as any).id), yaEstaba: false };
+
+  if ((error as any).code !== "23505") {
+    throw new Error(`No se ha podido crear la intervención: ${error.message}`);
+  }
+  const { data: ya, error: e2 } = await supabase
+    .from("tc_tacografo_intervenciones")
+    .select("id")
+    .eq("empresa_id", fila.empresa_id)
+    .eq("sistema_origen", fila.sistema_origen)
+    .eq("id_origen", fila.id_origen)
+    .single();
+  if (e2) throw new Error(`No se ha podido crear la intervención: ${error.message}`);
+  return { id: String((ya as any).id), yaEstaba: true };
+}
+
+/**
+ * Vincula a un vehículo una intervención que estaba sin él.
+ *
+ * Con `is("vehiculo_id", null)` dentro del UPDATE y no antes: si entretanto
+ * alguien la ha vinculado a mano, esto no la mueve. Devuelve si lo hizo.
+ */
+export async function vincularIntervencion(
+  intervencionId: string, vehiculoId: string, usuarioId: string | null,
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("tc_tacografo_intervenciones")
+    .update({ vehiculo_id: vehiculoId, vinculado_en: new Date().toISOString(), vinculado_por: usuarioId })
+    .eq("id", intervencionId)
+    .is("vehiculo_id", null)
+    .select("id");
+  if (error) throw new Error(`No se ha podido vincular la intervención: ${error.message}`);
+  return (data ?? []).length > 0;
+}
+
+/**
+ * Completa las filas que creó un informe en PDF con lo que trae el Excel.
+ *
+ * El parche lo calcula `parcheParaCompletar()`, que solo rellena nulos. Aquí
+ * solo se aplica, de una en una: son pocas —las que alguien adjuntó entre dos
+ * importaciones— y así un fallo en una no se lleva las demás.
+ */
+export async function completarDePdf(
+  empresa: string, parches: Array<{ idOrigen: string; parche: Record<string, unknown> }>,
+): Promise<number> {
+  let completadas = 0;
+  for (const { idOrigen, parche } of parches) {
+    const { data, error } = await supabase
+      .from("tc_tacografo_intervenciones")
+      .update(parche)
+      .eq("empresa_id", empresa)
+      .eq("id_origen", idOrigen)
+      // Solo si sigue siendo una fila a medias: si otra importación la
+      // completó mientras, esto no la vuelve a tocar.
+      .eq("creada_de_pdf", true)
+      .select("id");
+    if (error) throw new Error(`No se ha podido completar ${idOrigen}: ${error.message}`);
+    completadas += (data ?? []).length;
+  }
+  return completadas;
+}
+
+export interface InformeParaGuardar {
+  empresa: string;
+  vehiculoId: string;
+  intervencionId: string;
+  pdf: Buffer;
+  nombreOriginal: string;
+  sha256: string;
+  paginas: number | null;
+  idOrigen: string;
+  usuarioId: string | null;
+}
+
+/**
+ * Sube el PDF al bucket privado y lo deja apuntando a su intervención.
+ *
+ * El orden importa y es éste: primero el fichero, después la fila. Si falla
+ * la fila queda un objeto huérfano en el bucket, que no se ve y no estorba;
+ * al revés quedaría una fila en la ficha con un clip que no abre nada.
+ *
+ * `vigente` se queda como venga y `ocr_*` sin tocar: ver la migración.
+ */
+export async function guardarInformePdf(i: InformeParaGuardar): Promise<{ id: string; ruta: string }> {
+  const ruta = `${i.empresa}/${i.vehiculoId}/tacografo/${i.idOrigen}-${Date.now()}.pdf`;
+  const { error: subida } = await supabase.storage
+    .from(SUPABASE_DOCS_BUCKET)
+    .upload(ruta, i.pdf, { contentType: "application/pdf", upsert: false });
+  if (subida) throw new Error(`No se ha podido guardar el PDF: ${subida.message}`);
+
+  const { data, error } = await supabase
+    .from("tc_vehiculo_documentos")
+    .insert({
+      vehiculo_id: i.vehiculoId,
+      empresa_id: i.empresa,
+      tipo: TIPO_DOC_INFORME,
+      storage_path: ruta,
+      nombre_original: i.nombreOriginal,
+      mime_type: "application/pdf",
+      paginas: i.paginas,
+      tamano_bytes: i.pdf.length,
+      hash_sha256: i.sha256,
+      intervencion_id: i.intervencionId,
+      subido_por: i.usuarioId,
+    })
+    .select("id")
+    .single();
+  if (error) throw new Error(`No se ha podido registrar el informe: ${error.message}`);
+  return { id: String((data as any).id), ruta };
+}
+
+/** La URL firmada con la que el panel abre o descarga un informe. */
+export async function urlFirmadaDeInforme(ruta: string, segundos = 3600): Promise<string | null> {
+  const { data } = await supabase.storage.from(SUPABASE_DOCS_BUCKET).createSignedUrl(ruta, segundos);
+  return data?.signedUrl ?? null;
 }

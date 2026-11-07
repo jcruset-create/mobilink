@@ -99,7 +99,14 @@ export interface FilaInsert {
   tgd_fichero: string | null;
   comprobaciones: Record<string, string> | null;
 
-  lote_id: string;
+  /**
+   * El lote de importación, cuando viene de un fichero del centro. Las que
+   * se crean leyendo un informe en PDF no tienen lote: no son una
+   * importación, son un documento que alguien adjuntó. Su rastro es el PDF
+   * adjunto, `importado_por` y `creada_de_pdf`.
+   */
+  lote_id: string | null;
+  creada_de_pdf: boolean;
   archivo_nombre: string | null;
   hoja_origen: string | null;
   fila_origen: number;
@@ -120,6 +127,11 @@ export interface Preparacion {
   bloqueadas: FilaBloqueada[];
   /** `id_origen` que ya estaban: ni se insertan ni son un problema. */
   saltadas: string[];
+  /**
+   * Las que ya estaban pero las creó un informe en PDF, con la fila del Excel
+   * lista para completarlas. Ver `parcheParaCompletar()`.
+   */
+  completar: Array<{ idOrigen: string; nueva: FilaInsert }>;
   /** De las que se insertan, cuántas van sin vehículo. */
   sinVehiculo: number;
 }
@@ -133,6 +145,8 @@ export interface OpcionesPreparar {
   usuarioId: string | null;
   vehiculos: VehiculoRef[];
   yaImportados: Set<string>;
+  /** De las ya importadas, las que creó un PDF y están a medias. */
+  creadasDePdf?: Set<string>;
 }
 
 /**
@@ -158,6 +172,163 @@ export function marcarKmSospechoso(filas: FilaTacografo[]): Set<string> {
   return sospechosas;
 }
 
+
+/**
+ * Columnas que el Excel NUNCA pisa al completar una fila que creó un PDF.
+ *
+ * `vehiculo_id` está aquí por lo mismo que `deshacer.ts` se niega a borrar
+ * intervenciones vinculadas a mano: alguien puede haberla cambiado mirándola,
+ * y pisarla le tiraría ese trabajo. La identidad tampoco se toca, por razones
+ * obvias.
+ */
+const NUNCA_SE_PISA = new Set([
+  "id", "empresa_id", "sistema_origen", "id_origen", "vehiculo_id",
+  "created_at", "importado_en", "importado_por",
+]);
+
+/**
+ * Columnas que el Excel SIEMPRE manda, aunque la fila ya traiga valor.
+ *
+ * Las cuatro primeras son la trazabilidad: la fila pasa a venir del fichero
+ * del centro, con su lote, y el `fila_origen` que traía del PDF era un número
+ * de página, que ahí no significa nada.
+ *
+ * Las dos últimas son las sospechas, y es importante: `km_sospechoso` se
+ * decide comparando con las lecturas anteriores del mismo vehículo, y un PDF
+ * suelto no tiene con qué comparar. El Excel sí.
+ */
+const SIEMPRE_DEL_EXCEL = [
+  "lote_id", "archivo_nombre", "hoja_origen", "fila_origen",
+  "km_sospechoso", "medida_sospechosa",
+] as const;
+
+/**
+ * El parche con el que una fila del Excel COMPLETA la que creó un informe en
+ * PDF, en vez de saltársela por «ya importada».
+ *
+ * Hace falta porque el impreso no lo trae todo: de las unidades VDO no trae
+ * la versión de software, y de una transferencia el Excel del centro no trae
+ * el bastidor ni el modelo (comprobado: en producción están a null y el PDF
+ * sí los lleva). O sea que cada camino sabe cosas que el otro no, y la fila
+ * buena es la unión.
+ *
+ * Solo se rellena lo que está a NULL. Si el Excel dice una cosa y la fila
+ * otra, se queda lo que ya había: no es trabajo de un importador decidir
+ * cuál de dos valores distintos es el bueno, y pisarlo borraría la evidencia
+ * sin que nadie se enterara.
+ */
+export function parcheParaCompletar(
+  existente: Record<string, unknown>, nueva: FilaInsert,
+): Record<string, unknown> {
+  const parche: Record<string, unknown> = { creada_de_pdf: false };
+  for (const [clave, valor] of Object.entries(nueva as unknown as Record<string, unknown>)) {
+    if (NUNCA_SE_PISA.has(clave)) continue;
+    if ((SIEMPRE_DEL_EXCEL as readonly string[]).includes(clave)) { parche[clave] = valor; continue; }
+    const hay = existente[clave];
+    if ((hay === null || hay === undefined) && valor !== null && valor !== undefined) {
+      parche[clave] = valor;
+    }
+  }
+  return parche;
+}
+
+/** Lo que hace falta saber, además de la fila, para dejarla lista para insertar. */
+export interface ContextoInsert {
+  empresa: string;
+  sistemaOrigen: string;
+  /** El vehículo al que se vincula, o `null` si la matrícula no casa. */
+  vehiculoId: string | null;
+  /** `null` cuando no viene de un fichero del centro (ver `FilaInsert.lote_id`). */
+  loteId: string | null;
+  archivo: string | null;
+  hoja: string | null;
+  usuarioId: string | null;
+  kmSospechoso: boolean;
+  creadaDePdf?: boolean;
+}
+
+/**
+ * De una fila leída a una fila de la tabla.
+ *
+ * Está aquí fuera y no dentro de `preparar()` porque hay DOS caminos que
+ * acaban en la misma tabla: el Excel mensual del centro y el informe técnico
+ * en PDF de una intervención suelta. Con dos mapeos, el día que se añada una
+ * columna se añadiría en uno y no en el otro, y la ficha enseñaría un dato
+ * según por dónde hubiera entrado.
+ *
+ * Da por hecho que la fila trae `idOrigen`, `fecha` y `matriculaNorm`: son
+ * NOT NULL en la tabla y quien llama los comprueba antes, porque es ahí donde
+ * se sabe qué decirle a quien subió el fichero.
+ */
+export function aFilaInsert(f: FilaTacografo, c: ContextoInsert): FilaInsert {
+  return {
+    empresa_id: c.empresa,
+    vehiculo_id: c.vehiculoId,
+    sistema_origen: c.sistemaOrigen,
+    id_origen: f.idOrigen,
+    fecha: f.fecha,
+    tipo_operacion: f.tipoOperacion,
+    resultado: f.resultado,
+    orden_trabajo: f.ordenTrabajo,
+
+    referencia: f.referencia,
+    version: f.version,
+    version_mapa: f.versionMapa,
+    num_serie: f.numSerie,
+    num_sensor: f.numSensor,
+    gnss: f.gnss,
+    dsrc: f.dsrc,
+    tipo_tacografo: f.tipoTacografo,
+    fabricante: f.fabricante,
+    precintos: f.precintos,
+
+    medida_neumatico: f.medidaOrigen,
+    medida_neumatico_norm: f.medidaNorm,
+    medida_sospechosa: f.medidaSospechosa,
+    medida_anterior: f.medidaAnteriorOrigen,
+    medida_anterior_norm: f.medidaAnteriorNorm,
+
+    km_anterior: f.kmAnterior,
+    km_nuevo: f.kmNuevo,
+    km_sospechoso: c.kmSospechoso,
+
+    param_l: f.paramL,
+    param_w: f.paramW,
+    param_k: f.paramK,
+    param_l_anterior: f.paramLAnterior,
+    param_w_anterior: f.paramWAnterior,
+
+    b_rodillos: f.bRodillos,
+    eq_calibrado: f.eqCalibrado,
+    manometro: f.manometro,
+    cronometro: f.cronometro,
+
+    matricula_origen: f.matriculaOrigen,
+    matricula_norm: f.matriculaNorm,
+    bastidor_origen: f.bastidor,
+    marca: f.marca,
+    modelo: f.modelo,
+    categoria: f.categoria,
+    cliente_nombre_origen: f.clienteNombre,
+
+    tecnico: f.tecnico,
+    tecnico_tarjeta: f.tecnicoTarjeta,
+    tecnico_tarjeta_cad: f.tecnicoTarjetaCad,
+    tecnico_tarjeta_ver: f.tecnicoTarjetaVer,
+
+    observaciones: f.observaciones,
+    tgd_fichero: f.tgdFichero,
+    comprobaciones: f.comprobaciones,
+
+    lote_id: c.loteId,
+    creada_de_pdf: c.creadaDePdf ?? false,
+    archivo_nombre: c.archivo,
+    hoja_origen: c.hoja,
+    fila_origen: f.fila,
+    importado_por: c.usuarioId,
+  };
+}
+
 export function preparar(filas: FilaTacografo[], op: OpcionesPreparar): Preparacion {
   const porMatricula = new Map<string, VehiculoRef>();
   for (const v of op.vehiculos) if (!porMatricula.has(v.matriculaNorm)) porMatricula.set(v.matriculaNorm, v);
@@ -167,6 +338,7 @@ export function preparar(filas: FilaTacografo[], op: OpcionesPreparar): Preparac
   const insertar: FilaInsert[] = [];
   const bloqueadas: FilaBloqueada[] = [];
   const saltadas: string[] = [];
+  const completar: Preparacion["completar"] = [];
   let sinVehiculo = 0;
 
   for (const f of filas) {
@@ -186,80 +358,42 @@ export function preparar(filas: FilaTacografo[], op: OpcionesPreparar): Preparac
         fecha: f.fecha, motivo: "Sin matrícula", valor: null });
       continue;
     }
+    const veh = porMatricula.get(f.matriculaNorm) ?? null;
+
     if (op.yaImportados.has(f.idOrigen)) {
       saltadas.push(f.idOrigen);
+      // Las que creó un PDF no se saltan del todo: el Excel las completa.
+      if (op.creadasDePdf?.has(f.idOrigen)) {
+        completar.push({
+          idOrigen: f.idOrigen,
+          nueva: aFilaInsert(f, {
+            empresa: op.empresa,
+            sistemaOrigen: op.sistemaOrigen,
+            vehiculoId: veh?.id ?? null,
+            loteId: op.loteId,
+            archivo: op.archivo,
+            hoja: op.hoja,
+            usuarioId: op.usuarioId,
+            kmSospechoso: kmRaro.has(f.idOrigen),
+          }),
+        });
+      }
       continue;
     }
 
-    const veh = porMatricula.get(f.matriculaNorm) ?? null;
     if (!veh) sinVehiculo += 1;
 
-    insertar.push({
-      empresa_id: op.empresa,
-      vehiculo_id: veh?.id ?? null,
-      sistema_origen: op.sistemaOrigen,
-      id_origen: f.idOrigen,
-      fecha: f.fecha,
-      tipo_operacion: f.tipoOperacion,
-      resultado: f.resultado,
-      orden_trabajo: f.ordenTrabajo,
-
-      referencia: f.referencia,
-      version: f.version,
-      version_mapa: f.versionMapa,
-      num_serie: f.numSerie,
-      num_sensor: f.numSensor,
-      gnss: f.gnss,
-      dsrc: f.dsrc,
-      tipo_tacografo: f.tipoTacografo,
-      fabricante: f.fabricante,
-      precintos: f.precintos,
-
-      medida_neumatico: f.medidaOrigen,
-      medida_neumatico_norm: f.medidaNorm,
-      medida_sospechosa: f.medidaSospechosa,
-      medida_anterior: f.medidaAnteriorOrigen,
-      medida_anterior_norm: f.medidaAnteriorNorm,
-
-      km_anterior: f.kmAnterior,
-      km_nuevo: f.kmNuevo,
-      km_sospechoso: kmRaro.has(f.idOrigen),
-
-      param_l: f.paramL,
-      param_w: f.paramW,
-      param_k: f.paramK,
-      param_l_anterior: f.paramLAnterior,
-      param_w_anterior: f.paramWAnterior,
-
-      b_rodillos: f.bRodillos,
-      eq_calibrado: f.eqCalibrado,
-      manometro: f.manometro,
-      cronometro: f.cronometro,
-
-      matricula_origen: f.matriculaOrigen,
-      matricula_norm: f.matriculaNorm,
-      bastidor_origen: f.bastidor,
-      marca: f.marca,
-      modelo: f.modelo,
-      categoria: f.categoria,
-      cliente_nombre_origen: f.clienteNombre,
-
-      tecnico: f.tecnico,
-      tecnico_tarjeta: f.tecnicoTarjeta,
-      tecnico_tarjeta_cad: f.tecnicoTarjetaCad,
-      tecnico_tarjeta_ver: f.tecnicoTarjetaVer,
-
-      observaciones: f.observaciones,
-      tgd_fichero: f.tgdFichero,
-      comprobaciones: f.comprobaciones,
-
-      lote_id: op.loteId,
-      archivo_nombre: op.archivo,
-      hoja_origen: op.hoja,
-      fila_origen: f.fila,
-      importado_por: op.usuarioId,
-    });
+    insertar.push(aFilaInsert(f, {
+      empresa: op.empresa,
+      sistemaOrigen: op.sistemaOrigen,
+      vehiculoId: veh?.id ?? null,
+      loteId: op.loteId,
+      archivo: op.archivo,
+      hoja: op.hoja,
+      usuarioId: op.usuarioId,
+      kmSospechoso: kmRaro.has(f.idOrigen),
+    }));
   }
 
-  return { insertar, bloqueadas, saltadas, sinVehiculo };
+  return { insertar, bloqueadas, saltadas, completar, sinVehiculo };
 }

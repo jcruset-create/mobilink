@@ -410,12 +410,12 @@ TACOGRAFO_INFORMES_DIR=/ruta/a/los/informes npx vitest run informePdf.reales
 Sin la variable se salta y lo dice, en vez de pasar en verde sin haber
 comprobado nada.
 
-**Fase 2 · la migración.** Las dos columnas de §6 (`intervencion_id`,
+**Fase 2 · la migración. HECHA.** Las dos columnas de §6 (`intervencion_id`,
 `creada_de_pdf`), un índice parcial por `intervencion_id`, y las políticas RLS
 al mismo patrón que las demás. Versionada en `supabase/migrations/`, con su
 md5, para aplicar a mano como las anteriores.
 
-**Fase 3 · la ruta de subida.**
+**Fase 3 · las rutas. HECHA.**
 `POST /api/tyrecontrol/vehiculos/:id/informe-tacografo`: lee el PDF, parsea,
 compara matrícula (D4), busca el A1, y entonces o bien **solo adjunta** (ya
 estaba) o bien **crea y adjunta** (no estaba), siempre en el mismo orden:
@@ -424,12 +424,34 @@ intervención queda sin adjunto pero correcta. Devuelve qué hizo, para que la
 pantalla lo diga con palabras y no con un «OK». Comprobación de empresa en
 código, como en el resto del módulo: el servidor habla con `service_role` y RLS
 no le aplica. Más `GET` de los informes de un vehículo con su URL firmada, y
-`deshacer.ts` enterándose del adjunto (D2).
+`deshacer.ts` enterándose del adjunto (D2): un informe adjunto es trabajo de
+una persona y entra en la lista de estorbos, al lado de las vinculaciones a
+mano y las propuestas aceptadas.
 
-**Fase 4 · el clip.** En `SeccionTacografo.tsx`, una columna más en el
+Y la pieza de D3 que no se podía dejar para después: el importador del Excel
+**completa** las filas que creó un PDF en vez de saltárselas por «ya
+importadas». Solo rellena lo que está a null —si el Excel dice una cosa y la
+fila otra, se queda lo que ya había— y sí manda en la trazabilidad y en
+`km_sospechoso`, que se decide comparando con las lecturas anteriores del
+mismo vehículo y que un PDF suelto no tiene con qué comparar.
+
+Para no tener dos mapeos de fila a columna, el que había dentro de `preparar()`
+se ha sacado a `aFilaInsert()` y lo usan los dos caminos. Con dos, el día que
+se añadiera una columna se añadiría en uno y no en el otro, y la ficha
+enseñaría un dato según por dónde hubiera entrado.
+
+**Fase 4 · el clip. HECHA.** En `SeccionTacografo.tsx`, una columna más en el
 histórico: clip si esa intervención tiene informe, nada si no. Abre en pestaña
-nueva con la URL firmada y ofrece descargarlo. Y un botón «Adjuntar informe
+nueva con la URL firmada —que caduca en una hora, así que los informes se
+piden aparte de la ficha— y ofrece descargarlo. Y un botón «Adjuntar informe
 (PDF)» en la cabecera de la sección, que es donde se busca.
+
+Dos cosas más que la pantalla enseña y que salen de decisiones de arriba: si
+la matrícula del impreso no es la del vehículo abierto, el servidor no graba y
+aquí aparece un botón de «sí, es este vehículo» —la pantalla no reintenta por
+su cuenta—; y los informes cuyo lote se deshizo siguen listados aparte, porque
+el PDF no se borra con la intervención y abrirlo tiene que seguir siendo
+posible.
 
 **Fase 5 · comprobar contra la realidad.** Subir los cinco: los cuatro que ya
 están tienen que quedarse en «solo adjuntado» sin crear nada —y el contador de
