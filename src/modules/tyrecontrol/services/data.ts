@@ -4335,8 +4335,6 @@ export async function urlInformeTacografo(
 export type AccionInformePdf =
   | "creada_y_adjuntada"
   | "adjuntada"
-  /** La intervención se dio de alta, pero su matrícula no está en TyreControl. */
-  | "creada_sin_adjuntar"
   | "ya_estaba"
   | "no_se_puede";
 
@@ -4361,9 +4359,10 @@ export interface ResultadoImportarInformesPdf {
   resumen: {
     creadasYAdjuntadas: number;
     adjuntadas: number;
-    creadasSinAdjuntar: number;
     yaEstaban: number;
     conProblema: number;
+    /** De las colocadas, las que esperan a que su autobús se dé de alta. */
+    sinVehiculo: number;
   };
   resultados: ResultadoInformePdf[];
 }

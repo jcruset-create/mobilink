@@ -53,7 +53,6 @@ const ETIQUETA_CASO: Record<string, string> = {
 const ETIQUETA_PDF: Record<AccionInformePdf, string> = {
   creada_y_adjuntada: "Dada de alta y adjuntada",
   adjuntada: "Ya estaba: solo adjuntado",
-  creada_sin_adjuntar: "Dada de alta, sin adjuntar",
   ya_estaba: "Este mismo PDF ya estaba",
   no_se_puede: "No se ha podido",
 };
@@ -61,7 +60,6 @@ const ETIQUETA_PDF: Record<AccionInformePdf, string> = {
 const TONO_PDF: Record<AccionInformePdf, string> = {
   creada_y_adjuntada: "font-bold text-emerald-300",
   adjuntada: "text-sky-300",
-  creada_sin_adjuntar: "text-amber-300",
   ya_estaba: "text-slate-400",
   no_se_puede: "font-bold text-rose-300",
 };
@@ -258,7 +256,8 @@ export default function ImportarTacografo() {
           dada de alta <b className="text-slate-200">se crea con los datos del informe</b>, y en
           cualquier caso el PDF queda adjunto a su revisión, con un clip en la ficha del vehículo.
           Un fichero puede traer <b className="text-slate-200">varias intervenciones</b>, y el
-          mismo PDF dos veces no duplica nada.
+          mismo PDF dos veces no duplica nada. Si el autobús todavía no está dado de alta, el
+          informe se guarda igual y aparece en su ficha el día que lo esté.
         </p>
 
         <div className="mt-3 flex flex-wrap items-end gap-2">
@@ -290,8 +289,8 @@ export default function ImportarTacografo() {
               <Cifra n={resPdf.resumen.creadasYAdjuntadas} de="dadas de alta y adjuntadas" tono="text-emerald-300" />
               <Cifra n={resPdf.resumen.adjuntadas} de="ya estaban: solo adjuntado" />
               <Cifra n={resPdf.resumen.yaEstaban} de="el mismo PDF otra vez" tono="text-slate-400" />
-              <Cifra n={resPdf.resumen.creadasSinAdjuntar} de="sin vehículo en TyreControl"
-                     tono={resPdf.resumen.creadasSinAdjuntar ? "text-amber-300" : ""} />
+              <Cifra n={resPdf.resumen.sinVehiculo} de="esperando el alta del vehículo"
+                     tono={resPdf.resumen.sinVehiculo ? "text-amber-300" : ""} />
               <Cifra n={resPdf.resumen.conProblema} de="no se han podido"
                      tono={resPdf.resumen.conProblema ? "text-rose-300" : ""} />
             </div>

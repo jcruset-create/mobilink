@@ -73,7 +73,7 @@ async function crearIntervencion(idOrigen: string, vehiculo: string, dePdf = fal
 }
 
 /** El PDF adjunto, como lo graba la ruta de subida. */
-async function adjuntar(vehiculo: string, intervencion: string | null, ruta: string): Promise<string> {
+async function adjuntar(vehiculo: string | null, intervencion: string | null, ruta: string): Promise<string> {
   const { rows } = await db.query(
     `insert into tc_vehiculo_documentos
        (vehiculo_id, empresa_id, tipo, storage_path, nombre_original, mime_type,
@@ -110,6 +110,7 @@ beforeAll(async () => {
   await db.query(migracion("tyrecontrol_tacografo.sql"));
   await db.query(migracion("tyrecontrol_tacografo_lotes.sql"));
   await db.query(migracion("tyrecontrol_tacografo_informes_pdf.sql"));
+  await db.query(migracion("tyrecontrol_documentos_sin_vehiculo.sql"));
   await db.query(`insert into tc_empresas (id, nombre) values ($1,'Plana')`, [EMPRESA]);
   vehiculoA = await crearVehiculo("8235JDF");
   vehiculoB = await crearVehiculo("9204HMM");
@@ -192,5 +193,35 @@ describe.runIf(RUN)("los informes en PDF contra PostgreSQL", () => {
     expect(rowCount).toBe(0);
     expect(await contar(
       `select count(*)::int n from tc_tacografo_intervenciones where id_origen='PDF-4'`)).toBe(1);
+  });
+
+  /*
+   * Un informe puede llegar antes que el alta del autobús: lo manda el centro
+   * técnico de un vehículo que todavía no está en TyreControl. El papel se
+   * guarda igual, colgando de su intervención, en vez de tirarse.
+   */
+  it("un documento puede existir sin vehículo", async () => {
+    const { rows } = await db.query(
+      `insert into tc_tacografo_intervenciones
+         (empresa_id, sistema_origen, id_origen, fecha, matricula_norm, creada_de_pdf)
+       values ($1, 'informe_intervenciones', 'PDF-SIN-VEH', '2026-11-07', '0000XXX', true)
+       returning id`, [EMPRESA]);
+    const interv = String(rows[0].id);
+    const doc = await adjuntar(null, interv, "sin-vehiculo/1.pdf");
+    expect(await contar(
+      `select count(*)::int n from tc_vehiculo_documentos where id=$1 and vehiculo_id is null`,
+      [doc])).toBe(1);
+  });
+
+  // Y dos de ellos no chocan entre sí: un índice único trata cada NULL como
+  // distinto, así que la regla de «uno vigente por vehículo y tipo» no les
+  // aplica.
+  it("y dos sin vehículo tampoco chocan entre sí", async () => {
+    await db.query(
+      `insert into tc_vehiculo_documentos (vehiculo_id, empresa_id, tipo, storage_path)
+       values (null,$1,'ficha_tecnica','x/1.pdf'), (null,$1,'ficha_tecnica','x/2.pdf')`, [EMPRESA]);
+    expect(await contar(
+      `select count(*)::int n from tc_vehiculo_documentos
+        where vehiculo_id is null and tipo='ficha_tecnica'`)).toBe(2);
   });
 });

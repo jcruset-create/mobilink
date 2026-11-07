@@ -30,13 +30,7 @@
 
 import type { FilaTacografo, Problema } from "./parser.ts";
 
-export type Accion =
-  | "crear_y_adjuntar"
-  /** Se crea la intervención, pero el PDF no se puede archivar: ver `motivo`. */
-  | "crear_sin_adjuntar"
-  | "solo_adjuntar"
-  | "duplicado"
-  | "no_se_puede";
+export type Accion = "crear_y_adjuntar" | "solo_adjuntar" | "duplicado" | "no_se_puede";
 
 /** La intervención que ya existe con ese nº de orden. */
 export interface IntervencionExistente {
@@ -80,7 +74,12 @@ export interface Decision {
   /**
    * El vehículo bajo el que se archiva el PDF. Es el de la intervención si ya
    * la había —ahí es donde tiene que salir el clip— y si no, el que casó con
-   * la matrícula. `null` si no hay ninguno y el informe no se puede archivar.
+   * la matrícula.
+   *
+   * `null` cuando esa matrícula no está en TyreControl: el informe SE GUARDA
+   * igual, colgando de su intervención, y aparece en la ficha el día que el
+   * autobús se dé de alta y la intervención se vincule. Tirarlo obligaría a
+   * que alguien se acordara de volver a subirlo semanas después.
    */
   vehiculoDelInforme?: string | null;
   /** El documento que ya estaba, cuando es un duplicado. */
@@ -162,16 +161,7 @@ export function decidirInforme(s: Situacion): Decision {
     }
     // El clip tiene que salir en la ficha donde está la intervención.
     const vehiculoDelInforme = s.existente.vehiculoId ?? s.vehiculoId;
-    if (vehiculoDelInforme == null) {
-      return {
-        accion: "no_se_puede",
-        motivo: `La intervención ${s.fila.idOrigen} ya está en el histórico, pero sin vehículo, `
-          + `y la matrícula del informe (${s.fila.matriculaOrigen ?? s.fila.matriculaNorm}) no `
-          + "está en TyreControl. Da de alta el vehículo y vuelve a subirlo.",
-        intervencionId: s.existente.id,
-        avisos,
-      };
-    }
+    if (vehiculoDelInforme == null) avisos.push(SIN_VEHICULO(s.fila));
     return {
       accion: "solo_adjuntar",
       intervencionId: s.existente.id,
@@ -184,19 +174,16 @@ export function decidirInforme(s: Situacion): Decision {
   /*
    * Sin vehículo, la intervención se crea igual —sin vincular, como hace el
    * importador del Excel: es historia del centro y el autobús puede darse de
-   * alta mañana— pero el PDF no se archiva. Un documento cuelga de un
-   * vehículo, y no hay ninguno.
+   * alta mañana— y el PDF se guarda colgando de ella. No se ve en ninguna
+   * ficha todavía, porque no hay ficha; aparece sola cuando la haya.
    */
-  if (s.vehiculoId == null) {
-    return {
-      accion: "crear_sin_adjuntar",
-      vehiculoDelInforme: null,
-      motivo: `La matrícula del informe (${s.fila.matriculaOrigen ?? s.fila.matriculaNorm}) no `
-        + "está en TyreControl: la intervención se da de alta sin vincular, pero el PDF no se "
-        + "archiva. Da de alta el vehículo y vuelve a subirlo para adjuntarlo.",
-      avisos,
-    };
-  }
+  if (s.vehiculoId == null) avisos.push(SIN_VEHICULO(s.fila));
 
   return { accion: "crear_y_adjuntar", vehiculoDelInforme: s.vehiculoId, avisos };
 }
+
+/** Lo que hay que decirle a quien sube un informe de un autobús que no está. */
+const SIN_VEHICULO = (fila: FilaTacografo) =>
+  `La matrícula del informe (${fila.matriculaOrigen ?? fila.matriculaNorm}) no está en `
+  + "TyreControl: la intervención se da de alta sin vincular y el informe queda guardado. "
+  + "Aparecerá en la ficha del vehículo en cuanto se dé de alta.";

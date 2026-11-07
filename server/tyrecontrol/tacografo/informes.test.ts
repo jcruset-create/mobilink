@@ -160,24 +160,33 @@ describe("decidirInforme() desde el panel de importación", () => {
   /*
    * Sin vehículo, la intervención se crea igual —es historia del centro y el
    * autobús puede darse de alta mañana, igual que hace el importador del
-   * Excel—, pero el PDF no se archiva: un documento cuelga de un vehículo.
+   * Excel— y el PDF se guarda colgando de ella. Tirarlo obligaría a que
+   * alguien se acordara de volver a subirlo semanas después, y el papel que
+   * se pierde es el que nadie echa de menos hasta que hace falta.
    */
-  it("sin vehículo: se crea la intervención y se dice que el PDF no se archiva", () => {
+  it("sin vehículo: se crea, el PDF se guarda igual, y se avisa", () => {
     const d = decidirInforme(panel({ vehiculoId: null }));
-    expect(d.accion).toBe("crear_sin_adjuntar");
+    expect(d.accion).toBe("crear_y_adjuntar");
     expect(d.vehiculoDelInforme).toBeNull();
-    expect(d.motivo).toContain("no está en TyreControl");
-    expect(d.motivo).toContain("8235JDF");
+    expect(d.avisos.some((a) => a.includes("no está en TyreControl"))).toBe(true);
+    expect(d.avisos.some((a) => a.includes("8235JDF"))).toBe(true);
+    expect(d.avisos.some((a) => a.includes("en cuanto se dé de alta"))).toBe(true);
   });
 
-  it("y si la intervención ya estaba sin vehículo, tampoco se archiva, pero se dice", () => {
+  it("y si la intervención ya estaba sin vehículo, se adjunta igual y se avisa", () => {
     const d = decidirInforme(panel({
       vehiculoId: null,
       existente: { id: "int-9", vehiculoId: null, fecha: "2026-11-04", creadaDePdf: false },
     }));
-    expect(d.accion).toBe("no_se_puede");
+    expect(d.accion).toBe("solo_adjuntar");
     expect(d.intervencionId).toBe("int-9");
-    expect(d.motivo).toContain("sin vehículo");
+    expect(d.vehiculoDelInforme).toBeNull();
+    expect(d.avisos.some((a) => a.includes("no está en TyreControl"))).toBe(true);
+  });
+
+  // Y con vehículo no se avisa de nada: el aviso es para el caso raro.
+  it("con vehículo, ningún aviso de ese tipo", () => {
+    expect(decidirInforme(panel()).avisos).toEqual([]);
   });
 
   // El clip tiene que salir donde está la intervención, no donde casó la

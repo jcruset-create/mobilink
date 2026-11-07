@@ -381,17 +381,61 @@ export async function leerInformePorHash(
   return { id: String((data as any).id), intervencionId: (data as any).intervencion_id ?? null };
 }
 
-/** Los informes adjuntos de un vehículo, el más reciente primero. */
+const CAMPOS_INFORME =
+  "id, intervencion_id, vehiculo_id, storage_path, nombre_original, tamano_bytes, paginas, created_at";
+
+/**
+ * Los informes adjuntos de un vehículo, el más reciente primero.
+ *
+ * Se buscan por DOS caminos y la unión es lo que se enseña:
+ *
+ *   · por las intervenciones de este vehículo, que es lo que de verdad
+ *     significa «el informe de esta revisión». Así aparece también el que se
+ *     subió cuando el autobús todavía no estaba dado de alta: en cuanto su
+ *     intervención se vincula, el clip sale solo, sin tocar el documento.
+ *   · por `vehiculo_id`, que recoge los que se quedaron huérfanos porque se
+ *     deshizo el lote que había importado su intervención.
+ *
+ * Con uno solo de los dos se perdería uno de esos dos casos.
+ */
 export async function leerInformesDeVehiculo(empresa: string, vehiculoId: string): Promise<any[]> {
-  const { data, error } = await supabase
+  const intervenciones = await paginar<any>((desde, hasta) =>
+    supabase
+      .from("tc_tacografo_intervenciones")
+      .select("id")
+      .eq("empresa_id", empresa)
+      .eq("vehiculo_id", vehiculoId)
+      .order("id", { ascending: true })
+      .range(desde, hasta));
+
+  const porVehiculo = supabase
     .from("tc_vehiculo_documentos")
-    .select("id, intervencion_id, storage_path, nombre_original, tamano_bytes, paginas, created_at")
+    .select(CAMPOS_INFORME)
     .eq("empresa_id", empresa)
     .eq("vehiculo_id", vehiculoId)
-    .eq("tipo", TIPO_DOC_INFORME)
-    .order("created_at", { ascending: false });
-  if (error) throw new Error(error.message);
-  return (data ?? []) as any[];
+    .eq("tipo", TIPO_DOC_INFORME);
+
+  const ids = intervenciones.map((i) => String(i.id));
+  const consultas = [porVehiculo];
+  // De 200 en 200: la lista de `in` viaja en la URL y un autobús con muchos
+  // años de histórico tiene muchas intervenciones.
+  for (let i = 0; i < ids.length; i += 200) {
+    consultas.push(supabase
+      .from("tc_vehiculo_documentos")
+      .select(CAMPOS_INFORME)
+      .eq("empresa_id", empresa)
+      .eq("tipo", TIPO_DOC_INFORME)
+      .in("intervencion_id", ids.slice(i, i + 200)));
+  }
+
+  const porId = new Map<string, any>();
+  for (const q of consultas) {
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+    for (const d of (data ?? []) as any[]) porId.set(String(d.id), d);
+  }
+  return [...porId.values()].sort((a, b) =>
+    String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
 }
 
 /** Un informe suelto, para servirlo con su URL firmada. */

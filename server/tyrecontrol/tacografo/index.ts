@@ -627,7 +627,7 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
 
             let intervencionId = decision.intervencionId ?? null;
             let creada = false;
-            if (decision.accion === "crear_y_adjuntar" || decision.accion === "crear_sin_adjuntar") {
+            if (decision.accion === "crear_y_adjuntar") {
               const r = await insertarIntervencionDePdf(aFilaInsert(fila!, {
                 empresa, sistemaOrigen: SISTEMA_ORIGEN,
                 vehiculoId: decision.vehiculoDelInforme ?? null,
@@ -644,20 +644,18 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
               await vincularIntervencion(intervencionId, decision.vehiculoDelInforme, usuarioId);
             }
 
-            if (decision.accion === "crear_sin_adjuntar") {
-              resultados.push({ ...base, accion: "creada_sin_adjuntar", intervencionId,
-                motivo: decision.motivo, avisos: decision.avisos });
-              continue;
-            }
-
             /*
              * Cada intervención se queda con SU copia del fichero, aunque un
              * PDF con el mes entero se guarde varias veces. Son 330 KB, y así
              * borrar el informe de una no deja a las otras con un clip que no
              * abre nada.
+             *
+             * `vehiculoId` puede ir a null: un informe de un autobús que
+             * todavía no está dado de alta se guarda igual y aparece en su
+             * ficha el día que exista.
              */
             const doc = await guardarInformePdf({
-              empresa, vehiculoId: decision.vehiculoDelInforme!, intervencionId: intervencionId!,
+              empresa, vehiculoId: decision.vehiculoDelInforme ?? null, intervencionId: intervencionId!,
               pdf: archivo.buffer, nombreOriginal: nombre, sha256: sha,
               paginas: lectura.paginas || null,
               idOrigen: fila!.idOrigen, usuarioId,
@@ -668,7 +666,7 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
               accion: creada ? "creada_y_adjuntada" : "adjuntada",
               intervencionId,
               documentoId: doc.id,
-              vehiculoId: decision.vehiculoDelInforme,
+              vehiculoId: decision.vehiculoDelInforme ?? null,
               avisos: decision.avisos,
             });
           }
@@ -682,9 +680,11 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
           resumen: {
             creadasYAdjuntadas: cuenta("creada_y_adjuntada"),
             adjuntadas: cuenta("adjuntada"),
-            creadasSinAdjuntar: cuenta("creada_sin_adjuntar"),
             yaEstaban: cuenta("ya_estaba"),
             conProblema: cuenta("no_se_puede"),
+            /** De las anteriores, las que esperan a que su autobús se dé de alta. */
+            sinVehiculo: resultados.filter((r) => r.vehiculoId === null
+              && r.accion !== "no_se_puede").length,
           },
           resultados,
         });
