@@ -33,8 +33,11 @@ import {
 import {
   avisosDeCondicion, completar, condicionPorPosicion, marcaPorPosicion,
   medidaPorMarca, medidaPorMilimetro, medidaPorPosicion, profundidadPorPosicion,
-  type Matriz,
+  type Matriz, type RuedaCompleta,
 } from "./matrices.ts";
+import {
+  mesesHasta, quesitoDeBandas, quesitoDeCondicion, recortar, serieMensual,
+} from "./evolucion.ts";
 
 /** El mes en curso, para cuando no se pide ninguno. */
 const mesActual = (): string => new Date().toISOString().slice(0, 7);
@@ -118,6 +121,86 @@ export function mountInformeMensual(app: Express, ...guards: RequestHandler[]): 
     } catch (e: any) {
       console.error("[informe-mensual] error:", e?.message ?? e);
       res.status(500).json({ error: e?.message || "No se ha podido generar el informe mensual" });
+    }
+  });
+
+  /**
+   * La evolución de los últimos meses, y los quesitos del último.
+   *
+   * Va en su propia ruta y no dentro del informe porque cuesta lo que cuesta:
+   * son doce meses de mediciones, y meterlo en la misma petición que la
+   * cabecera haría esperar por las gráficas a quien solo quiere los
+   * recuentos. La pantalla pide las dos cosas a la vez; el servidor las sirve
+   * por separado.
+   *
+   * Cada mes se deduplica POR SEPARADO, y eso es lo que obliga a leer mes a
+   * mes: una rueda medida en octubre y en noviembre son dos ruedas de la
+   * serie, una de cada mes. Deduplicando el año entero de una vez quedaría
+   * una sola y los meses anteriores se vaciarían.
+   */
+  app.get("/api/tyrecontrol/informes/mensual/evolucion", ...guards, async (req, res) => {
+    try {
+      const alcance = await empresaDelInforme(req, req.query.empresa);
+      if (!alcance.empresa) return res.status(alcance.estado!).json({ error: alcance.error });
+      const empresa = alcance.empresa;
+
+      let periodos;
+      try {
+        const n = Math.min(24, Math.max(1, Number(req.query.meses ?? 12) || 12));
+        periodos = mesesHasta(String(req.query.mes ?? mesActual()), n);
+      } catch (e) {
+        if (e instanceof MesInvalido) return res.status(400).json({ error: e.message });
+        throw e;
+      }
+      const incluirBaja = req.query.incluirBaja === "1";
+
+      const [vehiculos, posiciones] = await Promise.all([
+        leerVehiculos(empresa), leerOrdenDePosiciones(),
+      ]);
+      const contados = new Set(
+        vehiculos.filter((v) => incluirBaja || v.activo).map((v) => v.id),
+      );
+
+      const ruedasPorMes = new Map<string, RuedaCompleta[]>();
+      const idsNeumatico = new Set<string>();
+      const porMesSinCompletar = new Map<string, ReturnType<typeof ruedasDelMes>>();
+
+      for (const p of periodos) {
+        const revisiones = await leerRevisiones(empresa, p.desde, p.hasta);
+        const ids = revisiones.filter((r) => revisionCuenta(r.estado)).map((r) => r.id);
+        if (ids.length === 0) { porMesSinCompletar.set(p.mes, { ruedas: [], sinPosicion: 0 }); continue; }
+        const mediciones = await leerMediciones(empresa, ids, posiciones.orden);
+        const r = ruedasDelMes(revisiones, mediciones, p, contados);
+        porMesSinCompletar.set(p.mes, r);
+        for (const rueda of r.ruedas) if (rueda.neumaticoId) idsNeumatico.add(rueda.neumaticoId);
+      }
+
+      // Los neumáticos, UNA vez para toda la serie: los mismos aparecen mes
+      // tras mes, y pedirlos doce veces sería doce veces el mismo viaje.
+      const todos = [...idsNeumatico];
+      const [neumaticosRef, condiciones] = await Promise.all([
+        leerNeumaticos(empresa, todos),
+        leerCondicionDeNeumaticos(empresa, todos),
+      ]);
+      for (const [m, r] of porMesSinCompletar) {
+        ruedasPorMes.set(m, completar(r.ruedas, neumaticosRef, condiciones));
+      }
+
+      const evolucion = recortar(serieMensual(periodos, ruedasPorMes));
+      const ultimo = evolucion.meses.at(-1) ?? null;
+
+      res.json({
+        ok: true,
+        empresa,
+        mesesPedidos: periodos.length,
+        ...evolucion,
+        quesitos: ultimo
+          ? { bandas: quesitoDeBandas(ultimo), condicion: quesitoDeCondicion(ultimo) }
+          : null,
+      });
+    } catch (e: any) {
+      console.error("[informe-mensual-evolucion] error:", e?.message ?? e);
+      res.status(500).json({ error: e?.message || "No se ha podido calcular la evolución" });
     }
   });
 }
