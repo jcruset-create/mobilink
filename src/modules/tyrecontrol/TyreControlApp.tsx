@@ -61,6 +61,7 @@ import InformeEconomico from "./pages/informes/InformeEconomico";
 import InformeRankings from "./pages/informes/InformeRankings";
 import InformeDesgaste from "./pages/informes/InformeDesgaste";
 import InformeKmPorMm from "./pages/informes/InformeKmPorMm";
+import InformePrevision from "./pages/informes/InformePrevision";
 import InformePresiones from "./pages/informes/InformePresiones";
 import InformeProductividad from "./pages/informes/InformeProductividad";
 import InformeOperaciones from "./pages/informes/InformeOperaciones";
@@ -106,6 +107,7 @@ export default function TyreControlApp() {
               <Route path="historial-vehiculo" element={<InformeHistorialVehiculo />} />
               <Route path="desgaste" element={<InformeDesgaste />} />
               <Route path="km-por-mm" element={<InformeKmPorMm />} />
+              <Route path="prevision" element={<InformePrevision />} />
               <Route path="presiones" element={<InformePresiones />} />
               {/* Informes INTERNOS: costes, productividad de técnicos y códigos
                   internos. Un cliente no los ve en pestañas (InformesLayout) y
