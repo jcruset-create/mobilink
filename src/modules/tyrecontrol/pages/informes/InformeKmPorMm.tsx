@@ -69,9 +69,20 @@ export default function InformeKmPorMm() {
             menos el de retirada, por el km/mm; los dos extremos salen de los percentiles 99 y 1 de lo medido
             de ese modelo, así que son una aproximación, no una ficha técnica.
           </p>
+          <p>
+            El corte de 2 mm no pilla <i>todas</i> las sustituciones: si a un autobús le quitan una goma con
+            7 mm y le ponen otra usada con 8, la serie sigue como si nada. Eso deja tramos imposibles —hay
+            uno de <b>695.236 km con 2,4 mm gastados</b>—, y como aportan kilómetros al numerador y casi
+            ningún milímetro al denominador, inflan la cifra. Por eso se tira el tramo que implique más de
+            <b> 50.000 km por milímetro</b>: con 13 mm útiles serían 650.000 km de vida, que ningún
+            neumático de autobús hace.
+          </p>
           <p className="text-slate-400">
-            Un modelo y eje que no llegue a <b>3 tramos y 5 mm medidos</b> no sale: con medio milímetro
-            gastado la cuenta da cifras de millones de kilómetros que solo miden el ruido.
+            Dos detalles más. Un neumático medido <b>dos veces el mismo día y con el mismo odómetro</b>
+            —pasa 818 veces, y en 807 las dos lecturas no coinciden— cuenta como una sola medición, con la
+            media de las dos: si no, la cifra cambiaba entre ejecuciones. Y un modelo y eje que no llegue a
+            <b> 3 tramos y 5 mm medidos</b> no sale, porque con medio milímetro gastado la cuenta da cifras
+            de millones de kilómetros que solo miden el ruido.
           </p>
         </div>
       </details>
