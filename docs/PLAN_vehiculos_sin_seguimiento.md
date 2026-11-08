@@ -81,7 +81,7 @@ puede llamarse de otra manera en cada empresa. La alternativa sería
 `bajo_contrato`; se descarta porque mañana puede haber un vehículo propio al
 que tampoco se le hace seguimiento y no es cuestión de contrato.
 
-**`default true` es la pieza clave de «sin romper nada»**: los 4.812 vehículos
+**`default true` es la pieza clave de «sin romper nada»**: los 909 vehículos
 que hay hoy nacen en `true`, así que **el día que se aplique la migración no
 cambia ni un solo número**. Lo que cambie, cambiará cuando alguien pulse el
 botón.

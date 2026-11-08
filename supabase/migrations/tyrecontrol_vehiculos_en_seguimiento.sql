@@ -37,7 +37,7 @@
 --
 -- ── `default true`, que es lo que hace que esto no rompa nada ──────────────
 --
--- Los 4.812 vehículos que hay hoy nacen en `true`. El día que se aplique esta
+-- Los 909 vehículos que hay hoy nacen en `true`. El día que se aplique esta
 -- migración NO cambia ni un solo número de ningún informe. Lo que cambie,
 -- cambiará cuando alguien pulse el botón de la ficha.
 
