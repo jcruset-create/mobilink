@@ -446,6 +446,23 @@ export interface Vehiculo {
   // Nació en la tablet con lo mínimo (tc_alta_vehiculo_desde_parte) y le
   // faltan marca, modelo o delegación. Un administrador lo completa.
   pendiente_validar?: boolean;
+  /**
+   * Si entra en el mantenimiento integral.
+   *
+   * En `false` el vehículo sigue ACTIVO y sigue en la telemática, pero no
+   * cuenta para revisiones ni para informes: son matrículas que circulan y a
+   * las que nadie revisa las gomas. No confundir con `activo` —dado de baja—
+   * ni con `pendiente_validar` —le faltan datos administrativos—: las tres
+   * son independientes.
+   *
+   * Solo se cambia por `tc_vehiculo_seguimiento`, nunca escribiendo la
+   * columna: el motivo es obligatorio al quitarlo y eso lo exige la base.
+   */
+  en_seguimiento?: boolean;
+  /** Por qué se dejó sin seguimiento. Null cuando lo tiene. */
+  seguimiento_motivo?: string | null;
+  seguimiento_cambiado_en?: string | null;
+  seguimiento_cambiado_por?: string | null;
   creado_por?: string | null;
   creado_desde?: "panel" | "tablet" | "importacion" | null;
   // Los datos de la ficha técnica NO viven aquí: cada código de la tarjeta

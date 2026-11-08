@@ -34,6 +34,21 @@ const describeSiHayBase = CORRE ? describe : describe.skip;
 const RAIZ = new URL("../../../", import.meta.url).pathname;
 const MIGRACION = `${RAIZ}supabase/migrations/tyrecontrol_desgaste_por_tramos.sql`;
 const MIGRACION_PREVISION = `${RAIZ}supabase/migrations/tyrecontrol_sustituciones_previstas.sql`;
+const MIGRACION_SEGUIMIENTO = `${RAIZ}supabase/migrations/tyrecontrol_sin_seguimiento_en_informes.sql`;
+
+/**
+ * Las dos funciones de esa migración que este banco puede cargar.
+ *
+ * Las otras doce son informes que viven sobre tablas que aquí no existen
+ * —operaciones, planes, alertas—, así que se sacan por nombre en vez de
+ * cargar el fichero entero.
+ */
+function funcionDeLaMigracion(sql: string, nombre: string): string {
+  const i = sql.indexOf(`create or replace function public.${nombre}(`);
+  if (i < 0) throw new Error(`No se encuentra ${nombre}`);
+  const j = sql.indexOf("$$;", i) + 3;
+  return sql.slice(i, j);
+}
 
 /** Un esquema propio: así esta prueba no pisa nada de las demás. */
 const ESQUEMA = "pruebas_desgaste_tramos";
@@ -121,7 +136,8 @@ describeSiHayBase("tc_informes_km_por_mm", () => {
         marca text, modelo text, medida text, empresa_id uuid,
         codigo_interno text, numero_serie text);
       create table tc_vehiculos (
-        id uuid primary key default gen_random_uuid(), matricula text);
+        id uuid primary key default gen_random_uuid(), matricula text,
+        en_seguimiento boolean not null default true);
       create table tc_montajes_actuales (
         id uuid primary key default gen_random_uuid(),
         neumatico_id uuid references tc_neumaticos(id), vehiculo_id uuid,
@@ -251,6 +267,13 @@ describeSiHayBase("tc_informes_km_por_mm", () => {
       .replace(/^grant .*$/gm, "");
     await db.query(cargado);
     await db.query(aEsquema(readFileSync(MIGRACION_PREVISION, "utf8")));
+
+    // Y encima, las dos reescritas que exigen `en_seguimiento`. Con todos los
+    // vehículos del banco en `true`, que es como nacen, NINGUNA de las pruebas
+    // de arriba puede cambiar: ésa es justo la garantía que se quiere.
+    const seg = readFileSync(MIGRACION_SEGUIMIENTO, "utf8");
+    await db.query(aEsquema(funcionDeLaMigracion(seg, "tc_informes_desgaste")));
+    await db.query(aEsquema(funcionDeLaMigracion(seg, "tc_informes_sustituciones_previstas")));
 
     const r = await db.query<Fila>(`select * from ${ESQUEMA}.tc_informes_km_por_mm(null)`);
     filas = r.rows;
@@ -572,6 +595,61 @@ describeSiHayBase("tc_informes_km_por_mm", () => {
     const pronto = deMedida(await prevision("2026-06-01"), "295/80R22.5")[0];
     const tarde = deMedida(await prevision("2030-01-01"), "295/80R22.5")[0];
     expect(Number(tarde.vencidos)).toBeGreaterThan(Number(pronto.vencidos));
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // en_seguimiento
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * El vehículo fuera del mantenimiento integral.
+   *
+   * Está activo y en la telemática, pero nadie le revisa las gomas. No tiene
+   * que salir ni en la predicción de sustitución ni en la previsión de
+   * compra, y las medidas que solo lleve él tampoco: si de una medida no
+   * tenemos que cambiar nada, no hay que comprarla.
+   */
+  it("un vehículo sin seguimiento desaparece del desgaste y de la previsión", async () => {
+    const { rows } = await db.query(
+      `insert into tc_vehiculos (matricula, en_seguimiento) values ('9999ZZZ', true) returning id`,
+    );
+    const fuera = rows[0].id as string;
+    const { rows: pos } = await db.query(`select id from tc_posiciones_vehiculo where eje = 1`);
+    const eje1 = pos[0].id as string;
+    const n = await altaNeumatico("Hankook", "AH51",
+      { montadoEn: fuera, codigo: "FUERA", medida: "275/70R22.5" });
+    await serie(n, fuera, eje1, 100000, 15, 20000, 2);
+
+    // Con seguimiento sale, como cualquier otra.
+    const conSeg = await db.query(`select * from ${ESQUEMA}.tc_informes_desgaste()`);
+    expect(conSeg.rows.find((x: any) => x.codigo === "FUERA")).toBeDefined();
+    const prevCon = await db.query(
+      `select * from ${ESQUEMA}.tc_informes_sustituciones_previstas(null, '{30}'::int[], '2026-06-01'::date)`,
+    );
+    expect(prevCon.rows.find((x: any) => x.medida === "275/70R22.5")).toBeDefined();
+
+    // Se le quita, y deja de contar en los dos.
+    await db.query(`update tc_vehiculos set en_seguimiento = false where id = $1`, [fuera]);
+    const sinSeg = await db.query(`select * from ${ESQUEMA}.tc_informes_desgaste()`);
+    expect(sinSeg.rows.find((x: any) => x.codigo === "FUERA")).toBeUndefined();
+    const prevSin = await db.query(
+      `select * from ${ESQUEMA}.tc_informes_sustituciones_previstas(null, '{30}'::int[], '2026-06-01'::date)`,
+    );
+    expect(prevSin.rows.find((x: any) => x.medida === "275/70R22.5")).toBeUndefined();
+
+    // Y al devolvérselo, vuelve. No se ha perdido nada por el camino.
+    await db.query(`update tc_vehiculos set en_seguimiento = true where id = $1`, [fuera]);
+    const vuelta = await db.query(`select * from ${ESQUEMA}.tc_informes_desgaste()`);
+    expect(vuelta.rows.find((x: any) => x.codigo === "FUERA")).toBeDefined();
+    await db.query(`update tc_vehiculos set en_seguimiento = false where id = $1`, [fuera]);
+  });
+
+  it("quitarle el seguimiento a uno no toca a los demás", async () => {
+    // El resto del banco sigue en `true`, así que el AH51 del eje 1 tiene que
+    // seguir diciendo exactamente lo mismo que antes de todo esto.
+    const f = de("Hankook", "AH51", 1)!;
+    expect(Number(f.tramos)).toBe(9);
+    expect(Number(f.km_por_mm)).toBe(10000);
   });
 
   it("no mira las revisiones anuladas ni los neumáticos ausentes o inaccesibles", async () => {
