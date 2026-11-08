@@ -171,6 +171,36 @@ export interface ProductividadTecnico {
   operaciones: number;
 }
 
+/**
+ * Una fila de `tc_informes_km_por_mm`: un modelo de neumático en un eje, con
+ * lo que le aguanta cada milímetro de dibujo.
+ *
+ * `km_por_mm` ya viene calculado por la base para ESE eje. El del modelo
+ * entero se saca sumando `km_totales` y `mm_totales` de sus ejes, nunca
+ * promediando los `km_por_mm` — ver `services/kmPorMm.ts`.
+ */
+export interface KmPorMmFila {
+  marca: string;
+  modelo: string;
+  /** `null` si la medición no tenía posición conocida. */
+  eje: number | null;
+  /** Tramos limpios: una goma viviendo en un sitio, de punta a punta. */
+  tramos: number;
+  neumaticos: number;
+  km_totales: number;
+  mm_totales: number;
+  km_por_mm: number;
+  p25: number;
+  mediana: number;
+  p75: number;
+  /** Percentil 99 de lo medido del modelo: con qué dibujo entra, aproximado. */
+  mm_nuevo: number | null;
+  /** Percentil 1: con cuál se retira. */
+  mm_retirada: number | null;
+  /** Gomas distintas del modelo entero, ya sin contar dos veces las que han pasado por dos ejes. */
+  neumaticos_modelo: number;
+}
+
 export interface DesgasteNeumatico {
   neumatico_id: string;
   codigo: string | null;
