@@ -7,7 +7,7 @@ import type {
   FiltrosInformes, KpisInformes, EstadoFlota, DimensionTotal, MarcaMedidaTotal, ProfundidadDistribucion, Alerta,
   EconomicoInformes, RankingVehiculo, RankingMarca, CosteKmNeumatico, DesgasteNeumatico,
   PresionNeumatico, ProductividadTecnico, OperacionesInforme, InformeEjecutivo,
-  ControlRevision, MontajesInforme, OrigenMontajes, InventarioResumen,
+  ControlRevision, MontajesInforme, OrigenMontajes, InventarioResumen, KmPorMmFila,
 } from "../types/informes";
 
 function params(f: FiltrosInformes) {
@@ -87,6 +87,20 @@ export async function desgaste(f: FiltrosInformes): Promise<DesgasteNeumatico[]>
   const { data, error } = await supabase.rpc("tc_informes_desgaste", { p_empresa: f.empresaId ?? null });
   if (error) throw new Error(error.message);
   return (data ?? []) as DesgasteNeumatico[];
+}
+
+/**
+ * Kilómetros por milímetro de dibujo, por modelo y eje.
+ *
+ * `p_min_km` y `p_salto` son los dos mandos del método y se dejan en el
+ * valor por defecto de la base: no se mandan desde aquí para que la pantalla
+ * no pueda enseñar una cifra sacada con un criterio y llamarla igual que la
+ * de otro. Si algún día hacen falta, que sea con un control a la vista.
+ */
+export async function kmPorMm(f: FiltrosInformes): Promise<KmPorMmFila[]> {
+  const { data, error } = await supabase.rpc("tc_informes_km_por_mm", { p_empresa: f.empresaId ?? null });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as KmPorMmFila[];
 }
 
 export async function presiones(f: FiltrosInformes): Promise<PresionNeumatico[]> {

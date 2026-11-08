@@ -37,6 +37,7 @@ const TABS = [
   { to: "/tyrecontrol/informes/economico", label: "Económico", interna: true },
   { to: "/tyrecontrol/informes/rankings", label: "Rankings", interna: true },
   { to: "/tyrecontrol/informes/desgaste", label: "Desgaste" },
+  { to: "/tyrecontrol/informes/km-por-mm", label: "Km por mm" },
   { to: "/tyrecontrol/informes/presiones", label: "Presiones" },
   { to: "/tyrecontrol/informes/productividad", label: "Productividad", interna: true },
   { to: "/tyrecontrol/informes/operaciones-informe", label: "Operaciones", interna: true },
