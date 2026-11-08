@@ -8,6 +8,7 @@ import type {
   EconomicoInformes, RankingVehiculo, RankingMarca, CosteKmNeumatico, DesgasteNeumatico,
   PresionNeumatico, ProductividadTecnico, OperacionesInforme, InformeEjecutivo,
   ControlRevision, MontajesInforme, OrigenMontajes, InventarioResumen, KmPorMmFila,
+  PrevisionMedida,
 } from "../types/informes";
 
 function params(f: FiltrosInformes) {
@@ -101,6 +102,26 @@ export async function kmPorMm(f: FiltrosInformes): Promise<KmPorMmFila[]> {
   const { data, error } = await supabase.rpc("tc_informes_km_por_mm", { p_empresa: f.empresaId ?? null });
   if (error) throw new Error(error.message);
   return (data ?? []) as KmPorMmFila[];
+}
+
+/** Los plazos por defecto de la previsión de compra. */
+export const TRAMOS_PREVISION = [30, 60, 90, 120, 180, 365];
+
+/**
+ * Cuántas gomas habrá que cambiar, por medida y plazo.
+ *
+ * Los cuatro parámetros del método de predicción se dejan en el valor por
+ * defecto de la base, igual que en los otros dos informes: es lo que garantiza
+ * que las tres pantallas hablen del mismo desgaste.
+ */
+export async function previsionPorMedida(
+  f: FiltrosInformes, tramos: number[] = TRAMOS_PREVISION,
+): Promise<PrevisionMedida[]> {
+  const { data, error } = await supabase.rpc("tc_informes_sustituciones_previstas", {
+    p_empresa: f.empresaId ?? null, p_tramos: tramos,
+  });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as PrevisionMedida[];
 }
 
 export async function presiones(f: FiltrosInformes): Promise<PresionNeumatico[]> {

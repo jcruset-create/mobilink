@@ -38,6 +38,10 @@ export default function InformeDesgaste() {
   const vencidos = items.filter((i) => i.fecha_prevista && new Date(i.fecha_prevista) <= hoy).length;
   const proximos = items.filter((i) => i.fecha_prevista && new Date(i.fecha_prevista) > hoy && new Date(i.fecha_prevista) <= en60).length;
   const prestados = items.filter((i) => i.origen_ritmo === "modelo").length;
+  // La API corta en 1.000 filas. Como la lista viene ordenada por fecha
+  // prevista, las urgentes SÍ están todas; lo que no se puede es leer este
+  // recuento como el total de la flota, y por eso no se enseña como tal.
+  const recortada = items.length >= 1000;
 
   const filaColor = (i: DesgasteNeumatico) => {
     if (i.fecha_prevista && new Date(i.fecha_prevista) <= hoy) return "text-rose-300";
@@ -48,7 +52,11 @@ export default function InformeDesgaste() {
   return (
     <div>
       <div className="mb-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-        <KpiCard title="Con predicción" value={items.length} hint="Neumáticos montados con mediciones" />
+        <KpiCard
+          title="En la lista"
+          value={recortada ? `${items.length.toLocaleString("es-ES")}+` : items.length}
+          hint={recortada ? "Las más urgentes primero; la API corta en 1.000" : "Neumáticos montados con mediciones"}
+        />
         <KpiCard title="Sustitución vencida" value={vencidos} tono={vencidos > 0 ? "danger" : "ok"} />
         <KpiCard title="Sustituir en 60 días" value={proximos} tono={proximos > 0 ? "warn" : "ok"} />
         <KpiCard title="Con ritmo del modelo" value={prestados} tono="info" hint="Aún no llevan rodado lo bastante para medirles el suyo" />
@@ -75,6 +83,12 @@ export default function InformeDesgaste() {
             Los kilómetros restantes van hasta el <b>mínimo legal de 1,6 mm</b>. La fecha prevista proyecta
             esos kilómetros al ritmo de uso del propio vehículo; si no se le conoce, queda en blanco en vez
             de inventarse.
+          </p>
+          <p className="text-slate-400">
+            La lista viene ordenada por urgencia y <b>la API corta en 1.000 filas</b>, así que las que
+            tocan antes están todas pero el recuento de arriba no es el total de la flota. Para los
+            totales —y para saber cuántas gomas de cada medida hay que comprar y cuándo— está
+            <b> «Previsión de compra»</b>.
           </p>
         </div>
       </details>

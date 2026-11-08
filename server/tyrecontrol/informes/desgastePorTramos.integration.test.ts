@@ -33,6 +33,7 @@ const describeSiHayBase = CORRE ? describe : describe.skip;
 
 const RAIZ = new URL("../../../", import.meta.url).pathname;
 const MIGRACION = `${RAIZ}supabase/migrations/tyrecontrol_desgaste_por_tramos.sql`;
+const MIGRACION_PREVISION = `${RAIZ}supabase/migrations/tyrecontrol_sustituciones_previstas.sql`;
 
 /** Un esquema propio: así esta prueba no pisa nada de las demás. */
 const ESQUEMA = "pruebas_desgaste_tramos";
@@ -77,12 +78,13 @@ describeSiHayBase("tc_informes_km_por_mm", () => {
 
   async function altaNeumatico(
     marca: string, modelo: string,
-    opciones: { empresa?: string; montadoEn?: string; codigo?: string } = {},
+    opciones: { empresa?: string; montadoEn?: string; codigo?: string; medida?: string } = {},
   ): Promise<string> {
     const { rows } = await db.query(
       `insert into tc_neumaticos (marca, modelo, medida, empresa_id, codigo_interno)
-       values ($1,$2,'295/80R22.5',$3,$4) returning id`,
-      [marca, modelo, opciones.empresa ?? EMPRESA_A, opciones.codigo ?? null],
+       values ($1,$2,$3,$4,$5) returning id`,
+      [marca, modelo, opciones.medida ?? "295/80R22.5",
+       opciones.empresa ?? EMPRESA_A, opciones.codigo ?? null],
     );
     const id = rows[0].id as string;
     if (opciones.montadoEn) {
@@ -122,7 +124,8 @@ describeSiHayBase("tc_informes_km_por_mm", () => {
         id uuid primary key default gen_random_uuid(), matricula text);
       create table tc_montajes_actuales (
         id uuid primary key default gen_random_uuid(),
-        neumatico_id uuid references tc_neumaticos(id), vehiculo_id uuid);
+        neumatico_id uuid references tc_neumaticos(id), vehiculo_id uuid,
+        fecha_montaje date);
       create table tc_posiciones_vehiculo (
         id uuid primary key default gen_random_uuid(), eje int);
       create table revisiones_vehiculo (
@@ -190,6 +193,23 @@ describeSiHayBase("tc_informes_km_por_mm", () => {
     const desmontada = await altaNeumatico("Hankook", "AH51", { codigo: "DESMONTADA" });
     await serie(desmontada, V1, EJE1, 100000, 15, 20000, 2);
 
+    // ── Medidas para la previsión de compra ────────────────────────────────
+    // La misma medida escrita de dos formas: para quien compra es una sola.
+    const conIndice = await altaNeumatico("Hankook", "AH51",
+      { montadoEn: V1, codigo: "CON-INDICE", medida: "385/65R22.5 158L" });
+    await serie(conIndice, V1, EJE1, 100000, 15, 20000, 2);
+    const sinIndice = await altaNeumatico("Hankook", "AH51",
+      { montadoEn: V1, codigo: "SIN-INDICE", medida: "385/65R22.5" });
+    await serie(sinIndice, V1, EJE1, 100000, 15, 20000, 2);
+    // Montada y JAMÁS medida: el arco no la lee. Tiene que salir igual.
+    await altaNeumatico("Hankook", "AH51",
+      { montadoEn: V1, codigo: "NUNCA-MEDIDA", medida: "385/55R22.5" });
+
+    // Y una sin medida ninguna.
+    const sinMedida = await altaNeumatico("Hankook", "AH51",
+      { montadoEn: V1, codigo: "SIN-MEDIDA", medida: "0" });
+    await serie(sinMedida, V1, EJE1, 100000, 15, 20000, 2);
+
     // ── X-TEST, eje 2 · la goma que CAMBIA DE VEHÍCULO ──────────────────────
     // El segundo vehículo tiene el odómetro 400.000 km más arriba. Sin cortar,
     // el tramo mediría 420.000 km y el modelo saldría eterno.
@@ -217,12 +237,20 @@ describeSiHayBase("tc_informes_km_por_mm", () => {
       await serie(n, V1, EJE1, 100000, 15, 20000, 2);
     }
 
+    const aEsquema = (sql: string) => sql
+      .replace(/public\.tc_mediciones_tramo/g, `${ESQUEMA}.tc_mediciones_tramo`)
+      .replace(/public\.tc_informes_km_por_mm/g, `${ESQUEMA}.tc_informes_km_por_mm`)
+      .replace(/public\.tc_informes_desgaste/g, `${ESQUEMA}.tc_informes_desgaste`)
+      .replace(/public\.tc_informes_sustituciones_previstas/g, `${ESQUEMA}.tc_informes_sustituciones_previstas`)
+      .replace(/^grant .*$/gm, "");
+
     const cargado = readFileSync(MIGRACION, "utf8")
       .replace(/public\.tc_mediciones_tramo/g, `${ESQUEMA}.tc_mediciones_tramo`)
       .replace(/public\.tc_informes_km_por_mm/g, `${ESQUEMA}.tc_informes_km_por_mm`)
       .replace(/public\.tc_informes_desgaste/g, `${ESQUEMA}.tc_informes_desgaste`)
       .replace(/^grant .*$/gm, "");
     await db.query(cargado);
+    await db.query(aEsquema(readFileSync(MIGRACION_PREVISION, "utf8")));
 
     const r = await db.query<Fila>(`select * from ${ESQUEMA}.tc_informes_km_por_mm(null)`);
     filas = r.rows;
@@ -241,18 +269,18 @@ describeSiHayBase("tc_informes_km_por_mm", () => {
   it("mide el AH51 del eje 1 sumando kilómetros y milímetros", () => {
     const f = de("Hankook", "AH51", 1)!;
     expect(f).toBeDefined();
-    // 6 tramos de 20.000 km y 2 mm: 120.000 / 12 = 10.000 km por mm.
-    expect(Number(f.tramos)).toBe(6);
-    expect(Number(f.km_totales)).toBe(120000);
-    expect(Number(f.mm_totales)).toBe(12);
+    // 9 tramos de 20.000 km y 2 mm: 180.000 / 18 = 10.000 km por mm.
+    expect(Number(f.tramos)).toBe(9);
+    expect(Number(f.km_totales)).toBe(180000);
+    expect(Number(f.mm_totales)).toBe(18);
     expect(Number(f.km_por_mm)).toBe(10000);
   });
 
   it("la goma pisada aporta sus DOS vidas en vez de desaparecer", () => {
-    // Cuatro gomas limpias dan 4 tramos; la pisada tiene que poner 2 más.
+    // Siete gomas limpias dan 7 tramos; la pisada tiene que poner 2 más.
     const f = de("Hankook", "AH51", 1)!;
-    expect(Number(f.tramos)).toBe(6);
-    expect(Number(f.neumaticos)).toBe(5);
+    expect(Number(f.tramos)).toBe(9);
+    expect(Number(f.neumaticos)).toBe(8);
   });
 
   it("corta cuando la goma cambia de vehículo, y no mide el salto de odómetro", () => {
@@ -300,12 +328,12 @@ describeSiHayBase("tc_informes_km_por_mm", () => {
   it("p_salto más alto deja de cortar la goma pisada, y entonces el tramo se pierde", async () => {
     // Con un salto de 5 mm, el +4 de la sustitución ya no corta: la serie
     // entera es un solo tramo que empieza y acaba en 15,0 mm, desgaste cero,
-    // y se cae del informe. Baja de 6 tramos a 4.
+    // y se cae del informe. Baja de 9 tramos a 7.
     const r = await db.query<Fila>(
       `select * from ${ESQUEMA}.tc_informes_km_por_mm(null, 10000, 5.0)`,
     );
     const f = r.rows.find((x) => x.modelo === "AH51" && x.eje === 1)!;
-    expect(Number(f.tramos)).toBe(4);
+    expect(Number(f.tramos)).toBe(7);
   });
 
   it("tira el tramo que implique un ritmo imposible", async () => {
@@ -451,6 +479,99 @@ describeSiHayBase("tc_informes_km_por_mm", () => {
     // Y dos ejecuciones seguidas dicen lo mismo.
     const otra = await db.query<FilaDesgaste>(`select * from ${ESQUEMA}.tc_informes_desgaste()`);
     expect(Number(porCodigo(otra.rows, "EMPATE")!.ultima_prof)).toBe(7);
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // tc_informes_sustituciones_previstas
+  // ══════════════════════════════════════════════════════════════════════════
+
+  interface FilaPrevision {
+    medida: string; montados: string; sin_datos: string; sin_fecha: string;
+    vencidos: string; dias: number; en_el_tramo: string; acumulado: string;
+  }
+
+  /** La previsión con una fecha fija, para que no dependa del día que sea. */
+  async function prevision(desde = "2026-06-01", tramos = "{30,60,90}"): Promise<FilaPrevision[]> {
+    const r = await db.query<FilaPrevision>(
+      `select * from ${ESQUEMA}.tc_informes_sustituciones_previstas(null, $1::int[], $2::date)`,
+      [tramos, desde],
+    );
+    return r.rows;
+  }
+
+  const deMedida = (f: FilaPrevision[], m: string) => f.filter((x) => x.medida === m);
+
+  it("junta la misma medida escrita de dos formas", async () => {
+    const f = await prevision();
+    // «385/65R22.5 158L» y «385/65R22.5» son la misma goma para quien compra.
+    const m = deMedida(f, "385/65R22.5");
+    expect(m.length).toBeGreaterThan(0);
+    expect(Number(m[0].montados)).toBe(2);
+    expect(deMedida(f, "385/65R22.5 158L")).toHaveLength(0);
+  });
+
+  it("la goma sin medida no desaparece: se agrupa aparte", async () => {
+    const f = await prevision();
+    const m = deMedida(f, "(sin medida)");
+    expect(m.length).toBeGreaterThan(0);
+    expect(Number(m[0].montados)).toBe(1);
+  });
+
+  it("saca una fila por medida y plazo, y nada más", async () => {
+    const f = await prevision();
+    const medidas = new Set(f.map((x) => x.medida));
+    expect(f).toHaveLength(medidas.size * 3);
+    expect([...new Set(f.map((x) => x.dias))].sort((a, b) => a - b)).toEqual([30, 60, 90]);
+  });
+
+  it("el acumulado no baja nunca y empieza por lo ya vencido", async () => {
+    for (const m of new Set((await prevision()).map((x) => x.medida))) {
+      const filas = deMedida(await prevision(), m).sort((a, b) => a.dias - b.dias);
+      const acum = filas.map((x) => Number(x.acumulado));
+      expect([...acum].sort((a, b) => a - b)).toEqual(acum);
+      expect(acum[0]).toBeGreaterThanOrEqual(Number(filas[0].vencidos));
+    }
+  });
+
+  it("los tramos suman el acumulado, quitando lo vencido", async () => {
+    for (const m of new Set((await prevision()).map((x) => x.medida))) {
+      const filas = deMedida(await prevision(), m).sort((a, b) => a.dias - b.dias);
+      const suma = filas.reduce((a, x) => a + Number(x.en_el_tramo), 0);
+      const ultimo = filas[filas.length - 1];
+      expect(suma).toBe(Number(ultimo.acumulado) - Number(ultimo.vencidos));
+    }
+  });
+
+  it("nunca promete más de lo que hay montado", async () => {
+    for (const x of await prevision()) {
+      const cubiertas = Number(x.acumulado) + Number(x.sin_fecha) + Number(x.sin_datos);
+      expect(cubiertas).toBeLessThanOrEqual(Number(x.montados));
+    }
+  });
+
+  /**
+   * 346 gomas de 385/55R22.5 están montadas en la flota real y ninguna tiene
+   * una sola medición. Si la previsión saliera solo de lo medido, no saldrían,
+   * y quien hiciera el pedido entendería que esa medida no existe.
+   */
+  it("una medida montada y nunca medida sale igual, con ceros y su aviso", async () => {
+    const f = deMedida(await prevision(), "385/55R22.5");
+    expect(f.length).toBe(3);
+    expect(Number(f[0].montados)).toBe(1);
+    expect(Number(f[0].sin_datos)).toBe(1);
+    expect(Number(f[0].sin_fecha)).toBe(0);
+    expect(f.every((x) => Number(x.en_el_tramo) === 0 && Number(x.acumulado) === 0)).toBe(true);
+  });
+
+  it("respeta los plazos que se le pidan", async () => {
+    const f = await prevision("2026-06-01", "{7,400}");
+    expect([...new Set(f.map((x) => x.dias))].sort((a, b) => a - b)).toEqual([7, 400]);
+  });
+
+  it("mirando desde más adelante, lo que antes era futuro pasa a vencido", async () => {
+    const pronto = deMedida(await prevision("2026-06-01"), "295/80R22.5")[0];
+    const tarde = deMedida(await prevision("2030-01-01"), "295/80R22.5")[0];
+    expect(Number(tarde.vencidos)).toBeGreaterThan(Number(pronto.vencidos));
   });
 
   it("no mira las revisiones anuladas ni los neumáticos ausentes o inaccesibles", async () => {

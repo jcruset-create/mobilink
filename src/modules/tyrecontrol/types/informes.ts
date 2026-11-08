@@ -202,6 +202,30 @@ export interface KmPorMmFila {
 }
 
 /**
+ * Una fila de `tc_informes_sustituciones_previstas`: una MEDIDA y un PLAZO.
+ *
+ * `montados`, `sin_datos`, `sin_fecha` y `vencidos` son de la medida entera y
+ * vienen repetidos en cada una de sus filas de plazo; `en_el_tramo` y `acumulado` son
+ * del plazo. El giro a tabla de compra lo hace `services/previsionMedida.ts`.
+ */
+export interface PrevisionMedida {
+  medida: string;
+  /** Gomas de esa medida montadas hoy, tengan mediciones o no. */
+  montados: number;
+  /** De ésas, las que no tienen NINGUNA medición: el arco no las lee. */
+  sin_datos: number;
+  /** Medidas pero sin predicción: ni ritmo propio ni de su modelo. */
+  sin_fecha: number;
+  /** A las que ya se les pasó la fecha prevista. */
+  vencidos: number;
+  dias: number;
+  /** Las que caen entre el plazo anterior y éste: lo que se compra ese mes. */
+  en_el_tramo: number;
+  /** Vencidas más todo lo que cae hasta este plazo: lo que hay que tener. */
+  acumulado: number;
+}
+
+/**
  * Una fila de `tc_informes_desgaste`: cuándo tocará cambiar esta goma.
  *
  * El ritmo se mide sobre el ÚLTIMO tramo del neumático —la vida que está
