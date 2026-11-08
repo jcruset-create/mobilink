@@ -242,7 +242,14 @@ del contrato sigue siendo una medición buena de un AH51, y tirarla solo empeora
 la cifra. El filtro va en `tc_informes_desgaste` —que sí dice a qué goma hay
 que ir a cambiar— y no en la base de mediciones que los dos comparten.
 
-Y una cosa salió mejor de lo esperado en seguridad: las doce funciones de la
-fase 2 **no están reescritas a mano**. Se leyó su definición viva de producción
-y se aplicó una sustitución de texto comprobando el diff línea a línea: **13
-líneas cambiadas, ninguna otra**.
+**6. Las doce funciones de la fase 2 no se copian a la migración.** Copiarlas
+eran 1.200 líneas duplicadas —una sola, `tc_informe_ejecutivo_base`, ocupa
+18 KB— para añadirles cuatro palabras, y cada copia es una errata esperando a
+pasar. La migración lee la definición que hay, le aplica la sustitución y
+vuelve a crearla: dice **qué cambio hace**, no cómo queda cada función.
+
+Y para que eso no sea un `replace` a ciegas, **cada función declara cuántas
+veces tiene que casar el patrón**. Si no cuadra, la migración se para entera.
+Es preferible que no entre a que entre a medias: unos informes filtrando y
+otros no es peor que ninguno. Comprobado contra producción antes de darla por
+buena —las once cuadran— y probado contra PostgreSQL que se niega cuando no.
