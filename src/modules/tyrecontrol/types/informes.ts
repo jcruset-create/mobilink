@@ -201,14 +201,29 @@ export interface KmPorMmFila {
   neumaticos_modelo: number;
 }
 
+/**
+ * Una fila de `tc_informes_desgaste`: cuándo tocará cambiar esta goma.
+ *
+ * El ritmo se mide sobre el ÚLTIMO tramo del neumático —la vida que está
+ * viviendo ahora—, no sobre todo su historial, que puede incluir la goma
+ * anterior. Y cuando ese tramo todavía es corto, el ritmo se toma prestado del
+ * modelo y el eje: `origen_ritmo` dice cuál de las dos cosas es, y la pantalla
+ * lo enseña. Un informe que no distingue lo medido de lo supuesto no sirve
+ * para decidir.
+ */
 export interface DesgasteNeumatico {
   neumatico_id: string;
   codigo: string | null;
   marca: string | null;
   modelo: string | null;
   medida: string | null;
+  /** El vehículo en el que está montada ahora. */
+  matricula: string | null;
   ultima_prof: number | null;
+  ultima_fecha: string | null;
   mm_por_1000km: number | null;
+  /** «neumatico» si el ritmo es suyo medido; «modelo» si es prestado. */
+  origen_ritmo: "neumatico" | "modelo" | null;
   km_restantes: number | null;
   fecha_prevista: string | null;
   n_medidas: number;
