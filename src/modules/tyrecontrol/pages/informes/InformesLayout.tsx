@@ -1,9 +1,10 @@
-import { createContext, useContext } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import type { Empresa } from "../../types";
 import type { FiltrosInformes } from "../../types/informes";
 import { useFiltrosInformes } from "../../hooks/useFiltrosInformes";
 import { FiltroBarInformes } from "../../components/informes/FiltroBarInformes";
+import { contarSinSeguimiento } from "../../services/data";
 
 interface Ctx {
   filtros: FiltrosInformes;
@@ -50,12 +51,37 @@ const TABS = [
 export default function InformesLayout() {
   const { filtros, setFiltros, esCliente, empresas } = useFiltrosInformes();
 
+  /**
+   * Cuántos vehículos quedan fuera de TODOS estos informes.
+   *
+   * Va aquí, en la cabecera, y no en cada informe: son once pantallas y el
+   * aviso es el mismo en todas. Lo que no puede pasar es que los totales
+   * encojan en silencio el día que alguien saque el primer vehículo del
+   * mantenimiento integral.
+   */
+  const [sinSeguimiento, setSinSeguimiento] = useState(0);
+  useEffect(() => {
+    let vivo = true;
+    contarSinSeguimiento(filtros.empresaId).then((n) => { if (vivo) setSinSeguimiento(n); });
+    return () => { vivo = false; };
+  }, [filtros.empresaId]);
+
   return (
     <InformesCtx.Provider value={{ filtros, setFiltros, esCliente, empresas }}>
       <div className="no-imprimir mb-3 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-lg font-black">Informes</h1>
         <FiltroBarInformes filtros={filtros} setFiltros={setFiltros} esCliente={esCliente} empresas={empresas} />
       </div>
+
+      {sinSeguimiento > 0 && (
+        <div className="mb-3 rounded-lg border border-amber-600/40 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-200">
+          <b>{sinSeguimiento.toLocaleString("es-ES")}</b>{" "}
+          {sinSeguimiento === 1 ? "vehículo activo está" : "vehículos activos están"} fuera del
+          mantenimiento integral y <b>no {sinSeguimiento === 1 ? "cuenta" : "cuentan"} en estos
+          informes</b>. {sinSeguimiento === 1 ? "Sigue" : "Siguen"} en la telemática y en la lista de
+          vehículos, con el motivo por el que se {sinSeguimiento === 1 ? "sacó" : "sacaron"}.
+        </div>
+      )}
 
       <div className="no-imprimir mb-4 flex flex-wrap gap-1 border-b border-slate-700">
         {TABS.filter((t) => !esCliente || !t.interna).map((t) => (

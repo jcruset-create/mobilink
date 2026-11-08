@@ -3259,6 +3259,40 @@ export async function listarVehiculosPendientes(): Promise<Vehiculo[]> {
   return (data ?? []) as unknown as Vehiculo[];
 }
 
+/**
+ * Mete o saca un vehículo del mantenimiento integral.
+ *
+ * Por RPC y no escribiendo la columna: el motivo es obligatorio al quitarlo y
+ * esa regla vive en la base, no en el formulario. Solo administradores.
+ */
+export async function cambiarSeguimiento(
+  vehiculoId: string, enSeguimiento: boolean, motivo?: string,
+): Promise<void> {
+  const { error } = await supabase.rpc("tc_vehiculo_seguimiento", {
+    p_vehiculo: vehiculoId,
+    p_en_seguimiento: enSeguimiento,
+    p_motivo: motivo ?? null,
+  });
+  if (error) throw new Error(error.message);
+}
+
+/**
+ * Cuántos vehículos activos están fuera del mantenimiento integral.
+ *
+ * Lo pide la cabecera de Informes para poder decir «y además hay N que no
+ * cuentan aquí». Sin ese número, los totales encogerían en silencio el día
+ * que alguien marque el primero.
+ */
+export async function contarSinSeguimiento(empresaId?: string | null): Promise<number> {
+  let q = supabase.from("tc_vehiculos")
+    .select("id", { count: "exact", head: true })
+    .eq("activo", true).eq("en_seguimiento", false);
+  if (empresaId) q = q.eq("empresa_id", empresaId);
+  const { count, error } = await q;
+  if (error) return 0;   // un aviso que falla no puede tumbar la pantalla
+  return count ?? 0;
+}
+
 /** Da por bueno un vehículo dado de alta desde la tablet. Solo administradores. */
 export async function validarVehiculo(id: string): Promise<void> {
   const { error } = await supabase.rpc("tc_validar_vehiculo", { p_vehiculo: id });

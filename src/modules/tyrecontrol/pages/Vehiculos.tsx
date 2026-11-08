@@ -200,6 +200,14 @@ export default function Vehiculos() {
    * casilla para verlos; el filtro fijado sigue guardando lo que se elija.
    */
   const [fEstado, setFEstado] = useState<"todos" | "activos" | "inactivos">("activos");
+  /**
+   * Dentro / fuera del mantenimiento integral.
+   *
+   * Empieza en «todos» a propósito, al revés que el de baja: aquí es donde
+   * hay que poder ver los que no cuentan, y esconderlos por defecto sería
+   * repetir el problema que esto viene a arreglar, solo que al revés.
+   */
+  const [fSeguimiento, setFSeguimiento] = useState<"todos" | "con" | "sin">("todos");
 
   // Filtro fijado: para trabajar un rato con un solo cliente sin que se pierda
   // el filtro al ir y volver de una ficha. Se guarda en el navegador, así que
@@ -371,6 +379,8 @@ export default function Vehiculos() {
       if (fTipo && v.tipo_vehiculo_id !== fTipo) return false;
       if (fEstado === "activos" && !v.activo) return false;
       if (fEstado === "inactivos" && v.activo) return false;
+      if (fSeguimiento === "con" && v.en_seguimiento === false) return false;
+      if (fSeguimiento === "sin" && v.en_seguimiento !== false) return false;
       if (fWebfleet === "en_base" && !enAlgunaBase(v.id)) return false;
       if (fWebfleet === "en_ruta" && estadoDe(v.id) !== "en_ruta") return false;
       if (fWebfleet === "pend_base" && !revisarEnBase(v.id)) return false;
@@ -409,7 +419,7 @@ export default function Vehiculos() {
         case "config": return v.config_ejes?.nombre ?? "";
         case "medida": return medidaDe(v);
         case "km": return Number(v.km_actual) || 0;
-        case "estado": return v.activo ? "Activo" : "Inactivo";
+        case "estado": return (v.activo ? "Activo" : "Inactivo") + (v.en_seguimiento === false ? " · sin seguimiento" : "");
         // La posición no es un valor que se pueda comparar como texto: se
         // ordena por grupos y tiene su propio comparador, más abajo.
         case "posicion": return "";
@@ -731,6 +741,20 @@ export default function Vehiculos() {
           />
           Ver también los de baja
         </label>
+        {/*
+          Fuera del mantenimiento integral: activos y en la telemática, pero
+          sin revisiones y sin contar en los informes.
+        */}
+        <select
+          value={fSeguimiento}
+          onChange={(e) => setFSeguimiento(e.target.value as typeof fSeguimiento)}
+          title="Los que están fuera del mantenimiento integral no cuentan para revisiones ni informes"
+          className="rounded border border-slate-600 bg-slate-800 px-2 py-1 text-[12px] text-slate-200"
+        >
+          <option value="todos">Mantenimiento: todos</option>
+          <option value="con">Solo con seguimiento</option>
+          <option value="sin">Solo sin seguimiento</option>
+        </select>
         <span className="text-xs text-slate-500">{visibles.length} vehículo(s)</span>
         {fijado && (
           <span className="text-[11px] text-amber-300">
@@ -865,7 +889,19 @@ export default function Vehiculos() {
                   );
                 })()}
               </td>
-              <td className={tdCls}><Badge ok={v.activo}>{v.activo ? "Activo" : "Inactivo"}</Badge></td>
+              <td className={tdCls}>
+                <div className="flex flex-wrap items-center gap-1">
+                  <Badge ok={v.activo}>{v.activo ? "Activo" : "Inactivo"}</Badge>
+                  {v.en_seguimiento === false && (
+                    <span
+                      className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-300"
+                      title={v.seguimiento_motivo ?? "Fuera del mantenimiento integral"}
+                    >
+                      Sin seguimiento
+                    </span>
+                  )}
+                </div>
+              </td>
               <td className={tdCls}>
                 <div className="flex gap-2">
                   <button onClick={() => navigate(`/tyrecontrol/vehiculos/${v.id}`)} className="text-sky-300 hover:underline">Ficha</button>

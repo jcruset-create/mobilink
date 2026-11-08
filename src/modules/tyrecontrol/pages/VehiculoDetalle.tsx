@@ -8,7 +8,7 @@ import { esHistoricoAlbaran, etiquetaHistorico, textoNeumaticoHistorico, textoPo
 import type { MontajeActual, PosicionVehiculo, Vehiculo, TipoLlanta, VehiculoEje, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle, OperacionNeumatico } from "../types";
 import { ORIGEN_KM_LABELS, tipoLlantaLabel, presionTxt, TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS } from "../types";
 import { resumenOperaciones } from "../services/resumenOperaciones";
-import { ubicacionDeVehiculoBD } from "../services/data";
+import { ubicacionDeVehiculoBD, cambiarSeguimiento } from "../services/data";
 import { ubicacionDeVehiculo, coordenadasDeVehiculo, enlaceDeMapa, type Ubicacion, type PosicionMapa } from "../services/presenciaVista";
 import { explicarKm } from "../services/procedenciaKm";
 import { destinoVolver, type DeDondeVengo } from "../services/navegacionVolver";
@@ -44,6 +44,10 @@ export default function VehiculoDetalle() {
   const origen = (useLocation().state ?? {}) as DeDondeVengo;
   const { perfil } = useTyreAuth();
   const esCliente = perfil?.rol === "cliente" && !perfil?.es_superadmin;
+  // Meter y sacar del mantenimiento integral lo decide un administrador,
+  // igual que validar un vehículo. La base lo exige también: aquí solo se
+  // esconde el botón para no ofrecer algo que va a dar error.
+  const esAdmin = !!(perfil?.es_superadmin || perfil?.rol === "administrador");
   const volver = destinoVolver(origen, esCliente
     ? { ruta: "/tyrecontrol/mis-vehiculos", etiqueta: "Mis vehículos" }
     : { ruta: "/tyrecontrol/vehiculos", etiqueta: "Vehículos" });
@@ -115,6 +119,47 @@ export default function VehiculoDetalle() {
   // Editar la ficha aquí mismo, con el mismo formulario del listado.
   const [editando, setEditando] = useState(false);
   const [msgPlano, setMsgPlano] = useState("");
+  const [guardandoSeguimiento, setGuardandoSeguimiento] = useState(false);
+
+  /**
+   * Sacar el vehículo del mantenimiento integral, o devolverlo.
+   *
+   * Al sacarlo se pide el motivo y no se sigue sin él: la base lo rechazaría
+   * igualmente, y es mejor decirlo aquí que enseñar su excepción. Al
+   * devolverlo no se pregunta nada —volver al redil es el estado normal—,
+   * pero sí se confirma, porque el vehículo vuelve a contar en los informes.
+   */
+  async function cambiarSeguimientoDeEsteVehiculo() {
+    if (!v) return;
+    const fuera = v.en_seguimiento === false;
+
+    if (fuera) {
+      if (!window.confirm(
+        `¿Devolver ${v.matricula} al mantenimiento integral?\n\n` +
+        "Volverá a contar en las revisiones y en los informes.",
+      )) return;
+      setGuardandoSeguimiento(true);
+      try { await cambiarSeguimiento(v.id, true); await cargar(); }
+      catch (e: any) { window.alert(e?.message || "No se ha podido cambiar"); }
+      finally { setGuardandoSeguimiento(false); }
+      return;
+    }
+
+    const motivo = window.prompt(
+      `¿Por qué ${v.matricula} sale del mantenimiento integral?\n\n` +
+      "Seguirá activo y en la telemática, pero dejará de contar en las " +
+      "revisiones y en los informes. El motivo se guarda con la fecha.",
+      "",
+    );
+    // Cancelar es null; una cadena vacía es un motivo que no vale.
+    if (motivo === null) return;
+    if (!motivo.trim()) { window.alert("Hace falta un motivo."); return; }
+
+    setGuardandoSeguimiento(true);
+    try { await cambiarSeguimiento(v.id, false, motivo.trim()); await cargar(); }
+    catch (e: any) { window.alert(e?.message || "No se ha podido cambiar"); }
+    finally { setGuardandoSeguimiento(false); }
+  }
 
   async function cargar() {
     const veh = await obtenerVehiculo(id);
@@ -222,6 +267,26 @@ export default function VehiculoDetalle() {
         </button>
         <h1 className="text-lg font-black">{v.matricula}{v.numero_unidad ? ` · Unidad ${v.numero_unidad}` : ""}</h1>
         <Badge ok={v.activo}>{v.activo ? "Activo" : "Inactivo"}</Badge>
+        {/*
+          Fuera del mantenimiento integral. Es un estado aparte de «Activo»:
+          el vehículo circula y está en la telemática, pero nadie le revisa
+          las gomas y no cuenta en los informes. La chapa lleva el motivo
+          porque un vehículo que deja de contar sin que se sepa por qué es
+          justo lo que no queremos.
+        */}
+        {v.en_seguimiento === false && (
+          <span
+            className="rounded-full bg-amber-500/15 px-2.5 py-1 text-[11px] font-bold text-amber-300"
+            title={[
+              v.seguimiento_motivo ?? "Sin motivo anotado",
+              v.seguimiento_cambiado_en
+                ? `Desde el ${new Date(v.seguimiento_cambiado_en).toLocaleDateString("es-ES")}`
+                : null,
+            ].filter(Boolean).join(" · ")}
+          >
+            Sin seguimiento
+          </span>
+        )}
         <span className="ml-2 text-lg font-black text-slate-100">
           {Number(v.km_actual).toLocaleString("es-ES")} <span className="text-xs font-normal text-slate-400">km</span>
         </span>
@@ -282,10 +347,28 @@ export default function VehiculoDetalle() {
             🗺 Ver en el mapa
           </a>
         )}
+        {esAdmin && (
+          <button
+            onClick={cambiarSeguimientoDeEsteVehiculo}
+            disabled={guardandoSeguimiento}
+            title={
+              v.en_seguimiento === false
+                ? "Devolverlo al mantenimiento integral: volverá a contar en revisiones e informes"
+                : "Sacarlo del mantenimiento integral: dejará de contar en revisiones e informes, pero seguirá activo y en la telemática"
+            }
+            className={`ml-auto rounded-lg border px-3 py-1.5 text-[12px] font-bold disabled:opacity-50 ${
+              v.en_seguimiento === false
+                ? "border-emerald-600 text-emerald-300 hover:bg-emerald-500/10"
+                : "border-amber-600 text-amber-300 hover:bg-amber-500/10"
+            }`}
+          >
+            {v.en_seguimiento === false ? "Devolver al mantenimiento" : "Quitar del mantenimiento"}
+          </button>
+        )}
         {!esCliente && (
           <button
             onClick={() => setEditando(true)}
-            className="ml-auto rounded-lg bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-emerald-500"
+            className={`rounded-lg bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-emerald-500 ${esAdmin ? "" : "ml-auto"}`}
           >
             ✎ Editar vehículo
           </button>
