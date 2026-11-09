@@ -332,6 +332,24 @@ class _VehiculosEnBasesScreenState extends State<VehiculosEnBasesScreen> {
         'pero desactivadas. Hay que marcarlas como activas en el panel.',
       ));
     }
+    /*
+     * Los que están activos pero fuera del mantenimiento integral.
+     *
+     * No salen en ningún recuento de esta pantalla, y eso es lo que se quiere.
+     * Pero siguen en la telemática y en la lista de vehículos, así que sin
+     * decirlo el «N dentro» de una base no cuadra con el de otra pantalla y
+     * nadie sabe por qué.
+     */
+    if (datos.sinSeguimiento > 0) {
+      final n = datos.sinSeguimiento;
+      avisos.add(_aviso(
+        n == 1
+            ? '1 vehículo activo está fuera del mantenimiento integral y no cuenta en '
+                'esta pantalla. Sigue en la telemática y en la lista de vehículos.'
+            : '$n vehículos activos están fuera del mantenimiento integral y no cuentan '
+                'en esta pantalla. Siguen en la telemática y en la lista de vehículos.',
+      ));
+    }
     final sinEnlace = vehiculos.where((v) => v.motivo == 'sin_enlace').length;
     if (sinEnlace > 0) {
       avisos.add(_aviso(

@@ -70,7 +70,7 @@ export async function leerFlota(empresaId: string): Promise<VehiculoConBase[]> {
   for (let desde = 0; ; desde += TAMANO) {
     const { data, error } = await supabase
       .from("tc_vehiculos")
-      .select("id, matricula, delegacion_id, activo, webfleet_vehicle_id")
+      .select("id, matricula, delegacion_id, activo, en_seguimiento, webfleet_vehicle_id")
       .eq("empresa_id", empresaId)
       .order("matricula")
       .range(desde, desde + TAMANO - 1);
@@ -88,6 +88,10 @@ export async function leerFlota(empresaId: string): Promise<VehiculoConBase[]> {
         matricula: String(f.matricula ?? ""),
         delegacionId: f.delegacion_id ? String(f.delegacion_id) : null,
         activo: f.activo !== false,
+        // `en_seguimiento` es NOT NULL DEFAULT true en la tabla, así que lo
+        // único que puede faltar es la columna misma. Si faltara, se barre:
+        // es lo que se hacía antes de que existiera.
+        enSeguimiento: f.en_seguimiento !== false,
         enlaceHeredado: wf ? { connectorKey: "webfleet", externo: wf } : null,
       });
     }

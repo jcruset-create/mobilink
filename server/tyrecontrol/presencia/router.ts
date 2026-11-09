@@ -19,6 +19,7 @@ import { supabase } from "../../supabase.ts";
 import { empresaDe, resolverSolicitante, type Solicitante } from "../conciliacion/router.ts";
 import { barrerBases } from "./barrido.ts";
 import { empresaParaLeer } from "./empresaPedida.ts";
+import { filtrarPresencia, type PresenciaFiltrada } from "./seguimiento.ts";
 
 type Peticion = Request & { solicitante: Solicitante };
 
@@ -35,18 +36,35 @@ const CAMPOS =
   // La matrícula viaja con la fila: la pantalla la necesita para cada vehículo,
   // y sin esto habría que leer la flota entera aparte solo para poner un
   // nombre a cada línea.
-  "vehiculo:tc_vehiculos(id, matricula, numero_unidad), " +
+  // La matrícula viaja con la fila; `activo` y `en_seguimiento` deciden si la
+  // fila cuenta. Van aquí y no en una consulta aparte porque se necesitan para
+  // cada una de las 717 filas.
+  "vehiculo:tc_vehiculos(id, matricula, numero_unidad, activo, en_seguimiento), " +
   "delegacion:tc_delegaciones(id, nombre)";
 
 /**
- * La presencia de una empresa, en páginas.
+ * La presencia de una empresa, en páginas y ya filtrada.
  *
  * Supabase devuelve como mucho mil filas por consulta, y esta flota ya va por
  * 751. Sin paginar, el día que pase de mil la pantalla enseñaría menos
  * vehículos de los que hay sin un solo error a la vista, que es la peor forma
  * de equivocarse.
+ *
+ * Devuelve SOLO los que cuentan: ni dados de baja ni fuera del mantenimiento
+ * integral. El porqué está en `seguimiento.ts`; el resumen es que la tabla se
+ * escribe con UPSERT y nunca borra, así que saltárselos en el barrido no basta.
+ * Se filtra aquí, en la lectura, porque es lo que comparten las TRES pantallas
+ * que lo enseñan: el panel, la tablet y la hoja del patio en PDF. Filtrar en
+ * cada una sería el principio de que tres sitios dijeran tres números.
  */
 export async function leerPresencia(empresaId: string): Promise<any[]> {
+  return (await leerPresenciaConDescartes(empresaId)).filas;
+}
+
+/** Lo mismo, diciendo además a cuántos ha dejado fuera y por qué. */
+export async function leerPresenciaConDescartes(
+  empresaId: string,
+): Promise<PresenciaFiltrada<any>> {
   const out: any[] = [];
   const TAMANO = 1000;
   for (let desde = 0; ; desde += TAMANO) {
@@ -60,7 +78,7 @@ export async function leerPresencia(empresaId: string): Promise<any[]> {
     out.push(...pagina);
     if (pagina.length < TAMANO) break;
   }
-  return out;
+  return filtrarPresencia(out);
 }
 
 /**
@@ -143,8 +161,8 @@ export function createPresenciaRouter(): Router {
       if ("sinEmpresa" in pedida) return res.status(400).json({ error: "Sin empresa" });
       const { empresaId } = pedida;
 
-      const [filas, { data: bases }, cuentas] = await Promise.all([
-        leerPresencia(empresaId),
+      const [presencia, { data: bases }, cuentas] = await Promise.all([
+        leerPresenciaConDescartes(empresaId),
         supabase
           .from("tc_delegaciones")
           .select("id, nombre, base_lat, base_lng, base_radio_m")
@@ -152,6 +170,8 @@ export function createPresenciaRouter(): Router {
           .not("base_lat", "is", null),
         cuentasDeTelematica(empresaId),
       ]);
+
+      const { filas, sinSeguimiento } = presencia;
 
       const porEstado: Record<string, number> = {};
       for (const f of filas) {
@@ -165,6 +185,15 @@ export function createPresenciaRouter(): Router {
         // Para que la pantalla pueda explicar un barrido vacío en vez de
         // enseñar ceros sin motivo.
         cuentas,
+        /*
+         * Cuántos se han dejado fuera por estar fuera del mantenimiento
+         * integral. No es un detalle: esos vehículos siguen saliendo en la
+         * lista de vehículos y en la telemática, así que sin decirlo aquí el
+         * «N dentro» de una base no cuadra con lo que se ve en otra pantalla y
+         * nadie sabe por qué. Los dados de baja no se cuentan: que un vehículo
+         * de baja no salga no sorprende a nadie.
+         */
+        sinSeguimiento,
         bases: (bases ?? []).map((b: any) => ({
           id: b.id,
           nombre: b.nombre,

@@ -420,6 +420,26 @@ export default function VehiculosEnBases() {
         tiene ninguna cuenta de telemática dada de alta en el Hub, así que el
         barrido no tiene a quién preguntar.
       */}
+      {/*
+        Los que están activos pero fuera del mantenimiento integral.
+
+        No salen en ningún recuento de esta pantalla —ni en «N dentro», ni en
+        los cuatro contadores de estado, ni en los pendientes— y eso es lo que
+        se quiere. Pero siguen en la lista de vehículos y en la telemática, así
+        que sin decirlo el número de una base no cuadra con el de otra pantalla
+        y nadie sabe por qué. Mismo aviso que el de los informes.
+      */}
+      {(datos?.sinSeguimiento ?? 0) > 0 && (
+        <div className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-[13px] text-amber-200">
+          <b>{(datos!.sinSeguimiento as number).toLocaleString("es-ES")}</b>{" "}
+          {datos!.sinSeguimiento === 1 ? "vehículo activo está" : "vehículos activos están"} fuera
+          del mantenimiento integral y <b>no {datos!.sinSeguimiento === 1 ? "cuenta" : "cuentan"} en
+          esta pantalla</b>. {datos!.sinSeguimiento === 1 ? "Sigue" : "Siguen"} en la telemática y
+          en la lista de vehículos, con el motivo por el que se{" "}
+          {datos!.sinSeguimiento === 1 ? "sacó" : "sacaron"}.
+        </div>
+      )}
+
       {datos && datos.bases.length > 0 && (datos.cuentas ?? []).length === 0 && (
         <div className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-[13px] text-amber-200">
           Esta empresa no tiene ninguna cuenta de telemática dada de alta en el Hub, así que
