@@ -84,6 +84,11 @@ jobs:
 
       - run: flutter analyze --no-fatal-infos
 
+      # Las pruebas, antes de firmar nada. Faltaban aquí desde siempre:
+      # build-taller-apk.yml sí las ejecuta y esta app no, así que una APK
+      # podía publicarse con las pruebas en rojo sin que nadie lo viera.
+      - run: flutter test
+
       # Firma estable si el secret existe: mismas claves en todas las builds,
       # asi cada APK se instala encima de la anterior sin desinstalar. Si el
       # secret no esta, se firma con la clave debug del runner (cada build
