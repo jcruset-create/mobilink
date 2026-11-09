@@ -313,6 +313,11 @@ export async function listarRevisionesHistorico(filtros: {
     .from("revisiones_vehiculo")
     .select(
       "id, fecha_revision, created_at, medido_at, momento, estado_revision, km_vehiculo, empresa_id, tecnico_id, " +
+      // El cronómetro de la APK. Lleva guardándose desde hace tiempo y no se
+      // veía en ninguna pantalla: `duracion_seg` es de punta a punta y
+      // `trabajo_seg` descuenta las pausas. Una revisión del CheckPoint no
+      // trae ninguno de los dos, y es correcto: el arco mide al paso.
+      "inicio_at, fin_at, duracion_seg, trabajo_seg, pausa_seg, n_pausas, " +
       "vehiculo:tc_vehiculos(id, matricula, numero_unidad, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre), tipo:tc_tipos_vehiculo(imagen_chasis_url)), " +
       "tecnico:tc_usuarios(nombre), incidencias:tc_incidencias(id, estado), " +
       // Para saber QUIÉN midió. Una revisión del arco no tiene técnico, pero
