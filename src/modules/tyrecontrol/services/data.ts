@@ -3,6 +3,7 @@ import { codigoDeUso } from "../catalogo/usos";
 import { hasRealValue, normalizarValor, type TipoDatoItv } from "./itvValores";
 import { medidaCanonica } from "./medidas";
 import { recorrerPaginas } from "./paginacion";
+import type { PosicionOperario } from "./ubicacionOperario";
 import type { LecturaParteProveedor } from "./parteProveedor";
 import type {
   Delegacion, DelegacionInput, Empresa, EmpresaInput, Perfil, Rol,
@@ -456,6 +457,26 @@ export async function ultimosAccesos(): Promise<Record<string, string | null>> {
   const j = await r.json().catch(() => ({}));
   if (!r.ok || (j as any)?.error) throw new Error((j as any)?.error || "Error consultando accesos");
   return ((j as any).accesos ?? {}) as Record<string, string | null>;
+}
+
+/**
+ * Dónde está la tablet de cada operario.
+ *
+ * Va directo por Supabase y no por el backend, al revés que `ultimosAccesos`:
+ * aquello tiene que leer el esquema `auth`, que solo alcanza la clave de
+ * servicio, y esto es una tabla normal con su RLS. La política deja ver las
+ * posiciones de quien ya puedes ver como usuario, así que no hace falta
+ * filtrar aquí: lo que no te toque, no llega.
+ *
+ * Best-effort: si falla, la columna sale vacía. Saber dónde está una tablet no
+ * puede impedir gestionar usuarios.
+ */
+export async function ultimasPosicionesTablet(): Promise<PosicionOperario[]> {
+  const { data, error } = await supabase
+    .from("tc_posicion_tablet")
+    .select("usuario_id, lat, lng, precision_m, velocidad_kmh, visto_at");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as PosicionOperario[];
 }
 
 /**

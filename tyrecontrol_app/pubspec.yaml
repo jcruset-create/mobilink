@@ -32,6 +32,10 @@ dependencies:
 
   url_launcher: ^6.3.0
 
+  # Ubicación de la tablet. Misma versión que flutter_app (Mobilink Assist),
+  # que lleva tiempo con ella en producción: una sola versión que mantener.
+  geolocator: ^13.0.2
+
   image_picker: ^1.1.2
   # Escanear el QR de la etiqueta del neumático al montar. Misma versión que
   # en toolcontrol_app, que ya lo usa: una sola versión que mantener.
