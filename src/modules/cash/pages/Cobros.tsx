@@ -12,7 +12,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Search, RefreshCw } from "lucide-react";
+import { Search, RefreshCw, Undo2 } from "lucide-react";
 import { useCash } from "../contexts/CashContext";
 import AutorizarDuplicado from "../components/AutorizarDuplicado";
 import PanelCobroSinEfectivo from "../components/PanelCobroSinEfectivo";
@@ -562,7 +562,18 @@ export default function Cobros() {
 
   return (
     <div className="space-y-3">
-      <Cabecera titulo="Cobros" descripcion="Facturas de la ERP y cobros manuales, con el mismo motor de caja." />
+      <Cabecera titulo="Cobros" descripcion="Facturas de la ERP y cobros manuales, con el mismo motor de caja.">
+        {/* Devolver un cobro no es cobrar en negativo: es un abono, en su pantalla. */}
+        {puede("cash.collection.create_manual") && (
+          <button
+            onClick={() => navigate("/cash/pagos?modo=abono")}
+            className="flex items-center gap-1.5 rounded-lg border border-slate-600 px-3 py-1.5 text-[12px] font-semibold text-slate-200 hover:bg-slate-700"
+          >
+            <Undo2 className="h-4 w-4" />
+            Abono / devolución
+          </button>
+        )}
+      </Cabecera>
 
       {ultimo && (
         <>
