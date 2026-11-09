@@ -14,6 +14,7 @@ import 'planificacion_screen.dart';
 import 'realizar_operacion_screen.dart';
 import 'historial_operaciones_screen.dart';
 import 'revisions_screen.dart';
+import 'vehiculos_en_bases_screen.dart';
 import 'vehiculos_screen.dart';
 import 'tools_screen.dart';
 import 'sync_screen.dart';
@@ -147,7 +148,11 @@ class _InicioTab extends StatelessWidget {
             },
           ),
           const SizedBox(height: 14),
-          // Planificación arriba (antes estaba abajo con Vehículos)
+          // Planificación arriba (antes estaba abajo con Vehículos), y a su
+          // lado «En bases». Van juntas porque son las dos mitades de la misma
+          // decisión: Planificación dice CUÁNDO toca revisar cada vehículo, y
+          // En bases dice cuál de los que tocan está AHORA en el patio, que es
+          // lo único que se puede hacer hoy sin sacar a nadie de servicio.
           Row(
             children: [
               Expanded(
@@ -156,6 +161,16 @@ class _InicioTab extends StatelessWidget {
                   label: 'Planificación',
                   color: AppColors.tileGrisPastel,
                   onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PlanificacionScreen())),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: _BigTile(
+                  icon: Icons.place,
+                  label: 'En bases',
+                  color: AppColors.tileVerdePastel,
+                  onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const VehiculosEnBasesScreen())),
                 ),
               ),
             ],
