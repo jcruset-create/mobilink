@@ -8,6 +8,7 @@ import '../services/lectura_km.dart';
 import '../services/offline_store.dart';
 import '../services/pausa_controller.dart';
 import '../services/probe_session.dart';
+import '../services/seguimiento_ubicacion.dart';
 import '../services/supabase_service.dart';
 import '../services/tlgx_probe_service.dart';
 import '../theme/app_theme.dart';
@@ -205,6 +206,14 @@ class _ReviewScreenState extends State<ReviewScreen> {
        */
       final capturado = _lecturaKm?['capturadoAt'] as String?;
       final antiguedad = (_lecturaKm?['antiguedadMin'] as num?)?.round();
+      /*
+       * Dónde se abre la revisión. Se pide ANTES de crearla para que viaje en
+       * el mismo insert; si el GPS no fija a tiempo, devuelve null y la
+       * revisión se crea igual, sin coordenadas.
+       */
+      final dondeEmpieza = widget.revisionExistente == null
+          ? await SeguimientoUbicacion.instancia.posicionParaRevision()
+          : null;
       _revision = widget.revisionExistente ??
           await TyreControlApi.crearRevision(
             empresaId: widget.vehiculo.empresaId,
@@ -213,6 +222,9 @@ class _ReviewScreenState extends State<ReviewScreen> {
             origenKm: capturado != null ? 'telematica' : null,
             kmCapturadoAt: capturado != null ? DateTime.tryParse(capturado) : null,
             kmDesfaseMin: antiguedad != null ? -antiguedad : null,
+            lat: dondeEmpieza?.latitude,
+            lng: dondeEmpieza?.longitude,
+            precisionM: dondeEmpieza?.accuracy,
           );
       // Cronometraje: inicio_at lo puso la BD al crear la revisión; aquí solo
       // se gestionan las pausas de inactividad.
@@ -661,6 +673,10 @@ class _ReviewScreenState extends State<ReviewScreen> {
       // introduce nada a mano. Una pausa sin reanudar se cierra aquí.
       await _pausas?.cerrarSiActiva();
       final finAt = DateTime.now();
+      // Dónde se cierra. Viaja en `extra` por lo mismo que `finAt`: si el
+      // cierre sale por la cola horas después, el sitio bueno es este, no
+      // donde esté la tablet cuando haya red.
+      final dondeAcaba = await SeguimientoUbicacion.instancia.posicionParaRevision();
       final conPresion = _detalles.values.any((d) => d.presionBar != null);
       final nNeu = _detalles.values.where((d) => d.medido && !d.noAccesible && !d.neumaticoAusente).length;
       final extra = {
@@ -669,6 +685,11 @@ class _ReviewScreenState extends State<ReviewScreen> {
         'nNeumaticos': nNeu,
         'pausaSeg': _pausas?.pausaSeg ?? 0,
         'nPausas': _pausas?.numPausas ?? 0,
+        if (dondeAcaba != null) ...{
+          'finLat': dondeAcaba.latitude,
+          'finLng': dondeAcaba.longitude,
+          'finPrecisionM': dondeAcaba.accuracy,
+        },
       };
       if (OfflineStore.pendingCount.value > 0) {
         // Hay detalles en cola (no había cobertura al medirlos): encolamos el
@@ -687,6 +708,9 @@ class _ReviewScreenState extends State<ReviewScreen> {
             nNeumaticos: nNeu,
             pausaSeg: _pausas?.pausaSeg ?? 0,
             nPausas: _pausas?.numPausas ?? 0,
+            finLat: dondeAcaba?.latitude,
+            finLng: dondeAcaba?.longitude,
+            finPrecisionM: dondeAcaba?.accuracy,
           );
           OfflineStore.offline.value = false;
         } on PostgrestException {

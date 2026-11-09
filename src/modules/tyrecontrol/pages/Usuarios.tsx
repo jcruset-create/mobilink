@@ -3,7 +3,12 @@ import {
   listarUsuarios, crearUsuario, actualizarUsuario, listarEmpresas,
   listarEmpresasDeUsuario, guardarEmpresasUsuario, eliminarUsuario, cambiarPasswordUsuario,
   generarEnlaceAcceso, ultimosAccesos, obtenerPantallasUsuario, guardarPantallasUsuario,
+  ultimasPosicionesTablet,
 } from "../services/data";
+import {
+  detalleDePosicion, enlaceDeMapa, indexarPosiciones, vistaHace,
+  type PosicionOperario,
+} from "../services/ubicacionOperario";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 import { Modal, inputCls } from "../components/ui";
 import { ROL_LABELS, type Empresa, type Perfil, type Rol } from "../types";
@@ -34,6 +39,14 @@ export default function Usuarios() {
   const [filtroRol, setFiltroRol] = useState<"todos" | Rol>("todos");
   const [busca, setBusca] = useState("");
   const [accesos, setAccesos] = useState<Record<string, string | null>>({});
+  /*
+   * Dónde está la tablet de cada operario.
+   *
+   * Solo la ÚLTIMA posición de cada uno, que es lo que guarda el servidor: la
+   * pregunta es «dónde está ahora», no «por dónde ha ido». Se borra al cerrar
+   * sesión y deja de enseñarse a las 24 h.
+   */
+  const [posiciones, setPosiciones] = useState<Map<string, PosicionOperario>>(new Map());
 
   async function cargar() {
     setLoading(true);
@@ -43,6 +56,11 @@ export default function Usuarios() {
       // El último acceso es informativo: si falla, la pantalla sigue siendo
       // útil, así que no se propaga el error.
       ultimosAccesos().then(setAccesos).catch(() => setAccesos({}));
+      // Best-effort, igual que los accesos: que no se sepa dónde está una
+      // tablet no puede impedir gestionar usuarios.
+      ultimasPosicionesTablet()
+        .then((filas) => setPosiciones(indexarPosiciones(filas)))
+        .catch(() => setPosiciones(new Map()));
     } catch (e: any) { setMsg(e?.message || "Error cargando usuarios"); }
     finally { setLoading(false); }
   }
@@ -79,7 +97,7 @@ export default function Usuarios() {
   }
 
   const inp = "rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500";
-  const cols = esSuper ? 8 : 7;
+  const cols = esSuper ? 9 : 8;
 
   const visibles = items.filter((u) => {
     if (filtroRol !== "todos" && u.rol !== filtroRol) return false;
@@ -155,7 +173,11 @@ export default function Usuarios() {
             <tr>
               <th className="px-4 py-2">Nombre</th><th className="px-4 py-2">Email</th>
               <th className="px-4 py-2">Rol</th>{esSuper && <th className="px-4 py-2">Empresa</th>}
-              <th className="px-4 py-2">Accesos</th><th className="px-4 py-2">Último acceso</th><th className="px-4 py-2">Estado</th>
+              <th className="px-4 py-2">Accesos</th><th className="px-4 py-2">Último acceso</th>
+              {/* Dónde está su tablet. Al lado del último acceso porque son la
+                  misma pregunta en dos escalas: cuándo entró y dónde está. */}
+              <th className="px-4 py-2">Tablet</th>
+              <th className="px-4 py-2">Estado</th>
               <th className="px-4 py-2">Acciones</th>
             </tr>
           </thead>
@@ -173,6 +195,38 @@ export default function Usuarios() {
                 <td className="px-4 py-2 text-[11px] text-slate-400">{u.acceso_panel ? "Panel " : ""}{u.acceso_apk ? "APK" : ""}</td>
                 <td className="px-4 py-2 text-[11px]" title={accesos[u.id] ?? "Sin registro de acceso"}>
                   {(() => { const a = haceCuanto(accesos[u.id]); return <span className={a.frio ? "text-slate-500" : "text-slate-300"}>{a.txt}</span>; })()}
+                </td>
+                <td className="px-4 py-2 text-[11px]">
+                  {(() => {
+                    const p = posiciones.get(u.id);
+                    /*
+                      Sin posición, raya con motivo: no es lo mismo que la
+                      tablet no mande —APK sin acceso, o sin estrenar— que que
+                      el operario haya cerrado sesión, que es cuando se borra.
+                    */
+                    if (!p) {
+                      return (
+                        <span
+                          className="text-slate-600"
+                          title={u.acceso_apk
+                            ? "Sin posición: la sesión está cerrada, o esta versión de la APK todavía no la envía."
+                            : "Este usuario no tiene acceso a la APK."}
+                        >—</span>
+                      );
+                    }
+                    const v = vistaHace(p.visto_at);
+                    return (
+                      <a
+                        href={enlaceDeMapa(p.lat, p.lng)}
+                        target="_blank"
+                        rel="noreferrer"
+                        title={detalleDePosicion(p)}
+                        className={`font-semibold hover:underline ${v.frio ? "text-slate-500" : "text-emerald-300"}`}
+                      >
+                        {v.txt}
+                      </a>
+                    );
+                  })()}
                 </td>
                 <td className="px-4 py-2">
                   <button
