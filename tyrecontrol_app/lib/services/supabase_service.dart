@@ -9,6 +9,7 @@ import '../config.dart';
 import '../models/models.dart';
 import '../models/incidencias.dart';
 import '../models/cliente_activo.dart';
+import '../models/presencia_vista.dart';
 
 /// Capa fina sobre supabase_flutter. No reimplementa reglas de negocio:
 /// las mismas RLS y RPCs que usa el panel web protegen y validan aqui.
@@ -2239,6 +2240,70 @@ class TyreControlApi {
     } catch (_) {
       return {};
     }
+  }
+
+  /*
+   * Lo mismo, pero entero.
+   *
+   * `revisionEstadoPorVehiculo` se queda con el estado y tira el resto, que es
+   * lo que necesitan las dos pantallas que ya la usan. «Vehículos en bases»
+   * necesita además la fecha de la última revisión, quién la hizo, los días de
+   * retraso —para ordenar— y la periodicidad, que es lo que separa un «al día»
+   * de verdad de uno que solo significa que nadie ha dicho cada cuánto toca.
+   *
+   * Se deja la otra como estaba en vez de cambiarle el tipo de vuelta: no hay
+   * nada que ganar tocando dos pantallas que funcionan.
+   */
+  static Future<Map<String, RevisionEstado>> revisionEstadoCompleto() async {
+    try {
+      final data = await _db.rpc('tc_revision_estado');
+      final m = <String, RevisionEstado>{};
+      for (final e in (data as List)) {
+        final r = RevisionEstado.desdeJson(Map<String, dynamic>.from(e as Map));
+        if (r.vehiculoId.isNotEmpty) m[r.vehiculoId] = r;
+      }
+      return m;
+    } catch (_) {
+      return {};
+    }
+  }
+
+  /*
+   * Dónde está cada vehículo, para «Vehículos en bases».
+   *
+   * Pasa por el backend y no por Supabase, igual que en el panel: la tabla de
+   * presencia la escribe el barrido con service_role y la lectura la resuelve
+   * el endpoint, que además trae las bases con geo-zona y las cuentas de
+   * telemática dadas de alta (sin esas dos cosas no se puede explicar una
+   * pantalla vacía).
+   *
+   * La empresa VIAJA en la petición, y es imprescindible: el técnico trabaja
+   * para varios clientes y la empresa de su perfil es la de servicio, que no
+   * tiene flota. El servidor comprueba que puede verla
+   * (`server/tyrecontrol/presencia/empresaPedida.ts`); un 403 aquí significa
+   * que el cliente elegido no le corresponde, no que falle la red.
+   *
+   * Aquí NO hay «barrer ahora»: el barrido corre solo en el servidor cada diez
+   * minutos y cuesta una llamada al proveedor para toda la flota. Lo que se
+   * enseña es lo último que se supo, con la hora a la vista.
+   */
+  static Future<PresenciaBases> presenciaBases(String empresaId) async {
+    final token = currentSessionToken;
+    if (token == null) throw Exception('Sesión caducada: vuelve a entrar');
+    final res = await http.get(
+      Uri.parse(
+        '$kBackendUrl/api/tyrecontrol/presencia-bases'
+        '?empresaId=${Uri.encodeComponent(empresaId)}',
+      ),
+      headers: {'Authorization': 'Bearer $token'},
+    ).timeout(const Duration(seconds: 30));
+    if (res.statusCode == 403) {
+      throw Exception('Este cliente no está asignado a tu usuario');
+    }
+    if (res.statusCode != 200) {
+      throw Exception('No se ha podido leer dónde están los vehículos');
+    }
+    return PresenciaBases.desdeJson(jsonDecode(res.body) as Map<String, dynamic>);
   }
 
   /// Catálogo de medidas id→valor (p. ej. "385/65R22.5").

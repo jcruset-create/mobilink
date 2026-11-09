@@ -18,6 +18,7 @@ import { Router, json, type Request, type Response } from "express";
 import { supabase } from "../../supabase.ts";
 import { empresaDe, resolverSolicitante, type Solicitante } from "../conciliacion/router.ts";
 import { barrerBases } from "./barrido.ts";
+import { empresaParaLeer } from "./empresaPedida.ts";
 
 type Peticion = Request & { solicitante: Solicitante };
 
@@ -128,8 +129,19 @@ export function createPresenciaRouter(): Router {
   router.get("/", async (req, res) => {
     try {
       const { solicitante } = req as Peticion;
-      const empresaId = empresaDe(solicitante, req.query?.empresaId);
-      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      /*
+       * Aquí NO vale `empresaDe()`, y es el motivo de `empresaPedida.ts`: a
+       * quien no es super-admin le da la empresa de su perfil y le ignora la
+       * que pida. El técnico de la tablet trabaja para varios clientes y su
+       * perfil apunta a la empresa de servicio, que no tiene flota: con
+       * `empresaDe()` la pantalla le saldría vacía, sin un solo error.
+       */
+      const pedida = await empresaParaLeer(solicitante, req.query?.empresaId);
+      if ("prohibida" in pedida) {
+        return res.status(403).json({ error: "Sin acceso a esa empresa" });
+      }
+      if ("sinEmpresa" in pedida) return res.status(400).json({ error: "Sin empresa" });
+      const { empresaId } = pedida;
 
       const [filas, { data: bases }, cuentas] = await Promise.all([
         leerPresencia(empresaId),
