@@ -69,11 +69,17 @@ export function tieneDuracion(t: TiempoRevision | null | undefined): boolean {
  * Por qué esta revisión no tiene duración.
  *
  * Va en el `title` de la raya, para que nadie tenga que adivinar si falta el
- * dato o es que no existe. Son dos cosas distintas y la diferencia importa:
- * del arco no habrá número nunca, y de una revisión antigua lo habrá a partir
- * de la siguiente.
+ * dato o es que no existe. Son TRES cosas distintas y la diferencia importa:
+ *
+ *   · del arco no habrá número nunca: mide al paso y no hay nada que empiece;
+ *   · del inventario inicial tampoco, porque se hace desde el panel, a mano y
+ *     a ratos, y cronometrarlo no mediría el trabajo de nadie;
+ *   · de una revisión antigua sí lo habrá, a partir de la siguiente.
  */
-export function motivoSinDuracion(esArco: boolean): string {
+export function motivoSinDuracion(esArco: boolean, esInventario = false): string {
+  if (esInventario) {
+    return "El inventario inicial se informa desde el panel, a ratos: no se cronometra.";
+  }
   return esArco
     ? "El CheckPoint mide al paso del vehículo: no hay una revisión que empiece y acabe."
     : "Revisión anterior al cronómetro de la APK, que empezó a guardarse después.";
