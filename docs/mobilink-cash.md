@@ -1081,6 +1081,13 @@ pantalla que ya sabe sacar dinero del cajón y aceptar la vuelta. El escáner lo
 detecta en Cobros —total en negativo, o el papel diciendo ser un abono— y en
 vez de dejar cobrar enseña el camino, llevándose la lectura ya hecha.
 
+Sin papel que escanear se entra con el botón **«Abono / devolución»** de
+Jornada actual, o el del mismo nombre en la cabecera de Cobros; los dos piden
+el permiso de cobrar a mano, que es el que exige el servidor. Pagos y abonos
+comparten pantalla pero no formulario: la ruta la monta con una clave por modo,
+para que la forma elegida en uno (CLEARONE, que solo vale para cobros) no se
+arrastre al otro.
+
 **El cotejo con Genes** lo entiende porque Genes lo imprime así: en la columna
 de cobros, **con signo negativo**, y el «Sum» ya restado. Un cobro en negativo
 en la lectura se convierte en tipo `ABONO` con el importe en positivo; los
