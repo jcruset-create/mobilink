@@ -184,6 +184,10 @@ class OfflineStore {
           nNeumaticos: extra?['nNeumaticos'] as int?,
           pausaSeg: extra?['pausaSeg'] as int?,
           nPausas: extra?['nPausas'] as int?,
+          // Dónde se cerró, no dónde está la tablet ahora que hay red.
+          finLat: (extra?['finLat'] as num?)?.toDouble(),
+          finLng: (extra?['finLng'] as num?)?.toDouble(),
+          finPrecisionM: (extra?['finPrecisionM'] as num?)?.toDouble(),
         );
       } else if (type == 'foto') {
         final path = item['localPath'] as String;

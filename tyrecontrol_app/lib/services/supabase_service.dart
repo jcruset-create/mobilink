@@ -158,10 +158,71 @@ class TyreControlApi {
     }
   }
 
+  /*
+   * Qué hay que parar antes de cerrar sesión.
+   *
+   * Lo registra `main()` con el seguimiento de ubicación. Es un gancho y no un
+   * import directo para no montar un ciclo: el seguimiento ya importa esta
+   * clase para mandar la posición, y que esta importara aquella cerraría el
+   * círculo.
+   */
+  static Future<void> Function()? alCerrarSesion;
+
   static Future<void> signOut() async {
+    // Primero parar y borrar la posición, y DESPUÉS cerrar: al cerrar se va el
+    // token y la llamada de borrado ya no valdría.
+    try {
+      await alCerrarSesion?.call();
+    } catch (_) {/* parar el GPS no puede impedir cerrar sesión */}
+    try {
+      await borrarMiUbicacion();
+    } catch (_) {/* sin red, la posición caduca sola a las 24 h */}
     // Al cerrar sesión se olvida el cliente para obligar a re-seleccionar.
     clienteActivo.value = null;
     await _db.auth.signOut();
+  }
+
+  /*
+   * La posición de la tablet, al backend.
+   *
+   * Pasa por el servidor y no por Supabase porque `tc_posicion_tablet` no
+   * tiene política de escritura para `authenticated`: escribe el backend con
+   * la clave de servicio. Si la tablet pudiera escribir con su propio token,
+   * cualquiera podría colocarse donde le conviniera.
+   *
+   * `vistoAt` viaja porque es el momento en que se TOMÓ la posición, que con
+   * la red mala no es el momento en que llega.
+   */
+  static Future<void> enviarMiUbicacion({
+    required double lat,
+    required double lng,
+    double? precisionM,
+    double? velocidadKmh,
+    DateTime? vistoAt,
+  }) async {
+    final token = currentSessionToken;
+    if (token == null) return;
+    await http.post(
+      Uri.parse('$kBackendUrl/api/tyrecontrol/ubicacion'),
+      headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'lat': lat,
+        'lng': lng,
+        if (precisionM != null) 'precisionM': precisionM,
+        if (velocidadKmh != null) 'velocidadKmh': velocidadKmh,
+        'vistoAt': (vistoAt ?? DateTime.now()).toUtc().toIso8601String(),
+      }),
+    ).timeout(const Duration(seconds: 10));
+  }
+
+  /// Al cerrar sesión. Quien ha cerrado sesión no sale en ninguna pantalla.
+  static Future<void> borrarMiUbicacion() async {
+    final token = currentSessionToken;
+    if (token == null) return;
+    await http.delete(
+      Uri.parse('$kBackendUrl/api/tyrecontrol/ubicacion'),
+      headers: {'Authorization': 'Bearer $token'},
+    ).timeout(const Duration(seconds: 10));
   }
 
   static Future<Map<String, dynamic>?> obtenerMiPerfil() async {
@@ -392,11 +453,22 @@ class TyreControlApi {
     /// lectura es anterior, que es el caso bueno —no puede contener
     /// kilómetros posteriores—. El valor absoluto borraría esa distinción.
     int? kmDesfaseMin,
+    /// Dónde estaba la tablet al abrirla. Opcional: si el GPS no fija, la
+    /// revisión se crea igual, que es lo que pasaba antes de que esto
+    /// existiera.
+    double? lat,
+    double? lng,
+    double? precisionM,
   }) async {
     final uid = _db.auth.currentUser?.id;
     final data = await _db
         .from('revisiones_vehiculo')
         .insert({
+          if (lat != null && lng != null) ...{
+            'inicio_lat': lat,
+            'inicio_lng': lng,
+            if (precisionM != null) 'inicio_precision_m': precisionM,
+          },
           'empresa_id': empresaId,
           'vehiculo_id': vehiculoId,
           'km_vehiculo': kmVehiculo,
@@ -429,8 +501,19 @@ class TyreControlApi {
     int? nNeumaticos,
     int? pausaSeg,
     int? nPausas,
+    /// Dónde estaba la tablet al pulsar Finalizar. Viaja por la cola offline
+    /// junto con `finAt`, por lo mismo: el sitio bueno es el de entonces, no
+    /// el del momento en que haya red.
+    double? finLat,
+    double? finLng,
+    double? finPrecisionM,
   }) async {
     final upd = <String, dynamic>{'estado_revision': estado};
+    if (finLat != null && finLng != null) {
+      upd['fin_lat'] = finLat;
+      upd['fin_lng'] = finLng;
+      if (finPrecisionM != null) upd['fin_precision_m'] = finPrecisionM;
+    }
     if (finAt != null) {
       upd['fin_at'] = finAt.toUtc().toIso8601String();
       // inicio_at se fijó al crear la revisión; se lee para la duración.
