@@ -3,6 +3,13 @@ import { useNavigate } from "react-router-dom";
 import { listarRevisionesHistorico, listarEmpresas, listarUsuarios, listarDetalleRevision, listarIncidenciasDeRevision, listarTiposIncidencia, listarMotivosPendiente, abrirInformeRevisionesPdf } from "../services/data";
 import type { Empresa, Perfil, RevisionDetalle } from "../types";
 import type { MontajeSnapshot } from "../services/data";
+import {
+  desglosePausas,
+  duracionCorta,
+  motivoSinDuracion,
+  resumenDuracion,
+  tieneDuracion,
+} from "../services/duracionRevision";
 import { presionTxt } from "../types";
 import { TableWrap, tdCls, thCls, inputCls, Modal } from "../components/ui";
 import PlanoSnapshot from "../components/PlanoSnapshot";
@@ -61,6 +68,15 @@ type Fila = {
   incidenciasAbiertas: number;
   vehiculoId?: string;
   chasisImg: string | null;
+  /*
+   * El cronómetro, tal como lo guarda la APK. Null en las del CheckPoint —el
+   * arco mide al paso y no hay nada que empiece— y en las de técnico
+   * anteriores a que esto se guardara.
+   */
+  duracion_seg: number | null;
+  trabajo_seg: number | null;
+  pausa_seg: number | null;
+  n_pausas: number | null;
 };
 
 function hoyISO(): string {
@@ -198,6 +214,10 @@ export default function HistoricoRevisiones() {
           incidenciasAbiertas: incs.filter((i) => !["solucionada", "cancelada", "no_procede"].includes(i.estado)).length,
           vehiculoId: r.vehiculo?.id ?? undefined,
           chasisImg: r.vehiculo?.tipo?.imagen_chasis_url ?? null,
+          duracion_seg: r.duracion_seg ?? null,
+          trabajo_seg: r.trabajo_seg ?? null,
+          pausa_seg: r.pausa_seg ?? null,
+          n_pausas: r.n_pausas ?? null,
         };
       }));
     } catch (e: any) { setError(e?.message || "Error"); }
@@ -216,6 +236,16 @@ export default function HistoricoRevisiones() {
     const pend = filas.filter((f) => f.incidenciasAbiertas > 0).length;
     return { total: filas.length, conInc, pend };
   }, [filas]);
+
+  /*
+   * Cuántas de las que se ven están cronometradas y cuánto duran.
+   *
+   * Hace falta decirlo aquí porque la columna va a salir casi toda a rayas y
+   * eso, sin explicación, parece un dato que falta: en esta instalación nueve
+   * de cada diez revisiones son del CheckPoint, que mide al paso. El número de
+   * cronometradas dice cuántas hay de verdad, y la mediana para qué sirve.
+   */
+  const tiempos = useMemo(() => resumenDuracion(filas), [filas]);
 
   // Cuántas ha hecho cada uno, con los MISMOS filtros que la tabla — se cuenta
   // sobre las filas ya cargadas, así que no puede discrepar de lo que se ve.
@@ -267,6 +297,11 @@ export default function HistoricoRevisiones() {
         </select>
         <span className="pb-2 text-xs text-slate-500">
           {topeAlcanzado ? "Primeras " : ""}{resumen.total} revisión(es) · {resumen.conInc} con incidencias · {resumen.pend} con incidencia pendiente
+          {tiempos.cronometradas > 0 && (
+            <span title="El CheckPoint mide al paso del vehículo, así que sus revisiones no tienen duración. Solo se cronometran las que hace un operario con la APK.">
+              {" · "}{tiempos.cronometradas} cronometrada(s), mediana {duracionCorta(tiempos.medianaSeg)}
+            </span>
+          )}
           {topeAlcanzado && <span className="ml-1 text-amber-400">· hay más: acota las fechas</span>}
         </span>
       </div>
@@ -337,14 +372,18 @@ export default function HistoricoRevisiones() {
           <th className={thCls}>Fecha</th><th className={thCls}>Hora</th><th className={thCls}>Matrícula</th>
           <th className={thCls}>Nº unidad</th>
           <th className={thCls}>Cliente</th><th className={thCls}>Base</th><th className={thCls}>Operario</th>
+          {/* Lo que tardó, de abrir la revisión a cerrarla. Va pegada a
+              Operario porque es su dato: dice cuánto le costó a esa persona,
+              y al lado del nombre se lee de corrido. */}
+          <th className={thCls}>Duración</th>
           <th className={thCls}>Km</th><th className={thCls}>Incidencias</th><th className={thCls}>Estado</th>
           <th className={thCls}></th>
         </tr></thead>
         <tbody>
           {loading ? (
-            <tr><td className={tdCls + " text-slate-500"} colSpan={11}>Cargando…</td></tr>
+            <tr><td className={tdCls + " text-slate-500"} colSpan={12}>Cargando…</td></tr>
           ) : filas.length === 0 ? (
-            <tr><td className={tdCls + " text-slate-500"} colSpan={11}>Sin revisiones en este periodo.</td></tr>
+            <tr><td className={tdCls + " text-slate-500"} colSpan={12}>Sin revisiones en este periodo.</td></tr>
           ) : filas.map((f) => {
             const meta = ESTADO_META[f.estado] ?? { label: f.estado, cls: "bg-slate-500/15 text-slate-300" };
             return (
@@ -378,6 +417,16 @@ export default function HistoricoRevisiones() {
                     ? <span className="rounded-full bg-sky-500/15 px-2 py-0.5 text-[11px] font-bold text-sky-300">CheckPoint</span>
                     : f.tecnico}
                 </td>
+                <td className={tdCls}>
+                  {/* La raya lleva el motivo en el título: no es lo mismo que
+                      falte el dato que que no exista. Del arco no habrá número
+                      nunca; de una revisión vieja, lo habrá en la siguiente. */}
+                  {tieneDuracion(f)
+                    ? <span className="font-semibold text-slate-200" title={desglosePausas(f) ?? undefined}>
+                        {duracionCorta(f.duracion_seg)}
+                      </span>
+                    : <span className="text-slate-500" title={motivoSinDuracion(f.esArco)}>—</span>}
+                </td>
                 <td className={tdCls + " text-slate-400"}>{f.km != null ? f.km.toLocaleString("es-ES") : "—"}</td>
                 <td className={tdCls}>
                   {f.incidencias === 0 ? <span className="text-slate-500">—</span> : (
@@ -408,6 +457,15 @@ export default function HistoricoRevisiones() {
           <div className="mb-2 text-[12px] text-slate-400">
             {ficha.cliente} · Base {ficha.base} · {ficha.esArco ? "Medido por el CheckPoint" : `Operario: ${ficha.tecnico}`}
             {ficha.km != null ? ` · ${ficha.km.toLocaleString("es-ES")} km` : ""}
+            {/* Lo que costó hacerla. En la ficha se dice entero —con el
+                desglose de pausas si las hubo— porque aquí hay sitio; en la
+                tabla solo cabe el número. */}
+            {tieneDuracion(ficha) && (
+              <>
+                {" · "}Duración: {duracionCorta(ficha.duracion_seg)}
+                {desglosePausas(ficha) ? ` (${desglosePausas(ficha)})` : ""}
+              </>
+            )}
             {" · "}Estado: {ESTADO_META[ficha.estado]?.label ?? ficha.estado}
             {/* Mirando una revisión, lo siguiente que se quiere ver es el
                 vehículo entero. Cierra el modal para no dejarlo colgando
