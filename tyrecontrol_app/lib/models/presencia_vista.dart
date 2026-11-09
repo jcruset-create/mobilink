@@ -149,6 +149,15 @@ class PresenciaBases {
   final List<CuentaTelematica> cuentas;
   final Map<String, int> porEstado;
 
+  /// Cuántos vehículos se han dejado fuera por estar fuera del mantenimiento
+  /// integral.
+  ///
+  /// Hay que decirlo: esos vehículos siguen saliendo en la lista de vehículos
+  /// y en la telemática, así que sin este número el «N dentro» de una base no
+  /// cuadra con lo que se ve en otro sitio y nadie sabe por qué. Los dados de
+  /// baja no se cuentan aquí: que uno de baja no salga no sorprende a nadie.
+  final int sinSeguimiento;
+
   /// Cuándo se barrió. NO es «ahora»: la pantalla lo enseña siempre porque un
   /// estado de hace media hora es útil y presentado como actual es engañoso.
   final String? calculadoAt;
@@ -158,6 +167,7 @@ class PresenciaBases {
     this.bases = const [],
     this.cuentas = const [],
     this.porEstado = const {},
+    this.sinSeguimiento = 0,
     this.calculadoAt,
   });
 
@@ -172,6 +182,7 @@ class PresenciaBases {
       bases: _lista(j['bases']).map(BaseGeo.desdeJson).toList(),
       cuentas: _lista(j['cuentas']).map(CuentaTelematica.desdeJson).toList(),
       porEstado: estados,
+      sinSeguimiento: _entero(j['sinSeguimiento']) ?? 0,
       calculadoAt: j['calculadoAt'] as String?,
     );
   }

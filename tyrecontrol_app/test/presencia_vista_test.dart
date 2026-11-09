@@ -353,6 +353,13 @@ void main() {
       expect(p.calculadoAt, '2026-11-09T11:00:00Z');
     });
 
+    test('sinSeguimiento se lee, y sin él es cero y no nulo', () {
+      // Un servidor viejo no manda el campo. Cero es la respuesta correcta:
+      // significa «no hay ninguno fuera», que es lo que pasaba antes.
+      expect(PresenciaBases.desdeJson({'sinSeguimiento': 3}).sinSeguimiento, 3);
+      expect(PresenciaBases.desdeJson({}).sinSeguimiento, 0);
+    });
+
     test('una respuesta vacía da listas vacías, no nulos', () {
       final p = PresenciaBases.desdeJson({});
       expect(p.vehiculos, isEmpty);

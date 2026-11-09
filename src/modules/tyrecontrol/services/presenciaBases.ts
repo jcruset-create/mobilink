@@ -79,6 +79,16 @@ export interface PresenciaBases {
    * quién preguntar, que es el motivo más habitual de una pantalla en blanco.
    */
   cuentas: CuentaTelematicaBases[];
+  /**
+   * Cuántos vehículos se han dejado fuera por estar fuera del mantenimiento
+   * integral.
+   *
+   * Hace falta decirlo porque esos vehículos siguen apareciendo en la lista de
+   * vehículos y en la telemática: sin este número, el «N dentro» de una base
+   * no cuadra con lo que se ve en otra pantalla y nadie sabe por qué. Los
+   * dados de baja no se cuentan aquí: que uno de baja no salga no sorprende.
+   */
+  sinSeguimiento?: number;
   porEstado: Partial<Record<EstadoPresencia, number>>;
   /** Cuándo se barrió lo que se está viendo. `null` si nunca se ha barrido. */
   calculadoAt: string | null;
