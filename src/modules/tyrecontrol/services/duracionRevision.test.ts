@@ -81,10 +81,16 @@ describe("hay cronómetro o no lo hay", () => {
     expect(tieneDuracion({ duracion_seg: -1 })).toBe(false);
   });
 
-  it("el motivo distingue el arco de una revisión vieja", () => {
+  it("el motivo distingue los tres casos", () => {
     expect(motivoSinDuracion(true)).toContain("CheckPoint");
     expect(motivoSinDuracion(false)).toContain("anterior al cronómetro");
-    expect(motivoSinDuracion(true)).not.toBe(motivoSinDuracion(false));
+    // El inventario no es «antiguo»: es que no se cronometra, y decir lo otro
+    // haría esperar que la próxima vez sí traiga número.
+    expect(motivoSinDuracion(false, true)).toContain("no se cronometra");
+    expect(motivoSinDuracion(true, true)).toContain("no se cronometra");
+    expect(new Set([
+      motivoSinDuracion(true), motivoSinDuracion(false), motivoSinDuracion(false, true),
+    ]).size).toBe(3);
   });
 });
 

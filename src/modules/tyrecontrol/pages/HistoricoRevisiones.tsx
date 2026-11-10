@@ -77,6 +77,13 @@ type Fila = {
   trabajo_seg: number | null;
   pausa_seg: number | null;
   n_pausas: number | null;
+  /*
+   * `inventario_inicial` = la toma de entrada del vehículo, no una revisión
+   * de las de cada X. Cuenta como revisión a todos los efectos —fecha, gomas,
+   * profundidades— pero conviene distinguirla: es la única que no busca
+   * desgaste, sino dejar constancia de con qué entró.
+   */
+  tipo_revision: string | null;
 };
 
 function hoyISO(): string {
@@ -214,6 +221,7 @@ export default function HistoricoRevisiones() {
           incidenciasAbiertas: incs.filter((i) => !["solucionada", "cancelada", "no_procede"].includes(i.estado)).length,
           vehiculoId: r.vehiculo?.id ?? undefined,
           chasisImg: r.vehiculo?.tipo?.imagen_chasis_url ?? null,
+          tipo_revision: r.tipo_revision ?? null,
           duracion_seg: r.duracion_seg ?? null,
           trabajo_seg: r.trabajo_seg ?? null,
           pausa_seg: r.pausa_seg ?? null,
@@ -401,6 +409,18 @@ export default function HistoricoRevisiones() {
                         {f.matricula}
                       </button>
                     : f.matricula}
+                  {/*
+                    El inventario de entrada se distingue, porque no es una
+                    revisión de las de cada X: es la toma con la que el
+                    vehículo entró. Sin esto, en la lista son idénticas y
+                    alguien contaría la entrada como un control de desgaste.
+                  */}
+                  {f.tipo_revision === "inventario_inicial" && (
+                    <span className="ml-1.5 rounded-full bg-violet-500/15 px-2 py-0.5 text-[10px] font-bold text-violet-300"
+                          title="Inventario inicial: las gomas con las que el vehículo entró en Mobilink. No descontó stock ni generó coste.">
+                      Inventario
+                    </span>
+                  )}
                 </td>
                 {/* El número de unidad es como llaman al vehículo dentro de la
                     empresa: al ir pegado a la matrícula y en letra pequeña se
@@ -425,7 +445,8 @@ export default function HistoricoRevisiones() {
                     ? <span className="font-semibold text-slate-200" title={desglosePausas(f) ?? undefined}>
                         {duracionCorta(f.duracion_seg)}
                       </span>
-                    : <span className="text-slate-500" title={motivoSinDuracion(f.esArco)}>—</span>}
+                    : <span className="text-slate-500"
+                            title={motivoSinDuracion(f.esArco, f.tipo_revision === "inventario_inicial")}>—</span>}
                 </td>
                 <td className={tdCls + " text-slate-400"}>{f.km != null ? f.km.toLocaleString("es-ES") : "—"}</td>
                 <td className={tdCls}>
@@ -455,6 +476,11 @@ export default function HistoricoRevisiones() {
       {ficha && (
         <Modal title={`Revisión ${ficha.matricula} · ${fechaCorta(ficha.fecha)}${ficha.hora ? ` · ${ficha.hora}` : ""}`} onClose={() => setFicha(null)} size="xl">
           <div className="mb-2 text-[12px] text-slate-400">
+            {ficha.tipo_revision === "inventario_inicial" && (
+              <span className="mr-2 rounded-full bg-violet-500/15 px-2 py-0.5 text-[11px] font-bold text-violet-300">
+                Inventario inicial
+              </span>
+            )}
             {ficha.cliente} · Base {ficha.base} · {ficha.esArco ? "Medido por el CheckPoint" : `Operario: ${ficha.tecnico}`}
             {ficha.km != null ? ` · ${ficha.km.toLocaleString("es-ES")} km` : ""}
             {/* Lo que costó hacerla. En la ficha se dice entero —con el

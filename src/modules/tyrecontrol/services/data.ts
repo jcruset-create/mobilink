@@ -318,7 +318,7 @@ export async function listarRevisionesHistorico(filtros: {
       // veía en ninguna pantalla: `duracion_seg` es de punta a punta y
       // `trabajo_seg` descuenta las pausas. Una revisión del CheckPoint no
       // trae ninguno de los dos, y es correcto: el arco mide al paso.
-      "inicio_at, fin_at, duracion_seg, trabajo_seg, pausa_seg, n_pausas, " +
+      "inicio_at, fin_at, duracion_seg, trabajo_seg, pausa_seg, n_pausas, tipo_revision, " +
       "vehiculo:tc_vehiculos(id, matricula, numero_unidad, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre), tipo:tc_tipos_vehiculo(imagen_chasis_url)), " +
       "tecnico:tc_usuarios(nombre), incidencias:tc_incidencias(id, estado), " +
       // Para saber QUIÉN midió. Una revisión del arco no tiene técnico, pero
@@ -854,6 +854,42 @@ export async function inventarioInicialPosicion(params: {
  * La base exige goma y profundidad en TODAS las posiciones y dice cuáles
  * faltan. Los km solo suben, nunca bajan.
  */
+/** Lo que contesta la telemática cuando se le pregunta el cuentakilómetros. */
+export interface LecturaKmActual {
+  estado: string;
+  km: number | null;
+  capturadoAt: string | null;
+  antiguedadMin: number | null;
+  proveedor: string | null;
+  texto: string;
+  aviso: string | null;
+}
+
+/**
+ * El cuentakilómetros de un vehículo, ahora.
+ *
+ * El mismo endpoint que usa la APK desde hace tiempo
+ * (`server/tyrecontrol/kilometrajeActual/router.ts`): pasa por el servidor
+ * porque la credencial del proveedor no puede salir del gestor de secretos del
+ * Hub. No escribe nada; solo pregunta.
+ *
+ * Nunca lanza por culpa de la telemática: el endpoint contesta `estado:
+ * "error"` con su texto, y quien llama decide. Quedarse sin cerrar el
+ * inventario porque el proveedor no conteste sería absurdo cuando el número se
+ * puede teclear.
+ */
+export async function kilometrajeActualVehiculo(vehiculoId: string): Promise<LecturaKmActual> {
+  const { data: sess } = await supabase.auth.getSession();
+  const token = sess.session?.access_token;
+  if (!token) throw new Error("Sesión no válida");
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/kilometraje-actual/vehiculo/${vehiculoId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || "No se ha podido consultar la telemática");
+  return j as LecturaKmActual;
+}
+
 export async function inventarioInicialFinalizar(params: {
   vehiculoId: string; km?: number | null; origenKm?: string;
 }): Promise<{ revision_id: string; ya_estaba: boolean; posiciones?: number }> {
