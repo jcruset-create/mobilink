@@ -1,5 +1,9 @@
 -- Pasada inicial: poner en la ficha lo que digan los albaranes importados.
 --
+-- APLICADO EN PRODUCCIÓN el 10/11/2026: 1.154 posiciones (1.109 cambiadas y
+-- 45 creadas), exactamente lo que predijo la simulación. Se deja aquí como
+-- registro y porque la función sirve para volver a pasarla cuando haga falta.
+--
 -- Necesita la migración `tyrecontrol_albaran_manda_en_montajes.sql` aplicada
 -- ANTES: es la que crea `tc_aplicar_albaranes_a_montajes`.
 --
@@ -53,34 +57,17 @@ select tc_aplicar_albaranes_a_montajes(
 -- PASO 2 — DE VERDAD. Solo después de mirar el paso 1.
 -- ════════════════════════════════════════════════════════════════════════════
 --
--- Va en una transacción con su foto de antes y de después: si el recuento
--- final no cuadra, se hace ROLLBACK en vez de COMMIT y no ha pasado nada.
-
-begin;
-
-create temporary table _antes on commit drop as
-select count(*) filas, count(distinct vehiculo_id) vehiculos
-  from tc_montajes_actuales
- where empresa_id = 'a51c9662-4b6f-4681-8e2b-599e109659eb';
+-- Una sola llamada. SIN tabla temporal y SIN begin/commit a mano: el editor
+-- SQL de Supabase ya envuelve el buffer, y un `create temporary table ... on
+-- commit drop` se muere antes de que lo lea el select de después. La primera
+-- versión de este script lo tenía y reventó con «relation "_antes" does not
+-- exist» —después de haber aplicado los cambios, que sí entraron—.
+--
+-- La foto de antes no hace falta: el `select` de abajo compara contra los
+-- albaranes, que es la comprobación que de verdad importa.
 
 select tc_aplicar_albaranes_a_montajes(
          'a51c9662-4b6f-4681-8e2b-599e109659eb'::uuid, null, false) as aplicado;
-
--- Antes y después, en la misma pantalla. El número de filas puede subir (las
--- 45 posiciones que estaban vacías) pero NO debería bajar: si baja, se ha
--- perdido un montaje por el camino.
-select a.filas    as filas_antes,
-       n.filas    as filas_despues,
-       n.filas - a.filas as diferencia,
-       a.vehiculos as vehiculos_antes,
-       n.vehiculos as vehiculos_despues
-  from _antes a,
-       (select count(*) filas, count(distinct vehiculo_id) vehiculos
-          from tc_montajes_actuales
-         where empresa_id = 'a51c9662-4b6f-4681-8e2b-599e109659eb') n;
-
--- Si `diferencia` es negativa, ROLLBACK. Si no, COMMIT.
-commit;
 
 
 -- ════════════════════════════════════════════════════════════════════════════
@@ -103,3 +90,22 @@ select p.codigo_posicion            as posicion,
   join tc_neumaticos n          on n.id = m.neumatico_id
  where m.vehiculo_id = 'd0c1b81d-86ae-4a4f-987f-b629367b0d8a'
  order by p.orden_visual;
+
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- COMPROBACIÓN GENERAL — que no se ha roto nada
+-- ════════════════════════════════════════════════════════════════════════════
+--
+-- Las dos primeras tienen que salir a CERO. Las otras son para mirar:
+-- `con_km_montaje` es el número que hace que el informe de duración funcione.
+
+select
+  (select count(*) from (select vehiculo_id, posicion_id from tc_montajes_actuales
+                          group by 1,2 having count(*) > 1) x)        as posiciones_duplicadas,
+  (select count(*) from tc_montajes_actuales m join tc_neumaticos n on n.id = m.neumatico_id
+    where n.estado <> 'montado')                                      as fila_con_goma_no_montada,
+  (select count(*) from (select neumatico_id from tc_montajes_actuales
+                          group by 1 having count(*) > 1) y)          as gomas_en_dos_sitios,
+  (select count(*) from tc_montajes_actuales where km_montaje > 0)    as con_km_montaje,
+  (select count(*) from tc_montajes_actuales
+    where observaciones = 'Aplicado desde albarán importado')         as aplicados_desde_albaran;
