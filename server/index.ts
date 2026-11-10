@@ -15,6 +15,7 @@ import { supabase, supabaseAnonAuth, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_
 import { fallaAlFirmar, firmarEnFilas, firmarUrls } from "./core/fotosFirmadas.ts";
 import { descargarMedioTwilio, rescatarMedioDeTwilio } from "./core/medioTwilio.ts";
 import { elegirPosicion, horaWebfleet, type PosicionElegida } from "./core/posicionDoble.ts";
+import { crearCacheEta, ESTADOS_ETA_ESTIMADA, type EtaEstimada } from "./core/etaEstimada.ts";
 import {
   borrarPosicionTablet,
   guardarPosicionTablet,
@@ -6210,6 +6211,50 @@ app.get("/api/roadside-assistances/historial", requireSupervisorRole, async (req
   }
 });
 
+// ETA aproximada antes de salir, por asistencia: ver core/etaEstimada.ts.
+const cacheEtaEstimada = crearCacheEta();
+
+/*
+ * Asignada, aún sin salir: cuánto tardaría aproximadamente desde donde está
+ * ahora la furgoneta (Webfleet o, si falla, la tablet). No se guarda en
+ * etaMinutos: no es el trayecto real, es una estimación. La usan el
+ * seguimiento y la tarjeta del panel, con la misma caché.
+ */
+async function etaEstimadaDeAsistencia(row: any): Promise<EtaEstimada | null> {
+  const lat = normalizeNullableNumber(row?.latitude);
+  const lng = normalizeNullableNumber(row?.longitude);
+  if (
+    !ESTADOS_ETA_ESTIMADA.has(String(row?.status)) ||
+    lat == null || lng == null ||
+    (!row?.webfleetVehicleId && !row?.assignedTechName)
+  ) {
+    return null;
+  }
+  const id = Number(row.id);
+  const ahora = Date.now();
+  const guardada = cacheEtaEstimada.leer(id, ahora);
+  if (guardada) return guardada;
+  try {
+    const pos = await posicionDeAsistencia(row);
+    if (!pos) return null;
+    const eta = await calcularETA(pos, { lat, lng });
+    const nueva: EtaEstimada = {
+      minutos: eta.minutos,
+      kilometros: eta.kilometros,
+      calculadaAtMs: ahora,
+      posicion: {
+        lat: pos.lat, lng: pos.lng, fuente: pos.fuente, antigua: pos.antigua,
+        atMs: pos.atMs, speedKmh: pos.speedKmh, moving: pos.moving,
+      },
+    };
+    cacheEtaEstimada.guardar(id, nueva);
+    return nueva;
+  } catch (err: any) {
+    console.warn(`ETA aproximada #${id}: ${err?.message ?? err}`);
+    return null;
+  }
+}
+
 app.get("/api/roadside-tracking/:token", async (req, res) => {
   try {
     const token = String(req.params.token || "").trim();
@@ -6283,6 +6328,10 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
         console.error("tracking ETA recalc error:", etaWarning);
       }
     }
+
+    // Asignada, aún sin salir: ETA aproximada desde donde está la furgoneta.
+    const etaEstimada = await etaEstimadaDeAsistencia(assistanceResult.rows[0]);
+    if (etaEstimada?.posicion) vehiclePosition = etaEstimada.posicion;
 
     const [eventsResult, filesResult] = await Promise.all([
       db.query(
@@ -6380,6 +6429,13 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
           }
         : null,
       etaWarning,
+      etaEstimada: etaEstimada
+        ? {
+            minutos: etaEstimada.minutos,
+            kilometros: etaEstimada.kilometros,
+            calculadaAtMs: etaEstimada.calculadaAtMs,
+          }
+        : null,
       expired:
         assistance.status === "llegada_taller" ||
         assistance.status === "cancelada",
@@ -8633,6 +8689,31 @@ app.get("/api/roadside-assistances/:id", exigirCredencial(authenticate), async (
   } catch (error) {
     console.error("GET /api/roadside-assistances/:id error:", error);
     res.status(500).json({ error: "Error obteniendo asistencia" });
+  }
+});
+
+// ETA aproximada antes de salir, para la tarjeta del panel («Asignada»).
+app.get("/api/roadside-assistances/:id/eta-estimada", exigirCredencial(authenticate), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    const r = await db.query(`SELECT * FROM roadside_assistances WHERE id = $1 LIMIT 1`, [id]);
+    if (r.rows.length === 0) return res.status(404).json({ error: "Asistencia no encontrada" });
+    const eta = await etaEstimadaDeAsistencia(r.rows[0]);
+    res.json(
+      eta
+        ? {
+            available: true,
+            minutos: eta.minutos,
+            kilometros: eta.kilometros,
+            calculadaAtMs: eta.calculadaAtMs,
+            fuente: eta.posicion?.fuente ?? null,
+          }
+        : { available: false }
+    );
+  } catch (error) {
+    console.error("GET /api/roadside-assistances/:id/eta-estimada error:", error);
+    res.status(500).json({ error: "Error calculando la ETA aproximada" });
   }
 });
 

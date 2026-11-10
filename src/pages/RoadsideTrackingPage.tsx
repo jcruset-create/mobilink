@@ -351,6 +351,28 @@ export default function RoadsideTrackingPage() {
           </div>
         </section>
 
+        {/* Antes de salir: tiempo aproximado desde donde está ahora la furgoneta */}
+        {assistance.status === "asignada" && data?.etaEstimada && (
+          <section className="rounded-lg border border-indigo-200 bg-indigo-600 p-5 shadow-sm">
+            <div className="flex items-center gap-3">
+              <img src="/van-icon.png" style={{height:48,width:"auto",flexShrink:0}} alt="furgoneta" />
+              <div className="text-white flex-1">
+                <div className="text-lg font-black">Técnico asignado</div>
+                <div className="mt-1 text-sm font-semibold text-indigo-100">
+                  Tiempo aproximado de llegada:{" "}
+                  <span className="font-black text-white">
+                    ~{data.etaEstimada.minutos} min · {data.etaEstimada.kilometros} km
+                  </span>
+                </div>
+                <div className="mt-1 text-xs text-indigo-200">
+                  Desde donde está ahora la furgoneta. Se ajustará cuando el técnico salga.
+                  {" "}Calculado: {formatTimeWithSeconds(data.etaEstimada.calculadaAtMs)}
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+
         {/* ETA banner */}
         {(assistance.status === "en_camino" || assistance.status === "en_camino_base") && (
           <section className={`rounded-lg border p-5 shadow-sm ${assistance.status === "en_camino_base" ? "border-teal-200 bg-teal-600" : "border-blue-200 bg-blue-600"}`}>
