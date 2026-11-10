@@ -4,9 +4,19 @@
 --
 --   · El MODELO «X COACH Z» de Michelin: multiposición, vale delante y detrás.
 --   · El MODELO «X COACH D» de Michelin: eje motriz.
---   · Su REFERENCIA en 295/80R22.5, con índices y etiqueta europea.
+--   · La MEDIDA CON ÍNDICES «295/80R22.5 154/150M», que no existía.
+--   · Su REFERENCIA, con la etiqueta europea.
 --
--- La medida 295/80R22.5 ya existe y está activa, así que no se toca.
+-- Ojo con las dos tablas de medidas, que no son la misma:
+--
+--   tc_cat_medidas_neumatico  la medida pelada: 295/80R22.5. YA EXISTE.
+--   tyre_sizes                medida + índices + velocidad: 295/80R22.5
+--                             154/150M. NO existía — hay 152/148L, 152/148M y
+--                             154/149M, pero no la 154/150M que llevan estas
+--                             dos. Se crea aquí.
+--
+-- `tc_referencias_neumatico.tyre_size_id` apunta a la SEGUNDA, no a la
+-- primera. Es la parte del esquema que más fácil se confunde.
 --
 -- ── Por qué estos dos y no los cuatro ───────────────────────────────────────
 --
@@ -50,25 +60,46 @@
 
 begin;
 
+-- ── 0. La medida con índices, si no está ────────────────────────────────────
+--
+-- 154 = 3.750 kg por rueda en simple, 150 = 3.350 kg en gemelado, M = 130
+-- km/h. Son los de la tabla ISO de índices de carga, no un dato de Michelin.
+
+insert into tyre_sizes
+  (medida_id, referencia_completa, medida, ancho, perfil, diametro_llanta,
+   indice_carga_simple, indice_carga_doble, codigo_velocidad, activo)
+values
+  ((select id from tc_cat_medidas_neumatico where valor = '295/80R22.5'),
+   '295/80R22.5 154/150M', '295/80R22.5', 295, 80, 22.5,
+   '154', '150', 'M', true)
+on conflict (referencia_completa) do update
+  set activo = excluded.activo;
+
 -- ── Los dos modelos ─────────────────────────────────────────────────────────
 --
--- `tipo_vehiculo` es texto libre y solo se enseña en la ficha; se pone
--- «autocar» porque es lo que son. Los modelos de autocar de Bridgestone que ya
--- hay dicen «camion», que parece un valor por defecto arrastrado más que una
--- decisión; si se prefiere esa uniformidad, se cambia aquí y ya.
+-- Los dos campos de clasificación son vocabulario CERRADO por CHECK, aunque el
+-- editor del panel los pinte como texto libre:
 --
--- `eje_recomendado` sí es vocabulario cerrado del panel: direccion, traccion,
--- remolque, mixto. La Z es multiposición → «mixto», igual que las X MULTI Z.
+--   chk_modelo_tipo_vehiculo: camion, autobus, turismo, furgoneta, agricola,
+--                             otr, industrial, carretillas_elevadoras,
+--                             multisegmento
+--   chk_modelo_eje:           direccion, traccion, remolque, mixto
+--
+-- Así que «autobus», que es el término de la lista, y no «autocar». Los
+-- modelos de autocar de Bridgestone que ya hay dicen «camion», que parece un
+-- valor por defecto arrastrado más que una decisión.
+--
+-- La Z es multiposición → «mixto», igual que las X MULTI Z.
 
 insert into tc_cat_modelos_neumatico
   (marca_id, nombre, activo, eje_recomendado, aplicacion, tipo_vehiculo,
    m_s, tres_pmsf, reesculturable, recauchutable)
 values
   ((select id from tc_cat_marcas_neumatico where nombre = 'Michelin'),
-   'X COACH Z', true, 'mixto', 'Larga distancia autocar', 'autocar',
+   'X COACH Z', true, 'mixto', 'Larga distancia autocar', 'autobus',
    true, true, true, true),
   ((select id from tc_cat_marcas_neumatico where nombre = 'Michelin'),
-   'X COACH D', true, 'traccion', 'Larga distancia autocar', 'autocar',
+   'X COACH D', true, 'traccion', 'Larga distancia autocar', 'autobus',
    true, true, true, true)
 on conflict (marca_id, nombre) do update
   set activo          = excluded.activo,
@@ -99,7 +130,7 @@ values
   ((select mo.id from tc_cat_modelos_neumatico mo
       join tc_cat_marcas_neumatico ma on ma.id = mo.marca_id
      where ma.nombre = 'Michelin' and mo.nombre = 'X COACH Z'),
-   (select id from tc_cat_medidas_neumatico where valor = '295/80R22.5'),
+   (select id from tyre_sizes where referencia_completa = '295/80R22.5 154/150M'),
    'Michelin X COACH Z 295/80R22.5 154/150M', true,
    true, true,
    'C', 'B', 71, null,
@@ -116,7 +147,7 @@ values
   ((select mo.id from tc_cat_modelos_neumatico mo
       join tc_cat_marcas_neumatico ma on ma.id = mo.marca_id
      where ma.nombre = 'Michelin' and mo.nombre = 'X COACH D'),
-   (select id from tc_cat_medidas_neumatico where valor = '295/80R22.5'),
+   (select id from tyre_sizes where referencia_completa = '295/80R22.5 154/150M'),
    'Michelin X COACH D 295/80R22.5 154/150M', true,
    true, true,
    'D', 'C', 75, 'B',
@@ -154,7 +185,7 @@ select ma.nombre                         as marca,
        mo.nombre                         as modelo,
        mo.eje_recomendado,
        mo.tipo_vehiculo,
-       me.valor                          as medida,
+       ts.referencia_completa            as medida_con_indices,
        r.referencia_completa,
        r.etiqueta_rr                     as rodadura,
        r.etiqueta_grip_humedo            as mojado,
@@ -166,6 +197,6 @@ select ma.nombre                         as marca,
   from tc_referencias_neumatico r
   join tc_cat_modelos_neumatico mo on mo.id = r.modelo_id
   join tc_cat_marcas_neumatico ma  on ma.id = mo.marca_id
-  join tc_cat_medidas_neumatico me on me.id = r.tyre_size_id
+  join tyre_sizes ts               on ts.id = r.tyre_size_id
  where ma.nombre = 'Michelin' and mo.nombre in ('X COACH Z', 'X COACH D')
  order by mo.nombre;
