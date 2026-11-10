@@ -20,6 +20,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   buscarNeumaticosParaCorregir, corregirMontado, corregirMontadoNuevaFicha,
   inventarioInicialFinalizar, inventarioInicialPosicion, listarReferenciasNeumatico,
+  kilometrajeActualVehiculo, type LecturaKmActual,
 } from "../services/data";
 import {
   accionDeFila, borradorVacio, datosMedicion, descripcionNeumatico, etiquetaNeumatico,
@@ -66,6 +67,17 @@ export default function ModalNeumaticosMontados({
   const [hechas, setHechas] = useState<string[]>([]);   // códigos guardados en esta sesión
   const [fallos, setFallos] = useState<{ codigo: string; error: string }[]>([]);
   const [km, setKm] = useState("");
+  /*
+   * De dónde sale el número que hay en el campo.
+   *
+   * Importa para `origen_km`: un kilometraje que viene del proveedor y uno
+   * tecleado a mano no valen lo mismo, y la revisión lo guarda. En cuanto
+   * alguien toca el campo vuelve a ser manual, aunque lo haya traído la
+   * telemática: lo que se guarda es lo que hay escrito.
+   */
+  const [kmDeTelematica, setKmDeTelematica] = useState(false);
+  const [lecturaKm, setLecturaKm] = useState<LecturaKmActual | null>(null);
+  const [pidiendoKm, setPidiendoKm] = useState(false);
   const [cerrado, setCerrado] = useState(false);
 
   useEffect(() => { listarReferenciasNeumatico().then(setReferencias).catch(() => setReferencias([])); }, []);
@@ -155,11 +167,55 @@ export default function ModalNeumaticosMontados({
       : mal.length ? "No se ha podido guardar ninguna." : "No había nada que guardar.");
   }
 
+  /*
+   * Pedir el cuentakilómetros al proveedor.
+   *
+   * No sobrescribe lo que haya tecleado una persona: si el campo tiene algo
+   * puesto a mano, se trae la lectura para enseñarla pero el número se
+   * respeta. Quien quiera el de la telemática, vacía el campo y vuelve a
+   * pulsar.
+   */
+  async function pedirKm(automatico = false) {
+    if (pidiendoKm) return;
+    setPidiendoKm(true);
+    try {
+      const l = await kilometrajeActualVehiculo(vehiculoId);
+      setLecturaKm(l);
+      if (l.km != null && (!km.trim() || kmDeTelematica)) {
+        setKm(String(Math.round(l.km)));
+        setKmDeTelematica(true);
+      }
+    } catch (e: unknown) {
+      // En automático se calla: el inventario no es la pantalla de la
+      // telemática, y un aviso al abrir el bloque sería ruido. A mano sí se
+      // dice, porque alguien ha pulsado y espera respuesta.
+      if (!automatico) setMsg(mensajeError(e, "No se ha podido consultar la telemática"));
+    } finally { setPidiendoKm(false); }
+  }
+
+  /*
+   * Al aparecer el bloque de cierre se pregunta sola, una vez.
+   *
+   * Es el momento en que el dato hace falta y el único en que se sabe que el
+   * inventario va a cerrarse. Preguntar al abrir el modal gastaría cupo del
+   * proveedor cada vez que alguien mira las gomas de un vehículo.
+   */
+  useEffect(() => {
+    if (hayInventarioAbierto && !cerrado && lecturaKm == null && !pidiendoKm) {
+      void pedirKm(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hayInventarioAbierto, cerrado]);
+
   async function finalizar() {
     setGuardando(true); setMsg("");
     try {
       const kmNum = km.trim() ? Number(km.trim().replace(",", ".")) : null;
-      const r = await inventarioInicialFinalizar({ vehiculoId, km: Number.isFinite(kmNum as number) ? kmNum : null });
+      const r = await inventarioInicialFinalizar({
+        vehiculoId,
+        km: Number.isFinite(kmNum as number) ? kmNum : null,
+        origenKm: kmDeTelematica ? "telematica" : "manual",
+      });
       setCerrado(true);
       setMsg(r.ya_estaba ? "El inventario inicial ya estaba cerrado." : "Inventario inicial cerrado. El vehículo queda operativo.");
       onChanged();
@@ -275,15 +331,42 @@ export default function ModalNeumaticosMontados({
               <label className="block">
                 <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Kilómetros del vehículo (opcional)</span>
                 <input className={`${inputCls} w-40`} inputMode="numeric" value={km}
-                       onChange={(e) => setKm(e.target.value)} placeholder={kmActual != null ? String(kmActual) : "—"} />
+                       onChange={(e) => { setKm(e.target.value); setKmDeTelematica(false); }}
+                       placeholder={kmActual != null ? String(kmActual) : "—"} />
               </label>
+              {/*
+                Pedirlos al proveedor. Se pregunta solo al abrirse este bloque,
+                así que el botón es para reintentar cuando la telemática no ha
+                contestado, o para recuperar la lectura después de teclear.
+              */}
+              <button onClick={() => void pedirKm()} disabled={pidiendoKm}
+                      title="Pregunta el cuentakilómetros al proveedor de telemática"
+                      className="rounded-lg border border-slate-600 px-3 py-2 text-sm font-bold text-slate-200 hover:bg-slate-700/40 disabled:opacity-50">
+                {pidiendoKm ? "Consultando…" : "Pedir kilómetros"}
+              </button>
               <button onClick={finalizar} disabled={guardando || !completo}
                       className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
                 Finalizar inventario inicial
               </button>
             </div>
+            {/*
+              Lo que ha dicho la telemática, con su antigüedad. El número a
+              secas no basta: una lectura de hace dos días y una de hace dos
+              minutos se escriben igual y no valen lo mismo.
+            */}
+            {lecturaKm && (
+              <div className={`mt-1 text-[11px] ${lecturaKm.km != null ? "text-slate-400" : "text-amber-400"}`}>
+                {lecturaKm.km != null
+                  ? <>Telemática: <b>{Math.round(lecturaKm.km).toLocaleString("es-ES")} km</b>
+                      {lecturaKm.antiguedadMin != null && <> · leído hace {lecturaKm.antiguedadMin} min</>}
+                      {lecturaKm.proveedor && <> · {lecturaKm.proveedor}</>}
+                      {lecturaKm.aviso && <span className="ml-1 text-amber-400">· {lecturaKm.aviso}</span>}</>
+                  : lecturaKm.texto}
+              </div>
+            )}
             <div className="mt-1 text-[11px] text-slate-500">
               Los kilómetros solo suben: una lectura más baja que la que ya hay no se escribe.
+              Al finalizar, el inventario queda como una revisión más en el Histórico.
             </div>
           </div>
         )}
