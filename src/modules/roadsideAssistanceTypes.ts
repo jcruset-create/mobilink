@@ -252,6 +252,11 @@ export type RoadsideTrackingResponse = {
     atMs?: number;
   } | null;
   etaWarning?: string | null;
+  /**
+   * Antes de salir («Asignada»): cuánto tardaría aproximadamente desde donde
+   * está ahora la furgoneta. No es el ETA del trayecto (eso es etaMinutos).
+   */
+  etaEstimada?: { minutos: number; kilometros: string; calculadaAtMs: number } | null;
   expired: boolean;
 };
 

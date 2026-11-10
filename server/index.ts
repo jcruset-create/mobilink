@@ -15,6 +15,7 @@ import { supabase, supabaseAnonAuth, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_
 import { fallaAlFirmar, firmarEnFilas, firmarUrls } from "./core/fotosFirmadas.ts";
 import { descargarMedioTwilio, rescatarMedioDeTwilio } from "./core/medioTwilio.ts";
 import { elegirPosicion, horaWebfleet, type PosicionElegida } from "./core/posicionDoble.ts";
+import { crearCacheEta, ESTADOS_ETA_ESTIMADA, type EtaEstimada } from "./core/etaEstimada.ts";
 import {
   borrarPosicionTablet,
   guardarPosicionTablet,
@@ -6210,6 +6211,9 @@ app.get("/api/roadside-assistances/historial", requireSupervisorRole, async (req
   }
 });
 
+// ETA aproximada antes de salir, por asistencia: ver core/etaEstimada.ts.
+const cacheEtaEstimada = crearCacheEta();
+
 app.get("/api/roadside-tracking/:token", async (req, res) => {
   try {
     const token = String(req.params.token || "").trim();
@@ -6282,6 +6286,43 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
         etaWarning = etaErr?.message ?? "Error recalculando ETA";
         console.error("tracking ETA recalc error:", etaWarning);
       }
+    }
+
+    /*
+     * Asignada, aún sin salir: cuánto tardaría aproximadamente desde donde
+     * está ahora la furgoneta (Webfleet o, si falla, la tablet). No se guarda
+     * en etaMinutos: no es el trayecto real, es una estimación.
+     */
+    let etaEstimada: EtaEstimada | null = null;
+    if (
+      ESTADOS_ETA_ESTIMADA.has(assistance.status) &&
+      assistance.latitude != null &&
+      assistance.longitude != null &&
+      (assistance.webfleetVehicleId || assistance.assignedTechName)
+    ) {
+      const ahora = Date.now();
+      etaEstimada = cacheEtaEstimada.leer(assistance.id, ahora);
+      if (!etaEstimada) {
+        try {
+          const pos = await posicionDeAsistencia(assistanceResult.rows[0]);
+          if (pos) {
+            const eta = await calcularETA(pos, { lat: assistance.latitude, lng: assistance.longitude });
+            etaEstimada = {
+              minutos: eta.minutos,
+              kilometros: eta.kilometros,
+              calculadaAtMs: ahora,
+              posicion: {
+                lat: pos.lat, lng: pos.lng, fuente: pos.fuente, antigua: pos.antigua,
+                atMs: pos.atMs, speedKmh: pos.speedKmh, moving: pos.moving,
+              },
+            };
+            cacheEtaEstimada.guardar(assistance.id, etaEstimada);
+          }
+        } catch (err: any) {
+          console.warn(`ETA aproximada #${assistance.id}: ${err?.message ?? err}`);
+        }
+      }
+      if (etaEstimada?.posicion) vehiclePosition = etaEstimada.posicion;
     }
 
     const [eventsResult, filesResult] = await Promise.all([
@@ -6380,6 +6421,13 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
           }
         : null,
       etaWarning,
+      etaEstimada: etaEstimada
+        ? {
+            minutos: etaEstimada.minutos,
+            kilometros: etaEstimada.kilometros,
+            calculadaAtMs: etaEstimada.calculadaAtMs,
+          }
+        : null,
       expired:
         assistance.status === "llegada_taller" ||
         assistance.status === "cancelada",
