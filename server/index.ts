@@ -2578,8 +2578,6 @@ app.post("/api/reset", requireAdminRole, async (req, res) => {
    await db.query(`DELETE FROM jobs`);
 await db.query(`DELETE FROM logs`);
 
-await ensureMaintenanceTables();
-
 await db.query(`DELETE FROM assigned_maintenance_tasks`);
 
 await db.query(`
@@ -12224,6 +12222,126 @@ const DEFAULT_MAINTENANCE_TASKS: MaintenanceTask[] = [
   },
 ];
 
+/**
+ * Las plantillas del taller que trae el sistema de serie.
+ *
+ * Vivían DENTRO de `GET /api/quick-templates`, y el manejador las volvía a
+ * sembrar en CADA lectura: tres `INSERT` por petición que no cambiaban nada,
+ * porque las tres ya estaban. Medido en producción con `pg_stat_statements`,
+ * esa sentencia llevaba 16.783.907 ejecuciones —84.000 al día— y era la más
+ * ejecutada de toda la instalación.
+ *
+ * Ahora se siembran UNA VEZ al arrancar, desde `initTallerEsquema`, y en una
+ * sola sentencia. El `ON CONFLICT (key) DO NOTHING` se conserva tal cual: una
+ * plantilla nueva en esta lista sigue entrando sola en el siguiente arranque y
+ * ninguna de las que ya existen se pisa.
+ */
+const PLANTILLAS_RAPIDAS_POR_DEFECTO = [
+  {
+    key: "alineacion_camion",
+    label: "Alineación Camión",
+    area: "camion",
+    mode: "single",
+    allowedTechs: JSON.stringify(["Anthoni", "Alejandro", "José"]),
+    priorityOrder: JSON.stringify(["Anthoni", "Alejandro", "José"]),
+    standardMinutes: 90,
+  },
+  {
+    key: "pinchazo_camion",
+    label: "Pinchazo camión",
+    area: "camion",
+    mode: "single",
+    allowedTechs: JSON.stringify([
+      "José",
+      "Iván",
+      "Alejandro",
+      "Jesús",
+      "Anthoni",
+      "David",
+    ]),
+    priorityOrder: JSON.stringify([
+      "José",
+      "Iván",
+      "Alejandro",
+      "Jesús",
+      "Anthoni",
+      "David",
+    ]),
+    standardMinutes: 25,
+  },
+  {
+    key: "cambio_4_neumaticos_camion",
+    label: "Cambio de 4 neumáticos de camión",
+    area: "camion",
+    mode: "team",
+    allowedTechs: JSON.stringify([
+      "José",
+      "Iván",
+      "Alejandro",
+      "Jesús",
+      "Anthoni",
+      "David",
+    ]),
+    priorityOrder: JSON.stringify([
+      "José",
+      "Iván",
+      "Alejandro",
+      "Jesús",
+      "Anthoni",
+      "David",
+    ]),
+    standardMinutes: 60,
+  },
+];
+
+/** Siembra las plantillas de serie. Una sentencia, no una por plantilla. */
+async function sembrarPlantillasRapidas(): Promise<void> {
+  if (PLANTILLAS_RAPIDAS_POR_DEFECTO.length === 0) return;
+  const valores: unknown[] = [];
+  const tuplas = PLANTILLAS_RAPIDAS_POR_DEFECTO.map((item, i) => {
+    const b = i * 7;
+    valores.push(
+      item.key,
+      item.label,
+      item.area,
+      item.mode,
+      item.allowedTechs,
+      item.priorityOrder,
+      item.standardMinutes ?? null
+    );
+    return `($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5}, $${b + 6}, $${b + 7})`;
+  });
+  await db.query(
+    `
+      INSERT INTO quick_templates
+        (key, label, area, mode, "allowedTechs", "priorityOrder", "standardMinutes")
+      VALUES ${tuplas.join(", ")}
+      ON CONFLICT (key) DO NOTHING
+    `,
+    valores
+  );
+}
+
+/**
+ * El esquema del taller, preparado al arrancar y no en cada petición.
+ *
+ * `ensureMaintenanceTables` y `ensureAppUsersTable` se llamaban desde dentro de
+ * los manejadores —catorce y cuatro sitios— así que cada petición lanzaba sus
+ * `CREATE TABLE IF NOT EXISTS`. En producción eso eran 5.600.813 ejecuciones de
+ * un `CREATE TABLE`, 28.000 al día y 3.390 segundos de CPU, para crear unas
+ * tablas que ya existían desde la primera vez.
+ *
+ * Entra en la cadena de `prepararEsquema` como un módulo más: termina antes de
+ * que el servidor escuche, así que cuando llega la primera petición las tablas
+ * están. Si falla, `prepararEsquema` lo registra y el servidor arranca igual.
+ */
+async function initTallerEsquema(): Promise<void> {
+  await ensureMaintenanceTables();
+  await ensureAppUsersTable();
+  await sembrarPlantillasRapidas();
+}
+
+
 async function ensureMaintenanceTables() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS maintenance_tasks (
@@ -12279,7 +12397,6 @@ function normalizeDbAppUser(data: any): DbAppUser | null {
 }
 
 async function listDbAppUsers(): Promise<DbAppUser[]> {
-  await ensureAppUsersTable();
   const r = await db.query(`SELECT data FROM app_users ORDER BY data->>'name'`);
   return r.rows.map((row: any) => normalizeDbAppUser(row.data)).filter(Boolean) as DbAppUser[];
 }
@@ -12451,7 +12568,6 @@ function normalizeAssignedMaintenanceTask(
 }
 
 async function getBlockedOutsideMaintenanceTechNames(techNames: string[]) {
-  await ensureMaintenanceTables();
 
   const uniqueTechNames = Array.from(
     new Set(
@@ -12485,7 +12601,6 @@ async function getBlockedOutsideMaintenanceTechNames(techNames: string[]) {
 }
 
 async function interruptWorkshopMaintenanceForTechs(techNames: string[]) {
-  await ensureMaintenanceTables();
 
   const uniqueTechNames = Array.from(
     new Set(
@@ -12542,7 +12657,6 @@ async function interruptWorkshopMaintenanceForTechs(techNames: string[]) {
 }
 
 async function seedDefaultMaintenanceTasksIfEmpty() {
-  await ensureMaintenanceTables();
 
   const countResult = await db.query(`
     SELECT COUNT(*)::int AS count
@@ -12591,7 +12705,6 @@ app.get("/api/maintenance-tasks", exigirCredencial(requirePanelRole), async (_re
 
 app.post("/api/maintenance-tasks", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
-    await ensureMaintenanceTables();
 
     const task = normalizeMaintenanceTask({
       id: req.body?.id || `maintenance-${Date.now()}`,
@@ -12628,7 +12741,6 @@ app.post("/api/maintenance-tasks", exigirCredencial(requirePanelRole), async (re
 
 app.put("/api/maintenance-tasks/:id", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
-    await ensureMaintenanceTables();
 
     const id = String(req.params.id || "").trim();
 
@@ -12686,7 +12798,6 @@ app.put("/api/maintenance-tasks/:id", exigirCredencial(requirePanelRole), async 
 
 app.delete("/api/maintenance-tasks/:id", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
-    await ensureMaintenanceTables();
 
     const id = String(req.params.id || "").trim();
 
@@ -12705,7 +12816,6 @@ app.delete("/api/maintenance-tasks/:id", exigirCredencial(requirePanelRole), asy
 
 app.get("/api/assigned-maintenance-tasks", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
-    await ensureMaintenanceTables();
 
     const result = await db.query(`
       SELECT data
@@ -12728,7 +12838,6 @@ app.get("/api/assigned-maintenance-tasks", exigirCredencial(requirePanelRole), a
 
 app.get("/api/maintenance-availability", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
-    await ensureMaintenanceTables();
 
     const result = await db.query(`
   SELECT data
@@ -12784,7 +12893,6 @@ const interruptedTasks = activeMaintenanceTasks.filter(
 
 app.post("/api/assigned-maintenance-tasks", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
-    await ensureMaintenanceTables();
 
     const task = normalizeAssignedMaintenanceTask({
       id: req.body?.id || `assigned-maintenance-${Date.now()}`,
@@ -12849,7 +12957,6 @@ async function updateAssignedMaintenanceTaskStatus(
   status: AssignedMaintenanceTaskStatus,
   extra: Record<string, unknown> = {}
 ) {
-  await ensureMaintenanceTables();
 
   const existingResult = await db.query(
     `
@@ -12952,7 +13059,6 @@ app.put("/api/assigned-maintenance-tasks/:id/resume", exigirCredencial(requirePa
 
 app.delete("/api/assigned-maintenance-tasks/history", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
-    await ensureMaintenanceTables();
 
     await db.query(`
       DELETE FROM assigned_maintenance_tasks
@@ -12978,7 +13084,6 @@ app.delete(
   requireSupervisorRole,
   async (req, res) => {
     try {
-      await ensureMaintenanceTables();
 
       const olderThanMs = Date.now() - 12 * 60 * 60 * 1000;
       const dryRun = String(req.query.dryRun || "") === "true";
@@ -13044,7 +13149,6 @@ app.delete(
 
 app.delete("/api/assigned-maintenance-tasks/:id", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
-    await ensureMaintenanceTables();
 
     const id = String(req.params.id || "").trim();
 
@@ -13136,84 +13240,6 @@ app.get("/api/rules", exigirCredencial(requirePanelRole), async (_req, res) => {
  */
 app.get("/api/quick-templates", requirePanelRole, async (_req, res) => {
   try {
-    const defaults = [
-      {
-        key: "alineacion_camion",
-        label: "Alineación Camión",
-        area: "camion",
-        mode: "single",
-        allowedTechs: JSON.stringify(["Anthoni", "Alejandro", "José"]),
-        priorityOrder: JSON.stringify(["Anthoni", "Alejandro", "José"]),
-        standardMinutes: 90,
-      },
-      {
-        key: "pinchazo_camion",
-        label: "Pinchazo camión",
-        area: "camion",
-        mode: "single",
-        allowedTechs: JSON.stringify([
-          "José",
-          "Iván",
-          "Alejandro",
-          "Jesús",
-          "Anthoni",
-          "David",
-        ]),
-        priorityOrder: JSON.stringify([
-          "José",
-          "Iván",
-          "Alejandro",
-          "Jesús",
-          "Anthoni",
-          "David",
-        ]),
-        standardMinutes: 25,
-      },
-      {
-        key: "cambio_4_neumaticos_camion",
-        label: "Cambio de 4 neumáticos de camión",
-        area: "camion",
-        mode: "team",
-        allowedTechs: JSON.stringify([
-          "José",
-          "Iván",
-          "Alejandro",
-          "Jesús",
-          "Anthoni",
-          "David",
-        ]),
-        priorityOrder: JSON.stringify([
-          "José",
-          "Iván",
-          "Alejandro",
-          "Jesús",
-          "Anthoni",
-          "David",
-        ]),
-        standardMinutes: 60,
-      },
-    ];
-
-    for (const item of defaults) {
-      await db.query(
-        `
-        INSERT INTO quick_templates
-          (key, label, area, mode, "allowedTechs", "priorityOrder", "standardMinutes")
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT (key) DO NOTHING
-        `,
-        [
-          item.key,
-          item.label,
-          item.area,
-          item.mode,
-          item.allowedTechs,
-          item.priorityOrder,
-          item.standardMinutes ?? null,
-        ]
-      );
-    }
-
     const result = await db.query(`
       SELECT *
       FROM quick_templates
@@ -15165,7 +15191,6 @@ app.post("/api/users", requireAdminRole, async (req, res) => {
     if (!name || !password) {
       return res.status(400).json({ error: "Nombre y contraseña obligatorios" });
     }
-    await ensureAppUsersTable();
     const id = `user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const user = normalizeDbAppUser({ id, name, password, role, allowedViews });
     await db.query(
@@ -15182,7 +15207,6 @@ app.post("/api/users", requireAdminRole, async (req, res) => {
 app.put("/api/users/:id", requireAdminRole, async (req, res) => {
   try {
     const id = String(req.params.id || "").trim();
-    await ensureAppUsersTable();
     const existing = await db.query(`SELECT data FROM app_users WHERE id = $1`, [id]);
     if (existing.rows.length === 0) {
       return res.status(404).json({ error: "Usuario no encontrado" });
@@ -15209,7 +15233,6 @@ app.put("/api/users/:id", requireAdminRole, async (req, res) => {
 
 app.delete("/api/users/:id", requireAdminRole, async (req, res) => {
   try {
-    await ensureAppUsersTable();
     await db.query(`DELETE FROM app_users WHERE id = $1`, [String(req.params.id || "").trim()]);
     res.json({ ok: true });
   } catch (error) {
@@ -22175,6 +22198,10 @@ async function prepararEsquema(nombre: string, fn: () => Promise<void>): Promise
 }
 
 initDb()
+  // Taller: las tablas de mantenimiento, las de usuarios del panel y las
+  // plantillas de serie. Va la primera porque no depende de nadie y porque
+  // los manejadores ya no las preparan por su cuenta.
+  .then(() => prepararEsquema("Taller", initTallerEsquema))
   .then(() => prepararEsquema("Integration Hub", initIntegrationHub))
   .then(() => prepararEsquema("Licencias", initLicenses))
   .then(() => prepararEsquema("Connect Pro", initConnect))

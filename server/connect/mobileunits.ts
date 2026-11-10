@@ -133,19 +133,51 @@ export async function syncMobileUnits(): Promise<number> {
     }
 
     const prev = existing.rows[0];
-    await db.query(
-      `UPDATE connect_mobile_units SET
-         name = $1, plate = $2, status = $3, "technicianRef" = $4,
-         latitude = COALESCE($5, latitude), longitude = COALESCE($6, longitude),
-         "positionText" = COALESCE($7, "positionText"), "speedKmh" = $8,
-         "connectionStatus" = $9, "activeAssistanceId" = $10,
-         "lastReportAtMs" = COALESCE($11, "lastReportAtMs"),
-         "sharedWithCentral" = $12, "updatedAtMs" = $13
-       WHERE id = $14`,
-      [v.name, v.plate ?? null, status, row.tech, row.lat, row.lng, row.posText,
-       row.speed, row.connection, row.activeId, row.lastReport,
-       v.compartidoCentral === true, now, prev.id],
-    );
+
+    /*
+     * Si no ha cambiado nada, no se escribe.
+     *
+     * Esta vuelta corre cada 30 segundos y el `UPDATE` iba suelto, así que las
+     * diez unidades se reescribían siempre: 2.933.478 escrituras sobre diez
+     * filas, 293.000 por fila, casi todas para dejarlas igual que estaban. Lo
+     * único que cambiaba de verdad era `updatedAtMs`, que es la hora de la
+     * vuelta y no un dato de la unidad.
+     *
+     * Se comparan los valores EFECTIVOS: las cuatro columnas con `COALESCE`
+     * conservan lo que ya había cuando el dato nuevo viene nulo, así que un
+     * GPS que calla no cuenta como cambio.
+     */
+    const mismo = (a: unknown, b: unknown) =>
+      (a == null ? "" : String(a)) === (b == null ? "" : String(b));
+    const sinCambios =
+      mismo(prev.name, v.name) &&
+      mismo(prev.plate, v.plate ?? null) &&
+      mismo(prev.status, status) &&
+      mismo(prev.technicianRef, row.tech) &&
+      mismo(prev.latitude, row.lat ?? prev.latitude) &&
+      mismo(prev.longitude, row.lng ?? prev.longitude) &&
+      mismo(prev.positionText, row.posText ?? prev.positionText) &&
+      mismo(prev.speedKmh, row.speed) &&
+      mismo(prev.connectionStatus, row.connection) &&
+      mismo(prev.activeAssistanceId, row.activeId) &&
+      mismo(prev.lastReportAtMs, row.lastReport ?? prev.lastReportAtMs) &&
+      mismo(prev.sharedWithCentral, v.compartidoCentral === true);
+
+    if (!sinCambios) {
+      await db.query(
+        `UPDATE connect_mobile_units SET
+           name = $1, plate = $2, status = $3, "technicianRef" = $4,
+           latitude = COALESCE($5, latitude), longitude = COALESCE($6, longitude),
+           "positionText" = COALESCE($7, "positionText"), "speedKmh" = $8,
+           "connectionStatus" = $9, "activeAssistanceId" = $10,
+           "lastReportAtMs" = COALESCE($11, "lastReportAtMs"),
+           "sharedWithCentral" = $12, "updatedAtMs" = $13
+         WHERE id = $14`,
+        [v.name, v.plate ?? null, status, row.tech, row.lat, row.lng, row.posText,
+         row.speed, row.connection, row.activeId, row.lastReport,
+         v.compartidoCentral === true, now, prev.id],
+      );
+    }
     if (prev.status !== status) {
       await db.query(
         `INSERT INTO connect_mobile_unit_events ("unitId", "fromStatus", "toStatus", reason, "createdAtMs")
