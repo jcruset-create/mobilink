@@ -338,6 +338,50 @@ function getNextStatus(
   return ROADSIDE_ASSISTANCE_STATUS_FLOW[index + 1] ?? null;
 }
 
+/*
+ * «Asignada», aún sin salir: cuánto tardaría aproximadamente desde donde está
+ * ahora la furgoneta. El servidor lo guarda unos minutos
+ * (`server/core/etaEstimada.ts`): cada cálculo es una llamada de pago a
+ * Google, así que aquí se pide cada minuto y no más.
+ */
+function EtaAproximada({ assistanceId }: { assistanceId: number }) {
+  const [eta, setEta] = useState<{
+    minutos: number; kilometros: string; calculadaAtMs: number; fuente: string | null;
+  } | null>(null);
+
+  useEffect(() => {
+    let vivo = true;
+    const cargar = () => {
+      apiFetch(`${API_BASE}/api/roadside-assistances/${assistanceId}/eta-estimada`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (vivo) setEta(d?.available ? d : null);
+        })
+        .catch(() => {});
+    };
+    cargar();
+    const intervalo = setInterval(cargar, 60_000);
+    return () => {
+      vivo = false;
+      clearInterval(intervalo);
+    };
+  }, [assistanceId]);
+
+  if (!eta) return null;
+  return (
+    <div
+      className="mt-4 flex items-center gap-2 rounded-lg border border-indigo-500/40 bg-indigo-500/15 px-3 py-2 text-sm font-bold text-indigo-300"
+      title={`Desde donde está ahora la furgoneta${eta.fuente === "tablet" ? " (posición de la tablet)" : ""}. Calculado a las ${new Date(eta.calculadaAtMs).toLocaleTimeString()}.`}
+    >
+      <img src="/van-icon.png" style={{height:24,width:"auto",flexShrink:0}} alt="furgoneta" />
+      <span>
+        Asignada — llegada aprox.: ~{eta.minutos} min · {eta.kilometros} km
+        <span className="ml-1 font-semibold text-indigo-400/80">(si sale ahora)</span>
+      </span>
+    </div>
+  );
+}
+
 function getActionLabel(status: RoadsideAssistanceStatus) {
   if (status === "pendiente") return "Asignar";
   if (status === "asignada") return "En camino";
@@ -2832,6 +2876,10 @@ export default function RoadsideAssistanceView({
                         );
                       })()}
                     </div>
+
+                    {assistance.status === "asignada" && (
+                      <EtaAproximada assistanceId={assistance.id} />
+                    )}
 
                     {assistance.status === "en_camino" && (
                       <div className="mt-4 flex items-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/15 px-3 py-2 text-sm font-bold text-blue-300">
