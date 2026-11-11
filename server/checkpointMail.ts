@@ -25,8 +25,21 @@ import { supabase } from "./supabase.ts";
 import { getMailTransport } from "./mail.ts";
 import { filasDelExcel, importarCheckpoint, type ResultadoCheckpoint } from "./tyrecontrol/checkpointImport.ts";
 import { esAdjuntoInforme } from "../src/modules/tyrecontrol/services/checkpoint.ts";
+import {
+  clasificar, procesarAvisoGoodyear, seMarcaLeido,
+  type Procesado as ProcesadoGoodyear,
+} from "./tyrecontrol/goodyear/ingesta.ts";
 
 const MIN_POR_DEFECTO = 15;
+
+/**
+ * Cuántos correos se miran por pasada.
+ *
+ * Nació pensado para un informe semanal. Con los avisos de presión llegando a
+ * cualquier hora siguen sobrando —son 1.920 al día a 15 minutos la pasada—,
+ * pero ahora los que se quedan fuera se cuentan y salen en el resultado.
+ */
+const TOPE_POR_PASADA = 20;
 
 function config() {
   const host = process.env.CHECKPOINT_IMAP_HOST;
@@ -46,6 +59,20 @@ export interface PasadaCheckpoint {
   correos: number;
   importados: number;
   errores: number;
+  /** Avisos de presión de Goodyear: nuevos, repetidos y sin casar. */
+  alertas: number;
+  repetidos: number;
+  sinCasar: number;
+  /** Correos que no son ni informe ni aviso: se cuentan y se marcan leídos. */
+  ignorados: number;
+  /**
+   * Los que se han quedado fuera del tope de esta pasada.
+   *
+   * Antes no se contaban, así que un buzón con más correos de los que cabe
+   * mirar de una vez se veía igual que uno al día. Con el informe semanal daba
+   * lo mismo; con avisos de presión llegando a cualquier hora, no.
+   */
+  pendientes: number;
 }
 
 /**
@@ -62,7 +89,10 @@ export async function revisarBuzonCheckpoint(): Promise<PasadaCheckpoint | { err
     logger: false,
   });
 
-  const out: PasadaCheckpoint = { correos: 0, importados: 0, errores: 0 };
+  const out: PasadaCheckpoint = {
+    correos: 0, importados: 0, errores: 0,
+    alertas: 0, repetidos: 0, sinCasar: 0, ignorados: 0, pendientes: 0,
+  };
   try {
     await cliente.connect();
     const lock = await cliente.getMailboxLock(cfg.carpeta);
@@ -70,18 +100,27 @@ export async function revisarBuzonCheckpoint(): Promise<PasadaCheckpoint | { err
       // Solo lo no leído: lo ya procesado se marca como leído al terminar, así
       // que el buzón mismo lleva la cuenta y no hay que recorrerlo entero cada
       // vez. El unique de message_id es la segunda red por si algo se relee.
-      const sinLeer = await cliente.search({ seen: false });
-      for (const uid of (sinLeer || []).slice(0, 20)) {
+      const sinLeer = (await cliente.search({ seen: false })) || [];
+      out.pendientes = Math.max(0, sinLeer.length - TOPE_POR_PASADA);
+      for (const uid of sinLeer.slice(0, TOPE_POR_PASADA)) {
         out.correos++;
         const procesado = await procesarCorreo(cliente, uid);
         if (procesado === "error") out.errores++;
         else if (procesado === "importado") out.importados++;
+        else if (procesado === "alerta") out.alertas++;
+        else if (procesado === "repetido") out.repetidos++;
+        else if (procesado === "no_casado") out.sinCasar++;
+        else out.ignorados++;
         // Un correo que ha fallado se queda SIN leer. Si se marcase, el arreglo
         // del fallo llegaría tarde: el informe ya estaría descartado y habría
         // que pedirle a alguien que lo reenviara. Se reintenta en la siguiente
         // pasada, que es lo que uno espera de algo que falla por un motivo
-        // pasajero. Los que se han importado o no traían informe, leídos.
-        if (procesado !== "error") {
+        // pasajero.
+        //
+        // Todo lo demás se marca leído, el `no_casado` incluido: volver a
+        // pasarlo daría lo mismo, y no se pierde porque queda en
+        // `tc_goodyear_avisos` con su motivo y con lo que se entendió.
+        if (seMarcaLeido(procesado)) {
           await cliente.messageFlagsAdd({ uid: String(uid) }, ["\\Seen"], { uid: true });
         }
       }
@@ -97,14 +136,44 @@ export async function revisarBuzonCheckpoint(): Promise<PasadaCheckpoint | { err
   return out;
 }
 
-async function procesarCorreo(cliente: ImapFlow, uid: number): Promise<"importado" | "sin_adjunto" | "error"> {
+type Procesado = "importado" | ProcesadoGoodyear;
+
+async function procesarCorreo(cliente: ImapFlow, uid: number): Promise<Procesado> {
   const msg = await cliente.fetchOne(String(uid), { source: true }, { uid: true });
-  if (!msg || !msg.source) return "sin_adjunto";
+  if (!msg || !msg.source) return "ignorado";
   const correo = await simpleParser(msg.source);
 
   const messageId = correo.messageId || `uid-${uid}`;
   const adjunto = (correo.attachments || []).find((a) => esAdjuntoInforme(a.filename));
-  if (!adjunto) return "sin_adjunto";
+
+  /*
+   * ── El reparto ────────────────────────────────────────────────────────────
+   *
+   * A este buzón llegan DOS cosas distintas del mismo remitente. El informe de
+   * la flota lo manda `proactivesolutions-alerts@ps.goodyear.com` desde agosto
+   * —91 de las 94 importaciones registradas— y los avisos de presión los manda
+   * esa misma dirección, así que repartir por remitente es imposible.
+   *
+   * Se mira primero el adjunto, que es lo que ya hacía `esAdjuntoInforme`: con
+   * informe, el camino de siempre, sin un solo cambio de comportamiento. Sin
+   * informe, se intenta leer como aviso de presión.
+   *
+   * Antes de esto, un correo sin adjunto se marcaba como leído y desaparecía
+   * sin dejar rastro: los avisos de Goodyear que cayeran aquí se perdían.
+   */
+  if (!adjunto) {
+    const r = await procesarAvisoGoodyear({
+      messageId,
+      asunto: correo.subject ?? null,
+      html: typeof correo.html === "string" ? correo.html : null,
+      texto: correo.text ?? null,
+      remitente: correo.from?.text ?? null,
+      fecha: correo.date ?? null,
+    });
+    if (r.estado === "error") console.error("Goodyear:", r.motivo);
+    if (r.estado === "no_casado") console.warn("Goodyear, aviso sin casar:", r.motivo);
+    return clasificar(r);
+  }
 
   // ¿Ya procesado CON ÉXITO? Sólo entonces se salta. Una fila en 'error' es
   // constancia de un intento fallido, no de un correo consumido: si se tratara
@@ -112,7 +181,7 @@ async function procesarCorreo(cliente: ImapFlow, uid: number): Promise<"importad
   // dado por visto.
   const { data: ya } = await supabase.from("tc_checkpoint_ejecuciones")
     .select("id, estado").eq("message_id", messageId).maybeSingle();
-  if (ya && ya.estado !== "error") return "sin_adjunto";
+  if (ya && ya.estado !== "error") return "repetido";
   // El unique de message_id impediría insertar el reintento, así que se retira
   // la constancia del intento anterior justo antes de volver a probar.
   if (ya) await supabase.from("tc_checkpoint_ejecuciones").delete().eq("id", ya.id);
@@ -226,9 +295,21 @@ function traza(qué: string, siempre: boolean) {
     // El error ya lo ha escrito revisarBuzonCheckpoint con su causa.
     if ("error" in r) return;
     if (!siempre && !r.correos && !r.errores) return;
+    // Lo que no ha pasado no se dice: una línea con seis ceros cada quince
+    // minutos acaba tapando la que sí importa. Pero `sinCasar` y `pendientes`
+    // se dicen SIEMPRE que no sean cero, porque son los dos avisos de que algo
+    // se está quedando fuera.
     console.log(
-      `CheckPoint por correo: ${qué} — ${r.correos} correo(s), ` +
-      `${r.importados} importado(s), ${r.errores} error(es)`,
+      [
+        `CheckPoint por correo: ${qué} — ${r.correos} correo(s)`,
+        r.importados ? `${r.importados} informe(s)` : "",
+        r.alertas ? `${r.alertas} alerta(s) de presión` : "",
+        r.repetidos ? `${r.repetidos} repetido(s)` : "",
+        r.sinCasar ? `${r.sinCasar} SIN CASAR` : "",
+        r.ignorados ? `${r.ignorados} ignorado(s)` : "",
+        r.errores ? `${r.errores} error(es)` : "",
+        r.pendientes ? `${r.pendientes} PENDIENTES para la próxima pasada` : "",
+      ].filter(Boolean).join(", "),
     );
   };
 }
