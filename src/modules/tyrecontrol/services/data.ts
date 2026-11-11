@@ -4522,6 +4522,25 @@ export async function listarAlertasPresionVehiculo(vehiculoId: string): Promise<
   return (data ?? []) as unknown as AlertaPresion[];
 }
 
+/**
+ * Los avisos de presión ABIERTOS de toda la empresa, para la campana.
+ *
+ * Sin filtro de empresa: la RLS de `tc_alertas_presion` ya enseña solo lo que
+ * cada uno puede ver, igual que hace la campana con los avisos de base.
+ *
+ * Trae la matrícula con la fila porque el aviso tiene que decir DE QUÉ
+ * vehículo habla: en la campana no hay contexto alrededor que lo diga.
+ */
+export async function listarAlertasPresionAbiertas(limite = 30): Promise<AlertaPresion[]> {
+  const { data, error } = await supabase.from("tc_alertas_presion")
+    .select("*, posicion:tc_posiciones_vehiculo(codigo_posicion), vehiculo:tc_vehiculos(matricula)")
+    .eq("estado", "abierta")
+    .order("ultimo_aviso_at", { ascending: false })
+    .limit(limite);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as AlertaPresion[];
+}
+
 /** Dar por resuelto un aviso a mano. Goodyear no avisa de que se ha arreglado. */
 export async function resolverAlertaPresion(id: string, nota?: string): Promise<void> {
   const { error } = await supabase.from("tc_alertas_presion")

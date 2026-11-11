@@ -290,6 +290,8 @@ export interface AlertaPresion {
   resuelta_at?: string | null;
   nota?: string | null;
   posicion?: { codigo_posicion?: string | null; nombre?: string | null } | null;
+  /** Solo cuando se pide para la campana, que necesita decir de qué vehículo. */
+  vehiculo?: { matricula?: string | null } | null;
   neumatico?: { codigo_interno?: string | null; numero_serie?: string | null } | null;
 }
 
