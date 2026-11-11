@@ -21,7 +21,7 @@ import type {
   VehiculoConBase,
 } from "../../integration-hub/application/services/BasePresenceService.ts";
 import type { GeoZonaBase } from "../../integration-hub/domain/presencia.ts";
-import { filaDePresencia, type Anterior } from "./filas.ts";
+import { filaCambia, filaDePresencia, type Anterior } from "./filas.ts";
 import { decidirEstancia, filaNueva, type EstanciaAbierta } from "./historico.ts";
 import { INTERVALO_MIN } from "./cadencia.ts";
 
@@ -129,7 +129,13 @@ export async function guardarPresencia(filas: FilaPresencia[]): Promise<void> {
   for (let desde = 0; ; desde += LOTE) {
     const { data, error } = await supabase
       .from("tc_vehiculo_presencia_base")
-      .select("vehiculo_id, estado, delegacion_id, entrada_base_at")
+      // Las tres primeras son para no perder la estancia (`mismaEstancia`); el
+      // resto, para saber si la fila cambia y poder no escribirla (`filaCambia`).
+      .select(
+        "vehiculo_id, estado, delegacion_id, entrada_base_at, es_su_base, " +
+          "distancia_m, lat, lng, velocidad_kmh, posicion_at, proveedor, " +
+          "cuenta, externo, motivo",
+      )
       .eq("empresa_id", empresaId)
       .range(desde, desde + LOTE - 1);
     if (error) throw new Error(`No se pudo leer la presencia anterior: ${error.message}`);
@@ -141,13 +147,57 @@ export async function guardarPresencia(filas: FilaPresencia[]): Promise<void> {
   }
 
   const ahora = new Date().toISOString();
-  const upsert = filas.map((f) => filaDePresencia(f, anterior.get(f.vehiculoId), ahora));
+
+  /*
+   * Solo se escriben las filas que dicen algo distinto.
+   *
+   * Medido el 10/11/2026: de los 717 vehículos solo 356 traen posición más
+   * fresca que el intervalo de diez minutos. Los otros 361 —155 dormidos, con
+   * posición de hace más de una hora— se reescribían enteros para dejar la
+   * fila igual que estaba. Eran unas 73.000 escrituras al día.
+   *
+   * Lo que cambiaba en todas era la contabilidad del barrido, no el dato:
+   * `antiguedad_min` se recalcula ahora al leer (`frescura.ts`) y el instante
+   * del barrido se apunta una vez en `tc_presencia_barrido`, justo aquí abajo.
+   */
+  const upsert = filas
+    .map((f) => ({ id: f.vehiculoId, fila: filaDePresencia(f, anterior.get(f.vehiculoId), ahora) }))
+    .filter(({ id, fila }) => filaCambia(fila, anterior.get(id)))
+    .map(({ fila }) => fila);
 
   for (let i = 0; i < upsert.length; i += LOTE) {
     const { error } = await supabase
       .from("tc_vehiculo_presencia_base")
       .upsert(upsert.slice(i, i + LOTE), { onConflict: "vehiculo_id" });
     if (error) throw new Error(`No se pudo guardar la presencia: ${error.message}`);
+  }
+
+  /*
+   * El barrido ha pasado, aunque no haya cambiado ni una fila.
+   *
+   * Esto es lo que sostiene el «último barrido» del panel. Antes salía de
+   * `max(calculado_at)` de las 717 filas, y eso solo funcionaba porque se
+   * reescribían todas: de madrugada, con la flota parada, ahora podrían pasar
+   * horas sin que cambiara ninguna y la pantalla diría que el barrido lleva
+   * parado desde las diez de la noche.
+   *
+   * Va en su propio try y DELANTE del histórico: si falla, el barrido ya ha
+   * dejado la presencia escrita y lo único que se pierde es la hora.
+   */
+  try {
+    const { error } = await supabase.from("tc_presencia_barrido").upsert(
+      {
+        empresa_id: empresaId,
+        calculado_at: ahora,
+        vehiculos: filas.length,
+        escritas: upsert.length,
+        actualizado_at: ahora,
+      },
+      { onConflict: "empresa_id" },
+    );
+    if (error) throw new Error(error.message);
+  } catch (e: any) {
+    console.warn("[presencia-bases] no se pudo anotar la hora del barrido:", e?.message ?? e);
   }
 
   // Y el histórico. Aparte y detrás, para que un fallo aquí no se lleve por

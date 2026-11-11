@@ -19,6 +19,7 @@ import { supabase } from "../../supabase.ts";
 import { empresaDe, resolverSolicitante, type Solicitante } from "../conciliacion/router.ts";
 import { barrerBases } from "./barrido.ts";
 import { empresaParaLeer } from "./empresaPedida.ts";
+import { refrescarAntiguedad } from "./frescura.ts";
 import { filtrarPresencia, type PresenciaFiltrada } from "./seguimiento.ts";
 
 type Peticion = Request & { solicitante: Solicitante };
@@ -78,7 +79,42 @@ export async function leerPresenciaConDescartes(
     out.push(...pagina);
     if (pagina.length < TAMANO) break;
   }
-  return filtrarPresencia(out);
+  /*
+   * `antiguedad_min` se recalcula aquí y no se lee de la fila.
+   *
+   * Es lo que permite que el barrido deje de reescribir las filas que no
+   * cambian: ese número crece solo aunque no llegue ninguna posición nueva, y
+   * era la única razón por la que un vehículo parado necesitaba que se le
+   * reescribiera la fila cada diez minutos. Además el dato sale mejor: lo
+   * guardado era «cuánto hacía en el último barrido» y esto es «cuánto hace
+   * ahora mismo».
+   *
+   * Va antes de filtrar para que las TRES pantallas que leen por aquí —el
+   * panel, la tablet y la hoja del patio en PDF— reciban exactamente lo mismo.
+   */
+  return filtrarPresencia(refrescarAntiguedad(out));
+}
+
+/**
+ * Cuándo corrió el último barrido de esta empresa.
+ *
+ * Va en su propio try y devuelve `null` si algo falla: es el dato que explica
+ * la pantalla, no la pantalla. Que no se pueda leer la hora no puede dejar sin
+ * ver los 717 vehículos.
+ */
+async function leerHoraDelBarrido(empresaId: string): Promise<string | null> {
+  try {
+    const { data, error } = await supabase
+      .from("tc_presencia_barrido")
+      .select("calculado_at")
+      .eq("empresa_id", empresaId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return data?.calculado_at ? String(data.calculado_at) : null;
+  } catch (e) {
+    console.warn("[presencia-bases] no se pudo leer la hora del barrido:", (e as any)?.message ?? e);
+    return null;
+  }
 }
 
 /**
@@ -161,7 +197,7 @@ export function createPresenciaRouter(): Router {
       if ("sinEmpresa" in pedida) return res.status(400).json({ error: "Sin empresa" });
       const { empresaId } = pedida;
 
-      const [presencia, { data: bases }, cuentas] = await Promise.all([
+      const [presencia, { data: bases }, cuentas, barrido] = await Promise.all([
         leerPresenciaConDescartes(empresaId),
         supabase
           .from("tc_delegaciones")
@@ -169,6 +205,7 @@ export function createPresenciaRouter(): Router {
           .eq("empresa_id", empresaId)
           .not("base_lat", "is", null),
         cuentasDeTelematica(empresaId),
+        leerHoraDelBarrido(empresaId),
       ]);
 
       const { filas, sinSeguimiento } = presencia;
@@ -202,12 +239,25 @@ export function createPresenciaRouter(): Router {
           radioM: b.base_radio_m == null ? null : Number(b.base_radio_m),
         })),
         porEstado,
-        // El barrido más reciente de los que se ven. Sin filas, null.
+        /*
+         * Cuándo pasó el barrido.
+         *
+         * Sale de `tc_presencia_barrido`, que lo guarda una vez por vuelta.
+         * Antes salía de `max(calculado_at)` de las filas, y eso dependía de
+         * que el barrido las reescribiera TODAS cada vez; desde que se salta
+         * las que no cambian, de madrugada podrían pasar horas sin tocar
+         * ninguna y esto diría que el barrido lleva parado toda la noche.
+         *
+         * El `max` de las filas se queda de respaldo, para las empresas que
+         * todavía no hayan tenido un barrido desde el despliegue.
+         */
         calculadoAt:
+          barrido ??
           filas.reduce<string | null>((max, f: any) => {
             const c = f.calculado_at ? String(f.calculado_at) : null;
             return c && (!max || c > max) ? c : max;
-          }, null) ?? null,
+          }, null) ??
+          null,
       });
     } catch (e) {
       fallo(res, e);
