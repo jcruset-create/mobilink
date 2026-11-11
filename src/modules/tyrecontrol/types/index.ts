@@ -260,6 +260,39 @@ export interface WebfleetAlerta {
   created_at?: string | null;
 }
 
+/**
+ * Un aviso de presión del sensor de Goodyear.
+ *
+ * NO es una revisión: nadie ha ido al vehículo. Llega por correo y vive en su
+ * propia tabla, `tc_alertas_presion`. Una fila por RUEDA mientras siga
+ * abierta, no una por correo: `avisos` cuenta cuántas veces ha avisado la
+ * misma, que es lo que distingue una presión baja de una fuga.
+ */
+export interface AlertaPresion {
+  id: string;
+  empresa_id: string;
+  vehiculo_id: string;
+  posicion_id: string;
+  neumatico_id?: string | null;
+  tipo: "presion_baja" | "desinflado";
+  severidad: "alta" | "media";
+  presion_recomendada_bar?: number | null;
+  /** Nula en los avisos de «desinflado»: el correo pone `!!!`, no un número. */
+  presion_bar?: number | null;
+  /** El que dice el correo, con su signo. No se recalcula desde los bares. */
+  desviacion_pct?: number | null;
+  umbral_pct?: number | null;
+  medido_at: string;
+  estado: "abierta" | "resuelta" | "descartada";
+  avisos: number;
+  primer_aviso_at: string;
+  ultimo_aviso_at: string;
+  resuelta_at?: string | null;
+  nota?: string | null;
+  posicion?: { codigo_posicion?: string | null; nombre?: string | null } | null;
+  neumatico?: { codigo_interno?: string | null; numero_serie?: string | null } | null;
+}
+
 // ── Planificación de revisiones periódicas (mantenimiento) ──────
 export type EstadoPlan =
   | "correcta" | "proxima" | "vence_hoy" | "atrasada" | "planificada"

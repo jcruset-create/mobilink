@@ -10,7 +10,14 @@ const TIPO_LABEL: Record<string, string> = {
   bajo_minimo: "Bajo mínimo legal",
   proximo_sustitucion: "Próximo a sustitución",
   vehiculo_sin_revisar: "Vehículo sin revisar",
+  // Los dos de Goodyear. Entran por `tc_informes_alertas` igual que los otros
+  // tres, así que aquí solo hace falta ponerles nombre.
+  presion_baja: "Presión baja",
+  desinflado: "Neumático desinflado",
 };
+
+/** Las que vienen del sensor y no de una revisión. */
+const DE_PRESION = ["presion_baja", "desinflado"];
 
 const SEV_ESTILO: Record<string, { punto: string; texto: string }> = {
   alta: { punto: "#ef4444", texto: "text-rose-300" },
@@ -40,13 +47,15 @@ export default function InformeAlertas() {
   const nAlta = alertas.filter((a) => a.severidad === "alta").length;
   const nMedia = alertas.filter((a) => a.severidad === "media").length;
   const porTipo = (t: string) => alertas.filter((a) => a.tipo === t).length;
+  const nPresion = alertas.filter((a) => DE_PRESION.includes(a.tipo)).length;
 
   return (
     <div>
-      <div className="mb-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mb-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
         <KpiCard title="Alertas críticas" value={nAlta} tono={nAlta > 0 ? "danger" : "ok"} />
         <KpiCard title="Alertas medias" value={nMedia} tono={nMedia > 0 ? "warn" : "ok"} />
         <KpiCard title="Bajo mínimo legal" value={porTipo("bajo_minimo")} hint="≤ 1,6 mm" />
+        <KpiCard title="Presión" value={nPresion} tono={nPresion > 0 ? "danger" : "ok"} hint="Sensor Goodyear" />
         <KpiCard title="Sin revisar" value={porTipo("vehiculo_sin_revisar")} />
       </div>
 
@@ -91,6 +100,9 @@ export default function InformeAlertas() {
       <div className="mt-3 text-[11px] text-slate-500">
         Reglas: bajo mínimo ≤ 1,6 mm · próximo a sustitución ≤ 3,0 mm (sobre la última medición de cada neumático montado) ·
         vehículos activos sin ninguna revisión. Umbrales configurables por empresa y por medida en la ficha de la empresa (Empresas → ficha → Umbrales de profundidad).
+        {" "}Las de <b>presión</b> no salen de una revisión: las manda el sensor de Goodyear por correo, y siguen abiertas hasta que
+        alguien las cierra o hasta que una revisión posterior mida bien esa rueda. Cuando una misma rueda avisa varios días seguidos
+        se dice en el detalle, porque eso ya no es poca presión: es una fuga.
       </div>
     </div>
   );

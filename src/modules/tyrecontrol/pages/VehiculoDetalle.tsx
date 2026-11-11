@@ -15,6 +15,7 @@ import { destinoVolver, type DeDondeVengo } from "../services/navegacionVolver";
 import { Badge, Modal, TableWrap, tdCls, thCls } from "../components/ui";
 import VehicleLayoutImage from "../components/VehicleLayoutImage";
 import PlanoSnapshot from "../components/PlanoSnapshot";
+import AvisosPresionVehiculo from "../components/AvisosPresionVehiculo";
 import FichaTecnicaVehiculo from "../components/FichaTecnicaVehiculo";
 import FichaTecnicaItv from "../components/FichaTecnicaItv";
 import SeccionTacografo from "../components/SeccionTacografo";
@@ -382,6 +383,10 @@ export default function VehiculoDetalle() {
           onGuardado={async () => { await cargar(); }}
         />
       )}
+
+      {/* Avisos de presión abiertos. Arriba del todo porque es lo que cambia lo
+          que se va a hacer con el vehículo; si no hay ninguno, no pinta nada. */}
+      <AvisosPresionVehiculo vehiculoId={v.id} />
 
       {/* Datos generales: todo lo que traiga la ficha técnica, no solo lo que tiene columna propia */}
       <div className="rounded-lg bg-slate-800 p-3">
