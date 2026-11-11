@@ -10,6 +10,7 @@ import '../models/models.dart';
 import '../models/incidencias.dart';
 import '../models/cliente_activo.dart';
 import '../models/presencia_vista.dart';
+import '../models/alerta_presion.dart';
 
 /// Capa fina sobre supabase_flutter. No reimplementa reglas de negocio:
 /// las mismas RLS y RPCs que usa el panel web protegen y validan aqui.
@@ -2519,6 +2520,51 @@ class TyreControlApi {
         return (j['error'] as String?) ?? 'Error al sincronizar';
       }
       return null; // sin error
+    } catch (e) {
+      return '$e';
+    }
+  }
+
+  /// Los avisos de presión ABIERTOS de un vehículo.
+  ///
+  /// Vienen del sensor de Goodyear por correo, no de una revisión. Se piden
+  /// solo los abiertos porque es lo que contesta la pregunta que se hace
+  /// delante del vehículo —¿tiene algo ahora mismo?—; los resueltos no cambian
+  /// lo que hay que hacer hoy.
+  ///
+  /// Nunca lanza: devuelve lista vacía si algo falla. Un técnico que no puede
+  /// empezar la revisión porque no se han podido leer los avisos sería peor
+  /// que uno que la empieza sin verlos.
+  static Future<List<AlertaPresion>> listarAlertasPresionVehiculo(String vehiculoId) async {
+    try {
+      final r = await _db
+          .from('tc_alertas_presion')
+          .select(
+            '*, posicion:tc_posiciones_vehiculo(codigo_posicion), '
+            'neumatico:tc_neumaticos(codigo_interno, numero_serie)',
+          )
+          .eq('vehiculo_id', vehiculoId)
+          .eq('estado', 'abierta')
+          .order('ultimo_aviso_at', ascending: false);
+      return (r as List)
+          .map((e) => AlertaPresion.desdeJson(e as Map<String, dynamic>))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Dar por resuelto un aviso. Goodyear no avisa de que se haya arreglado:
+  /// lo cierra quien infla la rueda.
+  static Future<String?> resolverAlertaPresion(String id, {String? nota}) async {
+    try {
+      await _db.from('tc_alertas_presion').update({
+        'estado': 'resuelta',
+        'resuelta_at': DateTime.now().toUtc().toIso8601String(),
+        'nota': nota,
+        'actualizado_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', id);
+      return null;
     } catch (e) {
       return '$e';
     }

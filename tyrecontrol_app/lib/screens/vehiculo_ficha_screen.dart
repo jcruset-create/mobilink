@@ -4,6 +4,7 @@ import '../models/tipo_llanta.dart';
 import '../models/umbrales.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/banda_avisos_presion.dart';
 import '../widgets/vehicle_layout_image.dart';
 import 'cambio_neumatico_screen.dart';
 import 'historial_operaciones_screen.dart';
@@ -236,6 +237,14 @@ class _VehiculoFichaScreenState extends State<VehiculoFichaScreen> {
                   child: ListView(
                     padding: const EdgeInsets.all(12),
                     children: [
+                      // Arriba del todo: es lo que cambia lo que se va a
+                      // hacer con el vehículo. Sin avisos no pinta nada.
+                      // Aquí SÍ se puede cerrar: esta pantalla es para mirar
+                      // el vehículo, no para empezar una revisión.
+                      BandaAvisosPresion(
+                        vehiculoId: widget.vehiculoId,
+                        permitirResolver: true,
+                      ),
                       _datosGenerales(),
                       const SizedBox(height: 12),
                       _kilometraje(),
