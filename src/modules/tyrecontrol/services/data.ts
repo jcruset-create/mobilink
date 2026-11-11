@@ -6,6 +6,7 @@ import { recorrerPaginas } from "./paginacion";
 import type { PosicionOperario } from "./ubicacionOperario";
 import type { LecturaParteProveedor } from "./parteProveedor";
 import type {
+  AlertaPresion,
   Delegacion, DelegacionInput, Empresa, EmpresaInput, Perfil, Rol,
   TipoVehiculo, PosicionVehiculo, Vehiculo, VehiculoInput,
   Neumatico, NeumaticoInput, MontajeActual, HistorialMontaje, DestinoDesmontaje, MotivoDesmontaje,
@@ -4501,4 +4502,35 @@ export async function importarInformesPdf(
   return tcg<ResultadoImportarInformesPdf>(
     `/api/tyrecontrol/tacografo/informes-pdf?empresa=${encodeURIComponent(empresaId)}`,
     { method: "POST", body: fd });
+}
+
+/**
+ * Los avisos de presión ABIERTOS de un vehículo.
+ *
+ * Vienen del sensor de Goodyear por correo, no de una revisión: ver
+ * `server/tyrecontrol/goodyear/`. Se piden solo los abiertos porque es lo que
+ * contesta la pregunta que se hace delante del vehículo —¿tiene algo ahora
+ * mismo?—; el histórico de los resueltos no cambia lo que hay que hacer hoy.
+ */
+export async function listarAlertasPresionVehiculo(vehiculoId: string): Promise<AlertaPresion[]> {
+  const { data, error } = await supabase.from("tc_alertas_presion")
+    .select("*, posicion:tc_posiciones_vehiculo(codigo_posicion, nombre), neumatico:tc_neumaticos(codigo_interno, numero_serie)")
+    .eq("vehiculo_id", vehiculoId)
+    .eq("estado", "abierta")
+    .order("ultimo_aviso_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as AlertaPresion[];
+}
+
+/** Dar por resuelto un aviso a mano. Goodyear no avisa de que se ha arreglado. */
+export async function resolverAlertaPresion(id: string, nota?: string): Promise<void> {
+  const { error } = await supabase.from("tc_alertas_presion")
+    .update({
+      estado: "resuelta",
+      resuelta_at: new Date().toISOString(),
+      nota: nota ?? null,
+      actualizado_at: new Date().toISOString(),
+    })
+    .eq("id", id);
+  if (error) throw new Error(error.message);
 }
