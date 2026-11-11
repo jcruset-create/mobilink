@@ -15,7 +15,17 @@ import { purgeLiteActions } from "./lite.ts";
 import { pasadaDeCierreAutomatico } from "./pricing/cierreAutomatico.ts";
 
 const TICK_MS = 15_000;
-const SCORE_EVERY_TICKS = 20; // recalcular el score cada ~5 min
+const INTEL_EVERY_TICKS = 20; // anomalías e inteligencia operacional, cada ~5 min
+/*
+ * El score, cada hora y no cada cinco minutos.
+ *
+ * Es una media móvil de noventa días: entre una vuelta y la siguiente no puede
+ * moverse de forma que nadie note. Recalcularlo cada cinco minutos costaba 26
+ * talleres × 6 consultas × 288 vueltas al día para obtener, casi siempre, el
+ * mismo número. La detección de anomalías se queda donde estaba, que esa sí
+ * levanta avisos y la latencia le importa.
+ */
+const SCORE_EVERY_TICKS = 240;
 let timer: ReturnType<typeof setInterval> | null = null;
 let running = false;
 let tick = 0;
@@ -30,9 +40,13 @@ export async function runConnectChecksOnce(): Promise<void> {
     if (expired > 0) console.log(`[Connect] worker: ${expired} oferta(s) expiradas → cascada`);
     await notifySlaEvents(enqueueWebhookEvent);
     if (tick % 2 === 0) await syncMobileUnits(); // cada ~30 s
-    if (tick++ % SCORE_EVERY_TICKS === 0) {
+    if (tick % SCORE_EVERY_TICKS === 0) {
       const scored = await computeWorkshopScores();
       if (scored > 0) console.log(`[Connect] worker: score recalculado para ${scored} taller(es)`);
+    }
+    // `tick++` vive aquí, igual que antes, para no desfasar los `tick % 240`
+    // y `tick % 4` de más abajo.
+    if (tick++ % INTEL_EVERY_TICKS === 0) {
       const anomalies = await detectAnomalies();
       if (anomalies > 0) console.log(`[Connect] worker: ${anomalies} anomalía(s) de red detectadas`);
       // Inteligencia operacional: snapshot diario, precisión de demanda y recomendaciones
