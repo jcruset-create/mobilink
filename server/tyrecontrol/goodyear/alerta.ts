@@ -102,6 +102,28 @@ const TIPOS: Array<{ clave: RegExp; tipo: TipoAlerta }> = [
   { clave: /presi[óo]n\s+baja/i, tipo: "presion_baja" },
 ];
 
+/**
+ * Los avisos que Goodyear manda y que NO son de presión.
+ *
+ * Existe esta lista porque se comprobó en producción: de los primeros 55
+ * correos, 7 eran de PROFUNDIDAD DE DIBUJO —«Alerta de profundidad de dibujo
+ * - límite legal» y «Alertas de profundidad del dibujo - mantenimiento»— y el
+ * parser los tipaba como avisos de presión, porque su cuerpo también habla de
+ * neumáticos. Habrían acabado en `tc_alertas_presion` diciendo una presión
+ * que nadie ha medido.
+ *
+ * Se reconocen a propósito, antes que los de presión, y se apartan con su
+ * nombre en vez de dejar que caigan en el saco equivocado. Cuando se decida
+ * qué hacer con ellos —TyreControl ya tiene alertas de profundidad, sacadas
+ * de las revisiones— saldrán de aquí y tendrán su sitio.
+ *
+ * No se pierden: quedan en `tc_goodyear_avisos` con su motivo, así que se
+ * pueden repasar sin pedirle a nadie que reenvíe nada.
+ */
+const NO_SON_DE_PRESION: Array<{ clave: RegExp; familia: string }> = [
+  { clave: /profundidad\s+de(l)?\s+dibujo/i, familia: "profundidad de dibujo" },
+];
+
 /** La zona del cliente. El correo da hora de pared, sin decir de dónde. */
 const ZONA = "Europe/Madrid";
 
@@ -138,16 +160,39 @@ export function textoDelCorreo(html: string | null | undefined, texto?: string |
  * en líneas distintas, según cómo caiga la tabla al aplanarla. Se admiten las
  * dos, y se para en el salto de línea para no arrastrar el rótulo siguiente.
  */
+/**
+ * ¿Esta línea es OTRO rótulo y no un valor?
+ *
+ * Hace falta porque un campo vacío es normal —«Etiquetas:» casi siempre lo
+ * está, y «ID de flota:» lo está en los avisos de profundidad— y sin esta
+ * comprobación el valor que se devuelve es el rótulo siguiente.
+ *
+ * No es hipotético: así entraron en producción 17 avisos con
+ * `idFlota = "Rueda:"`, que luego no casaban contra el número de unidad del
+ * vehículo y se apartaban. El dato estaba bien; lo que estaba mal era leerlo.
+ */
+function pareceRotulo(linea: string): boolean {
+  const l = linea.trim();
+  // Un rótulo es corto, acaba en dos puntos y no lleva cifras ni unidades.
+  return /^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ ]{3,30}:$/.test(l);
+}
+
 function trasRotulo(texto: string, rotulo: RegExp): string | null {
-  const re = new RegExp(rotulo.source + String.raw`\s*:?\s*([^\n]*)`, "i");
+  // `[ \t]*` y no `\s*`: `\s` incluye el salto de línea, así que con un campo
+  // vacío la expresión saltaba a la línea siguiente y capturaba el rótulo de
+  // al lado como si fuera el valor. Ése era el fallo de los 17 avisos con
+  // `idFlota = "Rueda:"`.
+  const re = new RegExp(rotulo.source + String.raw`[ \t]*:?[ \t]*([^\n]*)`, "i");
   const m = texto.match(re);
   if (!m) return null;
   const mismaLinea = (m[1] ?? "").trim();
   if (mismaLinea) return mismaLinea;
-  // Vacío en la misma línea: el valor está en la siguiente.
+  // Vacío en la misma línea: el valor puede estar en la siguiente… o puede
+  // que el campo esté vacío y lo siguiente sea ya el rótulo de al lado.
   const resto = texto.slice((m.index ?? 0) + m[0].length);
   const siguiente = resto.split("\n").find((l) => l.trim().length > 0);
-  return siguiente ? siguiente.trim() : null;
+  if (!siguiente || pareceRotulo(siguiente)) return null;
+  return siguiente.trim();
 }
 
 /** Un número español o inglés («8.0», «8,0») a number. */
@@ -226,6 +271,12 @@ export function leerAlerta(entrada: { asunto?: string | null; html?: string | nu
   if (!cuerpo) return { motivo: "El correo no trae cuerpo" };
 
   const juntos = `${asunto}\n${cuerpo}`;
+
+  // Primero lo que se sabe que NO es de presión: su cuerpo también habla de
+  // neumáticos y si no, se cuela como si lo fuera.
+  const otra = NO_SON_DE_PRESION.find((f) => f.clave.test(juntos));
+  if (otra) return { motivo: `Es un aviso de ${otra.familia}, no de presión` };
+
   const tipo = TIPOS.find((t) => t.clave.test(juntos))?.tipo;
   if (!tipo) return { motivo: "No se reconoce el tipo de aviso" };
 
