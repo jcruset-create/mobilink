@@ -270,15 +270,38 @@ export function leerAlerta(entrada: { asunto?: string | null; html?: string | nu
   const cuerpo = textoDelCorreo(entrada.html, entrada.texto);
   if (!cuerpo) return { motivo: "El correo no trae cuerpo" };
 
-  const juntos = `${asunto}\n${cuerpo}`;
+  /*
+   * ── El ASUNTO manda al decidir qué aviso es ──────────────────────────────
+   *
+   * Antes se buscaba en asunto y cuerpo juntos, y ganaba el primero de la
+   * lista. Salió mal en producción y de las dos maneras posibles: de las 53
+   * alertas abiertas, NINGUNA estaba bien tipada. 45 eran avisos de
+   * profundidad colados como presión y las 8 de presión de verdad estaban
+   * guardadas como «desinflado» —con su lectura y todo, así que la ficha del
+   * vehículo pintaba «Neumático desinflado · 4.4 bar de 8 recomendados», que
+   * se contradice sola—.
+   *
+   * El motivo: el cuerpo de un correo de «Presión baja» nombra también el
+   * desinflado, y buscando en los dos textos a la vez ganaba quien estuviera
+   * antes en la lista. El asunto es la ÚNICA línea donde Goodyear nombra el
+   * aviso una sola vez; el cuerpo es prosa que puede nombrar cualquier cosa.
+   *
+   * Así que se mira el asunto entero —primero los que no son de presión,
+   * después los que sí— y solo si el asunto no dice nada se baja al cuerpo.
+   * Cambiar el orden de la lista NO habría bastado: un desinflado cuyo cuerpo
+   * mencionara «presión baja» habría fallado al revés.
+   */
+  const clasificar = (texto: string): Lectura | TipoAlerta | null => {
+    const otra = NO_SON_DE_PRESION.find((f) => f.clave.test(texto));
+    if (otra) return { motivo: `Es un aviso de ${otra.familia}, no de presión` };
+    return TIPOS.find((t) => t.clave.test(texto))?.tipo ?? null;
+  };
 
-  // Primero lo que se sabe que NO es de presión: su cuerpo también habla de
-  // neumáticos y si no, se cuela como si lo fuera.
-  const otra = NO_SON_DE_PRESION.find((f) => f.clave.test(juntos));
-  if (otra) return { motivo: `Es un aviso de ${otra.familia}, no de presión` };
-
-  const tipo = TIPOS.find((t) => t.clave.test(juntos))?.tipo;
-  if (!tipo) return { motivo: "No se reconoce el tipo de aviso" };
+  const porAsunto = clasificar(asunto);
+  const decidido = porAsunto ?? clasificar(cuerpo);
+  if (decidido === null) return { motivo: "No se reconoce el tipo de aviso" };
+  if (typeof decidido !== "string") return decidido;
+  const tipo: TipoAlerta = decidido;
 
   const matriculaCuerpo = trasRotulo(cuerpo, /matr[íi]cula/)?.toUpperCase().replace(/\s+/g, "") ?? null;
   const delAsunto = leerAsunto(asunto);
