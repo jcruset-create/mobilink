@@ -4605,3 +4605,66 @@ export async function resolverAlertaPresion(id: string, nota?: string): Promise<
     .eq("id", id);
   if (error) throw new Error(error.message);
 }
+
+// ── Partes de revisión en papel (Grupo Soledad) ─────────────────────────────
+
+/** Una fila de la hoja, tal cual la transcribe el modelo. */
+export interface FilaHojaPapel {
+  pos: number | null;
+  medida: string | null;
+  marca: string | null;
+  modelo: string | null;
+  numero_serie: string | null;
+  fecha_dot: string | null;
+  profundidad_mm: number | null;
+  recauchutado: string | null;
+  reestriado: string | null;
+  llanta_ha: string | null;
+  llanta_cd: string | null;
+  llanta_gp: string | null;
+}
+
+/** Una hoja leída: un vehículo. */
+export interface HojaPapel {
+  fecha: string | null;
+  base: string | null;
+  cliente: string | null;
+  taller: string | null;
+  matricula: string | null;
+  /** Lo escrito en la casilla «Km.», que es el número de unidad. */
+  numero_unidad: string | null;
+  croquis: string | null;
+  filas: FilaHojaPapel[];
+  confianza: number | null;
+  aviso: string | null;
+}
+
+/**
+ * Partir el PDF en una página por parte. No llama al modelo ni cuesta nada.
+ *
+ * Va aparte de la lectura porque un PDF de catorce partes son catorce
+ * llamadas: metidas en una sola petición serían más de dos minutos colgando
+ * sin nada que enseñar. Así el panel puede ir diciendo «hoja 3 de 14».
+ */
+export async function partirPartesPapel(ficheroDataUri: string): Promise<string[]> {
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/parte-flotas/hojas`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${await tokenSesion()}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ fichero: ficheroDataUri }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as { error?: string })?.error || "No se ha podido abrir el fichero");
+  return (j as { hojas: string[] }).hojas;
+}
+
+/** Leer UNA hoja. Devuelve lo que pone; no guarda nada. */
+export async function leerHojaPapel(hojaDataUri: string): Promise<HojaPapel> {
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/parte-flotas/leer`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${await tokenSesion()}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ hoja: hojaDataUri }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as { error?: string })?.error || "No se ha podido leer la hoja");
+  return (j as { lectura: HojaPapel }).lectura;
+}
