@@ -28,7 +28,18 @@ import type { AlertaPresion } from "../types";
  * esa rueda. Cerrarlo solo por que pase el tiempo sería dar por buena una
  * rueda que nadie ha tocado.
  */
-export default function AvisosPresionVehiculo({ vehiculoId }: { vehiculoId: string }) {
+export default function AvisosPresionVehiculo(
+  {
+    vehiculoId,
+    /*
+     * Se avisa al cerrar un aviso porque el plano del vehículo también los
+     * pinta —la rueda en rojo y su triángulo—. Sin esto, cerrar desde aquí
+     * haría desaparecer la banda y dejaría el plano en rojo hasta recargar la
+     * página, que parece que no ha funcionado.
+     */
+    onResuelto,
+  }: { vehiculoId: string; onResuelto?: () => void },
+) {
   const [avisos, setAvisos] = useState<AlertaPresion[]>([]);
   const [resolviendo, setResolviendo] = useState<string | null>(null);
 
@@ -49,6 +60,7 @@ export default function AvisosPresionVehiculo({ vehiculoId }: { vehiculoId: stri
     try {
       await resolverAlertaPresion(a.id, "Resuelto a mano desde la ficha del vehículo");
       setAvisos((prev) => prev.filter((x) => x.id !== a.id));
+      onResuelto?.();
     } catch (e: unknown) {
       alert((e as Error)?.message ?? "No se ha podido cerrar el aviso");
     } finally {

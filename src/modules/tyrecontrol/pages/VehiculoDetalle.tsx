@@ -16,6 +16,7 @@ import { Badge, Modal, TableWrap, tdCls, thCls } from "../components/ui";
 import VehicleLayoutImage from "../components/VehicleLayoutImage";
 import PlanoSnapshot from "../components/PlanoSnapshot";
 import AvisosPresionVehiculo from "../components/AvisosPresionVehiculo";
+import AvisosCambioVehiculo from "../components/AvisosCambioVehiculo";
 import FichaTecnicaVehiculo from "../components/FichaTecnicaVehiculo";
 import FichaTecnicaItv from "../components/FichaTecnicaItv";
 import SeccionTacografo from "../components/SeccionTacografo";
@@ -386,7 +387,13 @@ export default function VehiculoDetalle() {
 
       {/* Avisos de presión abiertos. Arriba del todo porque es lo que cambia lo
           que se va a hacer con el vehículo; si no hay ninguno, no pinta nada. */}
-      <AvisosPresionVehiculo vehiculoId={v.id} />
+      {/* `cargar` relee los montajes, y eso hace que el plano vuelva a pedir
+          los avisos: así la rueda deja de estar en rojo al cerrarlo. */}
+      <AvisosPresionVehiculo vehiculoId={v.id} onResuelto={cargar} />
+      {/* Y las que están para cambiar por profundidad. Van juntas y en este
+          orden porque una rueda a media presión es un riesgo ahora y una
+          gastada es un cambio que planificar. */}
+      <AvisosCambioVehiculo vehiculoId={v.id} montajes={montajes} />
 
       {/* Datos generales: todo lo que traiga la ficha técnica, no solo lo que tiene columna propia */}
       <div className="rounded-lg bg-slate-800 p-3">

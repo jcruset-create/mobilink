@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { AlertTriangle } from "lucide-react";
+import { hayQueCambiar } from "../services/umbralProfundidad";
 import { profundidadVigente } from "../utils/profundidad";
 import type { MontajeActual, Neumatico, PosicionVehiculo, TipoVehiculo } from "../types";
 import { presionTxt } from "../types";
@@ -7,7 +9,7 @@ import {
   cambiarPosicion, intercambiarPosiciones, aplicarPlanTrabajo, listarMarcasRecauchutadas,
   actualizarImagenChasis, guardarCoordenadasPosicion, guardarOrdenRevisionPosicion, listarUltimasMedicionesVehiculo, listarPresionesCatalogoPorModelo,
   listarFotosCatalogoPorModelo, claveModeloCatalogo, listarProfundidadesCatalogoPorModelo,
-  buscarNeumaticosParaCorregir, corregirMontado,
+  buscarNeumaticosParaCorregir, corregirMontado, listarAlertasPresionVehiculo,
 } from "../services/data";
 import { inputCls, Modal } from "./ui";
 import { mismaMedida } from "../services/medidas";
@@ -119,9 +121,22 @@ export default function VehicleLayoutImage({
   const [medicionesActuales, setMedicionesActuales] = useState<Record<string, { profundidad_mm: number | null; presion_bar: number | null }>>({});
   const [presionesCatalogo, setPresionesCatalogo] = useState<Record<string, number>>({});
 
+  /*
+   * Las ruedas con un aviso de presión ABIERTO, por posición.
+   *
+   * Se piden aquí y no se reciben por prop porque el plano ya pide por su
+   * cuenta las mediciones y los catálogos: es como funciona este componente.
+   * Y nunca lanza: un plano que no se dibuja porque no se han podido leer los
+   * avisos sería peor que un plano sin marcar.
+   */
+  const [posicionesConAviso, setPosicionesConAviso] = useState<Set<string>>(new Set());
+
   useEffect(() => {
     if (!vehiculoId) return;
     listarUltimasMedicionesVehiculo(vehiculoId).then(setMedicionesActuales).catch(() => setMedicionesActuales({}));
+    listarAlertasPresionVehiculo(vehiculoId)
+      .then((as) => setPosicionesConAviso(new Set(as.map((a) => a.posicion_id).filter(Boolean))))
+      .catch(() => setPosicionesConAviso(new Set()));
   }, [vehiculoId, montajes]);
 
   const [profundidadesCatalogo, setProfundidadesCatalogo] = useState<Record<string, number>>({});
@@ -685,6 +700,31 @@ export default function VehicleLayoutImage({
             const esCopiaOrigen = copiando && copiaOrigen === p.codigo_posicion;
             const nCopia = copiando ? copiaDestinos.indexOf(p.codigo_posicion) + 1 : 0;
             const esCopiaDestino = nCopia > 0;
+            /*
+             * Un aviso de presión abierto en esta rueda. Pinta el recuadro en
+             * rojo y cuelga un triángulo debajo: en un plano de ocho ruedas
+             * todas verdes, la que está a media presión tiene que saltar a la
+             * vista sin leer los números.
+             */
+            const conAviso = posicionesConAviso.has(p.id);
+
+            /*
+             * Y si la goma está para cambiar por profundidad. Se calcula aquí
+             * arriba, y no dentro del recuadro donde ya se calculaba para
+             * pintarla, porque el borde se decide antes de llegar ahí.
+             *
+             * La profundidad se saca igual que abajo: manda la medición y, si
+             * no hay, la de fábrica del catálogo. Una rueda recién montada no
+             * está «sin datos», está nueva.
+             */
+            const neuDe = m?.neumatico ?? null;
+            const claveCat = neuDe?.marca && neuDe?.modelo && neuDe?.medida
+              ? `${neuDe.marca}|${neuDe.modelo}|${neuDe.medida}`.toLowerCase().replace(/\s+/g, "")
+              : "";
+            const profDe = neuDe
+              ? profundidadVigente(medicionesActuales[neuDe.id], neuDe) ?? profundidadesCatalogo[claveCat] ?? null
+              : null;
+            const paraCambiar = hayQueCambiar(profDe, neuDe?.medida);
             return (
               <div
                 key={p.id}
@@ -695,7 +735,11 @@ export default function VehicleLayoutImage({
                   // después, crezca o no el recuadro por su contenido.
                   left: `${c.x + c.w / 2}%`, top: `${c.y + c.h / 2}%`, transform: "translate(-50%, -50%)",
                   width: `${c.w}%`, height: `${c.h}%`, minHeight: MIN_H_PX,
-                  borderColor: (esCopiaOrigen || esCopiaDestino) ? "#a855f7" : esOrigenPermuta ? "#38bdf8" : esDestino ? "#38bdf8" : calibrando ? "#f59e0b" : (planAbierto && (vieneDe || marcasDe.length)) ? "#38bdf8" : ocupado ? "#22c55e" : "#64748b",
+                  // El rojo del aviso va por delante del verde de «ocupado» pero
+                  // por DETRÁS de los estados de interacción (copiar, permutar,
+                  // calibrar): ésos son modos pasajeros y mientras duran mandan
+                  // ellos, que es lo que el usuario está haciendo ahora mismo.
+                  borderColor: (esCopiaOrigen || esCopiaDestino) ? "#a855f7" : esOrigenPermuta ? "#38bdf8" : esDestino ? "#38bdf8" : calibrando ? "#f59e0b" : (planAbierto && (vieneDe || marcasDe.length)) ? "#38bdf8" : (conAviso || paraCambiar) ? "#ef4444" : ocupado ? "#22c55e" : "#64748b",
                   borderWidth: esCopiaOrigen || esOrigenPermuta ? 3 : 2,
                   borderStyle: ocupado || calibrando || esCopiaDestino ? "solid" : "dashed",
                   background: esCopiaDestino ? "rgba(168,85,247,0.25)" : esDestino ? "rgba(56,189,248,0.25)" : ocupado ? "rgba(15,23,42,0.8)" : "rgba(15,23,42,0.25)",
@@ -716,6 +760,32 @@ export default function VehicleLayoutImage({
                   setMenuContextual({ codigo: p.codigo_posicion, x: e.clientX, y: e.clientY });
                 }}
               >
+                {/*
+                  El triángulo del aviso de presión, colgando DEBAJO del
+                  recuadro. Debajo y no dentro porque dentro compite con la
+                  marca, el modelo, la medida y los dos números, que es lo que
+                  ya va apretado ahí; y en ámbar sobre el borde rojo, que son
+                  dos señales distintas: el rojo dice cuál, el triángulo dice
+                  de qué.
+
+                  `pointer-events-none` para no robarle el clic al recuadro,
+                  que es lo que abre la ficha de la goma.
+                */}
+                {(conAviso || paraCambiar) && (
+                  <span
+                    className="pointer-events-none absolute -bottom-5 left-1/2 -translate-x-1/2 flex items-center gap-0.5 whitespace-nowrap rounded bg-slate-900/90 px-1 py-0.5 text-[10px] font-bold text-amber-300"
+                    title={[
+                      conAviso ? "Aviso de presión abierto en esta rueda" : null,
+                      paraCambiar ? `Para cambiar: ${profDe} mm` : null,
+                    ].filter(Boolean).join(" · ")}
+                  >
+                    <AlertTriangle className="h-3 w-3" />
+                    {/* Qué pasa, no solo que pasa algo: en un plano de ocho
+                        ruedas el triángulo solo dice «mira aquí». */}
+                    <span className="text-[9px]">{conAviso && paraCambiar ? "P+C" : conAviso ? "P" : "C"}</span>
+                  </span>
+                )}
+
                 {/* Encima de cada recuadro, siempre, de qué rueda se trata. */}
                 <span className={`pointer-events-none absolute -top-5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded px-1 py-0.5 text-[10px] font-bold ${
                   esCopiaOrigen ? "bg-violet-600 text-white" : calibrando ? "bg-slate-900/90 text-amber-300" : "bg-slate-900/90 text-slate-300"}`}>
