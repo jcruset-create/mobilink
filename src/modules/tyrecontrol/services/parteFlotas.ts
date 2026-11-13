@@ -175,3 +175,117 @@ export function discrepanciaDeCroquis(
   return `El papel marca ${leido} y este vehículo tiene ejes de ${esperado.replace(/-/g, "+")} ruedas.`
     + " Comprueba que la hoja es de este vehículo.";
 }
+
+// ── Lo que el modelo transcribe, puesto en limpio ───────────────────────────
+
+/** Una fila de la tabla, tal cual está escrita en el papel. */
+export interface FilaLeidaFlotas {
+  pos: number | null;
+  medida: string | null;
+  marca: string | null;
+  modelo: string | null;
+  numero_serie: string | null;
+  fecha_dot: string | null;
+  profundidad_mm: number | null;
+}
+
+/** Las columnas donde el papel usa comillas de «ídem». */
+const HEREDABLES = ["medida", "marca", "modelo"] as const;
+
+/**
+ * ¿Esta celda son comillas de «lo mismo que arriba»?
+ *
+ * En los 14 partes se usan en las tres primeras columnas, y una comilla
+ * manuscrita no siempre sale como comilla: según la letra y el escaneo, un
+ * modelo puede leerla como `u`, `n`, `v` o `,`.
+ *
+ * ── Dónde se pone la raya, y por qué ahí ───────────────────────────────────
+ *
+ * Se le pide al modelo que las transcriba como `"` (ver las instrucciones del
+ * lector), así que esto es la red de seguridad para cuando no lo haga. Y la
+ * red se queda CORTA a propósito: equivocarse hacia un lado deja un `4` raro
+ * en la casilla, que se ve; equivocarse hacia el otro copia la fila de arriba
+ * en silencio y nadie lo nota nunca.
+ *
+ * Por eso NO cuenta como comilla nada que lleve un dígito ni nada en
+ * mayúsculas: `4`, `XL` o `AH51` se quedan como están aunque sean una comilla
+ * mal leída. Prefiero una celda visiblemente rara a una medida inventada.
+ */
+const COMILLAS = /^[\s"'`,´’‘“”]{1,2}$/;
+/** Las minúsculas en que suele caer una comilla manuscrita al leerla. */
+const COMILLA_MAL_LEIDA = /^[unvwil]{1,2}$/;
+
+export function esIdem(celda: string | null | undefined): boolean {
+  const t = (celda ?? "").trim();
+  if (!t) return false;
+  if (/^(id\.?|idem|ídem)$/i.test(t)) return true;
+  return COMILLAS.test(t) || COMILLA_MAL_LEIDA.test(t);
+}
+
+/**
+ * Rellenar hacia abajo las comillas de «ídem».
+ *
+ * Se hace aquí y no en el prompt a propósito: pedirle al modelo que «copie el
+ * valor de arriba» es pedirle que razone sobre filas que todavía no ha
+ * terminado de leer, y cuando se equivoca no se nota. Transcribir la comilla
+ * tal cual es verificable; resolverla es una regla de tres líneas.
+ *
+ * Una comilla en la PRIMERA fila no hereda nada y se queda en null: no hay de
+ * dónde copiar, y poner algo sería inventarlo.
+ *
+ * No toca `numero_serie`, `fecha_dot` ni `profundidad_mm`: ésas no se heredan
+ * nunca. Dos ruedas distintas no comparten número de serie, y una profundidad
+ * repetida se escribe con su número —en los 14 partes siempre está escrita—.
+ */
+export function resolverIdem(filas: FilaLeidaFlotas[]): FilaLeidaFlotas[] {
+  const ultimo: Record<string, string | null> = {};
+  return filas.map((fila) => {
+    const salida = { ...fila };
+    for (const campo of HEREDABLES) {
+      const valor = salida[campo];
+      if (esIdem(valor)) {
+        salida[campo] = ultimo[campo] ?? null;
+      } else if ((valor ?? "").trim()) {
+        ultimo[campo] = (valor as string).trim();
+        salida[campo] = ultimo[campo];
+      }
+    }
+    return salida;
+  });
+}
+
+/**
+ * ¿Lo que hay en la columna «Nº DE SERIE» es de verdad un número de serie?
+ *
+ * Hace falta porque en la muestra alguien escribió ahí **«Cambio y alinear»**:
+ * la columna más ancha de la hoja se usa como margen para notas. Guardar eso
+ * como número de serie de un neumático lo dejaría buscado para siempre por una
+ * frase.
+ *
+ * Un serie no lleva espacios. Lo que los lleve es una nota, y se conserva como
+ * tal en vez de tirarse: es algo que alguien quiso decir.
+ */
+export function pareceNota(texto: string | null | undefined): boolean {
+  const t = (texto ?? "").trim();
+  return t.length > 0 && /\s/.test(t);
+}
+
+/**
+ * Las filas que traen algo, ya con las comillas resueltas.
+ *
+ * El impreso tiene ocho filas y casi nunca van todas: de los 14 partes, seis
+ * traen seis filas, seis traen ocho y dos traen cuatro. Una fila vacía no es
+ * una rueda sin medir, es una fila que no existe en ese vehículo.
+ *
+ * Se considera que una fila trae algo si tiene profundidad O identificación.
+ * La profundidad sola basta —es el dato que se viene a buscar— y la
+ * identificación sola también: una goma reconocida sin medir sigue siendo una
+ * goma que el sistema no tenía.
+ */
+export function filasConDatos(filas: FilaLeidaFlotas[]): FilaLeidaFlotas[] {
+  return resolverIdem(filas).filter((f) =>
+    f.profundidad_mm != null
+    || (f.medida ?? "").trim() !== ""
+    || (f.marca ?? "").trim() !== ""
+    || (f.modelo ?? "").trim() !== "");
+}

@@ -11,8 +11,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  discrepanciaDeCroquis, ejesDelPlano, numeracionDelParteFlotas,
-  type PosicionDelParte,
+  discrepanciaDeCroquis, ejesDelPlano, esIdem, filasConDatos,
+  numeracionDelParteFlotas, pareceNota, resolverIdem,
+  type FilaLeidaFlotas, type PosicionDelParte,
 } from "./parteFlotas";
 
 const p = (
@@ -164,5 +165,141 @@ describe("contrastar con la casilla marcada a mano", () => {
   it("de un plano que no se sabe numerar tampoco se saca croquis", () => {
     expect(ejesDelPlano([])).toBeNull();
     expect(discrepanciaDeCroquis([], "C2-4")).toBeNull();
+  });
+});
+
+describe("las comillas de «ídem»", () => {
+  const fila = (o: Partial<FilaLeidaFlotas> = {}): FilaLeidaFlotas => ({
+    pos: null, medida: null, marca: null, modelo: null,
+    numero_serie: null, fecha_dot: null, profundidad_mm: null, ...o,
+  });
+
+  it("reconoce las formas en que las lee un modelo", () => {
+    // La comilla manuscrita sale como comilla o como una minúscula suelta,
+    // según la letra y el escaneo.
+    for (const c of ['"', "''", ",,", "“", "”", "u", "n", "v", "id.", "idem", "ídem"]) {
+      expect(esIdem(c)).toBe(true);
+    }
+  });
+
+  it("y no confunde un dato con una comilla", () => {
+    // `AH51`, `9` o `X-Multi` son valores reales de la muestra.
+    for (const c of ["AH51", "9", "X-Multi", "295/80 R22.5", "KMAX-S", "", null]) {
+      expect(esIdem(c)).toBe(false);
+    }
+  });
+
+  it("ante la duda, NO es comilla", () => {
+    // Un `4` puede ser una comilla mal leída, y `XL` un modelo de verdad.
+    // Tratarlos como comilla copiaría la fila de arriba sin que se note;
+    // dejarlos deja una casilla visiblemente rara, que alguien corrige.
+    // La red se queda corta a propósito: los errores que se ven son mejores.
+    for (const c of ["4", "XL", "N", "R"]) {
+      expect(esIdem(c)).toBe(false);
+    }
+  });
+
+  it("rellena hacia abajo medida, marca y modelo", () => {
+    // La hoja de la unidad 1727 tal cual: la primera fila completa y las
+    // siguientes con comillas.
+    const r = resolverIdem([
+      fila({ pos: 1, medida: "295/80 R22.5", marca: "Hankook", modelo: "AH51", profundidad_mm: 15 }),
+      fila({ pos: 2, medida: '"', marca: '"', modelo: '"', profundidad_mm: 15 }),
+      fila({ pos: 3, medida: "u", marca: "Michelin", modelo: "Conch", profundidad_mm: 9 }),
+      fila({ pos: 4, medida: "u", marca: '"', modelo: '"', profundidad_mm: 9 }),
+    ]);
+    expect(r.map((f) => f.medida)).toEqual(Array(4).fill("295/80 R22.5"));
+    expect(r.map((f) => f.marca)).toEqual(["Hankook", "Hankook", "Michelin", "Michelin"]);
+    expect(r.map((f) => f.modelo)).toEqual(["AH51", "AH51", "Conch", "Conch"]);
+  });
+
+  it("una comilla en la PRIMERA fila no hereda nada", () => {
+    // No hay de dónde copiar. Poner algo sería inventarlo.
+    const r = resolverIdem([fila({ pos: 1, marca: '"', profundidad_mm: 11 })]);
+    expect(r[0].marca).toBeNull();
+  });
+
+  it("NO hereda la profundidad ni el número de serie", () => {
+    // Dos ruedas no comparten serie, y heredar una profundidad daría una
+    // medición que nadie ha tomado.
+    const r = resolverIdem([
+      fila({ pos: 1, marca: "Hankook", profundidad_mm: 15, numero_serie: "ABC123" }),
+      fila({ pos: 2, marca: '"', profundidad_mm: null, numero_serie: null }),
+    ]);
+    expect(r[1].profundidad_mm).toBeNull();
+    expect(r[1].numero_serie).toBeNull();
+  });
+
+  it("la última fila repite la medida entera y eso no estorba", () => {
+    // Pasa en casi todos los partes: la fila 8 vuelve a escribir la medida.
+    const r = resolverIdem([
+      fila({ pos: 7, medida: "315/80 R22.5", marca: "Bridgestone", profundidad_mm: 13 }),
+      fila({ pos: 8, medida: "315/80 R22.5", marca: '"', profundidad_mm: 14 }),
+    ]);
+    expect(r[1].medida).toBe("315/80 R22.5");
+    expect(r[1].marca).toBe("Bridgestone");
+  });
+
+  it("una medida DISTINTA a media hoja se respeta y arrastra", () => {
+    // La unidad 1717 cambia de medida en la fila 8.
+    const r = resolverIdem([
+      fila({ pos: 1, medida: "315/80 R22.5", profundidad_mm: 16 }),
+      fila({ pos: 2, medida: '"', profundidad_mm: 16 }),
+      fila({ pos: 3, medida: "295/80 R22.5", profundidad_mm: 10 }),
+      fila({ pos: 4, medida: '"', profundidad_mm: 11 }),
+    ]);
+    expect(r.map((f) => f.medida)).toEqual([
+      "315/80 R22.5", "315/80 R22.5", "295/80 R22.5", "295/80 R22.5",
+    ]);
+  });
+});
+
+describe("qué filas cuentan", () => {
+  const fila = (o: Partial<FilaLeidaFlotas> = {}): FilaLeidaFlotas => ({
+    pos: null, medida: null, marca: null, modelo: null,
+    numero_serie: null, fecha_dot: null, profundidad_mm: null, ...o,
+  });
+
+  it("las ocho filas del impreso casi nunca van llenas", () => {
+    // La unidad 1727: seis ruedas, dos filas vacías. Una fila vacía no es
+    // una rueda sin medir, es una fila que ese vehículo no tiene.
+    const hoja = [
+      ...[15, 15, 9, 9, 9, 9].map((mm, i) => fila({ pos: i + 1, marca: i ? '"' : "Hankook", profundidad_mm: mm })),
+      fila({ pos: 7 }), fila({ pos: 8 }),
+    ];
+    expect(filasConDatos(hoja)).toHaveLength(6);
+  });
+
+  it("una goma identificada sin medir cuenta", () => {
+    // Sigue siendo una goma que el sistema no tenía.
+    expect(filasConDatos([fila({ pos: 1, marca: "Hankook", modelo: "AH51" })])).toHaveLength(1);
+  });
+
+  it("una profundidad sin identificación también", () => {
+    expect(filasConDatos([fila({ pos: 1, profundidad_mm: 9 })])).toHaveLength(1);
+  });
+
+  it("y devuelve las comillas ya resueltas", () => {
+    const r = filasConDatos([
+      fila({ pos: 1, marca: "Michelin", profundidad_mm: 12 }),
+      fila({ pos: 2, marca: '"', profundidad_mm: 12 }),
+    ]);
+    expect(r[1].marca).toBe("Michelin");
+  });
+});
+
+describe("la columna del número de serie se usa como margen", () => {
+  it("reconoce una nota escrita donde va el serie", () => {
+    // Literal de la unidad 2018: «Cambio y alinear». Guardar eso como número
+    // de serie dejaría una goma buscada para siempre por una frase.
+    expect(pareceNota("Cambio y alinear")).toBe(true);
+    expect(pareceNota("CAMBIO Y ALINEAR")).toBe(true);
+  });
+
+  it("y no toma por nota un serie de verdad", () => {
+    expect(pareceNota("ABC123456")).toBe(false);
+    expect(pareceNota("1234-5678")).toBe(false);
+    expect(pareceNota("")).toBe(false);
+    expect(pareceNota(null)).toBe(false);
   });
 });
