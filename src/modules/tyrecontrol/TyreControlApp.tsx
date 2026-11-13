@@ -47,6 +47,7 @@ import Perfil from "./pages/Perfil";
 import Configuracion from "./pages/Configuracion";
 import TiposIncidencia from "./pages/TiposIncidencia";
 import Importar from "./pages/Importar";
+import ImportarPartesPapel from "./pages/ImportarPartesPapel";
 import ParteProveedor from "./pages/ParteProveedor";
 import InformesLayout from "./pages/informes/InformesLayout";
 import InformeEjecutivo from "./pages/informes/InformeEjecutivo";
@@ -169,6 +170,7 @@ export default function TyreControlApp() {
               <Route path="importar" element={<Importar />} />
               <Route path="importar/identificar" element={<UnidadesPorIdentificar />} />
               <Route path="parte-proveedor" element={<ParteProveedor />} />
+              <Route path="partes-papel" element={<ImportarPartesPapel />} />
             </Route>
           </Route>
         </Route>

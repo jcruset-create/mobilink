@@ -43,6 +43,7 @@ export const NAV: NavItem[] = [
   { key: "sonda", path: "sonda", label: "Sonda TLGX", icon: Bluetooth, roles: ["administrador"] },
   { key: "importar", path: "importar", label: "Importar", icon: Upload, roles: ["administrador"] },
   { key: "parte-proveedor", path: "parte-proveedor", label: "Parte del taller", icon: FileScan, roles: ["administrador"] },
+  { key: "partes-papel", path: "partes-papel", label: "Partes en papel", icon: FileScan, roles: ["administrador"] },
   { key: "tipos-incidencia", path: "tipos-incidencia", label: "Tipos y motivos de incidencia", icon: AlertTriangle, roles: ["administrador"] },
   { key: "configuracion", path: "configuracion", label: "Configuración", icon: Settings, roles: ["administrador"] },
   // Cliente
