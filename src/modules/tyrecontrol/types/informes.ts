@@ -68,7 +68,6 @@ export interface RuedaAlerta {
   vehiculo_id: string | null;
   matricula: string | null;
   numero_unidad: string | null;
-  vehiculo_activo: boolean | null;
   tipo_vehiculo: string | null;
   config_ejes: string | null;
   imagen_chasis_url: string | null;

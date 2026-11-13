@@ -41,22 +41,26 @@
 -- los 64 con incidencia, así que no se pierde ni una alerta; si mañana uno de
 -- ésos avisa, seguirá saliendo en la lista de `tc_informes_alertas`.
 --
--- ── Los de baja salen, y se dicen ──────────────────────────────────────────
+-- ── Los de baja NO salen ───────────────────────────────────────────────────
 --
--- Aquí NO se filtra por `v.activo`, aunque la tentación es fuerte: el primer
--- intento lo filtraba y se dejaba 11 ruedas de 8 vehículos dados de baja. El
--- informe de hoy esas 11 las enseña, así que filtrarlas habría cambiado el
--- KPI de 91 a 80 sin que nadie lo pidiera, y quien comparase las dos
--- pantallas pensaría que algo se ha roto. Salen, y la pantalla los marca con
--- la columna `vehiculo_activo`. Si luego hay que esconderlos, será un filtro
--- en la pantalla, no un cambio callado aquí.
+-- `v.activo`, pedido expresamente. Son 8 vehículos con 11 ruedas gastadas: a
+-- un autobús dado de baja no se le cambian las gomas, así que en una pantalla
+-- que dice «cambiar ya» solo hacen ruido.
+--
+-- Eso deja esta función en 80 ruedas donde `tc_informes_alertas` sigue
+-- diciendo 91, porque aquélla no filtra por `activo`. No se toca: ya no se
+-- pinta en ninguna pantalla —la de Alertas usa esta— y sigue sirviendo a los
+-- vehículos sin revisar, que sí filtran por activo por su cuenta.
+--
+-- `en_seguimiento` no se mira: de los 65 vehículos con incidencia, los 65
+-- están en seguimiento. Añadir una condición que hoy no quita ni una fila
+-- sería una regla sin probar escondida en la consulta.
 
 create or replace function tc_informes_alertas_vehiculos(p_empresa uuid default null)
 returns table (
   vehiculo_id uuid,
   matricula text,
   numero_unidad text,
-  vehiculo_activo boolean,
   tipo_vehiculo text,
   config_ejes text,
   imagen_chasis_url text,
@@ -95,7 +99,7 @@ as $function$
     order by d.neumatico_id, rv.fecha_revision desc, rv.created_at desc
   ),
   ruedas as (
-    select v.id as vehiculo_id, v.matricula, v.numero_unidad, v.activo as vehiculo_activo,
+    select v.id as vehiculo_id, v.matricula, v.numero_unidad,
            tv.nombre as tipo_vehiculo,
            ce.nombre as config_ejes,
            coalesce(ce.imagen_chasis_url, tv.imagen_chasis_url) as imagen_chasis_url,
@@ -128,7 +132,7 @@ as $function$
       order by a.ultimo_aviso_at desc nulls last
       limit 1
     ) pr on true
-    where p_empresa is null or v.empresa_id = p_empresa
+    where v.activo and (p_empresa is null or v.empresa_id = p_empresa)
   ),
   con_incidencias as (
     select r.*,
@@ -137,7 +141,7 @@ as $function$
                     then 1 else 0 end) over (partition by r.vehiculo_id) as incidencias
     from ruedas r
   )
-  select vehiculo_id, matricula, numero_unidad, vehiculo_activo, tipo_vehiculo, config_ejes, imagen_chasis_url,
+  select vehiculo_id, matricula, numero_unidad, tipo_vehiculo, config_ejes, imagen_chasis_url,
          posicion_id, codigo_posicion, eje, lado, interior_exterior,
          neumatico_id, codigo, medida,
          profundidad_mm, minimo_mm, fecha_revision,
@@ -152,8 +156,8 @@ grant execute on function tc_informes_alertas_vehiculos(uuid) to service_role;
 
 -- ── Comprobación ───────────────────────────────────────────────────────────
 --
--- 1. Los mismos 65 vehículos (64 con goma gastada + el del aviso de presión)
---    y las mismas 91 ruedas que el informe de hoy:
+-- 1. Tiene que devolver 57 vehículos y 80 ruedas para cambiar: los 65 y las 91
+--    del informe, menos los 8 vehículos de baja con sus 11 ruedas.
 
 select count(distinct vehiculo_id) as vehiculos,
        count(*) filter (where profundidad_mm is not null and profundidad_mm <= minimo_mm) as cambiar_ya,
@@ -163,8 +167,9 @@ select count(distinct vehiculo_id) as vehiculos,
        count(*) as filas
   from tc_informes_alertas_vehiculos('a51c9662-4b6f-4681-8e2b-599e109659eb'::uuid);
 
--- 2. Y que cuadra rueda a rueda con `tc_informes_alertas`: las dos listas de
---    «cambiar ya» tienen que ser idénticas, así que esto no devuelve nada.
+-- 2. Y que cuadra rueda a rueda con `tc_informes_alertas`: lo único que puede
+--    salir aquí son las 11 ruedas de los 8 vehículos dados de baja, que están
+--    en el informe y no aquí. Ni una más, y ninguna con otra profundidad.
 
 select coalesce(a.matricula, b.matricula) as matricula,
        coalesce(a.posicion, b.codigo_posicion) as posicion,
