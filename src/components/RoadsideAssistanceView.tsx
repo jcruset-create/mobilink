@@ -2963,6 +2963,23 @@ export default function RoadsideAssistanceView({
                         </button>
                       )}
 
+                      {assistance.assignedTechName && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void abrirInforme(
+                              `${API_BASE}/api/roadside-assistances/${assistance.id}/tablet-report.pdf`,
+                              `recorrido_tablet_${assistance.id}.pdf`,
+                              setLocalError
+                            )
+                          }
+                          title="Recorrido con el GPS de la tablet del operario, por si el de la furgoneta falla"
+                          className="inline-flex items-center gap-2 rounded-lg border border-teal-600/50 bg-teal-600/15 px-3 py-2 text-sm font-bold text-teal-300 hover:bg-teal-600/25"
+                        >
+                          📱 Recorrido tablet
+                        </button>
+                      )}
+
                       <button
                         type="button"
                         onClick={() => openReportModal(assistance)}

@@ -170,3 +170,19 @@ export function analizarRecorrido(
     track: puntos.map((p) => ({ lat: p.lat, lng: p.lng })),
   };
 }
+
+/**
+ * Junta dos fuentes de puntos de la misma tablet, sin repetir un mismo
+ * instante: el rastro de la asistencia (`roadside_operator_track`, desde
+ * siempre) y el rastro general de la tablet (`tablet_rastro`, más reciente).
+ * Un mismo envío suele estar en las dos.
+ */
+export function unirPuntos(...fuentes: PuntoRecorrido[][]): PuntoRecorrido[] {
+  const porInstante = new Map<number, PuntoRecorrido>();
+  for (const fuente of fuentes) {
+    for (const p of fuente) {
+      if (!porInstante.has(p.atMs)) porInstante.set(p.atMs, p);
+    }
+  }
+  return [...porInstante.values()].sort((a, b) => a.atMs - b.atMs);
+}
