@@ -59,6 +59,37 @@ export interface Alerta {
   valor: number | null;
 }
 
+/**
+ * Una RUEDA de un vehículo con alguna incidencia, tal como la devuelve
+ * `tc_informes_alertas_vehiculos`. Vienen todas las del vehículo, también las
+ * que están bien: la tarjeta pinta el plano entero.
+ */
+export interface RuedaAlerta {
+  vehiculo_id: string | null;
+  matricula: string | null;
+  numero_unidad: string | null;
+  vehiculo_activo: boolean | null;
+  tipo_vehiculo: string | null;
+  config_ejes: string | null;
+  imagen_chasis_url: string | null;
+  posicion_id: string | null;
+  codigo_posicion: string | null;
+  eje: number | null;
+  lado: string | null;
+  interior_exterior: string | null;
+  neumatico_id: string | null;
+  codigo: string | null;
+  medida: string | null;
+  profundidad_mm: number | null;
+  minimo_mm: number | null;
+  fecha_revision: string | null;
+  presion_bar: number | null;
+  presion_recomendada_bar: number | null;
+  desviacion_pct: number | null;
+  presion_avisos: number | null;
+  presion_aviso_at: string | null;
+}
+
 export interface EconomicoInformes {
   coste_neumaticos: number;
   coste_operaciones: number;
