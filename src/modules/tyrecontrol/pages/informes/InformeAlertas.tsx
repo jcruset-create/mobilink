@@ -37,7 +37,6 @@ function TarjetaVehiculo({ v }: { v: VehiculoConAlertas }) {
         <Link to={`/tyrecontrol/vehiculos/${v.vehiculoId}`} className="text-[17px] font-extrabold text-slate-100 hover:underline">
           {v.matricula || "sin matrícula"}
         </Link>
-        {!v.activo && <span className="rounded bg-slate-700 px-1.5 py-[1px] text-[10px] font-bold text-slate-300">de baja</span>}
         <span className="flex-1" />
         <span className={`whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-extrabold ${
           soloPresion ? "bg-amber-500/20 text-amber-200" : "bg-red-500/20 text-red-200"}`}>
@@ -238,7 +237,7 @@ export default function InformeAlertas() {
         distintos. La fecha del pie es la más reciente de las ruedas que avisan.
         {" "}Las de <b>presión</b> no salen de una revisión: las manda el sensor de Goodyear por correo y se cierran solas
         cuando el vehículo vuelve a pasar por el arco y da bien.
-        {" "}Los vehículos <b>dados de baja</b> salen marcados, porque sus gomas siguen contando en el almacén.
+        {" "}Los vehículos <b>dados de baja</b> no salen: a un autobús que ya no circula no se le cambian las gomas.
       </div>
     </div>
   );

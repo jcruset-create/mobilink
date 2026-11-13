@@ -10,7 +10,7 @@ const FOTO_BUS = "https://x.supabase.co/storage/v1/object/public/tc-chasis/confi
 /** Una rueda montada y medida, con lo mínimo para que valga de fila. */
 function fila(p: Partial<RuedaAlerta> = {}): RuedaAlerta {
   return {
-    vehiculo_id: "v1", matricula: "1234ABC", numero_unidad: "100", vehiculo_activo: true,
+    vehiculo_id: "v1", matricula: "1234ABC", numero_unidad: "100",
     tipo_vehiculo: "autobus", config_ejes: "2X4 BUS", imagen_chasis_url: FOTO_BUS,
     posicion_id: "p1", codigo_posicion: "E1_IZQ", eje: 1, lado: "izq", interior_exterior: null,
     neumatico_id: "n1", codigo: "AB-1", medida: "295/80R22.5",
@@ -151,12 +151,6 @@ describe("agruparPorVehiculo", () => {
     expect(dos[1].paraCambiar).toBe(1);
   });
 
-  it("un vehículo de baja se marca, no se esconde", () => {
-    const [baja] = agruparPorVehiculo([fila({ vehiculo_activo: false, profundidad_mm: 2 })], HOY);
-    expect(baja.activo).toBe(false);
-    expect(baja.paraCambiar).toBe(1);
-  });
-
   it("una posición vacía no cuenta como rueda para cambiar", () => {
     const [uno] = agruparPorVehiculo([
       fila({ codigo_posicion: "E1_IZQ", neumatico_id: null, profundidad_mm: null, medida: null }),
@@ -175,7 +169,7 @@ describe("agruparPorVehiculo", () => {
 
 describe("resumenDeTarjeta", () => {
   const base = (p: Partial<VehiculoConAlertas>): VehiculoConAlertas => ({
-    vehiculoId: "v", matricula: "1234ABC", unidad: null, tipo: null, activo: true, foto: null,
+    vehiculoId: "v", matricula: "1234ABC", unidad: null, tipo: null, foto: null,
     medidas: [], minimo: null, ruedas: [], paraCambiar: 0, conPresion: 0, peor: null,
     medidoEl: null, diasDesdeMedicion: null, ...p,
   });
@@ -197,7 +191,7 @@ describe("resumenDeTarjeta", () => {
 
 describe("ordenar y filtrar", () => {
   const v = (p: Partial<VehiculoConAlertas>): VehiculoConAlertas => ({
-    vehiculoId: p.matricula ?? "v", matricula: "0000AAA", unidad: null, tipo: null, activo: true, foto: null,
+    vehiculoId: p.matricula ?? "v", matricula: "0000AAA", unidad: null, tipo: null, foto: null,
     medidas: [], minimo: null, ruedas: [], paraCambiar: 0, conPresion: 0, peor: null,
     medidoEl: null, diasDesdeMedicion: null, ...p,
   });

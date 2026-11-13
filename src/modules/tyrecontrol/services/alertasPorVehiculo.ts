@@ -36,7 +36,6 @@ export interface VehiculoConAlertas {
   matricula: string;
   unidad: string | null;
   tipo: string | null;
-  activo: boolean;
   foto: string | null;
   /** Las medidas distintas que lleva montadas: casi siempre una, a veces dos. */
   medidas: string[];
@@ -155,7 +154,6 @@ export function agruparPorVehiculo(filas: RuedaAlerta[], hoy: string = hoyISO())
       matricula: cabecera.matricula ?? "",
       unidad: cabecera.numero_unidad,
       tipo: cabecera.tipo_vehiculo,
-      activo: cabecera.vehiculo_activo !== false,
       foto: cabecera.imagen_chasis_url,
       medidas,
       minimo: minimos.length === 1 ? minimos[0] : null,
