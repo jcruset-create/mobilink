@@ -281,3 +281,77 @@ describe("el aplanado del HTML", () => {
     expect(motivo(r)).toContain("cuerpo");
   });
 });
+
+/**
+ * Los dos fallos que se vieron en producción con los primeros 55 correos.
+ *
+ * De esos 55, 23 se apartaron sin casar: el registro de `tc_goodyear_avisos`
+ * dijo exactamente por qué, que es para lo que está. Aquí quedan fijados los
+ * dos motivos para que no vuelvan.
+ */
+describe("lo que falló con los primeros 55 correos reales", () => {
+  it("un campo VACÍO no se come el rótulo siguiente", () => {
+    // El fallo tal cual: en los avisos de profundidad «ID de flota» viene
+    // vacío, y el parser devolvía «Rueda:» —el rótulo de al lado— como si
+    // fuera el número de unidad. Luego no casaba contra la ficha y el aviso
+    // se apartaba. El dato estaba bien; leerlo era lo que estaba mal.
+    const conHueco = {
+      asunto: "[EXTERNO] Presión baja — 1467HJS/854 — Soledad // La Plana",
+      html: `<table>
+        <tr><td><h1>Presión baja!</h1></td></tr>
+        <tr><td>${CRITICO(75)}</td></tr>
+        <tr><td>Matrícula:</td><td><b>1467HJS</b></td></tr>
+        <tr><td>ID de flota:</td><td></td></tr>
+        <tr><td>Rueda:</td><td><b>Eje 2 - derecho interior</b></td></tr>
+        <tr><td>Fecha y hora:</td><td><b>10.11.2026 · 22:30:54</b></td></tr>
+        <tr><td>Presión recomendada:</td><td><b>8.0 bar</b></td></tr>
+        <tr><td>Presión bruta:</td><td><b>4.0 bar (-49.65%)</b></td></tr>
+      </table>`,
+    };
+    const a = alerta(leerAlerta(conHueco));
+    // Del cuerpo no sale nada, así que se queda el del asunto. Lo que NO
+    // puede pasar es que salga «Rueda:».
+    expect(a.idFlota).toBe("854");
+    // Y la rueda se lee bien, que es lo que el rótulo robado tapaba.
+    expect(a.eje).toBe(2);
+    expect(a.lado).toBe("der");
+  });
+
+  it("«Etiquetas:» vacío, que es el caso de siempre, tampoco", () => {
+    // Está vacío en los diez avisos reales. Si se comiera el rótulo
+    // siguiente, la fecha se leería mal en todos.
+    const a = alerta(leerAlerta(BAJA));
+    expect(a.medidoAt.toISOString()).toBe("2026-11-10T21:30:54.000Z");
+  });
+
+  it("un aviso de PROFUNDIDAD no se cuela como si fuera de presión", () => {
+    // Siete de los 55 eran de profundidad de dibujo y el parser los tipaba
+    // como «desinflado», porque su cuerpo también habla de neumáticos.
+    // Habrían acabado en tc_alertas_presion diciendo una presión que nadie
+    // ha medido.
+    const profundidad = {
+      asunto: "Alertas de profundidad del dibujo - mantenimiento — 9228MJP — Soledad // La Plana",
+      html: `<h1>Alertas de profundidad del dibujo</h1>
+        <p>La profundidad del dibujo del neumático está por debajo del umbral.</p>
+        <tr><td>Matrícula:</td><td><b>9228MJP</b></td></tr>
+        <tr><td>Rueda:</td><td><b>Eje 1 - izquierdo exterior</b></td></tr>`,
+    };
+    expect(motivo(leerAlerta(profundidad))).toContain("profundidad de dibujo");
+    expect(motivo(leerAlerta(profundidad))).toContain("no de presión");
+  });
+
+  it("y el de «límite legal» tampoco, que es el mismo caso", () => {
+    const limite = {
+      asunto: "Alerta de profundidad de dibujo - límite legal — 1949JJR — Soledad // La Plana",
+      html: "<h1>Alerta de profundidad de dibujo</h1><p>Límite legal.</p>",
+    };
+    expect(motivo(leerAlerta(limite))).toContain("profundidad de dibujo");
+  });
+
+  it("los de presión siguen entrando igual que antes", () => {
+    // La red de seguridad del arreglo: al apartar los de profundidad no se
+    // puede haber apartado de paso ninguno de los que sí valen.
+    expect(alerta(leerAlerta(BAJA)).tipo).toBe("presion_baja");
+    expect(alerta(leerAlerta(DESINFLADO)).tipo).toBe("desinflado");
+  });
+});
