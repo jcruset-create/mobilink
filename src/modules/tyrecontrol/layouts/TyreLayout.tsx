@@ -4,7 +4,7 @@ import { Menu, LogOut, Home } from "lucide-react";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 import { NAV, navVisible, SIEMPRE_VISIBLES } from "../config/navigation";
 import { ROL_LABELS } from "../types";
-import AlertasWebfleet from "../components/AlertasWebfleet";
+import CampanaAvisos from "../components/CampanaAvisos";
 import AsistenteChat from "../components/AsistenteChat";
 import AccesosCabecera from "../../../components/AccesosCabecera";
 import VersionDesplegada from "../../../components/VersionDesplegada";
@@ -79,7 +79,7 @@ export default function TyreLayout() {
           />
         </div>
         <div className="flex items-center gap-3">
-          <AlertasWebfleet />
+          <CampanaAvisos />
           <div className="hidden text-right sm:block">
             <div className="text-[12px] font-semibold leading-tight">👤 {perfil?.nombre}</div>
             <div className="text-[10px] text-slate-400">
