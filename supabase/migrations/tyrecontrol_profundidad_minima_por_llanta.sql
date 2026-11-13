@@ -96,10 +96,26 @@ grant execute on function tc_profundidad_minima_por_llanta(text) to authenticate
 --
 --     Los avisos de PRESIÓN no se tocan: ésos no tienen nivel de aviso.
 
+-- ── Dos trampas que costaron un intento fallido ────────────────────────────
+--
+--  1. `pg_get_functiondef` devuelve la definición con saltos CRLF, no LF. El
+--     anclaje del mínimo es de UNA línea y casaba; el del bloque de aviso son
+--     cuatro, y con `chr(10)` no casaba ninguna. Peor: la comprobación se hizo
+--     contra un volcado leído desde fichero en modo texto, y eso convierte los
+--     CRLF en LF, así que daba 1 y en la base daba 0. Aquí se quitan los CR
+--     antes de nada y se ejecuta la versión sin ellos, que en SQL es
+--     indiferente.
+--
+--  2. Contar con `regexp_matches` NO vale para un anclaje que lleva `||`: en
+--     una expresión regular eso es ALTERNACIÓN, no dos barras, así que el
+--     patrón casaba 4.069 veces con la cadena vacía. Se cuenta literal, por
+--     diferencia de longitudes, que no interpreta nada.
+
 do $migracion$
 declare
   v_def   text;
   v_nuevo text;
+  v_veces int;
 
   v_ancla_min constant text :=
     'coalesce(um.profundidad_minima_mm, uc.profundidad_minima_mm, ue.profundidad_minima_mm, 1.6) as minmm';
@@ -113,7 +129,7 @@ declare
     '         ''Profundidad '' || mo.profundidad_mm || '' mm (≤ '' || mo.avisomm || '')'', mo.profundidad_mm' || chr(10) ||
     '  from montados mo where mo.profundidad_mm > mo.minmm and mo.profundidad_mm <= mo.avisomm';
 begin
-  select pg_get_functiondef(p.oid) into v_def
+  select replace(pg_get_functiondef(p.oid), chr(13), '') into v_def
     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
    where n.nspname = 'public' and p.proname = 'tc_informes_alertas';
   if v_def is null then
@@ -125,11 +141,14 @@ begin
     return;
   end if;
 
-  if (select count(*) from regexp_matches(v_def, replace(replace(v_ancla_min, '(', '\('), ')', '\)'), 'g')) <> 1 then
-    raise exception 'Esperaba 1 vez el coalesce del mínimo en tc_informes_alertas';
+  v_veces := (length(v_def) - length(replace(v_def, v_ancla_min, ''))) / length(v_ancla_min);
+  if v_veces <> 1 then
+    raise exception 'Esperaba 1 vez el coalesce del mínimo en tc_informes_alertas y hay %', v_veces;
   end if;
-  if (select count(*) from regexp_matches(v_def, replace(replace(v_ancla_aviso, '(', '\('), ')', '\)'), 'g')) <> 1 then
-    raise exception 'Esperaba 1 vez el bloque de proximo_sustitucion en tc_informes_alertas';
+
+  v_veces := (length(v_def) - length(replace(v_def, v_ancla_aviso, ''))) / length(v_ancla_aviso);
+  if v_veces <> 1 then
+    raise exception 'Esperaba 1 vez el bloque de proximo_sustitucion en tc_informes_alertas y hay %', v_veces;
   end if;
 
   v_nuevo := replace(v_def, v_ancla_min, v_min_nuevo);
