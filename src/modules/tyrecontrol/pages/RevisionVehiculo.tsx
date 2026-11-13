@@ -4,15 +4,18 @@ import { useSearchParams } from "react-router-dom";
 import {
   listarEmpresas, listarVehiculos, listarPosiciones, listarMontajesVehiculo, obtenerVehiculo,
   crearRevision, guardarDetalleRevision, completarRevision, listarRevisiones, listarDetalleRevision,
-  cambiarFechaRevision,
+  cambiarFechaRevision, kilometrajeActualVehiculo,
   listarUltimasMedicionesVehiculo, listarPresionesCatalogoPorModelo, eliminarRevision,
 } from "../services/data";
+import type { LecturaKmActual } from "../services/data";
 import type { Empresa, Vehiculo, PosicionVehiculo, MontajeActual, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle } from "../types";
 import { presionTxt } from "../types";
 import { inputCls, Field, Modal, TableWrap, tdCls, thCls } from "../components/ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 import ModalMontarDesdeFicha from "../components/ModalMontarDesdeFicha";
-import { hoyISO, juzgarFecha, textoEnPapel } from "../services/revisionEnPapel";
+import {
+  avisoKmDeOtroDia, hoyISO, juzgarFecha, origenDeLosKm, textoEnPapel,
+} from "../services/revisionEnPapel";
 
 type Detalle = Partial<RevisionDetalle>;
 
@@ -61,6 +64,14 @@ export default function RevisionVehiculo() {
   const [fechaRevision, setFechaRevision] = useState(hoyISO());
   /* La posición en la que se va a reconocer una goma que el sistema no tiene. */
   const [montarEn, setMontarEn] = useState<PosicionVehiculo | null>(null);
+  /*
+   * Lo que ha contestado la telemática, para poder decir de dónde sale el
+   * número en vez de dejarlo aparecer solo en la casilla.
+   */
+  const [lecturaKm, setLecturaKm] = useState<LecturaKmActual | null>(null);
+  const [pidiendoKm, setPidiendoKm] = useState(false);
+  /* Si el número que hay puesto lo trajo el proveedor. Decide `origen_km`. */
+  const [kmDeTelematica, setKmDeTelematica] = useState(false);
   const [detalles, setDetalles] = useState<Record<string, Detalle>>({});
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
@@ -116,6 +127,45 @@ export default function RevisionVehiculo() {
     // parte del día 9 y se sigue el 13, sigue siendo la revisión del día 9.
     if (r.fecha_revision) setFechaRevision(r.fecha_revision);
     setRevision(r);
+  }
+
+  /**
+   * Pedirle el cuentakilómetros al proveedor de telemática.
+   *
+   * Mismo criterio que en el inventario inicial
+   * (`components/ModalNeumaticosMontados.tsx`), y a propósito el mismo: NO
+   * sobrescribe lo que haya tecleado una persona. Si el campo tiene algo
+   * puesto a mano, la lectura se trae para enseñarla y el número se respeta;
+   * quien quiera el del proveedor vacía la casilla y vuelve a pulsar.
+   *
+   * Pasa por el servidor porque la credencial de Movertis vive en el gestor de
+   * secretos del Hub y no sale de ahí. No escribe nada: solo pregunta.
+   */
+  async function pedirKm(vid: string, automatico = false) {
+    if (pidiendoKm || !vid) return;
+    setPidiendoKm(true);
+    try {
+      const l = await kilometrajeActualVehiculo(vid);
+      setLecturaKm(l);
+      if (l.km != null) {
+        /*
+         * Se pisa lo que hubiera, y no hay guarda de «lo tecleado no se toca»
+         * a propósito: las dos únicas llamadas vienen de sitios donde pisar es
+         * lo correcto —al elegir vehículo, donde la casilla trae el `km_actual`
+         * de la ficha que nadie ha tecleado (el 5399GWF trae un 0), y al pulsar
+         * el botón, que es justo pedir que se pise—. Un guarda leería el estado
+         * del render anterior y acabaría ignorando la lectura del vehículo
+         * recién elegido.
+         */
+        setKmVehiculo(String(Math.round(l.km)));
+        setKmDeTelematica(true);
+      }
+    } catch (e: any) {
+      // En automático se calla: esta no es la pantalla de la telemática, y un
+      // aviso al elegir vehículo sería ruido. A mano sí se dice, porque
+      // alguien ha pulsado y está esperando respuesta.
+      if (!automatico) setMsg(e?.message || "No se ha podido consultar la telemática");
+    } finally { setPidiendoKm(false); }
   }
 
   /**
@@ -205,6 +255,8 @@ export default function RevisionVehiculo() {
 
   async function cargarVehiculo(vid: string, vehOverride?: Vehiculo) {
     setVehiculoId(vid); setRevision(null); setDetalles({});
+    // La lectura del vehículo anterior no dice nada de éste.
+    setLecturaKm(null); setKmDeTelematica(false);
     const veh = vehOverride ?? vehiculos.find((v) => v.id === vid);
     if (!veh) { setPosiciones([]); setMontajes([]); return; }
     setKmVehiculo(veh.km_actual != null ? String(veh.km_actual) : "");
@@ -215,6 +267,17 @@ export default function RevisionVehiculo() {
       listarUltimasMedicionesVehiculo(vid),
     ]);
     setPosiciones(pos); setMontajes(mon); setHistorialRevisiones(hist); setMedicionesActuales(medic);
+
+    /*
+     * Y se le piden los kilómetros al proveedor, una vez, al elegir vehículo.
+     *
+     * Solo si la revisión es de HOY. El endpoint contesta el odómetro de ahora
+     * y el histórico de Movertis no trae odómetro, así que para un parte de
+     * hace cuatro días no hay nada que preguntar: gastaría cupo del proveedor
+     * —que se comparte con el barrido de presencia en bases— para traer un
+     * número que no es el de ese día.
+     */
+    if (fechaRevision === hoyISO()) void pedirKm(vid, true);
   }
 
   /* El vehículo elegido, para poder avisar de la casilla «KM.» del papel. */
@@ -244,6 +307,10 @@ export default function RevisionVehiculo() {
       const r = await crearRevision({
         empresaId, vehiculoId, kmVehiculo: kmVehiculo ? Number(kmVehiculo) : null,
         tecnicoId: perfil?.id ?? null, fechaRevision,
+        // `telematica` solo si lo trajo el proveedor Y la revisión es de hoy;
+        // si no, es una aproximación que ha aceptado una persona. Ver
+        // `origenDeLosKm` en `services/revisionEnPapel.ts`.
+        origenKm: origenDeLosKm(kmDeTelematica, fechaRevision),
       });
       setRevision(r);
       const inicial: Record<string, Detalle> = {};
@@ -354,9 +421,57 @@ export default function RevisionVehiculo() {
               />
             </Field>
             <Field label="Km actuales del vehículo">
-              <input type="number" className={`${inputCls} max-w-xs`} value={kmVehiculo} onChange={(e) => setKmVehiculo(e.target.value)} />
+              <input
+                type="number" className={`${inputCls} max-w-xs`} value={kmVehiculo}
+                onChange={(e) => {
+                  setKmVehiculo(e.target.value);
+                  // A partir de aquí el número es de quien lo escribe, así que
+                  // `origen_km` deja de ser de la telemática.
+                  setKmDeTelematica(false);
+                }}
+              />
             </Field>
+            {/*
+              Para reintentar cuando la telemática no ha contestado, o para
+              recuperar la lectura después de haber tecleado.
+            */}
+            <div className="self-end pb-[2px]">
+              <button
+                onClick={() => void pedirKm(vehiculoId)}
+                disabled={pidiendoKm || !vehiculoId}
+                title="Pregunta el cuentakilómetros al proveedor de telemática"
+                className="rounded-lg border border-slate-600 px-3 py-2 text-[13px] font-bold text-slate-200 hover:bg-slate-700/40 disabled:opacity-50"
+              >
+                {pidiendoKm ? "Consultando…" : "Pedir kilómetros"}
+              </button>
+            </div>
           </div>
+
+          {/*
+            Lo que ha dicho la telemática, con su antigüedad. El número a secas
+            no basta: una lectura de hace dos días y una de hace dos minutos se
+            escriben igual y no valen lo mismo. Mismo texto que en el
+            inventario inicial, que es de donde sale el criterio.
+          */}
+          {lecturaKm && (
+            <div className={`mt-1 text-[11px] ${lecturaKm.km != null ? "text-slate-400" : "text-amber-400"}`}>
+              {lecturaKm.km != null
+                ? <>Telemática: <b>{Math.round(lecturaKm.km).toLocaleString("es-ES")} km</b>
+                    {lecturaKm.antiguedadMin != null && <> · leído hace {lecturaKm.antiguedadMin} min</>}
+                    {lecturaKm.proveedor && <> · {lecturaKm.proveedor}</>}
+                    {lecturaKm.aviso && <span className="ml-1 text-amber-400">· {lecturaKm.aviso}</span>}</>
+                : lecturaKm.texto}
+            </div>
+          )}
+
+          {/*
+            Y el cruce con la fecha: para un parte de otro día, el odómetro de
+            ahora no es el de ese día. Se dice en vez de ofrecer un número que
+            parecería medido entonces.
+          */}
+          {avisoKmDeOtroDia(fechaRevision) && (
+            <div className="mt-1 text-[11px] text-amber-300/80">{avisoKmDeOtroDia(fechaRevision)}</div>
+          )}
 
           {/*
             * El parte de papel trae una casilla «KM.» que NO siempre son

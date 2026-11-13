@@ -1638,11 +1638,18 @@ export async function listarCatOperaciones(): Promise<{
 export async function crearRevision(input: {
   empresaId: string; vehiculoId: string; kmVehiculo?: number | null; tecnicoId?: string | null;
   fechaRevision?: string | null;
+  /*
+   * `telematica` o `manual`, que son los dos valores que hay en producción
+   * (7.551 y 4.153). Si no se dice, la columna se queda con su `default
+   * 'manual'`, que es lo correcto para unos kilómetros tecleados.
+   */
+  origenKm?: "telematica" | "manual" | null;
 }): Promise<RevisionVehiculo> {
   const fila: Record<string, unknown> = {
     empresa_id: input.empresaId, vehiculo_id: input.vehiculoId,
     km_vehiculo: input.kmVehiculo ?? null, tecnico_id: input.tecnicoId ?? null,
   };
+  if (input.origenKm) fila.origen_km = input.origenKm;
   if (input.fechaRevision) {
     fila.fecha_revision = input.fechaRevision;
     const hoy = new Date();

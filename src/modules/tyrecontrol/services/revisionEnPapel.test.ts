@@ -10,7 +10,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  diasAtras, diasDeRetraso, esEnPapel, juzgarFecha, textoEnPapel,
+  avisoKmDeOtroDia, diasAtras, diasDeRetraso, esEnPapel, juzgarFecha,
+  origenDeLosKm, textoEnPapel,
 } from "./revisionEnPapel";
 
 const HOY = "2026-11-13";
@@ -92,6 +93,52 @@ describe("contar los días", () => {
     // Cero significaría «hoy», que es justo lo contrario de «no se sabe».
     expect(diasAtras("ayer", "2026-11-13")).toBeNull();
     expect(diasAtras("2026-11-09", "")).toBeNull();
+  });
+});
+
+describe("de dónde se dice que salen los kilómetros", () => {
+  it("de la telemática, cuando la revisión es de hoy", () => {
+    expect(origenDeLosKm(true, HOY, HOY)).toBe("telematica");
+  });
+
+  it("a mano, cuando los ha tecleado una persona", () => {
+    expect(origenDeLosKm(false, HOY, HOY)).toBe("manual");
+  });
+
+  it("a mano también si la lectura es de hoy y la revisión de otro día", () => {
+    // El endpoint contesta el odómetro de AHORA y el histórico de Movertis no
+    // trae odómetro: no hay forma de saber cuánto marcaba el día 9. Aplicarle
+    // la lectura de hoy puede valer como aproximación, pero llamarla
+    // «telematica» sería firmar una precisión que no tiene, y esa palabra ya
+    // significa algo en 7.551 revisiones.
+    expect(origenDeLosKm(true, "2026-11-09", HOY)).toBe("manual");
+  });
+
+  it("y tampoco se llama telemática a una fecha que no se entiende", () => {
+    expect(origenDeLosKm(true, "", HOY)).toBe("manual");
+  });
+});
+
+describe("el aviso de que los km son de otro día", () => {
+  it("no se dice cuando la revisión es de hoy", () => {
+    // Ese día la lectura SÍ corresponde, así que avisar sería ruido.
+    expect(avisoKmDeOtroDia(HOY, HOY)).toBeNull();
+  });
+
+  it("se dice cuando la revisión es de días atrás", () => {
+    const a = avisoKmDeOtroDia("2026-11-09", HOY);
+    expect(a).toContain("hace 4 días");
+    expect(a).toContain("a mano");
+  });
+
+  it("ayer se dice «ayer», no «hace 1 días»", () => {
+    expect(avisoKmDeOtroDia("2026-11-12", HOY)).toContain("de ayer");
+  });
+
+  it("una fecha futura o ilegible no genera aviso", () => {
+    // La pantalla ya las rechaza; aquí simplemente no se inventa un texto.
+    expect(avisoKmDeOtroDia("2026-11-20", HOY)).toBeNull();
+    expect(avisoKmDeOtroDia("mañana", HOY)).toBeNull();
   });
 });
 

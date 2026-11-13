@@ -126,6 +126,42 @@ export function juzgarFecha(fecha: string, hoy: string = hoyISO()): JuicioFecha 
   return { error: null, aviso: null };
 }
 
+/**
+ * De dónde salen los kilómetros que se guardan con la revisión.
+ *
+ * `telematica` SOLO cuando el número lo ha dado el proveedor y además la
+ * revisión es de hoy. No es quisquillosería: el endpoint contesta el odómetro
+ * de AHORA, y el histórico de Movertis no trae odómetro, así que no hay forma
+ * de preguntarle cuánto marcaba el martes. Aplicar la lectura de hoy a una
+ * revisión del martes es una aproximación que puede valer —la toma una persona
+ * que tiene el papel delante— pero no es una lectura de ese día, y llamarla
+ * `telematica` sería firmar un dato con una precisión que no tiene.
+ *
+ * Hay 7.551 revisiones con `origen_km = 'telematica'` en producción. Que esa
+ * palabra siga significando lo mismo en todas vale más que ahorrar un clic.
+ */
+export function origenDeLosKm(
+  deTelematica: boolean,
+  fecha: string,
+  hoy: string = hoyISO(),
+): "telematica" | "manual" {
+  return deTelematica && fecha === hoy ? "telematica" : "manual";
+}
+
+/**
+ * El aviso de «estos kilómetros no son los de ese día», o `null` si no procede.
+ *
+ * Se dice cuando la revisión no es de hoy, porque es justo cuando el número
+ * que ofrece la pantalla deja de corresponder al día que se está guardando.
+ */
+export function avisoKmDeOtroDia(fecha: string, hoy: string = hoyISO()): string | null {
+  const dias = diasAtras(fecha, hoy);
+  if (dias == null || dias <= 0) return null;
+  const cuando = dias === 1 ? "ayer" : `hace ${dias} días`;
+  return `La telemática da el cuentakilómetros de ahora, no el de ${cuando}.`
+    + " Para una revisión de otro día, los kilómetros van a mano.";
+}
+
 /** Lo que hace falta saber de una revisión para decir si se tecleó después. */
 export interface RevisionFechada {
   fecha_revision?: string | null;
