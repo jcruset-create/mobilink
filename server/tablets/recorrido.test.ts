@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { analizarRecorrido, distanciaM, type PuntoRecorrido } from "./recorrido.ts";
+import { analizarRecorrido, distanciaM, unirPuntos, type PuntoRecorrido } from "./recorrido.ts";
 
 const T0 = Date.parse("2026-11-13T07:00:00Z");
 const MIN = 60_000;
@@ -73,5 +73,13 @@ describe("analizarRecorrido", () => {
 
   it("sin puntos, todo vacío", () => {
     expect(analizarRecorrido([])).toMatchObject({ km: 0, paradas: [], trayectos: [] });
+  });
+});
+
+describe("unirPuntos", () => {
+  it("junta las dos fuentes en orden, sin repetir el mismo instante", () => {
+    const asistencia = [{ lat: 1, lng: 1, atMs: 3 }, { lat: 2, lng: 2, atMs: 1 }];
+    const general = [{ lat: 9, lng: 9, atMs: 3 }, { lat: 3, lng: 3, atMs: 2 }];
+    expect(unirPuntos(asistencia, general).map((p) => [p.atMs, p.lat])).toEqual([[1, 2], [2, 3], [3, 1]]);
   });
 });

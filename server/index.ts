@@ -23,7 +23,7 @@ import {
   rastroTablet,
   ultimaPosicionTablet,
 } from "./tablets/posicionTablet.ts";
-import { analizarRecorrido } from "./tablets/recorrido.ts";
+import { analizarRecorrido, unirPuntos, type PuntoRecorrido } from "./tablets/recorrido.ts";
 import { guardarCodigoErp, SISTEMAS_NO_ERP } from "./clientes/codigoErp.ts";
 import { OTF_EN_ESPERA_SQL } from "./otf/espera.ts";
 import {
@@ -11132,9 +11132,9 @@ async function buildTabletTrackingPdfBuffer(
   techName: string,
   fromMs: number,
   toMs: number,
-  opts: { minStopSec?: number } = {}
+  opts: { minStopSec?: number; titleExtra?: string; puntos?: PuntoRecorrido[] } = {}
 ): Promise<Buffer> {
-  const puntos = await rastroTablet(techName, fromMs, toMs);
+  const puntos = opts.puntos ?? (await rastroTablet(techName, fromMs, toMs));
   const r = analizarRecorrido(puntos, { minParadaSec: opts.minStopSec ?? 180 });
   const nombres = await nombresDeParadas(r.paradas);
 
@@ -11143,7 +11143,11 @@ async function buildTabletTrackingPdfBuffer(
   doc.on("data", (c) => chunks.push(c));
   const finished = new Promise<Buffer>((resolve) => doc.on("end", () => resolve(Buffer.concat(chunks))));
 
-  attachBrandedHeader(doc, "Recorrido de la tablet", techName);
+  attachBrandedHeader(
+    doc,
+    "Recorrido de la tablet",
+    `${techName}${opts.titleExtra ? ` · ${opts.titleExtra}` : ""}`
+  );
   doc.fontSize(10).font("Helvetica").fillColor("#64748b")
     .text(`${formatDateEs(fromMs)}  –  ${formatDateEs(toMs)}`, 40, doc.y, { align: "left" });
   doc.fillColor("#000000").moveDown(0.8);
@@ -11234,6 +11238,53 @@ app.get("/api/tablets/:techName/recorrido.pdf", requireAdminRole, async (req, re
     res.send(buffer);
   } catch (error: any) {
     console.error("GET /api/tablets/:techName/recorrido.pdf error:", error);
+    if (!res.headersSent) res.status(500).json({ error: error?.message || "Error generando informe" });
+  }
+});
+
+/*
+ * El recorrido de la tablet del operario durante una asistencia: el mismo
+ * periodo que el de la furgoneta (salida → llegada al taller, o ahora).
+ * Junta el rastro de la asistencia, que existe desde siempre, con el rastro
+ * general de la tablet, que es más nuevo pero también cubre los ratos en que
+ * la tablet mandaba a la ruta general (asistencia puesta en camino desde el
+ * panel, por ejemplo).
+ */
+app.get("/api/roadside-assistances/:id/tablet-report.pdf", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    const r = await db.query(`SELECT * FROM roadside_assistances WHERE id = $1 LIMIT 1`, [id]);
+    if (r.rows.length === 0) return res.status(404).json({ error: "Asistencia no encontrada" });
+    const a = normalizeRoadsideAssistanceRow(r.rows[0]);
+    if (!a.assignedTechName) return res.status(400).json({ error: "La asistencia no tiene operario asignado" });
+
+    const fromMs = a.departedAtMs || a.assignedAtMs || a.createdAtMs;
+    const toMs = a.arrivedAtWorkshopMs || a.cancelledAtMs || a.finishedAtMs || Date.now();
+    const deLaAsistencia = await db.query(
+      `SELECT lat, lng, "ts", "accuracyM", "speedKmh" FROM roadside_operator_track
+        WHERE "assistanceId" = $1 ORDER BY "ts"`,
+      [id]
+    );
+    const puntos = unirPuntos(
+      deLaAsistencia.rows.map((p: any) => ({
+        lat: Number(p.lat),
+        lng: Number(p.lng),
+        atMs: Number(p.ts),
+        accuracyM: p.accuracyM != null ? Number(p.accuracyM) : null,
+        speedKmh: p.speedKmh != null ? Number(p.speedKmh) : null,
+      })),
+      await rastroTablet(a.assignedTechName, fromMs, toMs)
+    );
+    const buffer = await buildTabletTrackingPdfBuffer(a.assignedTechName, fromMs, toMs, {
+      titleExtra: `Asistencia #${a.id}`,
+      puntos,
+    });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="recorrido_tablet_asistencia_${id}.pdf"`);
+    res.send(buffer);
+  } catch (error: any) {
+    console.error("GET tablet-report.pdf (asistencia) error:", error);
     if (!res.headersSent) res.status(500).json({ error: error?.message || "Error generando informe" });
   }
 });
