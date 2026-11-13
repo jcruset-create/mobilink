@@ -74,9 +74,19 @@ export function tieneDuracion(t: TiempoRevision | null | undefined): boolean {
  *   · del arco no habrá número nunca: mide al paso y no hay nada que empiece;
  *   · del inventario inicial tampoco, porque se hace desde el panel, a mano y
  *     a ratos, y cronometrarlo no mediría el trabajo de nadie;
+ *   · de una hecha en papel y tecleada después, tampoco: el cronómetro habría
+ *     medido cuánto se tarda en teclear, que no es cuánto se tarda en revisar;
  *   · de una revisión antigua sí lo habrá, a partir de la siguiente.
+ *
+ * El papel va PRIMERO porque es el motivo verdadero cuando coincide con los
+ * demás: decirle «anterior al cronómetro de la APK» a una revisión de esta
+ * semana sería falso, y el que lo lea se quedaría pensando que falta un dato
+ * que no falta.
  */
-export function motivoSinDuracion(esArco: boolean, esInventario = false): string {
+export function motivoSinDuracion(esArco: boolean, esInventario = false, enPapel = false): string {
+  if (enPapel) {
+    return "Se hizo en papel y se pasó desde el escritorio: no hubo cronómetro que medir.";
+  }
   if (esInventario) {
     return "El inventario inicial se informa desde el panel, a ratos: no se cronometra.";
   }

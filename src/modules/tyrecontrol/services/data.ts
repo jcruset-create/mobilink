@@ -1621,10 +1621,43 @@ export async function listarCatOperaciones(): Promise<{
 }
 
 // ── Fase 8: Revisión de vehículo ────────────────────────────────
-export async function crearRevision(input: { empresaId: string; vehiculoId: string; kmVehiculo?: number | null; tecnicoId?: string | null }): Promise<RevisionVehiculo> {
-  const { data, error } = await supabase.from("revisiones_vehiculo").insert({
-    empresa_id: input.empresaId, vehiculo_id: input.vehiculoId, km_vehiculo: input.kmVehiculo ?? null, tecnico_id: input.tecnicoId ?? null,
-  }).select("*").single();
+/**
+ * Crear una revisión.
+ *
+ * `fechaRevision` es para las que se hacen en papel y se teclean días después:
+ * sin ella la fila se queda con el `default CURRENT_DATE` de la tabla, que es
+ * lo correcto para una revisión que se está haciendo ahora. Ver
+ * `services/revisionEnPapel.ts` para las reglas de qué fecha se admite.
+ *
+ * Cuando la fecha es de un día anterior, `inicio_at` va a null A PROPÓSITO. La
+ * columna tiene `default now()` y dejarlo correr pondría la hora de teclear en
+ * una revisión de hace cuatro días: la misma fila diría que se empezó hoy y
+ * que se hizo el lunes. Null es lo que de verdad se sabe —no hubo cronómetro—
+ * y es lo que ya pasa con `duracion_seg`, que el panel nunca ha rellenado.
+ */
+export async function crearRevision(input: {
+  empresaId: string; vehiculoId: string; kmVehiculo?: number | null; tecnicoId?: string | null;
+  fechaRevision?: string | null;
+  /*
+   * `telematica` o `manual`, que son los dos valores que hay en producción
+   * (7.551 y 4.153). Si no se dice, la columna se queda con su `default
+   * 'manual'`, que es lo correcto para unos kilómetros tecleados.
+   */
+  origenKm?: "telematica" | "manual" | null;
+}): Promise<RevisionVehiculo> {
+  const fila: Record<string, unknown> = {
+    empresa_id: input.empresaId, vehiculo_id: input.vehiculoId,
+    km_vehiculo: input.kmVehiculo ?? null, tecnico_id: input.tecnicoId ?? null,
+  };
+  if (input.origenKm) fila.origen_km = input.origenKm;
+  if (input.fechaRevision) {
+    fila.fecha_revision = input.fechaRevision;
+    const hoy = new Date();
+    const dd = (n: number) => String(n).padStart(2, "0");
+    const hoyISO = `${hoy.getFullYear()}-${dd(hoy.getMonth() + 1)}-${dd(hoy.getDate())}`;
+    if (input.fechaRevision < hoyISO) fila.inicio_at = null;
+  }
+  const { data, error } = await supabase.from("revisiones_vehiculo").insert(fila).select("*").single();
   if (error) throw new Error(error.message);
   return data as RevisionVehiculo;
 }
@@ -1632,6 +1665,25 @@ export async function crearRevision(input: { empresaId: string; vehiculoId: stri
 export async function guardarDetalleRevision(input: Partial<RevisionDetalle> & { revision_id: string; empresa_id: string; vehiculo_id: string; posicion_id: string }): Promise<void> {
   const { error } = await supabase.from("revisiones_neumaticos_detalle")
     .upsert(input, { onConflict: "revision_id,posicion_id" });
+  if (error) throw new Error(error.message);
+}
+
+/**
+ * Corregir la fecha de una revisión que todavía es borrador.
+ *
+ * Hace falta porque la fecha se elige antes de empezar a teclear, y quien
+ * descubre que se equivocó lo descubre a mitad de las ocho posiciones. Sin
+ * esto, la única salida sería borrar el borrador y volver a teclearlo entero,
+ * y el camino cómodo pasaría a ser dejar la fecha mal.
+ *
+ * Solo sobre borradores: una vez completada, la revisión ya ha escrito su
+ * operación en el histórico del neumático con esa fecha, y cambiarla por aquí
+ * dejaría las dos filas diciendo días distintos.
+ */
+export async function cambiarFechaRevision(id: string, fecha: string): Promise<void> {
+  const { error } = await supabase.from("revisiones_vehiculo")
+    .update({ fecha_revision: fecha, updated_at: new Date().toISOString() })
+    .eq("id", id).eq("estado_revision", "borrador");
   if (error) throw new Error(error.message);
 }
 

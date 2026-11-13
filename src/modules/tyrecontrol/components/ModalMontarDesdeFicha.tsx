@@ -14,12 +14,22 @@ interface Props {
   montajeActualId?: string; // si viene informado, es una SUSTITUCIÓN (desmonta + monta)
   medidaActual?: string | null; // medida del neumático de la posición → filtra el almacén
   posicionesBulk?: string[]; // si viene, se monta el MISMO neumático en todas estas posiciones
+  /*
+   * El día del montaje, `YYYY-MM-DD`. Por defecto hoy, que es lo correcto
+   * cuando se está montando la goma ahora mismo.
+   *
+   * Se informa al pasar una revisión hecha en papel: si el parte es del día 9,
+   * la goma se montó el día 9, y fecharla hoy metería en el histórico del
+   * neumático un montaje que no ocurrió cuando dice. De ahí salen los
+   * kilómetros recorridos y el desgaste por día.
+   */
+  fecha?: string | null;
   onClose: () => void;
   onDone: () => void;
 }
 
 
-export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, empresaId, posicionId, montajeActualId, medidaActual, posicionesBulk, onClose, onDone }: Props) {
+export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, empresaId, posicionId, montajeActualId, medidaActual, posicionesBulk, fecha, onClose, onDone }: Props) {
   const bulk = (posicionesBulk?.length ?? 0) > 1;
   const { perfil } = useTyreAuth();
   const esAdmin = !!(perfil?.es_superadmin || perfil?.rol === "administrador");
@@ -82,7 +92,9 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, empr
     const datosFinal = condicion === "usado" && profRestante.trim() !== ""
       ? { ...datos, profundidad_actual_mm: profRestante.replace(",", ".") }
       : datos;
-    const fecha = new Date().toISOString().slice(0, 10);
+    // El día del montaje: el que digan desde fuera —el del parte de papel—
+    // o, si no viene, hoy.
+    const fechaMontaje = fecha ?? new Date().toISOString().slice(0, 10);
     const posiciones = bulk ? posicionesBulk! : [posicionId];
     const ctrlInd = bulk ? false : controlIndividual; // en bulk no se controlan individualmente
     setSaving(true); setMsg("");
@@ -93,19 +105,19 @@ export default function ModalMontarDesdeFicha({ posicionNombre, vehiculoId, empr
           if (sel.tipo === "catalogo") {
             await montarDesdeCatalogo({
               vehiculoId, posicionId: pid, referenciaId: sel.id, controlIndividual: ctrlInd, datos: datosFinal,
-              km: km ? Number(km) : null, fecha, observaciones: obs || null, forzarMedida: forzar, condicion,
+              km: km ? Number(km) : null, fecha: fechaMontaje, observaciones: obs || null, forzarMedida: forzar, condicion,
               montajeActualId: !bulk && montajeActualId ? montajeActualId : null, motivoDesmontaje: motivo, destinoRetirado: destino,
             });
           } else if (!bulk && montajeActualId) {
             await sustituirNeumatico({
               montajeActualId, productoAlmacenId: sel.id, controlIndividual: ctrlInd, datos: datosFinal,
               motivoDesmontaje: motivo, destinoRetirado: destino,
-              km: km ? Number(km) : null, fecha, observaciones: obs || null, forzarMedida: forzar, condicion,
+              km: km ? Number(km) : null, fecha: fechaMontaje, observaciones: obs || null, forzarMedida: forzar, condicion,
             });
           } else {
             await montarDesdeAlmacen({
               vehiculoId, posicionId: pid, productoAlmacenId: sel.id, controlIndividual: ctrlInd, datos: datosFinal,
-              km: km ? Number(km) : null, fecha, observaciones: obs || null, forzarMedida: forzar, condicion,
+              km: km ? Number(km) : null, fecha: fechaMontaje, observaciones: obs || null, forzarMedida: forzar, condicion,
             });
           }
           ok++;

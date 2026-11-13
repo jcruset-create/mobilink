@@ -92,6 +92,22 @@ describe("hay cronómetro o no lo hay", () => {
       motivoSinDuracion(true), motivoSinDuracion(false), motivoSinDuracion(false, true),
     ]).size).toBe(3);
   });
+
+  it("la hecha en papel tiene su propio motivo, y manda sobre los demás", () => {
+    // Decirle «anterior al cronómetro de la APK» a una revisión de esta semana
+    // sería falso: el cronómetro existe, lo que no hubo es tablet. Y quien lo
+    // leyera se quedaría esperando que la próxima traiga número.
+    expect(motivoSinDuracion(false, false, true)).toContain("en papel");
+    expect(motivoSinDuracion(false, false, true)).not.toContain("anterior al cronómetro");
+    // Manda también sobre el inventario: un inventario pasado desde un papel
+    // de hace días no se cronometró por las dos razones, y la de fuera es la
+    // que explica por qué tampoco tiene coordenadas.
+    expect(motivoSinDuracion(true, true, true)).toContain("en papel");
+    expect(new Set([
+      motivoSinDuracion(true), motivoSinDuracion(false),
+      motivoSinDuracion(false, true), motivoSinDuracion(false, false, true),
+    ]).size).toBe(4);
+  });
 });
 
 describe("el desglose de pausas", () => {
