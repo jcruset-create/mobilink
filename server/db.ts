@@ -627,6 +627,22 @@ export async function initDb() {
      * Una fila por operario: se pisa con cada envío y se borra al cerrar
      * sesión (server/tablets/posicionTablet.ts).
      */
+    /*
+     * El rastro de la tablet de cada operario: todas sus posiciones, para el
+     * informe de recorrido del día (server/tablets/recorrido.ts). Se guarda
+     * 90 días y luego se borra solo.
+     */
+    CREATE TABLE IF NOT EXISTS tablet_rastro (
+      id BIGSERIAL PRIMARY KEY,
+      "techName" TEXT NOT NULL,
+      lat DOUBLE PRECISION NOT NULL,
+      lng DOUBLE PRECISION NOT NULL,
+      "accuracyM" DOUBLE PRECISION,
+      "speedKmh" DOUBLE PRECISION,
+      "atMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS tablet_rastro_tech_at_idx ON tablet_rastro("techName", "atMs");
+
     CREATE TABLE IF NOT EXISTS tablet_posicion (
       "techName" TEXT PRIMARY KEY,
       lat DOUBLE PRECISION NOT NULL,

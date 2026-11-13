@@ -149,6 +149,20 @@ export default function FlotaMapPage() {
   }
 
   // Las tablets van aparte: si Webfleet falla, siguen saliendo.
+  // El recorrido de la tablet, igual que el de la furgoneta: el día elegido arriba.
+  function openTabletReport(techName: string) {
+    const day = new Date(`${reportDate}T00:00:00`);
+    const from = day.getTime();
+    const to = from + 24 * 60 * 60 * 1000 - 1;
+    void abrirPdfConSesion(
+      apiFetch,
+      `${API_BASE}/api/tablets/${encodeURIComponent(techName)}/recorrido.pdf?from=${from}&to=${to}`,
+      `recorrido_tablet_${techName}_${reportDate}.pdf`
+    ).catch((e) =>
+      window.alert(e instanceof Error ? e.message : "No se pudo abrir el informe.")
+    );
+  }
+
   async function loadTablets() {
     try {
       const res = await apiFetch(`${API_BASE}/api/tablets/posiciones`, {
@@ -288,6 +302,14 @@ export default function FlotaMapPage() {
                       )}
                       {t.accuracyM != null && (
                         <div className="text-[10px] text-gray-400">Precisión ±{Math.round(t.accuracyM)} m</div>
+                      )}
+                      {t.esPropio && (
+                        <button
+                          onClick={() => openTabletReport(t.techName)}
+                          className="mt-2 w-full rounded bg-teal-600 px-2 py-1 text-xs font-bold text-white hover:bg-teal-700"
+                        >
+                          🛰️ Recorrido tablet (día)
+                        </button>
                       )}
                     </div>
                   </Popup>

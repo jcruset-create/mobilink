@@ -25,9 +25,30 @@ export type PosicionTablet = {
   atMs: number;
 };
 
+/** Cuánto se guarda el rastro de las tablets. */
+export const DIAS_RASTRO = 90;
+
+let ultimaPurgaMs = 0;
+
 export async function guardarPosicionTablet(techName: string, p: PosicionTablet): Promise<void> {
   if (!techName || !Number.isFinite(p.lat) || !Number.isFinite(p.lng)) return;
   if (p.lat === 0 && p.lng === 0) return; // GPS sin fijar
+  // El rastro, para el informe de recorrido. Un mismo instante dos veces
+  // (la ruta de la asistencia y un lote que llega tarde) se guarda una vez.
+  await db.query(
+    `INSERT INTO tablet_rastro ("techName", lat, lng, "accuracyM", "speedKmh", "atMs")
+     SELECT $1, $2, $3, $4, $5, $6
+      WHERE NOT EXISTS (
+        SELECT 1 FROM tablet_rastro WHERE "techName" = $1 AND "atMs" = $6
+      )`,
+    [techName, p.lat, p.lng, p.accuracyM ?? null, p.speedKmh ?? null, p.atMs]
+  );
+  if (p.atMs - ultimaPurgaMs > 60 * 60_000) {
+    ultimaPurgaMs = p.atMs;
+    await db.query(`DELETE FROM tablet_rastro WHERE "atMs" < $1`, [
+      p.atMs - DIAS_RASTRO * 24 * 60 * 60_000,
+    ]);
+  }
   await db.query(
     `INSERT INTO tablet_posicion ("techName", lat, lng, "accuracyM", "speedKmh", "atMs")
      VALUES ($1, $2, $3, $4, $5, $6)
@@ -53,6 +74,23 @@ export async function ultimaPosicionTablet(
   );
   const row = r.rows[0];
   return row ? { lat: Number(row.lat), lng: Number(row.lng), atMs: Number(row.atMs) } : null;
+}
+
+/** Las posiciones de la tablet de un operario entre dos instantes, en orden. */
+export async function rastroTablet(techName: string, desdeMs: number, hastaMs: number) {
+  const r = await db.query(
+    `SELECT lat, lng, "accuracyM", "speedKmh", "atMs" FROM tablet_rastro
+      WHERE "techName" = $1 AND "atMs" BETWEEN $2 AND $3
+      ORDER BY "atMs"`,
+    [techName, desdeMs, hastaMs]
+  );
+  return r.rows.map((row: any) => ({
+    lat: Number(row.lat),
+    lng: Number(row.lng),
+    accuracyM: row.accuracyM != null ? Number(row.accuracyM) : null,
+    speedKmh: row.speedKmh != null ? Number(row.speedKmh) : null,
+    atMs: Number(row.atMs),
+  }));
 }
 
 export async function borrarPosicionTablet(techName: string): Promise<void> {
