@@ -113,4 +113,77 @@ void main() {
       expect(repartirUltimasMediciones([]), isEmpty);
     });
   });
+
+  group('esPosteriorAlMontaje', () {
+    final d = DateTime.parse;
+    test('solo los días posteriores al del montaje', () {
+      expect(esPosteriorAlMontaje(d('2026-10-30'), d('2026-08-05')), isTrue);
+      expect(esPosteriorAlMontaje(d('2026-08-04'), d('2026-08-05')), isFalse);
+    });
+    test('el mismo día NO, aunque la lectura lleve hora', () {
+      expect(esPosteriorAlMontaje(d('2026-08-17'), d('2026-08-17')), isFalse);
+      expect(esPosteriorAlMontaje(d('2026-08-17 22:00:00'), d('2026-08-17')), isFalse);
+      expect(esPosteriorAlMontaje(d('2026-08-18 00:10:00'), d('2026-08-17')), isTrue);
+    });
+    test('sin fecha de montaje se hereda; sin fecha de lectura, no', () {
+      expect(esPosteriorAlMontaje(d('2026-08-17'), null), isTrue);
+      expect(esPosteriorAlMontaje(null, d('2026-08-17')), isFalse);
+    });
+  });
+
+  group('repartirUltimasMediciones · las lecturas siguen a la posición', () {
+    FilaMedicion delArco(String rev, double? prof, {String? clave = 'vieja', String? hereda, String? dia}) => FilaMedicion(
+          revisionId: rev,
+          clave: clave,
+          claveHeredada: hereda,
+          profundidadMm: prof,
+          presionBar: 8,
+          momento: dia == null ? null : DateTime.parse(dia),
+        );
+
+    test('el 4310JYJ: la goma dada de alta tarde hereda lo medido en su posición', () {
+      final mapa = repartirUltimasMediciones([
+        delArco('r2', 11.5, hereda: 'nueva', dia: '2026-10-30'),
+        delArco('r1', 11.6, hereda: 'nueva', dia: '2026-10-29'),
+      ]);
+      expect(mapa['nueva']!.profundidadMm, 11.5);
+      expect(mapa['nueva']!.presionBar, 8);
+      expect(mapa['nueva']!.medidoEn, DateTime.parse('2026-10-30'));
+      // La anterior conserva las suyas: son las mismas filas.
+      expect(mapa['vieja']!.profundidadMm, 11.5);
+    });
+
+    test('sin heredera, la fila es solo de su goma', () {
+      final mapa = repartirUltimasMediciones([delArco('r2', 3.9)]);
+      expect(mapa.keys, ['vieja']);
+    });
+
+    test('una fila sin neumático se le apunta solo a quien la hereda', () {
+      final mapa = repartirUltimasMediciones([delArco('r2', 2.6, clave: null, hereda: 'nueva')]);
+      expect(mapa.keys, ['nueva']);
+      expect(mapa['nueva']!.profundidadMm, 2.6);
+    });
+
+    test('manda la más reciente, sea propia o heredada', () {
+      final mapa = repartirUltimasMediciones([
+        delArco('r2', 2.6, clave: null, hereda: 'nueva'),
+        delArco('r1', 5.9, clave: 'nueva'),
+      ]);
+      expect(mapa['nueva']!.profundidadMm, 2.6);
+    });
+
+    test('una revisión parcial tampoco vale heredada', () {
+      final mapa = repartirUltimasMediciones([
+        delArco('r3', 1.9, hereda: 'nueva'),
+        delArco('r3', null, clave: 'otra'),
+        delArco('r2', 12.7, hereda: 'nueva'),
+      ]);
+      expect(mapa['nueva']!.profundidadMm, 12.7);
+    });
+
+    test('si hereda de sí misma no se apunta dos veces', () {
+      final mapa = repartirUltimasMediciones([delArco('r2', 7, clave: 'nueva', hereda: 'nueva')]);
+      expect(mapa.keys, ['nueva']);
+    });
+  });
 }

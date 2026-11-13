@@ -21,6 +21,18 @@
 /// La PRESIÓN no se toca: el arco la mide bien con lluvia, así que sale de la
 /// última fila que la traiga, sea de una revisión completa o no.
 ///
+/// ── Las lecturas siguen a la posición ──────────────────────────────────────
+///
+/// A un neumático montado le valen las lecturas guardadas a su nombre Y las de
+/// su posición con fecha POSTERIOR a su fecha de montaje, estén a nombre de
+/// otro neumático o de ninguno. El 4310JYJ salía con el eje 1 sin
+/// profundidades porque sus gomas se dieron de alta en noviembre con fecha de
+/// montaje de agosto, y todo lo medido entre medias estaba a nombre de las
+/// anteriores.
+///
+/// POSTERIOR y no «desde»: la lectura del mismo día del montaje suele ser la de
+/// la goma VIEJA, medida justo antes de cambiarla.
+///
 /// Es la misma regla que `services/ultimaMedicion.ts` en el panel y que
 /// `tc_informes_alertas_vehiculos` en la base. Las tres tienen que decir lo
 /// mismo: si cambia una, cambian las tres.
@@ -38,13 +50,31 @@ class FilaMedicion {
   /// Cuándo se tomó, para sellar la medición que salga de esta fila.
   final DateTime? momento;
 
+  /// A quién MÁS se le apunta esta fila: la goma que hoy ocupa la posición, si
+  /// la lectura es posterior a su montaje. Null si no hay a quién.
+  final String? claveHeredada;
+
   const FilaMedicion({
     required this.revisionId,
     required this.clave,
     this.profundidadMm,
     this.presionBar,
     this.momento,
+    this.claveHeredada,
   });
+}
+
+/// Si una lectura de la posición es de la goma que hoy está montada en ella:
+/// solo las de días POSTERIORES al del montaje.
+///
+/// Sin fecha de montaje no hay con qué acotar y se hereda; sin fecha de la
+/// lectura no se puede saber, y no se hereda.
+bool esPosteriorAlMontaje(DateTime? lectura, DateTime? montaje) {
+  if (montaje == null) return true;
+  if (lectura == null) return false;
+  final diaLectura = DateTime(lectura.year, lectura.month, lectura.day);
+  final diaMontaje = DateTime(montaje.year, montaje.month, montaje.day);
+  return diaLectura.isAfter(diaMontaje);
 }
 
 /// Lo que se sabe de una rueda.
@@ -93,21 +123,26 @@ Map<String, MedicionVigente> repartirUltimasMediciones(List<FilaMedicion> filas,
 
   final out = <String, MedicionVigente>{};
   for (final f in filas) {
-    final clave = f.clave;
-    if (clave == null) continue;
     final deCompleta = f.revisionId != null && completas.contains(f.revisionId);
     final aportaProfundidad = f.profundidadMm != null && deCompleta;
     final aportaPresion = f.presionBar != null;
     if (!aportaProfundidad && !aportaPresion) continue;
 
-    final m = out.putIfAbsent(clave, MedicionVigente.new);
-    if (m.profundidadMm == null && aportaProfundidad) {
-      m.profundidadMm = f.profundidadMm;
-      m.medidoEn = f.momento;
-    }
-    if (m.presionBar == null && aportaPresion) {
-      m.presionBar = f.presionBar;
-      m.presionEn = f.momento;
+    // A su clave, y a la goma que hereda la lectura si la hay y es otra.
+    final destinatarios = <String>{
+      if (f.clave != null) f.clave!,
+      if (f.claveHeredada != null) f.claveHeredada!,
+    };
+    for (final clave in destinatarios) {
+      final m = out.putIfAbsent(clave, MedicionVigente.new);
+      if (m.profundidadMm == null && aportaProfundidad) {
+        m.profundidadMm = f.profundidadMm;
+        m.medidoEn = f.momento;
+      }
+      if (m.presionBar == null && aportaPresion) {
+        m.presionBar = f.presionBar;
+        m.presionEn = f.momento;
+      }
     }
   }
   return out;

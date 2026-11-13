@@ -607,16 +607,20 @@ export async function listarUltimasMedicionesVehiculo(vehiculoId: string): Promi
     .select("neumatico_id, posicion_id, profundidad_mm, presion_bar, revision_id").in("revision_id", ids);
   if (e2) throw new Error(e2.message);
 
-  // Detalles guardados sin neumatico_id (p. ej. la posición aún no tenía
-  // montaje al crear la revisión): se atribuyen por posición al neumático
-  // montado actualmente en ella, para no perder la medición en el plano.
+  // Qué goma hay hoy en cada posición y desde cuándo: las lecturas de la
+  // posición posteriores a su montaje son suyas, estén a nombre de la goma
+  // anterior o de ninguna.
   const { data: mons } = await supabase.from("tc_montajes_actuales")
-    .select("posicion_id, neumatico_id").eq("vehiculo_id", vehiculoId);
-  const neuPorPosicion = new Map((mons ?? []).map((m) => [m.posicion_id as string, m.neumatico_id as string]));
+    .select("posicion_id, neumatico_id, fecha_montaje").eq("vehiculo_id", vehiculoId);
+  const montajePorPosicion = new Map((mons ?? []).map((m) => [
+    m.posicion_id as string,
+    { neumatico_id: m.neumatico_id as string, fecha_montaje: (m.fecha_montaje ?? null) as string | null },
+  ]));
 
-  // El reparto —y la regla de que la profundidad solo cuenta si la revisión
-  // midió todas sus ruedas— vive en services/ultimaMedicion.ts, con pruebas.
-  return mapaUltimasMediciones(revs ?? [], dets ?? [], neuPorPosicion);
+  // El reparto vive en services/ultimaMedicion.ts, con pruebas: la profundidad
+  // solo de revisiones que midieron todas sus ruedas, y las lecturas siguiendo
+  // a la posición desde el montaje.
+  return mapaUltimasMediciones(revs ?? [], dets ?? [], montajePorPosicion);
 }
 
 // Presión recomendada del catálogo por marca+modelo+medida, para neumáticos

@@ -2455,13 +2455,53 @@ class TyreControlApi {
       const limite = 400;
       final data = await _db
           .from('revisiones_neumaticos_detalle')
-          .select('revision_id, neumatico_id, profundidad_mm, presion_bar, created_at')
+          .select('revision_id, neumatico_id, posicion_id, profundidad_mm, presion_bar, created_at, '
+              'revision:revisiones_vehiculo(fecha_revision)')
           .eq('vehiculo_id', vehiculoId)
           .order('created_at', ascending: false)
           .limit(limite);
+      // Qué goma hay hoy en cada posición y desde cuándo: lo medido en la
+      // posición después de su montaje es suyo, esté a nombre de la anterior o
+      // de ninguna (ver ultima_medicion.dart).
+      final montajes = await _db
+          .from('tc_montajes_actuales')
+          .select('posicion_id, neumatico_id, fecha_montaje')
+          .eq('vehiculo_id', vehiculoId);
+      final montado = <String, ({String neumatico, DateTime? desde})>{
+        for (final m in (montajes as List))
+          if (m['posicion_id'] != null && m['neumatico_id'] != null)
+            m['posicion_id'] as String: (
+              neumatico: m['neumatico_id'] as String,
+              desde: DateTime.tryParse('${m['fecha_montaje'] ?? ''}'),
+            ),
+      };
+
+      final filas = <FilaMedicion>[];
+      for (final e in (data as List)) {
+        final nid = (e as Map)['neumatico_id'] as String?;
+        final creada = DateTime.tryParse('${e['created_at'] ?? ''}');
+        // El día de la REVISIÓN, no el de su entrada en la base: el arco entra
+        // al día siguiente, y con ese sello una lectura del mismo día del
+        // montaje parecería posterior.
+        final rev = e['revision'];
+        final dia = (rev is Map ? DateTime.tryParse('${rev['fecha_revision'] ?? ''}') : null) ?? creada;
+        final enPosicion = montado[e['posicion_id']];
+        final hereda = enPosicion != null &&
+            enPosicion.neumatico != nid &&
+            esPosteriorAlMontaje(dia, enPosicion.desde);
+        filas.add(FilaMedicion(
+          revisionId: e['revision_id'] as String?,
+          clave: nid,
+          claveHeredada: hereda ? enPosicion.neumatico : null,
+          profundidadMm: (e['profundidad_mm'] as num?)?.toDouble(),
+          presionBar: (e['presion_bar'] as num?)?.toDouble(),
+          momento: creada,
+        ));
+      }
+
       // La profundidad, solo de revisiones que midieron todas sus ruedas; la
-      // presión, de la última que la traiga (ver ultima_medicion.dart).
-      final reparto = repartirUltimasMediciones(_filasDeMedicion(data as List, 'neumatico_id'), limite: limite);
+      // presión, de la última que la traiga.
+      final reparto = repartirUltimasMediciones(filas, limite: limite);
       return {
         for (final e in reparto.entries)
           // La fecha es la que decide si esta medición sigue valiendo o si la

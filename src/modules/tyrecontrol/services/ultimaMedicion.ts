@@ -25,8 +25,28 @@
  * seis presiones de cada vehículo y ninguna profundidad—, así que la presión
  * sigue saliendo de la última revisión que la traiga, completa o no.
  *
+ * ── Las lecturas siguen a la posición ──────────────────────────────────────
+ *
+ * A un neumático montado le valen las lecturas guardadas a su nombre Y las de
+ * su posición con fecha POSTERIOR a su fecha de montaje, estén a nombre de
+ * otro neumático o de ninguno.
+ *
+ * El caso: el 4310JYJ salía con el eje 1 sin profundidades y el arco las mide
+ * a diario. Sus gomas se dieron de alta el 10/11 con su fecha de montaje real,
+ * 05/08, y todas las lecturas desde agosto estaban a nombre de las anteriores.
+ * Había 358 gomas así.
+ *
+ * POSTERIOR y no «desde»: la lectura del mismo día del montaje suele ser la de
+ * la goma VIEJA, medida justo antes de cambiarla. Heredarla le pondría un
+ * «cambiar ya» a un neumático recién estrenado (pasaba en el 9232HMK).
+ *
+ * Antes las filas sin `neumatico_id` se atribuían por posición SIN mirar la
+ * fecha. Ahora pasan por la misma regla: una lectura anterior al montaje no es
+ * de esta goma, tenga nombre o no. Son 16 gomas que dejan de enseñar un número
+ * que era de la anterior.
+ *
  * La misma regla está en `tc_informes_alertas_vehiculos`
- * (tyrecontrol_profundidad_solo_de_revisiones_completas.sql), que es la que
+ * (tyrecontrol_lecturas_siguen_a_la_posicion.sql), que es la que
  * contesta por toda la flota. Se repite porque la ficha no va a pedir el
  * informe de las 800 para pintar un camión, igual que pasa con el umbral por
  * llanta.
@@ -44,6 +64,26 @@ export interface DetalleParaMedicion {
   posicion_id?: string | null;
   profundidad_mm?: number | null;
   presion_bar?: number | null;
+}
+
+/** Quién está montado en una posición, y desde cuándo. */
+export interface MontajeEnPosicion {
+  neumatico_id: string;
+  /** Fecha ISO. En la base no es nula; si faltase, no se puede acotar. */
+  fecha_montaje: string | null;
+}
+
+/**
+ * Si una lectura de la posición es de la goma que hoy está montada en ella:
+ * solo las de días POSTERIORES al del montaje.
+ *
+ * Sin fecha de montaje no hay con qué acotar y se hereda, que es lo que se
+ * hacía siempre; sin fecha de la lectura no se puede saber, y no se hereda.
+ */
+export function esPosteriorAlMontaje(fechaLectura: string | null | undefined, fechaMontaje: string | null | undefined): boolean {
+  if (!fechaMontaje) return true;
+  if (!fechaLectura) return false;
+  return fechaLectura.slice(0, 10) > fechaMontaje.slice(0, 10);
 }
 
 export interface Medicion {
@@ -81,20 +121,24 @@ export function revisionesConTodasLasRuedas(detalles: DetalleParaMedicion[]): Se
  * es el orden en que se recorre para quedarse con la primera lectura de cada
  * neumático.
  *
- * `neumaticoPorPosicion` sirve para las filas guardadas sin `neumatico_id`
- * (p. ej. la posición aún no tenía montaje al crear la revisión): se atribuyen
- * al neumático que hoy está montado en esa posición, para no perder la
- * medición en el plano.
+ * `montajePorPosicion` dice qué goma hay hoy en cada posición y desde cuándo:
+ * con eso una fila de la posición se le apunta también a ella si es posterior
+ * a su montaje.
  */
 export function mapaUltimasMediciones(
   revisiones: RevisionParaMedicion[],
   detalles: DetalleParaMedicion[],
-  neumaticoPorPosicion: Map<string, string>,
+  montajePorPosicion: Map<string, MontajeEnPosicion>,
 ): Record<string, Medicion> {
   const completas = revisionesConTodasLasRuedas(detalles);
 
   const orden = new Map(revisiones.map((r, i) => [r.id, i]));
-  const fecha = new Map(revisiones.map((r) => [r.id, (r.created_at ?? r.fecha_revision ?? null) as string | null]));
+  const sello = new Map(revisiones.map((r) => [r.id, (r.created_at ?? r.fecha_revision ?? null) as string | null]));
+  // El día de la revisión, que es con lo que se compara el montaje. Es
+  // `fecha_revision` y no `created_at`: el arco entra en la base al día
+  // siguiente de pasar, y con el sello de entrada una lectura del mismo día
+  // del montaje parecería posterior.
+  const dia = new Map(revisiones.map((r) => [r.id, (r.fecha_revision ?? r.created_at ?? null) as string | null]));
   // Una fila de una revisión que no está en la lista no se puede ordenar: se
   // queda al final en vez de colarse la primera con un índice 0.
   const enOrden = [...detalles].sort(
@@ -103,15 +147,25 @@ export function mapaUltimasMediciones(
 
   const mapa: Record<string, Medicion> = {};
   for (const d of enOrden) {
-    const nid = d.neumatico_id ?? (d.posicion_id ? neumaticoPorPosicion.get(d.posicion_id) : null);
-    if (!nid) continue;
-    const actual = mapa[nid] ?? { profundidad_mm: null, presion_bar: null, medido_en: null };
-    if (actual.profundidad_mm == null && d.profundidad_mm != null && completas.has(d.revision_id)) {
-      actual.profundidad_mm = d.profundidad_mm;
-      actual.medido_en = fecha.get(d.revision_id) ?? null;
+    // A quién se le apunta la fila: a su neumático, y a la goma que hoy ocupa
+    // esa posición si la lectura es posterior a su montaje.
+    const destinatarios: string[] = [];
+    if (d.neumatico_id) destinatarios.push(d.neumatico_id);
+    const montado = d.posicion_id ? montajePorPosicion.get(d.posicion_id) : undefined;
+    if (montado && montado.neumatico_id !== d.neumatico_id
+        && esPosteriorAlMontaje(dia.get(d.revision_id), montado.fecha_montaje)) {
+      destinatarios.push(montado.neumatico_id);
     }
-    if (actual.presion_bar == null && d.presion_bar != null) actual.presion_bar = d.presion_bar;
-    mapa[nid] = actual;
+
+    for (const nid of destinatarios) {
+      const actual = mapa[nid] ?? { profundidad_mm: null, presion_bar: null, medido_en: null };
+      if (actual.profundidad_mm == null && d.profundidad_mm != null && completas.has(d.revision_id)) {
+        actual.profundidad_mm = d.profundidad_mm;
+        actual.medido_en = sello.get(d.revision_id) ?? null;
+      }
+      if (actual.presion_bar == null && d.presion_bar != null) actual.presion_bar = d.presion_bar;
+      mapa[nid] = actual;
+    }
   }
   return mapa;
 }
