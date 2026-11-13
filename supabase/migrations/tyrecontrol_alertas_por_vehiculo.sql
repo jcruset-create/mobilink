@@ -56,6 +56,13 @@
 -- están en seguimiento. Añadir una condición que hoy no quita ni una fila
 -- sería una regla sin probar escondida en la consulta.
 
+-- La función puede existir ya con OTRAS columnas de vuelta: la primera versión
+-- devolvía `vehiculo_activo` y llegó a pasarse a producción. `create or
+-- replace` no deja cambiar el tipo de vuelta («cannot change return type of
+-- existing function»), así que primero se quita. Los permisos se vuelven a dar
+-- más abajo, que el drop se los lleva.
+drop function if exists tc_informes_alertas_vehiculos(uuid);
+
 create or replace function tc_informes_alertas_vehiculos(p_empresa uuid default null)
 returns table (
   vehiculo_id uuid,
