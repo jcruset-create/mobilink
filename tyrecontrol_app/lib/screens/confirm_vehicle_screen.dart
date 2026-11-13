@@ -3,6 +3,7 @@ import '../models/models.dart';
 import '../services/offline_store.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/banda_avisos_presion.dart';
 import '../widgets/km_vehiculo.dart';
 import 'review_screen.dart';
 
@@ -131,6 +132,11 @@ class _ConfirmVehicleScreenState extends State<ConfirmVehicleScreen> {
             if (v.numeroUnidad != null)
               Center(child: Text('Unidad ${v.numeroUnidad}', style: const TextStyle(color: AppColors.textSecondary, fontSize: 16))),
             const SizedBox(height: 20),
+            // Los avisos de presión abiertos, ANTES de la ficha: es lo último
+            // que se ve antes de empezar a revisar, y si una rueda está a
+            // media presión eso cambia lo que se va a hacer. Sin avisos no
+            // pinta nada.
+            BandaAvisosPresion(vehiculoId: v.id),
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
