@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 import 'fotos.dart';
+import 'ultima_medicion.dart';
 import '../config.dart';
 import '../models/models.dart';
 import '../models/incidencias.dart';
@@ -1162,6 +1163,12 @@ class TyreControlApi {
 
   /// Última medición conocida por posición (de revisiones YA completadas),
   /// para mostrarla como referencia en el plano. Excluye la revisión actual.
+  ///
+  /// La PROFUNDIDAD sale de la última revisión que midió todas sus ruedas y la
+  /// presión de la última que la traiga: ver `ultima_medicion.dart`. Antes se
+  /// cogía la última revisión de cada posición tal cual, así que una pasada
+  /// del arco con lluvia —presión sí, profundidad no, o una sola y mala— le
+  /// dejaba al técnico de referencia un hueco o un número falso.
   static Future<Map<String, UltimaMedicion>> ultimasMedicionesVehiculo(
     String vehiculoId, {
     String? excluirRevisionId,
@@ -1174,26 +1181,35 @@ class TyreControlApi {
     final completadas = {
       'completada', 'completada_con_incidencias', 'completada_incidencia_pendiente', 'enviada'
     };
-    final porPos = <String, UltimaMedicion>{};
-    final tsPorPos = <String, int>{};
+    final conOrden = <({FilaMedicion fila, int ts})>[];
     for (final r in (rows as List)) {
       final rev = r['revision'];
       if (rev is! Map) continue;
       if (!completadas.contains(rev['estado_revision'])) continue;
       if (excluirRevisionId != null && rev['id'] == excluirRevisionId) continue;
-      final posId = r['posicion_id'] as String?;
-      if (posId == null) continue;
       final createdAt = DateTime.tryParse('${rev['created_at'] ?? ''}');
-      final ts = createdAt?.millisecondsSinceEpoch ?? 0;
-      if (tsPorPos.containsKey(posId) && ts <= tsPorPos[posId]!) continue;
-      tsPorPos[posId] = ts;
-      porPos[posId] = UltimaMedicion(
-        fecha: DateTime.tryParse('${rev['fecha_revision'] ?? ''}') ?? createdAt,
-        profundidadMm: (r['profundidad_mm'] as num?)?.toDouble(),
-        presionBar: (r['presion_bar'] as num?)?.toDouble(),
-      );
+      conOrden.add((
+        fila: FilaMedicion(
+          revisionId: rev['id'] as String?,
+          clave: r['posicion_id'] as String?,
+          profundidadMm: (r['profundidad_mm'] as num?)?.toDouble(),
+          presionBar: (r['presion_bar'] as num?)?.toDouble(),
+          momento: DateTime.tryParse('${rev['fecha_revision'] ?? ''}') ?? createdAt,
+        ),
+        ts: createdAt?.millisecondsSinceEpoch ?? 0,
+      ));
     }
-    return porPos;
+    // De la más reciente a la más antigua, que es como reparte.
+    conOrden.sort((a, b) => b.ts.compareTo(a.ts));
+    final reparto = repartirUltimasMediciones([for (final f in conOrden) f.fila]);
+    return {
+      for (final e in reparto.entries)
+        e.key: UltimaMedicion(
+          fecha: e.value.medidoEn ?? e.value.presionEn,
+          profundidadMm: e.value.profundidadMm,
+          presionBar: e.value.presionBar,
+        ),
+    };
   }
 
   /// Umbrales de profundidad de la empresa + overrides por medida.
@@ -2436,57 +2452,63 @@ class TyreControlApi {
   /// montado no hereda la medición del que había antes en esa posición.
   static Future<Map<String, RevisionDetalleDraft>> ultimasMedicionesPorNeumatico(String vehiculoId) async {
     try {
+      const limite = 400;
       final data = await _db
           .from('revisiones_neumaticos_detalle')
-          .select('neumatico_id, profundidad_mm, presion_bar, created_at')
+          .select('revision_id, neumatico_id, profundidad_mm, presion_bar, created_at')
           .eq('vehiculo_id', vehiculoId)
           .order('created_at', ascending: false)
-          .limit(400);
-      final out = <String, RevisionDetalleDraft>{};
-      for (final e in (data as List)) {
-        final r = Map<String, dynamic>.from(e as Map);
-        final nid = r['neumatico_id'] as String?;
-        if (nid == null || out.containsKey(nid)) continue;
-        final prof = (r['profundidad_mm'] as num?)?.toDouble();
-        final pres = (r['presion_bar'] as num?)?.toDouble();
-        if (prof == null && pres == null) continue;
-        // La fecha es la que decide si esta medición sigue valiendo o si la
-        // profundidad del propio neumático es más reciente (ver
-        // profundidadVigente en models.dart).
-        out[nid] = RevisionDetalleDraft(
-          posicionId: '', neumaticoId: nid, profundidadMm: prof, presionBar: pres,
-          medidoEn: DateTime.tryParse('${r['created_at'] ?? ''}'),
-        );
-      }
-      return out;
+          .limit(limite);
+      // La profundidad, solo de revisiones que midieron todas sus ruedas; la
+      // presión, de la última que la traiga (ver ultima_medicion.dart).
+      final reparto = repartirUltimasMediciones(_filasDeMedicion(data as List, 'neumatico_id'), limite: limite);
+      return {
+        for (final e in reparto.entries)
+          // La fecha es la que decide si esta medición sigue valiendo o si la
+          // profundidad del propio neumático es más reciente (ver
+          // profundidadVigente en models.dart): por eso es la de la PROFUNDIDAD.
+          e.key: RevisionDetalleDraft(
+            posicionId: '', neumaticoId: e.key,
+            profundidadMm: e.value.profundidadMm, presionBar: e.value.presionBar,
+            medidoEn: e.value.medidoEn,
+          ),
+      };
     } catch (_) {
       return {};
     }
   }
 
+  /// Las filas de detalle, tal como llegan de la consulta —ya ordenadas de la
+  /// más reciente a la más antigua—, listas para repartir por [campoClave].
+  static List<FilaMedicion> _filasDeMedicion(List data, String campoClave) => [
+        for (final e in data)
+          FilaMedicion(
+            revisionId: (e as Map)['revision_id'] as String?,
+            clave: e[campoClave] as String?,
+            profundidadMm: (e['profundidad_mm'] as num?)?.toDouble(),
+            presionBar: (e['presion_bar'] as num?)?.toDouble(),
+            momento: DateTime.tryParse('${e['created_at'] ?? ''}'),
+          ),
+      ];
+
   static Future<Map<String, RevisionDetalleDraft>> ultimasMedicionesPorPosicion(String vehiculoId) async {
     try {
+      const limite = 120;
       final data = await _db
           .from('revisiones_neumaticos_detalle')
-          .select('posicion_id, profundidad_mm, presion_bar, created_at')
+          .select('revision_id, posicion_id, profundidad_mm, presion_bar, created_at')
           .eq('vehiculo_id', vehiculoId)
           .order('created_at', ascending: false)
-          .limit(120);
-      final out = <String, RevisionDetalleDraft>{};
-      for (final e in (data as List)) {
-        final r = Map<String, dynamic>.from(e as Map);
-        final posId = r['posicion_id'] as String?;
-        if (posId == null || out.containsKey(posId)) continue; // la más reciente gana
-        final prof = (r['profundidad_mm'] as num?)?.toDouble();
-        final pres = (r['presion_bar'] as num?)?.toDouble();
-        if (prof == null && pres == null) continue;
-        out[posId] = RevisionDetalleDraft(
-          posicionId: posId,
-          profundidadMm: prof,
-          presionBar: pres,
-        );
-      }
-      return out;
+          .limit(limite);
+      final reparto = repartirUltimasMediciones(_filasDeMedicion(data as List, 'posicion_id'), limite: limite);
+      return {
+        for (final e in reparto.entries)
+          e.key: RevisionDetalleDraft(
+            posicionId: e.key,
+            profundidadMm: e.value.profundidadMm,
+            presionBar: e.value.presionBar,
+          ),
+      };
     } catch (_) {
       return {};
     }

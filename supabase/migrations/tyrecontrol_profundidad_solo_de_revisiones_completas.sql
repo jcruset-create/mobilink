@@ -62,6 +62,13 @@
 
 -- ── 1. La función de las alertas por vehículo ──────────────────────────────
 
+-- La función puede existir ya con OTRAS columnas de vuelta: la primera versión
+-- devolvía `vehiculo_activo` y llegó a pasarse a producción. `create or
+-- replace` no deja cambiar el tipo de vuelta («cannot change return type of
+-- existing function»), así que primero se quita. Los permisos se vuelven a dar
+-- más abajo, que el drop se los lleva.
+drop function if exists tc_informes_alertas_vehiculos(uuid);
+
 create or replace function tc_informes_alertas_vehiculos(p_empresa uuid default null)
 returns table (
   vehiculo_id uuid,
@@ -178,6 +185,7 @@ do $migracion$
 declare
   v_def text;
   v_ancla text;
+  v_nuevo text;
   v_veces int;
 begin
   select replace(pg_get_functiondef(p.oid), chr(13), '')
@@ -199,6 +207,12 @@ begin
     order by d.neumatico_id, rv.fecha_revision desc, rv.created_at desc
   ),';
 
+  -- El editor de Supabase manda el texto tal como lo pega el navegador, y desde
+  -- Windows eso son saltos CRLF. A la función se le quitan los CR más arriba;
+  -- si no se le quitan también al anclaje, no casa NUNCA aunque sea idéntico a
+  -- la vista: «Esperaba 1 vez el bloque ult y encontré 0». Pasó al pegarla.
+  v_ancla := replace(v_ancla, chr(13), '');
+
   -- Se cuenta por diferencia de longitud y no con regexp: el anclaje lleva
   -- `||` y `(`, que en una expresión regular son alternancia y grupo. Esa
   -- lección costó una migración.
@@ -207,7 +221,7 @@ begin
     raise exception 'Esperaba 1 vez el bloque ult y encontré %', v_veces;
   end if;
 
-  v_def := replace(v_def, v_ancla, '  with completas as (
+  v_nuevo := '  with completas as (
     select d.revision_id
     from revisiones_neumaticos_detalle d
     where p_empresa is null or d.empresa_id = p_empresa
@@ -222,7 +236,9 @@ begin
     where d.neumatico_id is not null and d.profundidad_mm is not null
       and rv.estado_revision <> ''anulada'' and (p_empresa is null or d.empresa_id = p_empresa)
     order by d.neumatico_id, rv.fecha_revision desc, rv.created_at desc
-  ),');
+  ),';
+
+  v_def := replace(v_def, v_ancla, replace(v_nuevo, chr(13), ''));
 
   execute v_def;
 end
