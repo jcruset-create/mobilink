@@ -7,7 +7,13 @@ import { KpiCard } from "../../components/informes/KpiCard";
 import { descargarCSV } from "../../utils/exportar";
 
 const TIPO_LABEL: Record<string, string> = {
-  bajo_minimo: "Bajo mínimo legal",
+  // «Cambiar ya» y no «Bajo mínimo legal»: desde
+  // `tyrecontrol_profundidad_minima_por_llanta.sql` el umbral es el de la
+  // política de la casa —4 mm en una llanta de 22.5— y no el mínimo legal de
+  // 1,6. Llamarlo legal haría pensar que una goma a 3 mm está fuera de la ley.
+  bajo_minimo: "Cambiar ya",
+  // Ya no lo devuelve el informe: se quitó el nivel de aviso de profundidad
+  // al poner el mínimo por llanta. Se deja el nombre por si vuelve.
   proximo_sustitucion: "Próximo a sustitución",
   vehiculo_sin_revisar: "Vehículo sin revisar",
   // Los dos de Goodyear. Entran por `tc_informes_alertas` igual que los otros
@@ -54,7 +60,12 @@ export default function InformeAlertas() {
       <div className="mb-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
         <KpiCard title="Alertas críticas" value={nAlta} tono={nAlta > 0 ? "danger" : "ok"} />
         <KpiCard title="Alertas medias" value={nMedia} tono={nMedia > 0 ? "warn" : "ok"} />
-        <KpiCard title="Bajo mínimo legal" value={porTipo("bajo_minimo")} hint="≤ 1,6 mm" />
+        {/*
+          El umbral ya no es uno solo, así que la pista dice la regla en vez de
+          un número que sería falso para dos tercios de la flota.
+        */}
+        <KpiCard title="Cambiar ya" value={porTipo("bajo_minimo")} tono={porTipo("bajo_minimo") > 0 ? "danger" : "ok"}
+                 hint="22.5 ≤ 4 mm · 19.5/17.5 ≤ 3 · 16 o menos ≤ 2" />
         <KpiCard title="Presión" value={nPresion} tono={nPresion > 0 ? "danger" : "ok"} hint="Sensor Goodyear" />
         <KpiCard title="Sin revisar" value={porTipo("vehiculo_sin_revisar")} />
       </div>

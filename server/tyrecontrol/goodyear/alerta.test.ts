@@ -355,3 +355,67 @@ describe("lo que falló con los primeros 55 correos reales", () => {
     expect(alerta(leerAlerta(DESINFLADO)).tipo).toBe("desinflado");
   });
 });
+
+/**
+ * El asunto manda al decidir qué aviso es.
+ *
+ * Salió mal en producción de las dos maneras posibles: de las 53 alertas
+ * abiertas, NINGUNA estaba bien tipada. El caso que no estaba cubierto era
+ * justo éste: un cuerpo que nombra las dos cosas.
+ */
+describe("qué aviso es: manda el asunto, no el cuerpo", () => {
+  it("«Presión baja» en el asunto gana aunque el cuerpo nombre el desinflado", () => {
+    // Éste es el fallo tal cual: las 8 alertas de presión de verdad estaban
+    // guardadas como «desinflado» —con su lectura— porque el cuerpo menciona
+    // el desinflado en algún sitio. La ficha pintaba «Neumático desinflado ·
+    // 4.4 bar de 8 recomendados», que se contradice sola.
+    const a = alerta(leerAlerta({
+      asunto: "Presión baja — 5924KWR/1513 — Soledad // La Plana",
+      html: `<h1>Presión baja!</h1>
+        <p>Un neumático desinflado puede provocar un reventón.</p>
+        <tr><td>Matrícula:</td><td><b>5924KWR</b></td></tr>
+        <tr><td>Rueda:</td><td><b>Eje 2 - derecho interior</b></td></tr>
+        <tr><td>Fecha y hora:</td><td><b>10.11.2026 · 22:30:54</b></td></tr>
+        <tr><td>Presión recomendada:</td><td><b>8.0 bar</b></td></tr>
+        <tr><td>Presión bruta:</td><td><b>4.4 bar (-45.19%)</b></td></tr>`,
+    }));
+    expect(a.tipo).toBe("presion_baja");
+    expect(a.presionBar).toBe(4.4);
+  });
+
+  it("«desinflado» en el asunto sigue siendo desinflado", () => {
+    // La red de seguridad del arreglo: al dar prioridad al asunto no se puede
+    // haber roto el otro sentido.
+    expect(alerta(leerAlerta(DESINFLADO)).tipo).toBe("desinflado");
+  });
+
+  it("un aviso de profundidad se aparta por el asunto, mire lo que mire el cuerpo", () => {
+    const r = leerAlerta({
+      asunto: "Alertas de profundidad del dibujo - mantenimiento — 9228MJP — Soledad // La Plana",
+      html: "<p>La presión baja y el neumático desinflado acortan la vida del dibujo.</p>",
+    });
+    expect(motivo(r)).toContain("profundidad de dibujo");
+  });
+
+  it("si el asunto no dice nada, se mira el cuerpo", () => {
+    // Un reenvío con el asunto cambiado sigue entrando por el cuerpo.
+    const a = alerta(leerAlerta({
+      asunto: "RV: aviso — 1467HJS — Soledad // La Plana",
+      html: `<h1>Presión baja!</h1>
+        <tr><td>Matrícula:</td><td><b>1467HJS</b></td></tr>
+        <tr><td>Rueda:</td><td><b>Eje 1 - izquierdo</b></td></tr>
+        <tr><td>Fecha y hora:</td><td><b>10.11.2026 · 22:30:54</b></td></tr>
+        <tr><td>Presión recomendada:</td><td><b>8.0 bar</b></td></tr>
+        <tr><td>Presión bruta:</td><td><b>4.0 bar (-49.65%)</b></td></tr>`,
+    }));
+    expect(a.tipo).toBe("presion_baja");
+  });
+
+  it("y un aviso de profundidad solo nombrado en el cuerpo también se aparta", () => {
+    const r = leerAlerta({
+      asunto: "RV: aviso — 9228MJP — Soledad // La Plana",
+      html: "<h1>Alerta de profundidad de dibujo</h1><p>Por debajo del umbral.</p>",
+    });
+    expect(motivo(r)).toContain("profundidad de dibujo");
+  });
+});
