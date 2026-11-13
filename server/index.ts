@@ -20,8 +20,10 @@ import {
   borrarPosicionTablet,
   guardarPosicionTablet,
   listarTabletsEnMapa,
+  rastroTablet,
   ultimaPosicionTablet,
 } from "./tablets/posicionTablet.ts";
+import { analizarRecorrido } from "./tablets/recorrido.ts";
 import { guardarCodigoErp, SISTEMAS_NO_ERP } from "./clientes/codigoErp.ts";
 import { OTF_EN_ESPERA_SQL } from "./otf/espera.ts";
 import {
@@ -11076,6 +11078,161 @@ app.get("/api/webfleet/vehicle/:objectno/tracking-report.pdf", requireAdminRole,
     res.send(buffer);
   } catch (error: any) {
     console.error("GET tracking-report.pdf (vehicle) error:", error);
+    if (!res.headersSent) res.status(500).json({ error: error?.message || "Error generando informe" });
+  }
+});
+
+/*
+ * El nombre de una parada de la tablet: un lugar conocido a menos de 200 m
+ * (taller, cliente...) o, si no, la dirección de OpenStreetMap. Nominatim pide
+ * no pasar de una consulta por segundo: se espera entre una y otra, y a partir
+ * de 15 paradas se dan las coordenadas.
+ */
+async function nombresDeParadas(paradas: { lat: number; lng: number }[]): Promise<string[]> {
+  const lugares = await db
+    .query(`SELECT nombre, lat, lng FROM roadside_known_places WHERE active = true`)
+    .then((r) => r.rows)
+    .catch(() => [] as any[]);
+  const nombres: string[] = [];
+  let consultas = 0;
+  for (const p of paradas) {
+    const conocido = lugares.find(
+      (l: any) => haversineDistanceM(p.lat, p.lng, Number(l.lat), Number(l.lng)) <= 200
+    );
+    if (conocido) {
+      nombres.push(String(conocido.nombre));
+      continue;
+    }
+    const coords = `${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}`;
+    if (consultas >= 15) {
+      nombres.push(coords);
+      continue;
+    }
+    if (consultas > 0) await new Promise((r) => setTimeout(r, 1100));
+    consultas++;
+    try {
+      const resp = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?lat=${p.lat}&lon=${p.lng}&format=json&zoom=17`,
+        { headers: { "User-Agent": "sea-tarragona-app/1.0" }, signal: AbortSignal.timeout(5000) }
+      );
+      const data: any = resp.ok ? await resp.json() : null;
+      // La dirección entera es larguísima («…, Tarragonès, Tarragona,
+      // Catalunya, 43006, España»): con las tres primeras partes basta.
+      const corto = String(data?.display_name ?? "").split(",").slice(0, 3).join(",").trim();
+      nombres.push(corto || coords);
+    } catch {
+      nombres.push(coords);
+    }
+  }
+  return nombres;
+}
+
+async function buildTabletTrackingPdfBuffer(
+  techName: string,
+  fromMs: number,
+  toMs: number,
+  opts: { minStopSec?: number } = {}
+): Promise<Buffer> {
+  const puntos = await rastroTablet(techName, fromMs, toMs);
+  const r = analizarRecorrido(puntos, { minParadaSec: opts.minStopSec ?? 180 });
+  const nombres = await nombresDeParadas(r.paradas);
+
+  const doc = new PDFDocument({ margin: 40, size: "A4" });
+  const chunks: Buffer[] = [];
+  doc.on("data", (c) => chunks.push(c));
+  const finished = new Promise<Buffer>((resolve) => doc.on("end", () => resolve(Buffer.concat(chunks))));
+
+  attachBrandedHeader(doc, "Recorrido de la tablet", techName);
+  doc.fontSize(10).font("Helvetica").fillColor("#64748b")
+    .text(`${formatDateEs(fromMs)}  –  ${formatDateEs(toMs)}`, 40, doc.y, { align: "left" });
+  doc.fillColor("#000000").moveDown(0.8);
+
+  function row(label: string, value: string) {
+    doc.fontSize(10).font("Helvetica-Bold").text(label, { continued: true, width: 180 });
+    doc.font("Helvetica").text(value);
+  }
+
+  doc.fontSize(13).font("Helvetica-Bold").text("Resumen");
+  doc.moveDown(0.3);
+  row("Operario:", techName);
+  row("Km recorridos:", `${r.km.toFixed(1)} km`);
+  row("Tiempo en marcha:", fmtDuration(r.enMarchaSec));
+  row("Tiempo parado total:", fmtDuration(r.paradoSec));
+  row("Nº de paradas:", String(r.paradas.length));
+  row("Primera salida:", r.primeraSalidaMs ? formatDateEs(r.primeraSalidaMs) : "-");
+  row("Última llegada:", r.ultimaLlegadaMs ? formatDateEs(r.ultimaLlegadaMs) : "-");
+  row("Posiciones GPS:", String(puntos.length));
+  doc.moveDown(0.3);
+  doc.fontSize(8).font("Helvetica").fillColor("#64748b").text(
+    "Calculado con el GPS de la tablet del operario (una posición por minuto, cada 30 s durante una asistencia). " +
+    "Los km son aproximados: los de la furgoneta los da Webfleet."
+  );
+  doc.fillColor("#000000");
+
+  if (r.track.length > 0) {
+    doc.moveDown(0.8);
+    doc.fontSize(13).font("Helvetica-Bold").text("Recorrido");
+    doc.moveDown(0.3);
+    try {
+      const mapBuf = await buildTrackMapImage(r.track, r.paradas);
+      if (mapBuf) doc.image(mapBuf, { fit: [480, 380] as [number, number] });
+    } catch { /* sin mapa */ }
+  }
+
+  doc.moveDown(0.8);
+  doc.fontSize(13).font("Helvetica-Bold").text("Paradas");
+  doc.moveDown(0.3);
+  if (r.paradas.length === 0) {
+    doc.fontSize(10).font("Helvetica").text(
+      puntos.length === 0
+        ? "La tablet no mandó ninguna posición en el periodo."
+        : "Sin paradas registradas en el periodo."
+    );
+  } else {
+    r.paradas.forEach((p, k) => {
+      doc.fontSize(10).font("Helvetica-Bold").text(`${p.n}. ${nombres[k]}`);
+      doc.fontSize(9).font("Helvetica").text(
+        `   Llegada: ${formatDateEs(p.llegadaMs)}  ·  Salida: ${formatDateEs(p.salidaMs)}  ·  Parado: ${fmtDuration(p.duracionSec)}`
+      );
+      doc.moveDown(0.2);
+    });
+  }
+
+  doc.moveDown(0.6);
+  doc.fontSize(13).font("Helvetica-Bold").text("Trayectos");
+  doc.moveDown(0.3);
+  if (r.trayectos.length === 0) {
+    doc.fontSize(10).font("Helvetica").text("Sin trayectos en el periodo.");
+  } else {
+    for (const t of r.trayectos) {
+      doc.fontSize(9).font("Helvetica").text(
+        `${formatDateEs(t.inicioMs)} → ${formatDateEs(t.finMs)}  ·  ${t.km.toFixed(1)} km  ·  ` +
+        `${fmtDuration(t.duracionSec)}  ·  máx ${t.maxKmh ?? "-"} km/h`
+      );
+    }
+  }
+
+  doc.end();
+  return finished;
+}
+
+// Recorrido de la tablet de un operario, por rango de fechas (como el de la furgoneta).
+app.get("/api/tablets/:techName/recorrido.pdf", requireAdminRole, async (req, res) => {
+  try {
+    const techName = String(req.params.techName);
+    const from = Number(req.query.from);
+    const to = Number(req.query.to);
+    const minStop = req.query.minStop ? Number(req.query.minStop) : 180;
+    if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) {
+      return res.status(400).json({ error: "Parámetros from/to (ms) requeridos" });
+    }
+    const buffer = await buildTabletTrackingPdfBuffer(techName, from, to, { minStopSec: minStop });
+    const nombreFichero = techName.normalize("NFD").replace(/[^\w-]+/g, "_");
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="recorrido_tablet_${nombreFichero}.pdf"`);
+    res.send(buffer);
+  } catch (error: any) {
+    console.error("GET /api/tablets/:techName/recorrido.pdf error:", error);
     if (!res.headersSent) res.status(500).json({ error: error?.message || "Error generando informe" });
   }
 });

@@ -21,6 +21,7 @@ describeSiHayBase("posición de las tablets para el Mapa flota", () => {
 
   afterAll(async () => {
     await db.query(`DELETE FROM tablet_posicion WHERE "techName" = $1`, [tecnico]);
+    await db.query(`DELETE FROM tablet_rastro WHERE "techName" = $1`, [tecnico]);
   });
 
   const mia = async () => (await mod.listarTabletsEnMapa(null, ahora)).find((t) => t.techName === tecnico);
@@ -49,6 +50,15 @@ describeSiHayBase("posición de las tablets para el Mapa flota", () => {
   it("la última posición se puede leer para el respaldo de la asistencia", async () => {
     expect(await mod.ultimaPosicionTablet(tecnico)).toEqual({ lat: 41.2, lng: 1.3, atMs: ahora - 30_000 });
     expect(await mod.ultimaPosicionTablet(`${tecnico}-nadie`)).toBeNull();
+  });
+
+  it("cada posición queda en el rastro, también las viejas, y sin repetir", async () => {
+    const rastro = await mod.rastroTablet(tecnico, ahora - 10 * 60_000, ahora);
+    // 41.1 (−60 s), 41.2 (−30 s) y la vieja 40.0 (−90 s): el rastro guarda
+    // todas, aunque la «última» no la pise la vieja.
+    expect(rastro.map((p) => p.lat)).toEqual([40.0, 41.1, 41.2]);
+    await mod.guardarPosicionTablet(tecnico, { lat: 41.2, lng: 1.3, atMs: ahora - 30_000 });
+    expect(await mod.rastroTablet(tecnico, ahora - 10 * 60_000, ahora)).toHaveLength(3);
   });
 
   it("al cerrar sesión desaparece del mapa", async () => {
