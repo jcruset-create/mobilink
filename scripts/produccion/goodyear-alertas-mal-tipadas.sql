@@ -22,15 +22,6 @@
 -- que es la única línea donde Goodyear nombra el aviso una sola vez. Esto
 -- arregla lo que entró antes.
 --
--- ── Qué hace este guion ─────────────────────────────────────────────────────
---
---   1. BORRA las alertas que en realidad son de profundidad.
---   2. CORRIGE el tipo de las que son de presión baja.
---
--- No se borra nada recuperable: el correo original sigue en
--- `tc_goodyear_avisos` con su asunto y su message_id, así que si algún día se
--- decide qué hacer con los avisos de profundidad, están todos ahí.
---
 -- ── Cómo se distingue una de otra ───────────────────────────────────────────
 --
 -- Por el ASUNTO DEL CORREO que la originó, no por si trae presión o no.
@@ -39,15 +30,25 @@
 -- verdad TAMPOCO trae presión —el correo pone `!!!`— y se habría borrado uno
 -- bueno. El asunto es el dato, la ausencia de presión es una consecuencia.
 --
--- Se ejecuta de una vez, en una transacción. Es idempotente: pasado una
--- segunda vez no encuentra nada que hacer.
-
-begin;
-
--- ── 1. Antes de tocar: qué se va a cambiar ─────────────────────────────────
+-- ── Por qué todo el cambio va en UN bloque `do` ────────────────────────────
 --
--- Mirar esto ANTES de seguir. Si los números no son los esperados (45 y 8 el
--- 13/11/2026, más los que hayan entrado después), parar y mirarlo.
+-- El primer intento usaba una tabla temporal con `on commit drop` dentro de un
+-- `begin; ... commit;`, y falló con «relation "_de_profundidad" does not
+-- exist». El editor SQL de Supabase ejecuta SENTENCIA A SENTENCIA con
+-- autocommit: el `begin` no agrupa nada, así que la tabla temporal moría al
+-- terminar la propia sentencia que la creaba.
+--
+-- Un bloque `do` es UNA SOLA SENTENCIA, así que es atómico se comporte como se
+-- comporte el editor: o hace las dos cosas o no hace ninguna. Los recuentos
+-- salen por `raise notice`, que Supabase enseña bajo los resultados.
+--
+-- Se ejecuta entero, de una vez. Es idempotente: pasado otra vez no encuentra
+-- nada que hacer.
+
+-- ══ 1. ANTES DE TOCAR: mirar qué se va a cambiar ═══════════════════════════
+--
+-- Lanzar SOLO esto primero. Si los números no son los esperados (45 y 8 el
+-- 13/11/2026, más los que hayan entrado después), parar y avisar.
 
 select
   count(*) filter (where g.asunto ilike '%profundidad%')      as se_borran,
@@ -59,45 +60,55 @@ from tc_alertas_presion a
 left join tc_goodyear_avisos g on g.alerta_id = a.id
 where a.estado = 'abierta';
 
--- ── 2. Fuera las de profundidad ────────────────────────────────────────────
---
--- Se APUNTAN PRIMERO los ids y después se borra por id. Hacerlo al revés
--- —desenlazar del registro de correos y luego borrar «las que no tienen
--- correo enlazado»— parecía más corto y es justo donde se cuela un borrado de
--- más: después de desenlazar, una alerta recién desenlazada y otra que nunca
--- tuvo correo son indistinguibles, y hay una de ésas.
 
-create temp table _de_profundidad on commit drop as
-select a.id
-  from tc_alertas_presion a
-  join tc_goodyear_avisos g on g.alerta_id = a.id
- where a.estado = 'abierta'
-   and g.asunto ilike '%profundidad%';
+-- ══ 2. EL CAMBIO ═══════════════════════════════════════════════════════════
 
--- Se desenlazan del registro de correos y se marcan con su motivo verdadero:
--- `tc_goodyear_avisos.alerta_id` apunta aquí, y dejar el puntero colgando
--- perdería el rastro de por qué ese correo se dio por bueno.
-update tc_goodyear_avisos
-   set estado = 'no_casado',
-       motivo = 'Es un aviso de profundidad de dibujo, no de presión (corregido a posteriori)',
-       alerta_id = null
- where alerta_id in (select id from _de_profundidad);
+do $arreglo$
+declare
+  v_borradas int;
+  v_retipadas int;
+begin
+  /*
+   * Primero se MARCA el correo y después se borra la alerta, en este orden y
+   * no al revés: la clave ajena es `on delete set null`, así que borrar
+   * primero dejaría el correo sin puntero y ya no se sabría cuál marcar.
+   *
+   * `alerta_id` NO se pone a null aquí a mano: lo hace la propia clave ajena
+   * al borrar, en el paso siguiente. Nulificarlo ahora rompería el enlace que
+   * ese mismo paso necesita para encontrar las alertas.
+   */
+  update tc_goodyear_avisos g
+     set estado = 'no_casado',
+         motivo = 'Es un aviso de profundidad de dibujo, no de presión (corregido a posteriori)'
+   where g.asunto ilike '%profundidad%'
+     and g.alerta_id in (select id from tc_alertas_presion where estado = 'abierta');
 
-delete from tc_alertas_presion
- where id in (select id from _de_profundidad);
+  delete from tc_alertas_presion a
+   where a.estado = 'abierta'
+     and exists (
+       select 1 from tc_goodyear_avisos g
+        where g.alerta_id = a.id
+          and g.asunto ilike '%profundidad%');
+  get diagnostics v_borradas = row_count;
 
--- ── 3. Y las de presión, con su nombre ─────────────────────────────────────
+  -- Y las de presión, con su nombre.
+  update tc_alertas_presion a
+     set tipo = 'presion_baja',
+         actualizado_at = now()
+    from tc_goodyear_avisos g
+   where g.alerta_id = a.id
+     and a.estado = 'abierta'
+     and a.tipo <> 'presion_baja'
+     and g.asunto ilike '%presi%n baja%';
+  get diagnostics v_retipadas = row_count;
 
-update tc_alertas_presion a
-   set tipo = 'presion_baja',
-       actualizado_at = now()
-  from tc_goodyear_avisos g
- where g.alerta_id = a.id
-   and a.estado = 'abierta'
-   and a.tipo <> 'presion_baja'
-   and g.asunto ilike '%presi%n baja%';
+  raise notice 'Borradas % alertas que eran de profundidad', v_borradas;
+  raise notice 'Retipadas % alertas de presion baja', v_retipadas;
+end
+$arreglo$;
 
--- ── 4. Comprobación ────────────────────────────────────────────────────────
+
+-- ══ 3. COMPROBACIÓN ════════════════════════════════════════════════════════
 --
 -- Tiene que salir:
 --   · `de_profundidad` a 0 — no queda ninguna.
@@ -118,8 +129,3 @@ select
 from tc_alertas_presion a
 left join tc_goodyear_avisos g on g.alerta_id = a.id
 where a.estado = 'abierta';
-
--- Si todo cuadra:
-commit;
--- Si no:
--- rollback;
