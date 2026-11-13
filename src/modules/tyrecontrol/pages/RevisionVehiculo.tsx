@@ -4,19 +4,34 @@ import { useSearchParams } from "react-router-dom";
 import {
   listarEmpresas, listarVehiculos, listarPosiciones, listarMontajesVehiculo, obtenerVehiculo,
   crearRevision, guardarDetalleRevision, completarRevision, listarRevisiones, listarDetalleRevision,
+  cambiarFechaRevision,
   listarUltimasMedicionesVehiculo, listarPresionesCatalogoPorModelo, eliminarRevision,
 } from "../services/data";
 import type { Empresa, Vehiculo, PosicionVehiculo, MontajeActual, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle } from "../types";
 import { presionTxt } from "../types";
 import { inputCls, Field, Modal, TableWrap, tdCls, thCls } from "../components/ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
+import ModalMontarDesdeFicha from "../components/ModalMontarDesdeFicha";
+import { hoyISO, juzgarFecha, textoEnPapel } from "../services/revisionEnPapel";
 
 type Detalle = Partial<RevisionDetalle>;
+
+/**
+ * «2026-11-09» → «09/11/2026». Se formatea a mano y no con
+ * `toLocaleDateString`: la cadena de la columna es un día sin hora, y pasarla
+ * por `new Date()` la interpreta en UTC y puede retroceder un día según la
+ * zona de quien mira.
+ */
+function fechaES(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : iso;
+}
 
 // Fecha + hora de la revisión. La fecha viene de fecha_revision (solo día) y
 // la hora del created_at (marca de tiempo real de creación).
 function fechaHora(r: RevisionVehiculoT): string {
-  const fecha = r.fecha_revision ?? "";
+  const fecha = fechaES(r.fecha_revision);
   const hora = r.created_at ? new Date(r.created_at).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : "";
   return hora ? `${fecha} · ${hora}` : fecha;
 }
@@ -37,6 +52,15 @@ export default function RevisionVehiculo() {
 
   const [revision, setRevision] = useState<RevisionVehiculoT | null>(null);
   const [kmVehiculo, setKmVehiculo] = useState("");
+  /*
+   * El día en que se hizo la revisión, que no siempre es hoy: las que se hacen
+   * en papel se teclean unos días después. Por defecto hoy, que es el caso
+   * normal. Las reglas de qué fecha se admite están en
+   * `services/revisionEnPapel.ts`.
+   */
+  const [fechaRevision, setFechaRevision] = useState(hoyISO());
+  /* La posición en la que se va a reconocer una goma que el sistema no tiene. */
+  const [montarEn, setMontarEn] = useState<PosicionVehiculo | null>(null);
   const [detalles, setDetalles] = useState<Record<string, Detalle>>({});
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
@@ -88,11 +112,64 @@ export default function RevisionVehiculo() {
     for (const d of det) mapa[d.posicion_id] = d;
     setDetalles(mapa);
     setKmVehiculo(r.km_vehiculo != null ? String(r.km_vehiculo) : "");
+    // La fecha del borrador manda sobre la de hoy: si se empezó a pasar el
+    // parte del día 9 y se sigue el 13, sigue siendo la revisión del día 9.
+    if (r.fecha_revision) setFechaRevision(r.fecha_revision);
     setRevision(r);
   }
 
+  /**
+   * Corregir la fecha de la revisión en curso.
+   *
+   * Se comprueba con las mismas reglas que al empezar: una fecha futura o de
+   * hace más de un año no entra ni por aquí. Si la base la rechaza, se deja la
+   * de antes en la pantalla, para que no quede diciendo una fecha que no se ha
+   * guardado.
+   */
+  async function corregirFecha(nueva: string) {
+    if (!revision) return;
+    const { error: errorFecha } = juzgarFecha(nueva);
+    if (errorFecha) { setMsg(errorFecha); return; }
+    const anterior = fechaRevision;
+    setFechaRevision(nueva);
+    setSaving(true); setMsg("");
+    try {
+      await cambiarFechaRevision(revision.id, nueva);
+      setRevision({ ...revision, fecha_revision: nueva });
+    } catch (e: any) {
+      setFechaRevision(anterior);
+      setMsg(e?.message || "No se ha podido cambiar la fecha");
+    } finally { setSaving(false); }
+  }
+
+  /**
+   * Después de reconocer una goma en una posición vacía.
+   *
+   * Hay que releer los montajes para que la posición deje de estar vacía y se
+   * pueda medir; y hay que meter el `neumatico_id` nuevo en el detalle, que es
+   * lo que enlaza la medición con la goma. Sin eso, la profundidad se
+   * guardaría sin decir de qué neumático es.
+   */
+  async function trasMontar() {
+    setMontarEn(null);
+    const [mon, medic] = await Promise.all([
+      listarMontajesVehiculo(vehiculoId),
+      listarUltimasMedicionesVehiculo(vehiculoId),
+    ]);
+    setMontajes(mon); setMedicionesActuales(medic);
+    const porPosicion = new Map(mon.map((m) => [m.posicion_id, m]));
+    setDetalles((prev) => {
+      const siguiente = { ...prev };
+      for (const p of posiciones) {
+        const neu = porPosicion.get(p.id)?.neumatico_id ?? null;
+        siguiente[p.id] = { ...siguiente[p.id], posicion_id: p.id, neumatico_id: neu };
+      }
+      return siguiente;
+    });
+  }
+
   async function borrarBorrador(r: RevisionVehiculoT) {
-    if (!window.confirm(`¿Eliminar el borrador de revisión del ${r.fecha_revision}? Esta acción no se puede deshacer.`)) return;
+    if (!window.confirm(`¿Eliminar el borrador de revisión del ${fechaES(r.fecha_revision)}? Esta acción no se puede deshacer.`)) return;
     setSaving(true); setMsg("");
     try {
       await eliminarRevision(r.id);
@@ -140,6 +217,15 @@ export default function RevisionVehiculo() {
     setPosiciones(pos); setMontajes(mon); setHistorialRevisiones(hist); setMedicionesActuales(medic);
   }
 
+  /* El vehículo elegido, para poder avisar de la casilla «KM.» del papel. */
+  const vehiculoElegido = useMemo(
+    () => vehiculos.find((v) => v.id === vehiculoId) ?? todosVehiculos.find((v) => v.id === vehiculoId) ?? null,
+    [vehiculos, todosVehiculos, vehiculoId],
+  );
+
+  /* El aviso de «esta fecha es de hace mucho», si procede. */
+  const avisoFecha = useMemo(() => juzgarFecha(fechaRevision).aviso, [fechaRevision]);
+
   const montajePorPosicion = useMemo(() => {
     const m = new Map<string, MontajeActual>();
     for (const x of montajes) m.set(x.posicion_id, x);
@@ -148,9 +234,17 @@ export default function RevisionVehiculo() {
 
   async function iniciarRevision() {
     if (!vehiculoId || !empresaId) return;
+    // La fecha se comprueba ANTES de crear la fila: una revisión con la fecha
+    // mal puesta no da un error, da una proyección de desgaste equivocada
+    // meses después.
+    const { error: errorFecha } = juzgarFecha(fechaRevision);
+    if (errorFecha) { setMsg(errorFecha); return; }
     setSaving(true); setMsg("");
     try {
-      const r = await crearRevision({ empresaId, vehiculoId, kmVehiculo: kmVehiculo ? Number(kmVehiculo) : null, tecnicoId: perfil?.id ?? null });
+      const r = await crearRevision({
+        empresaId, vehiculoId, kmVehiculo: kmVehiculo ? Number(kmVehiculo) : null,
+        tecnicoId: perfil?.id ?? null, fechaRevision,
+      });
       setRevision(r);
       const inicial: Record<string, Detalle> = {};
       posiciones.forEach((p) => {
@@ -252,9 +346,43 @@ export default function RevisionVehiculo() {
         <div className="rounded-lg border border-dashed border-slate-700 bg-slate-800 p-10 text-center text-sm text-slate-500">Selecciona empresa y vehículo.</div>
       ) : !revision ? (
         <div className="rounded-lg bg-slate-800 p-4">
-          <Field label="Km actuales del vehículo">
-            <input type="number" className={`${inputCls} max-w-xs`} value={kmVehiculo} onChange={(e) => setKmVehiculo(e.target.value)} />
-          </Field>
+          <div className="flex flex-wrap gap-4">
+            <Field label="Fecha de la revisión">
+              <input
+                type="date" max={hoyISO()} className={`${inputCls} max-w-[12rem]`}
+                value={fechaRevision} onChange={(e) => setFechaRevision(e.target.value)}
+              />
+            </Field>
+            <Field label="Km actuales del vehículo">
+              <input type="number" className={`${inputCls} max-w-xs`} value={kmVehiculo} onChange={(e) => setKmVehiculo(e.target.value)} />
+            </Field>
+          </div>
+
+          {/*
+            * El parte de papel trae una casilla «KM.» que NO siempre son
+            * kilómetros: en los partes de Plana lleva el número de unidad
+            * (5399GWF → «KM. 1482», y 1482 es la unidad, no los km). Si se
+            * teclea ahí, el vehículo pasa a tener 1.482 km y el cálculo de
+            * desgaste por kilómetro se va al suelo.
+            */}
+          {vehiculoElegido?.numero_unidad && (
+            <div className="mt-1 text-[11px] text-amber-300/80">
+              Ojo: la casilla «KM.» del parte de papel suele llevar el nº de unidad
+              (esta es la {vehiculoElegido.numero_unidad}), no los kilómetros.
+            </div>
+          )}
+
+          {/*
+            * Un parte de hace meses se deja guardar, pero se avisa: puede ser
+            * un papel que apareció en un cajón, o puede ser el año mal
+            * tecleado. Quien tiene el papel delante lo sabe; la pantalla no.
+            */}
+          {avisoFecha && (
+            <div className="mt-2 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-200">
+              {avisoFecha}
+            </div>
+          )}
+
           <button onClick={iniciarRevision} disabled={saving} className="mt-3 rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">Iniciar revisión</button>
 
           {historialRevisiones.length > 0 && (
@@ -286,7 +414,34 @@ export default function RevisionVehiculo() {
       ) : (
         <div>
           <div className="mb-3 flex items-center justify-between rounded-lg bg-slate-800 p-3 text-sm">
-            <span>Revisión en curso · {new Date().toLocaleDateString("es-ES")} · {kmVehiculo} km</span>
+            {/*
+              * La fecha que se enseña es la de la REVISIÓN, no la de hoy.
+              * Antes ponía `new Date()`, que en una revisión pasada a mano
+              * decía un día distinto del que se estaba guardando.
+              */}
+            <span className="flex flex-wrap items-center gap-2">
+              <span>Revisión en curso del</span>
+              {/*
+                * Editable: la fecha se elige antes de teclear y quien se
+                * equivoca lo descubre a mitad de las ocho posiciones. Sin
+                * poder corregirla aquí, la única salida sería borrar el
+                * borrador y empezar de nuevo, y entonces el camino cómodo
+                * sería dejar la fecha mal.
+                */}
+              <input
+                type="date" max={hoyISO()} value={fechaRevision} disabled={saving}
+                onChange={(e) => void corregirFecha(e.target.value)}
+                className={`${inputCls} w-auto py-0.5 text-[12px]`}
+                title="La fecha en que se hizo la revisión"
+              />
+              <span>· {kmVehiculo} km</span>
+              {textoEnPapel(revision) && (
+                <span className="rounded bg-amber-500/20 px-2 py-0.5 text-[11px] font-bold text-amber-200"
+                  title="Sin cronómetro ni coordenadas: no se hizo con la tablet">
+                  {textoEnPapel(revision)}
+                </span>
+              )}
+            </span>
             <div className="flex gap-2">
               <button onClick={guardarBorrador} disabled={saving} className="rounded border border-slate-600 px-3 py-1.5 text-[12px] text-slate-200 disabled:opacity-50">Guardar borrador</button>
               <button onClick={finalizar} disabled={saving} className="rounded bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white disabled:opacity-50">Finalizar revisión</button>
@@ -304,8 +459,28 @@ export default function RevisionVehiculo() {
                     <span className="text-[13px] font-bold text-sky-300">{p.codigo_posicion}</span>
                     {d.alerta_generada && <span className="rounded-full bg-rose-500/30 px-2 py-0.5 text-[10px] font-bold text-rose-200">Alerta</span>}
                   </div>
-                  <div className="mb-1 text-[11px] text-slate-400">
-                    {m?.neumatico ? `${m.neumatico.numero_interno ?? m.neumatico.codigo_interno} · ${m.neumatico.marca ?? ""} ${m.neumatico.medida ?? ""}` : "Sin neumático montado"}
+                  <div className="mb-1 flex items-center justify-between gap-2 text-[11px] text-slate-400">
+                    <span>
+                      {m?.neumatico ? `${m.neumatico.numero_interno ?? m.neumatico.codigo_interno} · ${m.neumatico.marca ?? ""} ${m.neumatico.medida ?? ""}` : "Sin neumático montado"}
+                    </span>
+                    {/*
+                      * El parte de papel trae MEDIDA, MARCA y MODELO de cada
+                      * posición, y a veces el sistema no tiene nada montado
+                      * ahí. Entonces no hay nada que medir: primero hay que
+                      * reconocer la goma que el papel dice que está puesta.
+                      *
+                      * Se monta con la FECHA DE LA REVISIÓN, no con la de hoy:
+                      * de ahí salen los kilómetros que lleva la goma.
+                      */}
+                    {!m && (
+                      <button
+                        onClick={() => setMontarEn(p)}
+                        className="shrink-0 rounded border border-sky-600/60 px-2 py-0.5 text-[11px] font-bold text-sky-300 hover:bg-sky-600/20"
+                        title="Dar de alta la goma que el parte dice que está en esta posición"
+                      >
+                        Reconocer goma
+                      </button>
+                    )}
                   </div>
                   {m?.neumatico && (
                     <div className="mb-2 text-[10px] text-slate-500">
@@ -345,6 +520,18 @@ export default function RevisionVehiculo() {
             })}
           </div>
         </div>
+      )}
+
+      {montarEn && revision && (
+        <ModalMontarDesdeFicha
+          posicionNombre={montarEn.codigo_posicion ?? "la posición"}
+          vehiculoId={vehiculoId}
+          empresaId={empresaId}
+          posicionId={montarEn.id}
+          fecha={revision.fecha_revision ?? undefined}
+          onClose={() => setMontarEn(null)}
+          onDone={trasMontar}
+        />
       )}
 
       {fichaRevision && (

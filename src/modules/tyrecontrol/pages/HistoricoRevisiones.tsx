@@ -10,6 +10,7 @@ import {
   resumenDuracion,
   tieneDuracion,
 } from "../services/duracionRevision";
+import { esEnPapel } from "../services/revisionEnPapel";
 import { presionTxt } from "../types";
 import { TableWrap, tdCls, thCls, inputCls, Modal } from "../components/ui";
 import PlanoSnapshot from "../components/PlanoSnapshot";
@@ -84,6 +85,13 @@ type Fila = {
    * desgaste, sino dejar constancia de con qué entró.
    */
   tipo_revision: string | null;
+  /*
+   * Hecha en papel y tecleada después: su `fecha_revision` es anterior al día
+   * en que se creó la fila. Se deduce, no se guarda; ver
+   * `services/revisionEnPapel.ts`. Importa para no decirle a una revisión de
+   * esta semana que es «anterior al cronómetro de la APK».
+   */
+  enPapel: boolean;
 };
 
 function hoyISO(): string {
@@ -222,6 +230,7 @@ export default function HistoricoRevisiones() {
           vehiculoId: r.vehiculo?.id ?? undefined,
           chasisImg: r.vehiculo?.tipo?.imagen_chasis_url ?? null,
           tipo_revision: r.tipo_revision ?? null,
+          enPapel: esEnPapel({ fecha_revision: r.fecha_revision, created_at: r.created_at }),
           duracion_seg: r.duracion_seg ?? null,
           trabajo_seg: r.trabajo_seg ?? null,
           pausa_seg: r.pausa_seg ?? null,
@@ -421,6 +430,17 @@ export default function HistoricoRevisiones() {
                       Inventario
                     </span>
                   )}
+                  {/*
+                    Y la que se pasó a mano desde el escritorio. Se distingue
+                    porque no tiene cronómetro ni coordenadas, y sin decirlo
+                    parecería una revisión a la que le faltan datos.
+                  */}
+                  {f.enPapel && (
+                    <span className="ml-1.5 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-300"
+                          title="Hecha en papel y pasada después desde el escritorio.">
+                      En papel
+                    </span>
+                  )}
                 </td>
                 {/* El número de unidad es como llaman al vehículo dentro de la
                     empresa: al ir pegado a la matrícula y en letra pequeña se
@@ -446,7 +466,7 @@ export default function HistoricoRevisiones() {
                         {duracionCorta(f.duracion_seg)}
                       </span>
                     : <span className="text-slate-500"
-                            title={motivoSinDuracion(f.esArco, f.tipo_revision === "inventario_inicial")}>—</span>}
+                            title={motivoSinDuracion(f.esArco, f.tipo_revision === "inventario_inicial", f.enPapel)}>—</span>}
                 </td>
                 <td className={tdCls + " text-slate-400"}>{f.km != null ? f.km.toLocaleString("es-ES") : "—"}</td>
                 <td className={tdCls}>
@@ -479,6 +499,11 @@ export default function HistoricoRevisiones() {
             {ficha.tipo_revision === "inventario_inicial" && (
               <span className="mr-2 rounded-full bg-violet-500/15 px-2 py-0.5 text-[11px] font-bold text-violet-300">
                 Inventario inicial
+              </span>
+            )}
+            {ficha.enPapel && (
+              <span className="mr-2 rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-bold text-amber-300">
+                Hecha en papel
               </span>
             )}
             {ficha.cliente} · Base {ficha.base} · {ficha.esArco ? "Medido por el CheckPoint" : `Operario: ${ficha.tecnico}`}
