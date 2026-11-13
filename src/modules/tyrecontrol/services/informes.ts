@@ -8,7 +8,7 @@ import type {
   EconomicoInformes, RankingVehiculo, RankingMarca, CosteKmNeumatico, DesgasteNeumatico,
   PresionNeumatico, ProductividadTecnico, OperacionesInforme, InformeEjecutivo,
   ControlRevision, MontajesInforme, OrigenMontajes, InventarioResumen, KmPorMmFila,
-  PrevisionMedida,
+  PrevisionMedida, RuedaAlerta,
 } from "../types/informes";
 
 function params(f: FiltrosInformes) {
@@ -58,6 +58,17 @@ export async function listarAlertas(f: FiltrosInformes): Promise<Alerta[]> {
   const { data, error } = await supabase.rpc("tc_informes_alertas", { p_empresa: f.empresaId ?? null });
   if (error) throw new Error(error.message);
   return (data ?? []) as Alerta[];
+}
+
+/**
+ * Las mismas alertas, pero una fila por RUEDA de cada vehículo afectado —las
+ * buenas incluidas—, con la foto del chasis y la fecha de cada medición. Es lo
+ * que necesita la pantalla para pintar un plano por vehículo.
+ */
+export async function listarAlertasPorVehiculo(f: FiltrosInformes): Promise<RuedaAlerta[]> {
+  const { data, error } = await supabase.rpc("tc_informes_alertas_vehiculos", { p_empresa: f.empresaId ?? null });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as RuedaAlerta[];
 }
 
 export async function obtenerEconomico(f: FiltrosInformes): Promise<EconomicoInformes> {
