@@ -11,6 +11,7 @@ import 'services/push.dart';
 import 'services/queue.dart';
 import 'services/session.dart';
 import 'theme.dart';
+import 'widgets/aviso_actualizacion.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -31,6 +32,9 @@ class LiteApp extends StatelessWidget {
       title: 'Mobilink Assist Lite',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.build(),
+      // Versión nueva publicada: franja arriba, en cualquier pantalla.
+      builder: (context, child) =>
+          AvisoActualizacion(app: 'assist-lite', child: child ?? const SizedBox.shrink()),
       home: const SplashScreen(),
     );
   }

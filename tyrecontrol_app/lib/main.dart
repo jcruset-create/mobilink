@@ -11,6 +11,7 @@ import 'screens/bloqueo_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/cliente_screen.dart';
+import 'widgets/aviso_actualizacion.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -81,6 +82,9 @@ class TyreControlApp extends StatelessWidget {
       title: 'Mobilink TyreControl',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.build(),
+      // Versión nueva publicada: franja arriba, en cualquier pantalla.
+      builder: (context, child) =>
+          AvisoActualizacion(app: 'tyrecontrol', child: child ?? const SizedBox.shrink()),
       // Gating de arranque: sin sesión → login; con sesión pero sin cliente
       // elegido → pantalla de selección de cliente; con cliente → home.
       // Con Face ID activado, el candado va delante y deja pasar al mismo
