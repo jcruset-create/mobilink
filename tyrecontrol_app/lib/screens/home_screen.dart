@@ -4,6 +4,7 @@ import '../services/probe_session.dart';
 import '../services/biometria.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/oferta_biometria.dart';
 import '../widgets/status_bar.dart';
 import 'alta_vehiculos_screen.dart';
 import 'analitica_screen.dart';
@@ -44,6 +45,11 @@ class _HomeScreenState extends State<HomeScreen> {
     // Deja la sonda guardada vigilada (autoConnect): el técnico no la conecta
     // a mano, se enlaza sola al encenderla y se rearma si se apaga o se aleja.
     ProbeSession.instance.vigilar();
+    // Face ID, una vez, a quien ya tenía la sesión abierta y no pasa por el
+    // login (allí es donde se ofrece la primera vez).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) ofrecerBiometria(context);
+    });
   }
 
   final _tabs = const [
