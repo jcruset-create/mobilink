@@ -6266,6 +6266,77 @@ async function etaEstimadaDeAsistencia(row: any): Promise<EtaEstimada | null> {
   }
 }
 
+/*
+ * Kilómetros recorridos en una asistencia, para el contador del seguimiento:
+ * desde la salida del taller hasta la llegada al taller (o ahora), ida y
+ * vuelta, que es lo que se factura.
+ *
+ * Fuente: los trayectos de Webfleet de la furgoneta, que miden con el
+ * odómetro; si fallan o no hay furgoneta, el GPS de la tablet (el mismo
+ * cálculo que el informe de recorrido). Se guarda 2 minutos por asistencia:
+ * la página se refresca cada 20 s y Webfleet limita las peticiones.
+ */
+const cacheKmAsistencia = new Map<number, { atMs: number; km: number; fuente: "furgoneta" | "tablet" }>();
+const TTL_KM_ASISTENCIA_MS = 2 * 60_000;
+
+async function kmRecorridosDeAsistencia(
+  a: ReturnType<typeof normalizeRoadsideAssistanceRow>
+): Promise<{ km: number; fuente: "furgoneta" | "tablet" } | null> {
+  if (!a.departedAtMs) return null;
+  const ahora = Date.now();
+  const guardado = cacheKmAsistencia.get(a.id);
+  // Cerrada: lo calculado ya no cambia, se queda.
+  const cerrada = a.arrivedAtWorkshopMs != null || a.cancelledAtMs != null;
+  if (guardado && (cerrada || ahora - guardado.atMs < TTL_KM_ASISTENCIA_MS)) return guardado;
+
+  const desde = a.departedAtMs;
+  const hasta = a.arrivedAtWorkshopMs || a.cancelledAtMs || ahora;
+  let resultado: { km: number; fuente: "furgoneta" | "tablet" } | null = null;
+
+  if (a.webfleetVehicleId) {
+    try {
+      const trips = await getWebfleetTrips(a.webfleetVehicleId, desde, hasta);
+      if (trips.length > 0) {
+        resultado = {
+          km: trips.reduce((s, t) => s + (t.distance || 0), 0) / 1000,
+          fuente: "furgoneta",
+        };
+      }
+    } catch (err: any) {
+      console.warn(`Km asistencia #${a.id} (Webfleet): ${err?.message ?? err}`);
+    }
+  }
+  if (!resultado && a.assignedTechName) {
+    try {
+      const deLaAsistencia = await db.query(
+        `SELECT lat, lng, "ts", "accuracyM", "speedKmh" FROM roadside_operator_track
+          WHERE "assistanceId" = $1 AND "ts" BETWEEN $2 AND $3 ORDER BY "ts"`,
+        [a.id, desde, hasta]
+      );
+      const puntos = unirPuntos(
+        deLaAsistencia.rows.map((p: any) => ({
+          lat: Number(p.lat), lng: Number(p.lng), atMs: Number(p.ts),
+          accuracyM: p.accuracyM != null ? Number(p.accuracyM) : null,
+          speedKmh: p.speedKmh != null ? Number(p.speedKmh) : null,
+        })),
+        await rastroTablet(a.assignedTechName, desde, hasta)
+      );
+      if (puntos.length >= 2) resultado = { km: analizarRecorrido(puntos).km, fuente: "tablet" };
+    } catch (err: any) {
+      console.warn(`Km asistencia #${a.id} (tablet): ${err?.message ?? err}`);
+    }
+  }
+  if (resultado) {
+    cacheKmAsistencia.set(a.id, { ...resultado, atMs: ahora });
+    if (cacheKmAsistencia.size > 500) {
+      for (const [id, v] of cacheKmAsistencia) {
+        if (ahora - v.atMs > 24 * 60 * 60_000) cacheKmAsistencia.delete(id);
+      }
+    }
+  }
+  return resultado;
+}
+
 app.get("/api/roadside-tracking/:token", async (req, res) => {
   try {
     const token = String(req.params.token || "").trim();
@@ -6440,6 +6511,10 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
           }
         : null,
       etaWarning,
+      // Contador de km del seguimiento: ida y vuelta, desde la salida del taller.
+      kmRecorridos: await kmRecorridosDeAsistencia(assistance).then((k) =>
+        k ? { km: Math.round(k.km * 10) / 10, fuente: k.fuente } : null
+      ),
       etaEstimada: etaEstimada
         ? {
             minutos: etaEstimada.minutos,
