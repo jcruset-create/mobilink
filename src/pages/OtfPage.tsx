@@ -3,6 +3,7 @@ import {
   fetchOtfList,
   fetchOtf,
   createOtf,
+  updateOtf,
   addOtfTrabajo,
   updateOtfTrabajo,
   deleteOtfTrabajo,
@@ -44,6 +45,8 @@ export default function OtfPage() {
   const [sel, setSel] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [showNew, setShowNew] = useState(false);
+  // La OTF que se está editando (misma ventana que «Nueva OTF», ya rellena).
+  const [editing, setEditing] = useState<any | null>(null);
   const [techs, setTechs] = useState<any[]>([]);
   const [vehicles, setVehicles] = useState<any[]>([]);
   const [plantillas, setPlantillas] = useState<OtfPlantilla[]>([]);
@@ -135,7 +138,7 @@ export default function OtfPage() {
           {/* Detalle */}
           <div>
             {sel ? (
-              <OtfDetail otf={sel} plantillas={plantillas} onChange={async () => { setSel(await fetchOtf(sel.id)); loadList(); }} />
+              <OtfDetail otf={sel} plantillas={plantillas} onChange={async () => { setSel(await fetchOtf(sel.id)); loadList(); }} onEdit={() => setEditing(sel)} />
             ) : (
               <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-10 text-center text-sm text-slate-500">Selecciona una OTF</div>
             )}
@@ -147,6 +150,18 @@ export default function OtfPage() {
         <PlantillasModal
           onClose={() => setShowPlantillas(false)}
           onChanged={() => fetchOtfPlantillas().then(setPlantillas).catch(() => {})}
+        />
+      )}
+
+      {editing && (
+        <NewOtfModal
+          otf={editing}
+          places={places}
+          techs={techs}
+          vehicles={vehicles}
+          onPlaceCreated={(p) => setPlaces((prev) => [p, ...prev])}
+          onClose={() => setEditing(null)}
+          onCreated={async (o) => { setEditing(null); setSel(o); loadList(); }}
         />
       )}
 
@@ -165,11 +180,18 @@ export default function OtfPage() {
   );
 }
 
-function NewOtfModal({ places, techs, vehicles, onPlaceCreated, onClose, onCreated }: { places: KnownPlace[]; techs: any[]; vehicles: any[]; onPlaceCreated: (p: KnownPlace) => void; onClose: () => void; onCreated: (o: any) => void }) {
-  const [clientName, setClientName] = useState("");
-  const [placeId, setPlaceId] = useState("");
-  const [tech, setTech] = useState("");
-  const [vehicleName, setVehicleName] = useState("");
+/*
+ * Nueva OTF y, con `otf`, editar una: la misma ventana ya rellena. Al editar
+ * se manda solo lo que ha cambiado (el servidor deja el resto como estaba:
+ * `server/otf/actualizar.ts`), y nunca los trabajos.
+ */
+function NewOtfModal({ otf, places, techs, vehicles, onPlaceCreated, onClose, onCreated }: { otf?: any; places: KnownPlace[]; techs: any[]; vehicles: any[]; onPlaceCreated: (p: KnownPlace) => void; onClose: () => void; onCreated: (o: any) => void }) {
+  const editando = otf != null;
+  const placeInicial = otf?.knownPlaceId != null ? String(otf.knownPlaceId) : "";
+  const [clientName, setClientName] = useState<string>(otf?.clientName ?? "");
+  const [placeId, setPlaceId] = useState(placeInicial);
+  const [tech, setTech] = useState<string>(otf?.assignedTechName ?? "");
+  const [vehicleName, setVehicleName] = useState<string>(otf?.assignedVehicleName ?? "");
   const [saving, setSaving] = useState(false);
   const [showPlaceMap, setShowPlaceMap] = useState(false);
   const [error, setError] = useState("");
@@ -181,6 +203,25 @@ function NewOtfModal({ places, techs, vehicles, onPlaceCreated, onClose, onCreat
     try {
       const place = places.find((p) => String(p.id) === placeId);
       const veh = vehicles.find((v) => v.name === vehicleName);
+      if (editando) {
+        const cambios: Record<string, unknown> = {};
+        if (clientName.trim() !== otf.clientName) cambios.clientName = clientName.trim();
+        if (placeId !== placeInicial) {
+          cambios.knownPlaceId = place?.id ?? null;
+          cambios.baseName = place?.nombre ?? null;
+          cambios.direccion = place?.direccion ?? null;
+          cambios.lat = place?.lat ?? null;
+          cambios.lng = place?.lng ?? null;
+        }
+        if ((tech || null) !== (otf.assignedTechName ?? null)) cambios.assignedTechName = tech || null;
+        if ((vehicleName || null) !== (otf.assignedVehicleName ?? null)) {
+          cambios.assignedVehicleName = vehicleName || null;
+          cambios.webfleetVehicleId = veh?.webfleetVehicleId ?? null;
+        }
+        if (Object.keys(cambios).length === 0) { onClose(); return; }
+        onCreated(await updateOtf(otf.id, cambios));
+        return;
+      }
       const o = await createOtf({
         clientName: clientName.trim(),
         knownPlaceId: place?.id ?? null,
@@ -194,7 +235,7 @@ function NewOtfModal({ places, techs, vehicles, onPlaceCreated, onClose, onCreat
       });
       onCreated(o);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "No se pudo crear la OTF");
+      setError(e instanceof Error ? e.message : editando ? "No se pudo guardar la OTF" : "No se pudo crear la OTF");
     } finally {
       setSaving(false);
     }
@@ -203,13 +244,13 @@ function NewOtfModal({ places, techs, vehicles, onPlaceCreated, onClose, onCreat
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 p-4 pt-12">
       <div className="w-full max-w-lg rounded-2xl border border-slate-700 bg-slate-800 p-5 text-slate-100 shadow-2xl">
-        <h2 className="mb-3 text-lg font-black">Nueva OTF</h2>
+        <h2 className="mb-3 text-lg font-black">{editando ? `Editar OTF · ${otf.clientName}` : "Nueva OTF"}</h2>
         <div className="space-y-3">
           <Field label="Cliente *"><input value={clientName} onChange={(e) => setClientName(e.target.value)} className={inputCls} /></Field>
           <Field label="Base (lugar conocido)">
             <div className="flex gap-2">
               <select value={placeId} onChange={(e) => setPlaceId(e.target.value)} className={inputCls}>
-                <option value="">— Elegir base —</option>
+                <option value="">{editando && !placeInicial && otf.baseName ? `${otf.baseName} (actual, sin lugar conocido)` : "— Elegir base —"}</option>
                 {places.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
               </select>
               <button
@@ -244,7 +285,7 @@ function NewOtfModal({ places, techs, vehicles, onPlaceCreated, onClose, onCreat
         )}
         <div className="mt-4 flex justify-end gap-2">
           <button onClick={onClose} className="rounded-lg border border-slate-600 px-4 py-2 text-sm font-bold text-slate-300 hover:bg-slate-700">Cancelar</button>
-          <button onClick={save} disabled={saving} className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-black text-white hover:bg-orange-500 disabled:opacity-50">{saving ? "…" : "Crear"}</button>
+          <button onClick={save} disabled={saving} className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-black text-white hover:bg-orange-500 disabled:opacity-50">{saving ? "…" : editando ? "Guardar" : "Crear"}</button>
         </div>
       </div>
 
@@ -415,7 +456,7 @@ function PresupuestarModal({ otf, onClose }: { otf: any; onClose: () => void }) 
   );
 }
 
-function OtfDetail({ otf, plantillas, onChange }: { otf: any; plantillas: OtfPlantilla[]; onChange: () => void }) {
+function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas: OtfPlantilla[]; onChange: () => void; onEdit: () => void }) {
   const [presupuestando, setPresupuestando] = useState(false);
   const [plate, setPlate] = useState("");
   const [tipo, setTipo] = useState("Tractora");
@@ -505,6 +546,14 @@ function OtfDetail({ otf, plantillas, onChange }: { otf: any; plantillas: OtfPla
           >
             📄 Informe PDF
           </button>
+          {otf.status !== "finalizada" && otf.status !== "cancelada" && (
+            <button
+              onClick={onEdit}
+              className="mt-2 ml-2 rounded-lg border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs font-black text-slate-200 hover:bg-slate-700"
+            >
+              ✎ Editar
+            </button>
+          )}
           <button
             onClick={() => setPresupuestando(true)}
             className="mt-2 ml-2 rounded-lg border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs font-black text-slate-200 hover:bg-slate-700"
