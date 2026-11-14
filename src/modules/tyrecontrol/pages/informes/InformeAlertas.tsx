@@ -135,8 +135,10 @@ export default function InformeAlertas() {
                  onClick={() => { setFiltro("todo"); setVerSinRevisar(false); }} />
         <KpiCard title="Cambiar ya" value={nCambiar} tono={nCambiar > 0 ? "danger" : "ok"}
                  hint="22.5 ≤ 4 mm · 19.5/17.5 ≤ 3 · 16 o menos ≤ 2"
+                 activo={filtro === "cambiar"}
                  onClick={() => { setFiltro("cambiar"); setVerSinRevisar(false); }} />
         <KpiCard title="Presión" value={nPresion} tono={nPresion > 0 ? "danger" : "ok"} hint="Sensor Goodyear"
+                 activo={filtro === "presion"}
                  onClick={() => { setFiltro("presion"); setVerSinRevisar(false); }} />
         {/*
           Lecturas bajas que el protocolo no da por buenas todavía. Pulsarlo
@@ -144,8 +146,10 @@ export default function InformeAlertas() {
         */}
         <KpiCard title="Por confirmar" value={paraSonda.length} tono={paraSonda.length > 0 ? "info" : "ok"}
                  hint={paraSonda.length > 0 ? "medir con sonda" : "nada en duda"}
+                 activo={filtro === "confirmar"}
                  onClick={() => { setFiltro("confirmar"); setVerSonda(true); setVerSinRevisar(false); }} />
         <KpiCard title="Medición vieja" value={nVieja} tono={nVieja > 0 ? "warn" : "ok"} hint={`más de ${DIAS_MEDICION_VIEJA} días`}
+                 activo={filtro === "vieja"}
                  onClick={() => { setFiltro("vieja"); setVerSinRevisar(false); }} />
         {/*
           Éste no filtra la rejilla porque sus vehículos NO están en ella: no
