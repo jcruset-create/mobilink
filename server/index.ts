@@ -22,6 +22,10 @@ import {
   emailValido,
   ErrorMaterial,
   limpiarChecklist,
+  tiemposTrabajo,
+  horaEs,
+  duracionCorta,
+  ETIQUETA_FOTO,
   limpiarMaterial,
   resultadoChecklist,
   telefonoValido,
@@ -18934,6 +18938,8 @@ function normalizeOtfTrabajo(row: any) {
     iniciadoAtMs: row.iniciadoAtMs != null ? Number(row.iniciadoAtMs) : null,
     finalizadoAtMs: row.finalizadoAtMs != null ? Number(row.finalizadoAtMs) : null,
     motivoNoRealizado: row.motivoNoRealizado ?? null,
+    explicacionNoRealizado: row.explicacionNoRealizado ?? null,
+    updatedAtMs: row.updatedAtMs != null ? Number(row.updatedAtMs) : null,
     matriculaLeida: row.matriculaLeida ?? null,
     matriculaNoCoincide: row.matriculaNoCoincide === true,
     checklist: Array.isArray(row.checklist) ? row.checklist : null,
@@ -18953,7 +18959,7 @@ async function otfWithDetails(id: number) {
   const filesByTrabajo = new Map<number, any[]>();
   for (const file of f.rows) {
     const arr = filesByTrabajo.get(Number(file.trabajoId)) ?? [];
-    arr.push({ id: Number(file.id), kind: file.kind, url: file.url });
+    arr.push({ id: Number(file.id), kind: file.kind, url: file.url, createdAtMs: Number(file.createdAtMs) || null });
     filesByTrabajo.set(Number(file.trabajoId), arr);
   }
   // Lista de comprobación de cada plantilla, y el material montado.
@@ -19727,7 +19733,7 @@ app.put("/api/roadside-operator/otf/trabajos/:tid/status", requireRoadsideOperat
       return res.json(cur.rows[0] ? normalizeOtfTrabajo(cur.rows[0]) : { ok: true });
     }
     // Con su tiempo y, si no se hizo, el motivo: otf/actualizar.ts.
-    const cambio = sqlEstadoTrabajo(tid, status, req.body?.motivo, Date.now());
+    const cambio = sqlEstadoTrabajo(tid, status, req.body?.motivo, Date.now(), req.body?.explicacion);
     let r = await db.query(cambio.sql, cambio.params);
     // Al finalizar, lo marcado de la lista de comprobación de su plantilla.
     if (r.rows[0] && status === "finalizado" && req.body?.checklist !== undefined) {
@@ -19925,7 +19931,7 @@ async function buildOtfReportPdfBuffer(id: number): Promise<Buffer | null> {
     row("Base:", data.baseName || data.direccion || "-");
     row("Operario:", data.assignedTechName || "-");
     row("Furgoneta:", data.assignedVehicleName || "-");
-    row("Estado:", data.status);
+    row("Estado:", ({ planificada: "Planificada", pendiente: "Pendiente", en_curso: "En curso", finalizada: "Finalizada", cancelada: "Cancelada" } as Record<string, string>)[data.status] ?? data.status);
     row("Progreso:", `${data.progreso.hechos} / ${data.progreso.total}`);
 
     doc.moveDown(1);
@@ -19934,60 +19940,124 @@ async function buildOtfReportPdfBuffer(id: number): Promise<Buffer | null> {
     const planificados = data.trabajos.filter((t: any) => t.origen !== "tecnico_campo");
     const enCampo = data.trabajos.filter((t: any) => t.origen === "tecnico_campo");
 
-    const FOTO_LABELS: Record<string, string> = { matricula: "Matrícula", averia: "Avería" };
+    // Cada trabajo: matrícula y estado en una línea, el trabajo, una banda con
+    // hora de inicio, hora de fin y tiempo, y si no se hizo, el motivo y la
+    // explicación del técnico en un recuadro rojo con sus fotos.
+    const L = 50;
+    const W = 495;
+    const ESTADO_PDF: Record<string, [string, string]> = {
+      finalizado: ["REALIZADO", "#067647"],
+      no_realizado: ["NO REALIZADO", "#B42318"],
+      en_proceso: ["EN CURSO", "#B54708"],
+      pendiente: ["PENDIENTE", "#475467"],
+    };
+    const fotosPdf = async (fotos: any[], x0 = L) => {
+      if (fotos.length === 0) return;
+      if (doc.y > 640) doc.addPage();
+      const y0 = doc.y + 4;
+      let x = x0;
+      for (const f of fotos.slice(0, 4)) {
+        try {
+          const buf = await fetchImageForPdf(f.url);
+          doc.image(buf, x, y0, { fit: [110, 80] });
+          const label = ETIQUETA_FOTO[String(f.kind)] ?? "";
+          if (label) {
+            doc.fontSize(7).font("Helvetica").fillColor("#555555")
+              .text(label, x, y0 + 83, { width: 110, align: "center" });
+            doc.fillColor("#000000");
+          }
+          x += 120;
+        } catch { /* foto no accesible: se omite */ }
+      }
+      doc.x = L;
+      doc.y = y0 + 96;
+    };
     const printT = async (t: any) => {
-      if (doc.y > 700) doc.addPage();
-      doc.fontSize(10).font("Helvetica-Bold").text(`${t.plate || "—"} · ${t.tipoVehiculo || ""}  [${t.status}]`);
-      doc.fontSize(9).font("Helvetica").text(`   ${t.trabajo || ""}`);
-      if (t.observaciones) doc.fontSize(8).font("Helvetica").text(`   Observaciones: ${t.observaciones}`);
-      if (t.motivoAltaCampo) doc.fontSize(8).font("Helvetica-Oblique").text(`   Motivo alta en campo: ${t.motivoAltaCampo}`);
-      // Tiempo del trabajo y, si no se hizo, por qué.
-      if (t.iniciadoAtMs && t.finalizadoAtMs) {
-        doc.fontSize(8).font("Helvetica").text(
-          `   Tiempo: ${fmtDuration(Math.max(0, Math.round((t.finalizadoAtMs - t.iniciadoAtMs) / 1000)))}` +
-          ` (${formatDateEs(t.iniciadoAtMs)} → ${formatDateEs(t.finalizadoAtMs)})`
-        );
+      if (doc.y > 680) doc.addPage();
+      const [estado, color] = ESTADO_PDF[t.status] ?? [String(t.status ?? "").toUpperCase(), "#475467"];
+      const yT = doc.y;
+      doc.fontSize(11).font("Helvetica-Bold").fillColor("#111111")
+        .text(`${t.plate || "—"}${t.tipoVehiculo ? ` · ${t.tipoVehiculo}` : ""}`, L, yT, { width: W - 130 });
+      const yFinTitulo = doc.y;
+      doc.fontSize(9).font("Helvetica-Bold").fillColor(color).text(estado, L + W - 130, yT + 1, { width: 130, align: "right" });
+      doc.fillColor("#000000");
+      doc.x = L;
+      doc.y = Math.max(yFinTitulo, yT + 14);
+      doc.fontSize(9).font("Helvetica").text(t.trabajo || "", L, doc.y, { width: W });
+      if (t.observaciones) doc.fontSize(8).fillColor("#555555").text(`Observaciones: ${t.observaciones}`, { width: W }).fillColor("#000000");
+      if (t.motivoAltaCampo) doc.fontSize(8).font("Helvetica-Oblique").text(`Motivo alta en campo: ${t.motivoAltaCampo}`, { width: W });
+
+      // Inicio · Fin · Tiempo (sin fecha: ya está en la cabecera).
+      const tiempos = tiemposTrabajo(t);
+      if (t.status === "finalizado" && (tiempos.inicioMs || tiempos.finMs)) {
+        const yB = doc.y + 4;
+        doc.save().rect(L, yB, W, 20).fill("#F2F4F7").restore();
+        const col = W / 3;
+        const celda = (i: number, et: string, v: string) => {
+          doc.fontSize(8).font("Helvetica").fillColor("#555555").text(et, L + 10 + i * col, yB + 6, { continued: true });
+          doc.font("Helvetica-Bold").fillColor("#111111").text(` ${v}`);
+        };
+        celda(0, "Inicio", horaEs(tiempos.inicioMs));
+        celda(1, "Fin", horaEs(tiempos.finMs));
+        celda(2, "Tiempo", duracionCorta(tiempos.segundos));
+        doc.fillColor("#000000");
+        doc.x = L;
+        doc.y = yB + 24;
       }
-      if (t.motivoNoRealizado) doc.fontSize(8).font("Helvetica-Bold").text(`   No realizado: ${t.motivoNoRealizado}`);
-      // Material montado y lista de comprobación.
-      for (const m of t.material ?? []) {
-        doc.fontSize(8).font("Helvetica").text(`   Material: ${m.texto}`);
-      }
+
+      for (const m of t.material ?? []) doc.fontSize(8).font("Helvetica").text(`Material: ${m.texto}`, L, doc.y, { width: W });
       if (Array.isArray(t.checklist) && t.checklist.length > 0) {
         doc.fontSize(8).font("Helvetica").text(
-          "   Comprobado: " +
-            t.checklist
-              .map((c: any) => `${c.hecho ? "✓" : "✗"} ${c.texto}${c.valor ? ` (${c.valor})` : ""}`)
-              .join(" · ")
+          "Comprobado: " +
+            t.checklist.map((c: any) => `${c.hecho ? "✓" : "✗"} ${c.texto}${c.valor ? ` (${c.valor})` : ""}`).join(" · "),
+          L, doc.y, { width: W }
         );
       }
       if (t.matriculaNoCoincide && t.matriculaLeida) {
-        doc.fontSize(8).font("Helvetica-Oblique").text(`   Aviso: en la foto se leyó ${t.matriculaLeida}, no la matrícula del trabajo`);
+        doc.fontSize(8).font("Helvetica-Oblique").text(`Aviso: en la foto se leyó ${t.matriculaLeida}, no la matrícula del trabajo`, L, doc.y, { width: W });
       }
-      // Fotos del trabajo (matrícula, avería…): fila de miniaturas etiquetadas
-      const fotos = (t.fotos ?? []).slice(0, 4);
-      if (fotos.length > 0) {
-        if (doc.y > 640) doc.addPage();
+
+      if (t.status === "no_realizado") {
+        // Recuadro rojo: motivo, explicación, quién y a qué hora, y sus fotos.
         const y0 = doc.y + 4;
-        let x = 50;
-        for (const f of fotos) {
-          try {
-            const buf = await fetchImageForPdf(f.url);
-            doc.image(buf, x, y0, { fit: [110, 80] });
-            const label = FOTO_LABELS[String(f.kind)] ?? "";
-            if (label) {
-              doc.fontSize(7).font("Helvetica").fillColor("#555555")
-                .text(label, x, y0 + 83, { width: 110, align: "center" });
-              doc.fillColor("#000000");
-            }
-            x += 120;
-          } catch { /* foto no accesible: se omite */ }
-        }
-        doc.x = 40;
-        doc.y = y0 + 96;
+        const campo = (et: string, v: string, italic = false) => {
+          const y = doc.y;
+          doc.fontSize(9).font("Helvetica-Bold").fillColor("#111111").text(et, L + 10, y, { width: 120 });
+          doc.font(italic ? "Helvetica-Oblique" : "Helvetica").text(v, L + 135, y, { width: W - 145 });
+          doc.y = Math.max(doc.y, y + 12);
+        };
+        doc.y = y0 + 8;
+        campo("Motivo:", t.motivoNoRealizado || "No indicado");
+        if (t.explicacionNoRealizado) campo("Explicación del técnico:", `«${t.explicacionNoRealizado}»`, true);
+        if (tiempos.finMs) campo("Técnico · hora:", `${data.assignedTechName || "—"} · ${horaEs(tiempos.finMs)}`);
+        const fotosNo = (t.fotos ?? []).filter((f: any) => f.kind === "no_realizado");
+        if (fotosNo.length) await fotosPdf(fotosNo, L + 10);
+        const y1 = doc.y + 4;
+        doc.save().lineWidth(1.2).rect(L, y0, W, y1 - y0).stroke("#B42318").restore();
+        doc.x = L;
+        doc.y = y1 + 4;
+        // Las demás fotos (matrícula, antes…) debajo, como en los hechos.
+        await fotosPdf((t.fotos ?? []).filter((f: any) => f.kind !== "no_realizado"));
+      } else {
+        await fotosPdf(t.fotos ?? []);
       }
-      doc.moveDown(0.2);
+      // Separador fino entre trabajos.
+      const yS = doc.y + 4;
+      doc.save().lineWidth(0.5).moveTo(L, yS).lineTo(L + W, yS).stroke("#DDDDDD").restore();
+      doc.x = L;
+      doc.y = yS + 8;
     };
+
+    // Resumen: cuántos hechos y cuántos no.
+    {
+      const n = (st: string) => data.trabajos.filter((x: any) => x.status === st).length;
+      const partes = [`${n("finalizado")} realizados`];
+      if (n("no_realizado")) partes.push(`${n("no_realizado")} no realizados`);
+      const pend = data.trabajos.length - n("finalizado") - n("no_realizado");
+      if (pend) partes.push(`${pend} sin hacer`);
+      doc.fontSize(9).font("Helvetica").fillColor("#555555").text(`Resumen: ${partes.join(" · ")}`, L, doc.y).fillColor("#000000");
+      doc.moveDown(0.4);
+    }
 
     doc.fontSize(11).font("Helvetica-Bold").text("Planificados por oficina:");
     if (planificados.length === 0) doc.fontSize(9).font("Helvetica").text("  (ninguno)");

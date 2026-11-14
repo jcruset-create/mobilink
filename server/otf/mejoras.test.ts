@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   codigoMaterial,
+  duracionCorta,
+  horaEs,
+  tiemposTrabajo,
   emailValido,
   ErrorMaterial,
   limpiarChecklist,
@@ -88,5 +91,34 @@ describe("contactos", () => {
     expect(emailValido("jordi@")).toBeNull();
     expect(telefonoValido("+34 600 11 22 33")).toBe("+34 600 11 22 33");
     expect(telefonoValido("123")).toBeNull();
+  });
+});
+
+describe("tiempo de cada trabajo en el informe", () => {
+  it("con Empezar y Finalizar", () => {
+    expect(tiemposTrabajo({ status: "finalizado", iniciadoAtMs: 1_000, finalizadoAtMs: 1_801_000 })).toEqual({
+      inicioMs: 1_000, finMs: 1_801_000, segundos: 1800,
+    });
+  });
+
+  it("sin pulsar Empezar: el inicio es la primera foto", () => {
+    const r = tiemposTrabajo({
+      status: "finalizado", iniciadoAtMs: null, finalizadoAtMs: 2_000_000,
+      fotos: [{ createdAtMs: 900_000 }, { createdAtMs: 500_000 }],
+    });
+    expect(r.inicioMs).toBe(500_000);
+    expect(r.segundos).toBe(1500);
+  });
+
+  it("cerrado sin hora de fin: la última actualización", () => {
+    expect(tiemposTrabajo({ status: "finalizado", updatedAtMs: 7_000, iniciadoAtMs: 1_000 }).finMs).toBe(7_000);
+    expect(tiemposTrabajo({ status: "pendiente", updatedAtMs: 7_000 }).finMs).toBeNull();
+  });
+
+  it("hora y duración cortas", () => {
+    expect(horaEs(Date.UTC(2026, 10, 14, 9, 29))).toBe("10:29");
+    expect(duracionCorta(1800)).toBe("30 min");
+    expect(duracionCorta(3900)).toBe("1 h 05 min");
+    expect(duracionCorta(null)).toBe("—");
   });
 });

@@ -212,7 +212,8 @@ class OfflineStore {
   }
 
   /// El cambio de estado de un trabajo, ya en la copia local de su OTF.
-  static Future<void> applyLocalOtfTrabajo(int otfId, int trabajoId, String status, {String? motivo}) async {
+  static Future<void> applyLocalOtfTrabajo(int otfId, int trabajoId, String status,
+      {String? motivo, String? explicacion}) async {
     final otf = cachedOtf(otfId);
     if (otf == null) return;
     final ahora = DateTime.now().millisecondsSinceEpoch;
@@ -227,6 +228,7 @@ class OfflineStore {
         t['finalizadoAtMs'] = null;
       }
       t['motivoNoRealizado'] = status == 'no_realizado' ? motivo : null;
+      t['explicacionNoRealizado'] = status == 'no_realizado' ? explicacion : null;
     }
     otf['trabajos'] = trabajos;
     await cacheOtf(otf);

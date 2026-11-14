@@ -25,6 +25,15 @@ import { leerPestana, otfDeLaPestana, TITULO_PESTANA } from "../modules/otfPesta
 import { apiFetch } from "../modules/apiFetch";
 import { abrirPdfConSesion } from "../modules/pdfConSesion";
 
+/** Cómo se llama cada tipo de foto de un trabajo (igual que en el informe). */
+const ETIQUETA_FOTO: Record<string, string> = {
+  matricula: "Matrícula",
+  averia: "Avería",
+  inicial: "Antes",
+  final: "Trabajo hecho",
+  no_realizado: "No realizado",
+};
+
 const STATUS_OTF: Record<string, string> = {
   planificada: "border-amber-500/40 bg-amber-500/15 text-amber-300",
   en_curso: "border-blue-500/40 bg-blue-500/15 text-blue-300",
@@ -688,6 +697,9 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
                 </div>
               )}
               {t.motivoNoRealizado && <div className="text-xs font-bold text-red-300">No realizado: {t.motivoNoRealizado}</div>}
+              {t.explicacionNoRealizado && (
+                <div className="text-xs italic text-red-200">«{t.explicacionNoRealizado}»</div>
+              )}
               {(t.material ?? []).map((m: any) => (
                 <div key={m.id} className="text-xs text-slate-300">🛞 {m.texto}</div>
               ))}
@@ -702,7 +714,9 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
               {(t.fotos ?? []).length > 0 && (
                 <div className="mt-1 flex gap-1">
                   {t.fotos.map((f: any) => (
-                    <a key={f.id} href={f.url} target="_blank" rel="noreferrer"><img src={f.url} className="h-10 w-10 rounded border border-slate-700 object-cover" /></a>
+                    <a key={f.id} href={f.url} target="_blank" rel="noreferrer" title={ETIQUETA_FOTO[f.kind] ?? f.kind}>
+                      <img src={f.url} className={`h-10 w-10 rounded border object-cover ${f.kind === "no_realizado" ? "border-red-500" : "border-slate-700"}`} />
+                    </a>
                   ))}
                 </div>
               )}

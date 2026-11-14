@@ -8,14 +8,20 @@ import '../services/camara.dart';
 import '../theme/app_theme.dart';
 import '../widgets/plate_badge.dart';
 
-/// Por qué no se ha hecho un trabajo. «Otro» pide escribirlo.
+/// Por qué no se ha hecho un trabajo. Siempre va con la explicación del
+/// técnico, que es obligatoria.
 const motivosNoRealizado = [
   'El vehículo no está en la base',
   'Falta material',
   'El cliente no autoriza el trabajo',
   'Avería distinta a la indicada',
+  'Peligroso / sin seguridad',
   'Otro',
 ];
+
+/// Lo mínimo que tiene que escribir el técnico para que la oficina entienda
+/// qué ha pasado.
+const minExplicacionNoRealizado = 10;
 
 List<Map<String, dynamic>> _fotos(Map<String, dynamic> t) =>
     (t['fotos'] as List<dynamic>?)?.cast<Map<String, dynamic>>() ?? [];
@@ -128,6 +134,15 @@ class _OtfInicioTrabajoScreenState extends State<OtfInicioTrabajoScreen> {
     } finally {
       if (mounted) setState(() => _ocupado = false);
     }
+  }
+
+  Future<void> _noSePuede() async {
+    final hecho = await Navigator.of(context).push<bool>(MaterialPageRoute(
+      builder: (_) => OtfNoRealizadoScreen(
+          api: widget.api, trabajo: widget.trabajo, numero: widget.numero, total: widget.total),
+    ));
+    // Sin valor: la OTF recarga y no abre «en curso».
+    if (hecho == true && mounted) Navigator.of(context).pop();
   }
 
   Future<void> _empezar() async {
@@ -245,6 +260,20 @@ class _OtfInicioTrabajoScreenState extends State<OtfInicioTrabajoScreen> {
                 child: Text('Se activa al hacer la foto de la matrícula',
                     textAlign: TextAlign.center, style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
               ),
+            const SizedBox(height: 14),
+            // Sin foto de matrícula también: si el camión no está, no hay foto.
+            SizedBox(
+              height: 52,
+              child: OutlinedButton(
+                onPressed: _ocupado ? null : _noSePuede,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFFFFB4B0),
+                  side: const BorderSide(color: AppColors.danger, width: 2),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                ),
+                child: const Text('No se puede realizar…', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+              ),
+            ),
           ],
         ),
       ),
@@ -386,13 +415,11 @@ class _OtfTrabajoEnCursoScreenState extends State<OtfTrabajoEnCursoScreen> {
   }
 
   Future<void> _noRealizado() async {
-    final motivo = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: AppColors.surface,
-      isScrollControlled: true,
-      builder: (_) => const _ElegirMotivo(),
-    );
-    if (motivo != null && motivo.trim().isNotEmpty) await _cerrar('no_realizado', motivo: motivo.trim());
+    final hecho = await Navigator.of(context).push<bool>(MaterialPageRoute(
+      builder: (_) => OtfNoRealizadoScreen(
+          api: widget.api, trabajo: widget.trabajo, numero: widget.numero, total: widget.total),
+    ));
+    if (hecho == true && mounted) Navigator.of(context).pop(true);
   }
 
   void _error(Object e) {
@@ -541,11 +568,11 @@ class _OtfTrabajoEnCursoScreenState extends State<OtfTrabajoEnCursoScreen> {
                   side: const BorderSide(color: Color(0xFFB45309)),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                 ),
-                child: const Text('No realizado…', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                child: const Text('No se puede realizar…', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
               ),
             ),
             const SizedBox(height: 8),
-            const Text('«No realizado» pide el motivo, para que la oficina sepa qué reprogramar.',
+            const Text('Pide el motivo, tu explicación y, si quieres, fotos: sale en el informe.',
                 textAlign: TextAlign.center, style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
           ],
         ),
@@ -554,62 +581,257 @@ class _OtfTrabajoEnCursoScreenState extends State<OtfTrabajoEnCursoScreen> {
   }
 }
 
-class _ElegirMotivo extends StatefulWidget {
-  const _ElegirMotivo();
+/// Un trabajo que no se puede hacer: motivo, explicación del técnico
+/// (obligatoria) y fotos que lo demuestren. Sale en el informe como
+/// NO REALIZADO. También sirve para corregirlo después (viene relleno).
+class OtfNoRealizadoScreen extends StatefulWidget {
+  final ApiService api;
+  final Map<String, dynamic> trabajo;
+  final int numero;
+  final int total;
+  const OtfNoRealizadoScreen({
+    super.key,
+    required this.api,
+    required this.trabajo,
+    required this.numero,
+    required this.total,
+  });
+
   @override
-  State<_ElegirMotivo> createState() => _ElegirMotivoState();
+  State<OtfNoRealizadoScreen> createState() => _OtfNoRealizadoScreenState();
 }
 
-class _ElegirMotivoState extends State<_ElegirMotivo> {
-  String? _elegido;
-  final _otro = TextEditingController();
+class _OtfNoRealizadoScreenState extends State<OtfNoRealizadoScreen> {
+  late String? _motivo = motivosNoRealizado.contains(widget.trabajo['motivoNoRealizado'])
+      ? widget.trabajo['motivoNoRealizado'] as String
+      : (widget.trabajo['motivoNoRealizado'] != null ? 'Otro' : null);
+  late final _explicacion = TextEditingController(
+    text: widget.trabajo['explicacionNoRealizado']?.toString() ??
+        // De versiones viejas: el «Otro» escrito era el motivo.
+        (widget.trabajo['motivoNoRealizado'] != null && !motivosNoRealizado.contains(widget.trabajo['motivoNoRealizado'])
+            ? widget.trabajo['motivoNoRealizado'].toString()
+            : ''),
+  );
+  final List<File> _nuevas = [];
+  bool _ocupado = false;
+
+  static const _maxFotos = 6;
+
+  int get _tid => widget.trabajo['id'] as int;
+  int get _yaSubidas => _fotos(widget.trabajo).where((f) => f['kind'] == 'no_realizado').length;
+  bool get _valido => _motivo != null && _explicacion.text.trim().length >= minExplicacionNoRealizado;
 
   @override
   void dispose() {
-    _otro.dispose();
+    _explicacion.dispose();
     super.dispose();
   }
 
-  String? get _motivo => _elegido == 'Otro' ? _otro.text.trim() : _elegido;
+  Future<void> _foto({required bool galeria}) async {
+    if (_nuevas.length + _yaSubidas >= _maxFotos) return;
+    final x = await (galeria
+        ? Camara.elegirDeGaleria(context, maxWidth: 1920)
+        : Camara.hacerFoto(context, maxWidth: 1920));
+    if (x == null || !mounted) return;
+    setState(() => _nuevas.add(File(x.path)));
+  }
+
+  Future<void> _guardar() async {
+    if (!_valido) return;
+    setState(() => _ocupado = true);
+    try {
+      // Las fotos se suben al confirmar: si se arrepiente, no quedan en el trabajo.
+      // Sin cobertura se quedan en la cola y se envían al volver la señal.
+      var sinCobertura = false;
+      for (final f in _nuevas) {
+        final r = await widget.api.uploadOtfTrabajoFile(_tid, f, 'no_realizado');
+        if (r['offline'] == true) sinCobertura = true;
+      }
+      await widget.api.updateOtfTrabajoStatus(
+        _tid,
+        'no_realizado',
+        motivo: _motivo,
+        explicacion: _explicacion.text.trim(),
+        otfId: widget.trabajo['otfId'] as int?,
+      );
+      if (!mounted) return;
+      if (sinCobertura) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Sin cobertura: se enviará al recuperar señal.'),
+        ));
+      }
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(e.toString().replaceFirst('Exception: ', '')),
+          backgroundColor: Colors.red,
+        ));
+      }
+    } finally {
+      if (mounted) setState(() => _ocupado = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + MediaQuery.of(context).viewInsets.bottom),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Text('¿Por qué no se ha hecho?',
-              style: TextStyle(color: AppColors.textPrimary, fontSize: 20, fontWeight: FontWeight.w900)),
-          const SizedBox(height: 10),
-          for (final m in motivosNoRealizado)
-            ListTile(
-              onTap: () => setState(() => _elegido = m),
-              leading: Icon(
-                _elegido == m ? Icons.radio_button_checked : Icons.radio_button_unchecked,
-                color: _elegido == m ? AppColors.primary : AppColors.textHint,
+    final t = widget.trabajo;
+    final caben = _nuevas.length + _yaSubidas < _maxFotos;
+    final escrito = _explicacion.text.trim().length;
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      appBar: AppBar(
+        title: Text('No se puede realizar · ${widget.numero} de ${widget.total}'),
+        backgroundColor: AppColors.surface,
+        foregroundColor: AppColors.textPrimary,
+      ),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            _CabeceraTrabajo(trabajo: t),
+            const SizedBox(height: 18),
+            const Text('1 · ¿Por qué no se hace?',
+                style: TextStyle(color: AppColors.textPrimary, fontSize: 16, fontWeight: FontWeight.w900)),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final m in motivosNoRealizado)
+                  ChoiceChip(
+                    label: Text(m),
+                    selected: _motivo == m,
+                    onSelected: _ocupado ? null : (_) => setState(() => _motivo = m),
+                    showCheckmark: true,
+                    checkmarkColor: const Color(0xFFFFD2B0),
+                    selectedColor: const Color(0xFF3A2414),
+                    backgroundColor: AppColors.surface,
+                    side: BorderSide(
+                      color: _motivo == m ? AppColors.warning : AppColors.cardBorder,
+                      width: _motivo == m ? 2 : 1,
+                    ),
+                    labelStyle: TextStyle(
+                      color: _motivo == m ? const Color(0xFFFFD2B0) : AppColors.textPrimary,
+                      fontWeight: _motivo == m ? FontWeight.w800 : FontWeight.w600,
+                      fontSize: 14,
+                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            const Row(children: [
+              Expanded(
+                child: Text('2 · Explica qué has visto',
+                    style: TextStyle(color: AppColors.textPrimary, fontSize: 16, fontWeight: FontWeight.w900)),
               ),
-              title: Text(m, style: const TextStyle(color: AppColors.textPrimary, fontSize: 16)),
-              contentPadding: EdgeInsets.zero,
-            ),
-          if (_elegido == 'Otro')
+              _Etiqueta(texto: 'OBLIGATORIO', color: AppColors.warning),
+            ]),
+            const SizedBox(height: 8),
             TextField(
-              controller: _otro,
-              autofocus: true,
+              controller: _explicacion,
+              enabled: !_ocupado,
+              minLines: 4,
+              maxLines: 8,
+              maxLength: 500,
               onChanged: (_) => setState(() {}),
-              style: const TextStyle(color: AppColors.textPrimary),
-              decoration: const InputDecoration(hintText: 'Escribe el motivo', filled: true),
+              textCapitalization: TextCapitalization.sentences,
+              style: const TextStyle(color: AppColors.textPrimary, fontSize: 15),
+              decoration: const InputDecoration(
+                hintText: 'Qué pasa y qué hace falta para poder hacerlo',
+                filled: true,
+                helperText: 'Se puede dictar con el micrófono del teclado',
+              ),
             ),
-          const SizedBox(height: 12),
-          SizedBox(
-            height: 52,
-            child: FilledButton(
-              onPressed: (_motivo ?? '').isEmpty ? null : () => Navigator.pop(context, _motivo),
-              child: const Text('Marcar como no realizado', style: TextStyle(fontWeight: FontWeight.w900)),
+            if (escrito > 0 && escrito < minExplicacionNoRealizado)
+              const Text('Un poco más de detalle, para que la oficina lo entienda.',
+                  style: TextStyle(color: AppColors.warning, fontSize: 13)),
+            const SizedBox(height: 16),
+            const Row(children: [
+              Expanded(
+                child: Text('3 · Fotos que lo demuestren',
+                    style: TextStyle(color: AppColors.textPrimary, fontSize: 16, fontWeight: FontWeight.w900)),
+              ),
+              _Etiqueta(texto: 'OPCIONAL · HASTA $_maxFotos', color: AppColors.textHint),
+            ]),
+            if (_yaSubidas > 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text('Ya tiene $_yaSubidas foto(s) de antes',
+                    style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+              ),
+            const SizedBox(height: 8),
+            GridView.count(
+              crossAxisCount: 4,
+              crossAxisSpacing: 8,
+              mainAxisSpacing: 8,
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              children: [
+                for (final f in _nuevas)
+                  Stack(fit: StackFit.expand, children: [
+                    ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.file(f, fit: BoxFit.cover)),
+                    Positioned(
+                      top: 2,
+                      right: 2,
+                      child: IconButton.filled(
+                        onPressed: _ocupado ? null : () => setState(() => _nuevas.remove(f)),
+                        icon: const Icon(Icons.close, size: 18),
+                        tooltip: 'Quitar foto',
+                        style: IconButton.styleFrom(
+                          backgroundColor: AppColors.background,
+                          foregroundColor: AppColors.danger,
+                          minimumSize: const Size(32, 32),
+                        ),
+                      ),
+                    ),
+                  ]),
+                if (caben) ...[
+                  _BotonFoto(icono: Icons.add_a_photo_outlined, texto: 'Cámara',
+                      onTap: _ocupado ? null : () => _foto(galeria: false)),
+                  _BotonFoto(icono: Icons.photo_library_outlined, texto: 'Galería',
+                      onTap: _ocupado ? null : () => _foto(galeria: true)),
+                ],
+              ],
             ),
-          ),
-        ],
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(color: AppColors.secondary, borderRadius: BorderRadius.circular(12)),
+              child: const Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Icon(Icons.info_outline, color: AppColors.info, size: 20),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Saldrá en el informe como NO REALIZADO, con tu explicación y las fotos.',
+                    style: TextStyle(color: Color(0xFFCFE0F5), fontSize: 13),
+                  ),
+                ),
+              ]),
+            ),
+            const SizedBox(height: 20),
+            SizedBox(
+              height: 60,
+              child: FilledButton(
+                onPressed: _valido && !_ocupado ? _guardar : null,
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.danger,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                ),
+                child: _ocupado
+                    ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white))
+                    : const Text('Marcar como no realizado', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+              ),
+            ),
+            if (!_valido)
+              const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: Text('Elige el motivo y escribe la explicación',
+                    textAlign: TextAlign.center, style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+              ),
+          ],
+        ),
       ),
     );
   }

@@ -410,6 +410,13 @@ class _OtfDetailScreenState extends State<OtfDetailScreen> {
     _load();
   }
 
+  Future<void> _corregirNoRealizado(Map<String, dynamic> t, int numero, int total) async {
+    await Navigator.of(context).push<bool>(MaterialPageRoute(
+      builder: (_) => OtfNoRealizadoScreen(api: widget.api, trabajo: t, numero: numero, total: total),
+    ));
+    _load();
+  }
+
   Widget _trabajoCard(Map<String, dynamic> t, int numero, int total) {
     final status = t['status'] as String? ?? 'pendiente';
     final color = _trabajoColor(status);
@@ -466,6 +473,9 @@ class _OtfDetailScreenState extends State<OtfDetailScreen> {
         if (t['motivoNoRealizado'] != null)
           Padding(padding: const EdgeInsets.only(top: 4), child: Text('No realizado: ${t['motivoNoRealizado']}',
               style: const TextStyle(color: AppColors.danger, fontSize: 13, fontWeight: FontWeight.w700))),
+        if ((t['explicacionNoRealizado'] ?? '').toString().isNotEmpty)
+          Padding(padding: const EdgeInsets.only(top: 2), child: Text('«${t['explicacionNoRealizado']}»',
+              style: const TextStyle(color: Color(0xFFFFB4B0), fontSize: 13, fontStyle: FontStyle.italic))),
         const SizedBox(height: 10),
         // Pendiente → pantalla previa con las fotos; en curso → tiempo y cierre.
         if (status == 'pendiente')
@@ -483,12 +493,19 @@ class _OtfDetailScreenState extends State<OtfDetailScreen> {
             style: FilledButton.styleFrom(backgroundColor: AppColors.success),
           ))
         else
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton(
+          Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+            // No realizado: cambiar la explicación o añadir fotos antes de firmar.
+            if (status == 'no_realizado')
+              TextButton.icon(
+                onPressed: () => _corregirNoRealizado(t, numero, total),
+                icon: const Icon(Icons.edit_outlined, size: 18),
+                label: const Text('Corregir'),
+              ),
+            TextButton(
               onPressed: () => _setStatus(t, 'pendiente'),
               child: const Text('Reabrir', style: TextStyle(color: AppColors.textHint)),
             ),
+          ]
           ),
       ]),
     );
