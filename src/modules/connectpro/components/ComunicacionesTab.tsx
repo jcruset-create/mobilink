@@ -7,10 +7,13 @@ import { fmtDateTime } from "../types";
 
 type Comm = {
   id: number; channel: string; direction: string; toRef: string | null;
-  body: string; byName: string | null; createdAtMs: number;
+  body: string; byName: string | null; createdAtMs: number; readAtMs: number | null;
 };
 
-const CHANNEL_LABELS: Record<string, string> = { note: "📝 Nota", call: "📞 Llamada", whatsapp: "💬 WhatsApp", email: "✉️ Email" };
+const CHANNEL_LABELS: Record<string, string> = {
+  note: "📝 Nota", call: "📞 Llamada", whatsapp: "💬 WhatsApp", email: "✉️ Email",
+  workshop: "🔧 Al taller",
+};
 
 export default function ComunicacionesTab({ assistanceId, canOperate }: { assistanceId: number; canOperate: boolean }) {
   const [rows, setRows] = useState<Comm[]>([]);
@@ -31,7 +34,14 @@ export default function ComunicacionesTab({ assistanceId, canOperate }: { assist
     try {
       await boFetch(`/assistances/${assistanceId}/communications`, {
         method: "POST",
-        body: { channel, direction: channel === "note" ? "internal" : "outbound", toRef: toRef || null, body },
+        body: {
+          channel,
+          // 'workshop' sale del taller hacia fuera igual que una llamada: es
+          // Central quien escribe. 'note' se queda dentro.
+          direction: channel === "note" ? "internal" : "outbound",
+          toRef: toRef || null,
+          body,
+        },
       });
       setBody(""); setToRef("");
       load();
@@ -44,17 +54,24 @@ export default function ComunicacionesTab({ assistanceId, canOperate }: { assist
       {canOperate && (
         <div className="flex flex-wrap gap-2">
           <Select value={channel} onChange={(e) => setChannel(e.target.value)}>
+            <option value="workshop">Mensaje al taller</option>
             <option value="note">Nota interna</option>
             <option value="call">Llamada</option>
             <option value="whatsapp">WhatsApp</option>
             <option value="email">Email</option>
           </Select>
-          {channel !== "note" && (
+          {channel !== "note" && channel !== "workshop" && (
             <Input placeholder="Destinatario (tel./email)" value={toRef} onChange={(e) => setToRef(e.target.value)} className="w-48" />
           )}
-          <Input placeholder="Escribe la nota o el resumen de la comunicación…" value={body} onChange={(e) => setBody(e.target.value)}
+          <Input
+            placeholder={channel === "workshop"
+              ? "Escribe al operario; le llegará un aviso al móvil…"
+              : "Escribe la nota o el resumen de la comunicación…"}
+            value={body} onChange={(e) => setBody(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && enviar()} className="min-w-64 flex-1" />
-          <Button onClick={enviar} disabled={busy || !body.trim()}>Registrar</Button>
+          <Button onClick={enviar} disabled={busy || !body.trim()}>
+            {channel === "workshop" ? "Enviar" : "Registrar"}
+          </Button>
         </div>
       )}
       {rows.length === 0 ? (
@@ -68,6 +85,13 @@ export default function ComunicacionesTab({ assistanceId, canOperate }: { assist
                 {c.toRef && <span>→ {c.toRef}</span>}
                 <span>· {c.byName ?? "sistema"}</span>
                 <span>· {fmtDateTime(c.createdAtMs)}</span>
+                {/* Solo en lo que va al taller: distingue "no ha contestado"
+                    de "no se ha enterado", que se arregla llamando. */}
+                {c.channel === "workshop" && (
+                  <span className={c.readAtMs ? "text-emerald-400" : "text-amber-400"}>
+                    · {c.readAtMs ? `✓✓ leído ${fmtDateTime(c.readAtMs)}` : "✓ enviado, sin leer"}
+                  </span>
+                )}
               </div>
               <p className="whitespace-pre-wrap text-[13px] text-slate-200">{c.body}</p>
             </Card>

@@ -98,9 +98,33 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
         builder: (_) => AssistanceScreen(
           session: widget.session,
           assistanceId: e.assistanceId!,
+          abrirMensajes: e.type == 'assistance_message',
         ),
       ));
       _load();
+      return;
+    }
+    // Con la app abierta no se navega, pero un mensaje de la central no puede
+    // pasar desapercibido: se avisa y se deja el atajo a un toque.
+    if (e.type == 'assistance_message' && e.assistanceId != null) {
+      final id = e.assistanceId!;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text('La central te ha escrito'),
+        duration: const Duration(seconds: 8),
+        action: SnackBarAction(
+          label: 'ABRIR',
+          onPressed: () async {
+            await Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => AssistanceScreen(
+                session: widget.session,
+                assistanceId: id,
+                abrirMensajes: true,
+              ),
+            ));
+            _load();
+          },
+        ),
+      ));
     }
   }
 
@@ -337,6 +361,7 @@ class _AssistanceCard extends StatelessWidget {
     final st = statusStyle(row['status']?.toString() ?? '');
     final vehicle = (row['vehicle'] as Map?)?.cast<String, dynamic>() ?? const {};
     final urgent = row['priority'] == 'urgente';
+    final sinLeer = (row['unreadMessages'] as num?)?.toInt() ?? 0;
     final sla = row['slaDeadlineAtMs'] as num?;
     final restMin = sla != null
         ? ((sla.toInt() - DateTime.now().millisecondsSinceEpoch) / 60000).round()
@@ -360,6 +385,25 @@ class _AssistanceCard extends StatelessWidget {
                     style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
                   ),
                 ),
+                if (sinLeer > 0) ...[
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: AppColors.danger.withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(children: [
+                      const Icon(Icons.forum, size: 13, color: AppColors.danger),
+                      const SizedBox(width: 4),
+                      Text('$sinLeer',
+                          style: const TextStyle(
+                              color: AppColors.danger,
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold)),
+                    ]),
+                  ),
+                  const SizedBox(width: 6),
+                ],
                 if (urgent)
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),

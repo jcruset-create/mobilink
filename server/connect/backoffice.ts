@@ -4591,7 +4591,10 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
       [
         Number(req.params.id),
-        ["note","call","whatsapp","email"].includes(channel) ? channel : "note",
+        // 'workshop' es el mensaje PARA el taller Lite: es el único que le
+        // llega a su app y el único que dispara el aviso. Lo demás (notas
+        // internas, llamadas, WhatsApp al cliente) se queda en Central.
+        ["note","call","whatsapp","email","workshop"].includes(channel) ? channel : "note",
         ["internal","outbound","inbound"].includes(direction) ? direction : "internal",
         toRef ?? null, body.trim(), u.id, u.name, Date.now(),
       ],
@@ -4602,6 +4605,10 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
     // pero la respuesta se quedaba esperando a que alguien abriera la app.
     // El aviso no lleva el texto: solo el identificador, y el operario lo lee
     // ya autenticado (misma regla de privacidad que el resto de push).
+    //
+    // Solo con channel='workshop'. Antes avisaba con CUALQUIER comunicacion,
+    // asi que una nota interna o el registro de una llamada al cliente le
+    // sonaba al taller como "Mensaje de la central".
     try {
       const a = await db.query(
         `SELECT ca.id, ca."expedientNumber", ca."liteUserId", w."integrationType"
@@ -4611,7 +4618,8 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
         [Number(req.params.id)],
       );
       const fila = a.rows[0];
-      if (fila?.integrationType === "lite" && fila.liteUserId) {
+      const paraElTaller = r.rows[0]?.channel === "workshop";
+      if (paraElTaller && fila?.integrationType === "lite" && fila.liteUserId) {
         await notifyLiteUser(Number(fila.liteUserId), {
           title: "Mensaje de la central",
           body: `${fila.expedientNumber ?? `#${fila.id}`} · Abre la app para leerlo`,

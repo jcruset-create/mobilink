@@ -300,7 +300,10 @@ async function requireLite(req: Request, res: Response, next: NextFunction) {
 async function loadAssistance(session: LiteSession, id: number, opts: { ownOnly?: boolean } = {}) {
   const r = await db.query(
     `SELECT ca.*, w.name AS "workshopName", w.latitude AS "workshopLat", w.longitude AS "workshopLng",
-            w."liteSettings", w.features, cl.name AS "clientDisplayName"
+            w."liteSettings", w.features, cl.name AS "clientDisplayName",
+            (SELECT COUNT(*) FROM connect_communications cc
+              WHERE cc."assistanceId" = ca.id
+                AND cc.channel = 'workshop' AND cc."readAtMs" IS NULL) AS "unreadMessages"
        FROM connect_assistances ca
        JOIN connect_workshops w ON w.id = ca."workshopId"
        LEFT JOIN connect_clients cl ON cl.id = ca."clientId"
@@ -340,6 +343,9 @@ function publicAssistance(a: any, opts: { detail?: boolean } = {}) {
     updatedAtMs: Number(a.updatedAtMs),
     liteUserId: a.liteUserId,
     liteUserName: a.liteUserName,
+    // Mensajes de Central que el operario aún no ha abierto. Va en la lista y
+    // en la ficha para poder pintar la insignia sin pedir el hilo entero.
+    unreadMessages: Number(a.unreadMessages ?? 0),
     vehicle: {
       type: vehicle.type ?? null, make: vehicle.make ?? null, model: vehicle.model ?? null,
       plate: vehicle.plate ?? null, trailer: !!vehicle.trailer, dangerousGoods: !!vehicle.dangerousGoods,
@@ -639,7 +645,10 @@ export function createConnectLiteRouter(): Router {
     const onlyMine = s.role === "operator";
 
     const r = await db.query(
-      `SELECT ca.*, cl.name AS "clientDisplayName"
+      `SELECT ca.*, cl.name AS "clientDisplayName",
+              (SELECT COUNT(*) FROM connect_communications cc
+                WHERE cc."assistanceId" = ca.id
+                  AND cc.channel = 'workshop' AND cc."readAtMs" IS NULL) AS "unreadMessages"
          FROM connect_assistances ca
          LEFT JOIN connect_clients cl ON cl.id = ca."clientId"
         WHERE ca."workshopId" = $1
@@ -952,16 +961,51 @@ export function createConnectLiteRouter(): Router {
     res.status(201).json(payload);
   });
 
+  /*
+   * El hilo con la central, tal y como lo ve el taller.
+   *
+   * Filtra a propósito: `connect_communications` guarda TAMBIEN las notas
+   * internas de Central y el registro de llamadas o WhatsApp al cliente, y un
+   * taller colaborador no tiene por qué leer nada de eso. Solo salen los
+   * mensajes escritos PARA el taller (channel='workshop') y los que el propio
+   * taller ha escrito (direction='inbound').
+   *
+   * Orden ascendente, que es como se lee una conversación; el DESC de antes
+   * era para una lista de últimas comunicaciones, no para un chat.
+   */
   router.get("/assistances/:id/messages", async (req, res) => {
     const s = req.liteSession!;
     const a = await loadAssistance(s, Number(req.params.id));
     if (!a) return err(res, 404, "not_found", "Asistencia no encontrada");
     const r = await db.query(
-      `SELECT id, channel, direction, body, "byName", "createdAtMs"
-         FROM connect_communications WHERE "assistanceId" = $1 ORDER BY id DESC LIMIT 100`,
+      `SELECT id, channel, direction, body, "byName", "createdAtMs", "readAtMs"
+         FROM connect_communications
+        WHERE "assistanceId" = $1
+          AND (channel = 'workshop' OR direction = 'inbound')
+        ORDER BY id ASC LIMIT 200`,
       [a.id],
     );
     res.json({ data: r.rows });
+  });
+
+  /*
+   * Acuse de lectura: el operario ha abierto el hilo.
+   *
+   * Marca lo que venía de Central y aún no estaba leído. Central lo enseña en
+   * su pestaña, que es lo que permite distinguir "no ha contestado" de "no se
+   * ha enterado": lo segundo se arregla llamando por teléfono.
+   */
+  router.post("/assistances/:id/messages/read", async (req, res) => {
+    const s = req.liteSession!;
+    const a = await loadAssistance(s, Number(req.params.id));
+    if (!a) return err(res, 404, "not_found", "Asistencia no encontrada");
+    const r = await db.query(
+      `UPDATE connect_communications SET "readAtMs" = $2
+        WHERE "assistanceId" = $1 AND channel = 'workshop' AND "readAtMs" IS NULL
+        RETURNING id`,
+      [a.id, Date.now()],
+    );
+    res.json({ data: { marked: r.rowCount ?? 0 } });
   });
 
   router.post("/assistances/:id/messages", limitar("messages"), async (req, res) => {

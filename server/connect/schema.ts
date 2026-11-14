@@ -429,6 +429,19 @@ async function crearEsquemaConnect(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_connect_communications_assistance
       ON connect_communications ("assistanceId", id DESC);
 
+    -- Mensajería con el taller Lite.
+    --
+    -- El canal 'workshop' es lo que Central escribe PARA EL TALLER, y es
+    -- distinto de una nota interna: esta tabla mezcla las dos cosas y un
+    -- taller colaborador no puede leer lo que la central anota para sí misma.
+    -- La app de Lite solo enseña channel='workshop' y lo que ha escrito el
+    -- propio taller (direction='inbound').
+    --
+    -- "readAtMs" es el acuse: cuándo abrió el operario el hilo. Central lo ve,
+    -- igual que en Assist Pro, para saber si el mensaje ha llegado a alguien o
+    -- sigue sin abrir en un móvil dentro de un furgón.
+    ALTER TABLE connect_communications ADD COLUMN IF NOT EXISTS "readAtMs" BIGINT;
+
     -- Sprint 6: histórico del score del taller/proveedor
     CREATE TABLE IF NOT EXISTS connect_workshop_scores (
       id SERIAL PRIMARY KEY,
