@@ -11,6 +11,7 @@ import '../services/mensajes_oficina.dart';
 import '../services/navegar.dart';
 import '../widgets/conversacion_oficina.dart';
 import 'otf_trabajo_screens.dart';
+import '../services/orden_trabajos.dart';
 
 const _tipos = ['Tractora', 'Remolque', 'Camión rígido', 'Furgoneta', 'Turismo', 'Maquinaria', 'Otros'];
 
@@ -227,7 +228,7 @@ class _OtfDetailScreenState extends State<OtfDetailScreen> {
           await widget.api.uploadOtfTrabajoFile(tid, File(x.path), 'matricula');
         }
       }
-      await widget.api.updateOtfTrabajoStatus(tid, status);
+      await widget.api.updateOtfTrabajoStatus(tid, status, otfId: widget.otfId);
       _load();
     } catch (e) {
       if (mounted) {
@@ -240,7 +241,9 @@ class _OtfDetailScreenState extends State<OtfDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final o = _otf;
-    final trabajos = (o?['trabajos'] as List<dynamic>?)?.cast<Map<String, dynamic>>() ?? [];
+    // En el orden de recorrer la base: a medias, pendientes por plaza, hechos.
+    final trabajos = ordenarTrabajosEnBase(
+        (o?['trabajos'] as List<dynamic>?)?.cast<Map<String, dynamic>>() ?? []);
     final prog = o?['progreso'] as Map<String, dynamic>? ?? {};
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -685,6 +688,8 @@ class _OtfFirmaScreenState extends State<OtfFirmaScreen> {
   final _dni = TextEditingController();
   bool _saving = false;
   Map<String, dynamic>? _otf;
+  // Si la OTF tiene correo para el informe, se envía al cerrar (se puede quitar).
+  bool _enviarInforme = true;
 
   @override
   void initState() {
@@ -715,7 +720,8 @@ class _OtfFirmaScreenState extends State<OtfFirmaScreen> {
     if (ok != true) return;
     setState(() => _saving = true);
     try {
-      await widget.api.finalizarOtf(widget.otfId, null, null, null, sinResponsable: true);
+      await widget.api.finalizarOtf(widget.otfId, null, null, null,
+          sinResponsable: true, enviarInforme: _hayCorreo && _enviarInforme);
       if (!mounted) return;
       Navigator.of(context).pop(true);
     } catch (e) {
@@ -726,6 +732,8 @@ class _OtfFirmaScreenState extends State<OtfFirmaScreen> {
       if (mounted) setState(() => _saving = false);
     }
   }
+
+  bool get _hayCorreo => (_otf?['emailInforme'] ?? '').toString().trim().isNotEmpty;
 
   Widget _resumen() {
     final o = _otf;
@@ -797,7 +805,8 @@ class _OtfFirmaScreenState extends State<OtfFirmaScreen> {
       await f.writeAsBytes(bytes);
       await widget.api.finalizarOtf(widget.otfId, f,
           _nombre.text.trim().isEmpty ? null : _nombre.text.trim(),
-          _dni.text.trim().isEmpty ? null : _dni.text.trim());
+          _dni.text.trim().isEmpty ? null : _dni.text.trim(),
+          enviarInforme: _hayCorreo && _enviarInforme);
       if (!mounted) return;
       Navigator.of(context).pop(true);
     } catch (e) {
@@ -841,6 +850,16 @@ class _OtfFirmaScreenState extends State<OtfFirmaScreen> {
                   icon: const Icon(Icons.refresh, size: 16, color: AppColors.textHint),
                   label: const Text('Borrar', style: TextStyle(color: AppColors.textHint)),
                 )),
+                if (_hayCorreo)
+                  CheckboxListTile(
+                    value: _enviarInforme,
+                    onChanged: (v) => setState(() => _enviarInforme = v ?? false),
+                    title: Text('Enviar el informe por correo a ${_otf!['emailInforme']}',
+                        style: const TextStyle(color: AppColors.textPrimary, fontSize: 15)),
+                    controlAffinity: ListTileControlAffinity.leading,
+                    contentPadding: EdgeInsets.zero,
+                    activeColor: AppColors.primary,
+                  ),
                 const SizedBox(height: 8),
                 SizedBox(width: double.infinity, child: ElevatedButton.icon(
                   onPressed: _save, icon: const Icon(Icons.check),

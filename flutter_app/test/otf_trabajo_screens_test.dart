@@ -57,4 +57,33 @@ void main() {
     expect(motivosNoRealizado.last, 'Otro');
     expect(motivosNoRealizado, contains('El vehículo no está en la base'));
   });
+
+  testWidgets('en curso: la lista de comprobación de la plantilla y el material ya montado', (tester) async {
+    await pantallaAlta(tester);
+    await tester.pumpWidget(MaterialApp(
+      home: OtfTrabajoEnCursoScreen(
+        api: api,
+        trabajo: {
+          ..._trabajo(),
+          'status': 'en_proceso',
+          'iniciadoAtMs': DateTime.now().millisecondsSinceEpoch,
+          'checklistPlantilla': ['Presiones', 'Par de apriete'],
+          'material': [
+            {'id': 3, 'texto': '2 × 385/65R22.5 Continental (nuevo)'},
+          ],
+        },
+        numero: 1,
+        total: 3,
+      ),
+    ));
+    expect(find.text('Comprobar al terminar'), findsOneWidget);
+    expect(find.text('Presiones'), findsOneWidget);
+    expect(find.text('Par de apriete'), findsOneWidget);
+    expect(find.text('2 × 385/65R22.5 Continental (nuevo)'), findsOneWidget);
+    await tester.tap(find.byType(Checkbox).first);
+    await tester.pump();
+    expect(tester.widget<Checkbox>(find.byType(Checkbox).first).value, isTrue);
+    // El reloj de la pantalla: se para antes de acabar la prueba.
+    await tester.pumpWidget(const SizedBox());
+  });
 }

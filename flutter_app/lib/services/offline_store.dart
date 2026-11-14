@@ -162,6 +162,76 @@ class OfflineStore {
   static List<Map<String, dynamic>> perdidasDe(int assistanceId) =>
       perdidas().where((p) => p['assistanceId'] == assistanceId).toList();
 
+  // ── OTF sin cobertura ──
+  //
+  // Muchas bases son polígonos sin señal. La lista y el detalle de cada OTF se
+  // guardan al cargarlos; los cambios de estado, fotos y material se encolan
+  // (`enqueueOtf`) y se envían solos al recuperar cobertura. El cambio de
+  // estado se aplica ya en la copia local, para que la pantalla lo enseñe.
+  static Future<void> cacheOtfList(List<Map<String, dynamic>> list) async {
+    await _cache.put('otf_list', jsonEncode(list));
+  }
+
+  static List<Map<String, dynamic>> cachedOtfList() => _leerLista('otf_list');
+
+  static Future<void> cacheOtf(Map<String, dynamic> otf) async {
+    final id = otf['id'];
+    if (id is int) await _cache.put('otf_$id', jsonEncode(otf));
+  }
+
+  static Map<String, dynamic>? cachedOtf(int id) {
+    final raw = _cache.get('otf_$id');
+    if (raw is! String || raw.isEmpty) return null;
+    try {
+      return Map<String, dynamic>.from(jsonDecode(raw) as Map);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static List<Map<String, dynamic>> _leerLista(String clave) {
+    final raw = _cache.get(clave);
+    if (raw is String && raw.isNotEmpty) {
+      try {
+        return (jsonDecode(raw) as List<dynamic>).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      } catch (_) {}
+    }
+    return [];
+  }
+
+  /// Un cambio de OTF para enviar al recuperar cobertura. `tipo`:
+  /// 'otf_status' | 'otf_upload' | 'otf_material'.
+  static Future<void> enqueueOtf(String tipo, Map<String, dynamic> datos) async {
+    await _outbox.add({
+      'actionId': '${DateTime.now().millisecondsSinceEpoch}-$tipo-${datos['trabajoId']}',
+      'type': tipo,
+      ...datos,
+      'ts': DateTime.now().millisecondsSinceEpoch,
+    });
+    pendingCount.value = _outbox.length;
+  }
+
+  /// El cambio de estado de un trabajo, ya en la copia local de su OTF.
+  static Future<void> applyLocalOtfTrabajo(int otfId, int trabajoId, String status, {String? motivo}) async {
+    final otf = cachedOtf(otfId);
+    if (otf == null) return;
+    final ahora = DateTime.now().millisecondsSinceEpoch;
+    final trabajos = (otf['trabajos'] as List<dynamic>? ?? []).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    for (final t in trabajos) {
+      if (t['id'] != trabajoId) continue;
+      t['status'] = status;
+      if (status == 'en_proceso') t['iniciadoAtMs'] ??= ahora;
+      if (status == 'finalizado' || status == 'no_realizado') t['finalizadoAtMs'] = ahora;
+      if (status == 'pendiente') {
+        t['iniciadoAtMs'] = null;
+        t['finalizadoAtMs'] = null;
+      }
+      t['motivoNoRealizado'] = status == 'no_realizado' ? motivo : null;
+    }
+    otf['trabajos'] = trabajos;
+    await cacheOtf(otf);
+  }
+
   // ── Cola de subida de fotos/firma ──
   static Future<void> enqueueUpload({
     required int assistanceId,

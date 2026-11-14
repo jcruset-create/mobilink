@@ -60,6 +60,11 @@ class _OtfInicioTrabajoScreenState extends State<OtfInicioTrabajoScreen> {
     try {
       final r = await widget.api.uploadOtfTrabajoFile(_tid, File(x.path), 'matricula');
       _matriculaSubida = true;
+      if (r['offline'] == true && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Sin cobertura: la foto se enviará al recuperar señal (la matrícula se comprobará entonces).'),
+        ));
+      }
       final m = r['matricula'];
       if (m is Map && m['coincide'] == false && mounted) {
         final esEste = await showDialog<bool>(
@@ -128,7 +133,7 @@ class _OtfInicioTrabajoScreenState extends State<OtfInicioTrabajoScreen> {
   Future<void> _empezar() async {
     setState(() => _ocupado = true);
     try {
-      await widget.api.updateOtfTrabajoStatus(_tid, 'en_proceso');
+      await widget.api.updateOtfTrabajoStatus(_tid, 'en_proceso', otfId: widget.trabajo['otfId'] as int?);
       if (!mounted) return;
       Navigator.of(context).pop(true);
     } catch (e) {
@@ -266,6 +271,48 @@ class OtfTrabajoEnCursoScreen extends StatefulWidget {
 }
 
 class _OtfTrabajoEnCursoScreenState extends State<OtfTrabajoEnCursoScreen> {
+  // Lista de comprobación de la plantilla del trabajo.
+  late final List<String> _puntos =
+      ((widget.trabajo['checklistPlantilla'] as List<dynamic>?) ?? []).map((e) => e.toString()).toList();
+  final Set<String> _hechos = {};
+  late final Map<String, TextEditingController> _valores = {for (final p in _puntos) p: TextEditingController()};
+  // Material montado: lo que ya tenía y lo añadido ahora.
+  late final List<Map<String, dynamic>> _material =
+      ((widget.trabajo['material'] as List<dynamic>?) ?? []).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+
+  Future<void> _anadirMaterial() async {
+    final m = await showModalBottomSheet<Map<String, dynamic>>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      isScrollControlled: true,
+      builder: (_) => const _NuevoMaterial(),
+    );
+    if (m == null || !mounted) return;
+    setState(() => _ocupado = true);
+    try {
+      final r = await widget.api.addOtfMaterial(_tid, m);
+      if (mounted) setState(() => _material.add(r));
+    } catch (e) {
+      _error(e);
+    } finally {
+      if (mounted) setState(() => _ocupado = false);
+    }
+  }
+
+  Future<void> _quitarMaterial(Map<String, dynamic> m) async {
+    final id = m['id'];
+    if (id is! int) {
+      setState(() => _material.remove(m));
+      return;
+    }
+    try {
+      await widget.api.deleteOtfMaterial(id);
+      if (mounted) setState(() => _material.remove(m));
+    } catch (e) {
+      _error(e);
+    }
+  }
+
   late final DateTime _inicio = widget.trabajo['iniciadoAtMs'] is int
       ? DateTime.fromMillisecondsSinceEpoch(widget.trabajo['iniciadoAtMs'] as int)
       : DateTime.now();
@@ -286,6 +333,9 @@ class _OtfTrabajoEnCursoScreenState extends State<OtfTrabajoEnCursoScreen> {
   @override
   void dispose() {
     _reloj?.cancel();
+    for (final c in _valores.values) {
+      c.dispose();
+    }
     super.dispose();
   }
 
@@ -314,7 +364,19 @@ class _OtfTrabajoEnCursoScreenState extends State<OtfTrabajoEnCursoScreen> {
   Future<void> _cerrar(String status, {String? motivo}) async {
     setState(() => _ocupado = true);
     try {
-      await widget.api.updateOtfTrabajoStatus(_tid, status, motivo: motivo);
+      await widget.api.updateOtfTrabajoStatus(
+        _tid,
+        status,
+        motivo: motivo,
+        otfId: widget.trabajo['otfId'] as int?,
+        // Al finalizar, lo marcado de la lista de comprobación de su plantilla.
+        checklist: status == 'finalizado' && _puntos.isNotEmpty
+            ? [
+                for (final p in _puntos)
+                  {'texto': p, 'hecho': _hechos.contains(p), 'valor': _valores[p]?.text.trim()},
+              ]
+            : null,
+      );
       if (mounted) Navigator.of(context).pop(true);
     } catch (e) {
       _error(e);
@@ -400,6 +462,63 @@ class _OtfTrabajoEnCursoScreenState extends State<OtfTrabajoEnCursoScreen> {
               onCamara: () => _foto(galeria: false),
               onGaleria: () => _foto(galeria: true),
             ),
+            if (_puntos.isNotEmpty) ...[
+              const SizedBox(height: 20),
+              const Text('Comprobar al terminar',
+                  style: TextStyle(color: AppColors.textPrimary, fontSize: 16, fontWeight: FontWeight.w900)),
+              const SizedBox(height: 6),
+              for (final p in _puntos)
+                Row(children: [
+                  Checkbox(
+                    value: _hechos.contains(p),
+                    onChanged: (v) => setState(() => v == true ? _hechos.add(p) : _hechos.remove(p)),
+                    activeColor: AppColors.success,
+                  ),
+                  Expanded(child: Text(p, style: const TextStyle(color: AppColors.textPrimary, fontSize: 15))),
+                  SizedBox(
+                    width: 110,
+                    child: TextField(
+                      controller: _valores[p],
+                      style: const TextStyle(color: AppColors.textPrimary, fontSize: 14),
+                      decoration: const InputDecoration(hintText: 'valor', isDense: true),
+                    ),
+                  ),
+                ]),
+            ],
+            const SizedBox(height: 20),
+            Row(children: [
+              const Expanded(
+                child: Text('Material usado',
+                    style: TextStyle(color: AppColors.textPrimary, fontSize: 16, fontWeight: FontWeight.w900)),
+              ),
+              TextButton.icon(
+                onPressed: _ocupado ? null : _anadirMaterial,
+                icon: const Icon(Icons.add),
+                label: const Text('Añadir'),
+              ),
+            ]),
+            if (_material.isEmpty)
+              const Text('Neumáticos o piezas montadas: salen en el informe y en el presupuesto.',
+                  style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+            for (final m in _material)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.tire_repair, color: AppColors.textSecondary),
+                title: Text(
+                  m['texto']?.toString() ??
+                      '${m['cantidad']} × ${m['descripcion'] ?? m['medida']}${m['marca'] != null ? ' ${m['marca']}' : ''}',
+                  style: const TextStyle(color: AppColors.textPrimary),
+                ),
+                subtitle: m['offline'] == true
+                    ? const Text('Sin cobertura: se enviará al recuperar señal',
+                        style: TextStyle(color: AppColors.warning, fontSize: 12))
+                    : null,
+                trailing: IconButton(
+                  onPressed: () => _quitarMaterial(m),
+                  icon: const Icon(Icons.close, color: AppColors.danger),
+                  tooltip: 'Quitar',
+                ),
+              ),
             const SizedBox(height: 28),
             SizedBox(
               height: 64,
@@ -512,8 +631,11 @@ class _CabeceraTrabajo extends StatelessWidget {
           Row(children: [
             if (plate.isNotEmpty) PlateBadge(plate: plate),
             const SizedBox(width: 8),
-            Text(trabajo['tipoVehiculo']?.toString() ?? '',
-                style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+            Flexible(
+              child: Text(trabajo['tipoVehiculo']?.toString() ?? '',
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+            ),
           ]),
           const SizedBox(height: 6),
           Text(trabajo['trabajo']?.toString() ?? '',
@@ -602,4 +724,115 @@ class _BotonFoto extends StatelessWidget {
           ),
         ),
       );
+}
+
+
+/// Añadir un neumático o material montado.
+class _NuevoMaterial extends StatefulWidget {
+  const _NuevoMaterial();
+  @override
+  State<_NuevoMaterial> createState() => _NuevoMaterialState();
+}
+
+class _NuevoMaterialState extends State<_NuevoMaterial> {
+  bool _neumatico = true;
+  bool _usado = false;
+  int _cantidad = 1;
+  final _descripcion = TextEditingController();
+  final _marca = TextEditingController();
+
+  @override
+  void dispose() {
+    _descripcion.dispose();
+    _marca.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final valido = _descripcion.text.trim().isNotEmpty;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + MediaQuery.of(context).viewInsets.bottom),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text('Material usado',
+              style: TextStyle(color: AppColors.textPrimary, fontSize: 20, fontWeight: FontWeight.w900)),
+          const SizedBox(height: 12),
+          SegmentedButton<bool>(
+            segments: const [
+              ButtonSegment(value: true, label: Text('Neumático')),
+              ButtonSegment(value: false, label: Text('Otro material')),
+            ],
+            selected: {_neumatico},
+            onSelectionChanged: (v) => setState(() => _neumatico = v.first),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _descripcion,
+            autofocus: true,
+            textCapitalization: TextCapitalization.characters,
+            onChanged: (_) => setState(() {}),
+            style: const TextStyle(color: AppColors.textPrimary),
+            decoration: InputDecoration(
+              labelText: _neumatico ? 'Medida' : 'Qué material',
+              hintText: _neumatico ? '385/65R22.5' : 'Válvula, tuerca…',
+              filled: true,
+            ),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _marca,
+            style: const TextStyle(color: AppColors.textPrimary),
+            decoration: const InputDecoration(labelText: 'Marca (opcional)', filled: true),
+          ),
+          const SizedBox(height: 12),
+          Row(children: [
+            if (_neumatico)
+              Expanded(
+                child: SegmentedButton<bool>(
+                  segments: const [
+                    ButtonSegment(value: false, label: Text('Nuevo')),
+                    ButtonSegment(value: true, label: Text('Usado')),
+                  ],
+                  selected: {_usado},
+                  onSelectionChanged: (v) => setState(() => _usado = v.first),
+                ),
+              )
+            else
+              const Spacer(),
+            const SizedBox(width: 12),
+            IconButton(
+              onPressed: _cantidad > 1 ? () => setState(() => _cantidad--) : null,
+              icon: const Icon(Icons.remove_circle_outline, color: AppColors.textSecondary),
+              tooltip: 'Menos',
+            ),
+            Text('$_cantidad', style: const TextStyle(color: AppColors.textPrimary, fontSize: 20, fontWeight: FontWeight.w900)),
+            IconButton(
+              onPressed: _cantidad < 50 ? () => setState(() => _cantidad++) : null,
+              icon: const Icon(Icons.add_circle_outline, color: AppColors.textSecondary),
+              tooltip: 'Más',
+            ),
+          ]),
+          const SizedBox(height: 14),
+          SizedBox(
+            height: 52,
+            child: FilledButton(
+              onPressed: !valido
+                  ? null
+                  : () => Navigator.pop(context, {
+                        'tipo': _neumatico ? 'neumatico' : 'otro',
+                        'descripcion': _descripcion.text.trim(),
+                        if (_marca.text.trim().isNotEmpty) 'marca': _marca.text.trim(),
+                        if (_neumatico) 'estado': _usado ? 'usado' : 'nuevo',
+                        'cantidad': _cantidad,
+                      }),
+              child: const Text('Añadir', style: TextStyle(fontWeight: FontWeight.w900)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
