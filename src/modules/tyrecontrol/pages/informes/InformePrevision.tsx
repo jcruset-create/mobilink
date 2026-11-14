@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useInformesFiltros } from "./InformesLayout";
 import { previsionPorMedida } from "../../services/informes";
-import { nombreDeTramo, pivotar, type FilaPrevision } from "../../services/previsionMedida";
+import {
+  medidasDelCuadro, nombreDeTramo, pivotar, NOMBRE_FILTRO_PREVISION,
+  type FilaPrevision, type FiltroPrevision,
+} from "../../services/previsionMedida";
 import type { PrevisionMedida } from "../../types/informes";
-import { KpiCard } from "../../components/informes/KpiCard";
+import { FiltroActivo, KpiCard } from "../../components/informes/KpiCard";
 import { TableWrap, tdCls, thCls } from "../../components/ui";
 import { descargarCSV } from "../../utils/exportar";
 
@@ -15,6 +18,7 @@ export default function InformePrevision() {
   const { filtros } = useInformesFiltros();
   const [filas, setFilas] = useState<PrevisionMedida[]>([]);
   const [vista, setVista] = useState<Vista>("tramo");
+  const [filtro, setFiltro] = useState<FiltroPrevision>("todo");
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
 
@@ -29,6 +33,10 @@ export default function InformePrevision() {
   }, [filtros]);
 
   const { tramos, filas: medidas, total } = useMemo(() => pivotar(filas), [filas]);
+  // Cada cuadro deja las medidas que tienen alguna goma en él, de la que más a
+  // la que menos: lo que se quiere saber al pulsarlo es de QUÉ medidas son.
+  const visibles = useMemo(() => medidasDelCuadro(medidas, filtro), [medidas, filtro]);
+  const alternar = (f: FiltroPrevision) => setFiltro((actual) => (actual === f ? "todo" : f));
   const valor = (f: FilaPrevision, d: number) =>
     (vista === "tramo" ? f.enElTramo[d] : f.acumulado[d]) ?? 0;
 
@@ -38,10 +46,14 @@ export default function InformePrevision() {
   return (
     <div>
       <div className="mb-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-        <KpiCard title="Ya vencidas" value={miles(total.vencidos)} tono={total.vencidos > 0 ? "danger" : "ok"} hint="Se les pasó la fecha prevista" />
-        <KpiCard title="En 30 días" value={miles(total.enElTramo[30] ?? 0)} tono="warn" />
-        <KpiCard title="Hasta 90 días" value={miles(total.acumulado[90] ?? 0)} hint="Vencidas incluidas" />
-        <KpiCard title="Fuera de la previsión" value={miles(total.sinDatos + total.sinFecha)} tono="info" hint={`${miles(total.sinDatos)} sin una sola medición · ${miles(total.sinFecha)} medidas pero sin fecha`} />
+        <KpiCard title="Ya vencidas" value={miles(total.vencidos)} tono={total.vencidos > 0 ? "danger" : "ok"} hint="Se les pasó la fecha prevista"
+                 activo={filtro === "vencidas"} onClick={() => alternar("vencidas")} />
+        <KpiCard title="En 30 días" value={miles(total.enElTramo[30] ?? 0)} tono="warn"
+                 activo={filtro === "en30"} onClick={() => alternar("en30")} />
+        <KpiCard title="Hasta 90 días" value={miles(total.acumulado[90] ?? 0)} hint="Vencidas incluidas"
+                 activo={filtro === "hasta90"} onClick={() => alternar("hasta90")} />
+        <KpiCard title="Fuera de la previsión" value={miles(total.sinDatos + total.sinFecha)} tono="info" hint={`${miles(total.sinDatos)} sin una sola medición · ${miles(total.sinFecha)} medidas pero sin fecha`}
+                 activo={filtro === "fuera"} onClick={() => alternar("fuera")} />
       </div>
 
       <details className="mb-3 rounded-lg border border-slate-700 bg-slate-800/60 p-3 text-[12px] text-slate-300">
@@ -80,7 +92,10 @@ export default function InformePrevision() {
 
       <div className="rounded-lg bg-slate-800 p-3">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <div className="text-[11px] font-bold uppercase text-slate-400">Sustituciones previstas por medida</div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="text-[11px] font-bold uppercase text-slate-400">Sustituciones previstas por medida ({visibles.length})</div>
+            {filtro !== "todo" && <FiltroActivo texto={NOMBRE_FILTRO_PREVISION[filtro]} onQuitar={() => setFiltro("todo")} />}
+          </div>
           <div className="flex flex-wrap items-center gap-1">
             <button
               onClick={() => setVista("tramo")}
@@ -94,9 +109,9 @@ export default function InformePrevision() {
             >Acumulado</button>
             <button
               onClick={() => descargarCSV(
-                "prevision-por-medida",
+                filtro === "todo" ? "prevision-por-medida" : `prevision-por-medida-${filtro}`,
                 ["Medida", "Montadas", "Vencidas", ...tramos.map((d) => `${vista === "tramo" ? "En" : "Hasta"} ${nombreDeTramo(d)}`), "Sin datos", "Sin fecha"],
-                [...medidas, total].map((f) => [f.medida, f.montados, f.vencidos, ...tramos.map((d) => valor(f, d)), f.sinDatos, f.sinFecha]),
+                [...visibles, total].map((f) => [f.medida, f.montados, f.vencidos, ...tramos.map((d) => valor(f, d)), f.sinDatos, f.sinFecha]),
               )}
               className="ml-1 rounded border border-slate-600 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-700"
             >Exportar CSV</button>
@@ -121,7 +136,12 @@ export default function InformePrevision() {
                 revisiones y kilometraje.
               </td></tr>
             ) : <>
-              {medidas.map((f) => (
+              {visibles.length === 0 && (
+                <tr><td className={tdCls + " text-slate-500"} colSpan={5 + tramos.length}>
+                  Ninguna medida en «{NOMBRE_FILTRO_PREVISION[filtro]}».
+                </td></tr>
+              )}
+              {visibles.map((f) => (
                 <tr key={f.medida} className="border-t border-slate-700/60">
                   <td className={tdCls + " font-semibold text-slate-200"}>{f.medida}</td>
                   <td className={tdCls + " text-right text-slate-400"}>{miles(f.montados)}</td>
@@ -136,7 +156,9 @@ export default function InformePrevision() {
                 </tr>
               ))}
               <tr className="border-t-2 border-slate-600 bg-slate-900/40 font-bold">
-                <td className={tdCls + " text-slate-200"}>Total</td>
+                {/* El total es siempre el de la flota: con un cuadro pulsado, la
+                    columna de ese cuadro cuadra con las filas; las demás no. */}
+                <td className={tdCls + " text-slate-200"}>{filtro === "todo" ? "Total" : "Total de la flota"}</td>
                 <td className={tdCls + " text-right text-slate-300"}>{miles(total.montados)}</td>
                 <td className={tdCls + " text-right text-rose-300"}>{miles(total.vencidos)}</td>
                 {tramos.map((d) => (

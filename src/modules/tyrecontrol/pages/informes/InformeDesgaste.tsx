@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { useInformesFiltros } from "./InformesLayout";
 import { desgaste } from "../../services/informes";
 import type { DesgasteNeumatico } from "../../types/informes";
-import { KpiCard } from "../../components/informes/KpiCard";
+import { FiltroActivo, KpiCard } from "../../components/informes/KpiCard";
 import { TableWrap, tdCls, thCls } from "../../components/ui";
 import { descargarCSV } from "../../utils/exportar";
 import {
@@ -110,14 +110,7 @@ export default function InformeDesgaste() {
       <div className="rounded-lg bg-slate-800 p-3">
         <div className="mb-2 flex flex-wrap items-center gap-2">
           <div className="text-[11px] font-bold uppercase text-slate-400">Predicción de sustitución ({visibles.length})</div>
-          {filtro !== "todo" && (
-            <button
-              type="button"
-              onClick={() => setFiltro("todo")}
-              className="rounded-full border border-sky-500/50 bg-sky-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-sky-200 hover:bg-sky-500/20"
-              title="Quitar el filtro y ver todas"
-            >{NOMBRE_FILTRO[filtro]} ✕</button>
-          )}
+          {filtro !== "todo" && <FiltroActivo texto={NOMBRE_FILTRO[filtro]} onQuitar={() => setFiltro("todo")} />}
           <span className="flex-1" />
           <button
             onClick={() => descargarCSV(filtro === "todo" ? "desgaste" : `desgaste-${filtro}`, ["Neumático", "Matrícula", "Marca", "Modelo", "Medida", "Última prof (mm)", "Última medición", "Desgaste (mm/1000km)", "Origen del ritmo", "Km restantes", "Fecha prevista", "Nº medidas"],

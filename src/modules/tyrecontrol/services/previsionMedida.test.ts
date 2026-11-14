@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nombreDeTramo, pivotar } from "./previsionMedida";
+import { gomasDelCuadro, medidasDelCuadro, nombreDeTramo, pivotar } from "./previsionMedida";
 import type { PrevisionMedida } from "../types/informes";
 
 function fila(p: Partial<PrevisionMedida>): PrevisionMedida {
@@ -111,5 +111,45 @@ describe("nombreDeTramo", () => {
     expect(nombreDeTramo(180)).toBe("6 meses");
     expect(nombreDeTramo(365)).toBe("1 año");
     expect(nombreDeTramo(730)).toBe("2 años");
+  });
+});
+
+describe("medidasDelCuadro", () => {
+  // Tres medidas: una con vencidas y de todo, otra solo a 90 días, otra sin datos.
+  const { filas, total } = pivotar([
+    fila({ medida: "295/80R22.5", vencidos: 5, sin_datos: 0, sin_fecha: 0, dias: 30, en_el_tramo: 7, acumulado: 12 }),
+    fila({ medida: "295/80R22.5", vencidos: 5, sin_datos: 0, sin_fecha: 0, dias: 90, en_el_tramo: 4, acumulado: 16 }),
+    fila({ medida: "315/80R22.5", vencidos: 0, sin_datos: 0, sin_fecha: 2, dias: 30, en_el_tramo: 0, acumulado: 0 }),
+    fila({ medida: "315/80R22.5", vencidos: 0, sin_datos: 0, sin_fecha: 2, dias: 90, en_el_tramo: 9, acumulado: 9 }),
+    fila({ medida: "385/55R22.5", vencidos: 0, sin_datos: 346, sin_fecha: 0, dias: 30, en_el_tramo: 0, acumulado: 0 }),
+    fila({ medida: "385/55R22.5", vencidos: 0, sin_datos: 346, sin_fecha: 0, dias: 90, en_el_tramo: 0, acumulado: 0 }),
+  ]);
+  const medidas = (f: Parameters<typeof medidasDelCuadro>[1]) => medidasDelCuadro(filas, f).map((x) => x.medida);
+
+  it("«todo» devuelve la lista tal cual", () => {
+    expect(medidasDelCuadro(filas, "todo")).toBe(filas);
+  });
+
+  it("cada cuadro deja las medidas que tienen alguna goma en él", () => {
+    expect(medidas("vencidas")).toEqual(["295/80R22.5"]);
+    expect(medidas("en30")).toEqual(["295/80R22.5"]);
+    expect(medidas("hasta90")).toEqual(["295/80R22.5", "315/80R22.5"]);
+  });
+
+  it("de la que más a la que menos", () => {
+    expect(medidas("fuera")).toEqual(["385/55R22.5", "315/80R22.5"]);
+  });
+
+  it("lo que suman las medidas que quedan es el número del cuadro", () => {
+    for (const f of ["vencidas", "en30", "hasta90", "fuera"] as const) {
+      const suma = medidasDelCuadro(filas, f).reduce((s, x) => s + gomasDelCuadro(x, f), 0);
+      expect(suma).toBe(gomasDelCuadro(total, f));
+    }
+  });
+
+  it("no desordena la lista que le pasan", () => {
+    const antes = filas.map((x) => x.medida);
+    medidasDelCuadro(filas, "fuera");
+    expect(filas.map((x) => x.medida)).toEqual(antes);
   });
 });
