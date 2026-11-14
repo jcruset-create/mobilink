@@ -55,9 +55,13 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # Versión EXACTA, nunca «stable» a secas: el 14/11/2026 «stable» pasó a
+      # 3.50, que exige Gradle 9.3.1, y esta APK dejó de compilar sin que
+      # nadie tocara nada. 3.35.4 es la de las otras apps y la de Codemagic.
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: "3.35.4"
 
       # Misma numeración que Assist y TyreControl: sube un tramo por build y
       # desborda al de al lado (0.1.0 → 0.1.1 → … → 0.1.9 → 0.2.0). El pubspec
