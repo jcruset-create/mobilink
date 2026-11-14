@@ -2456,7 +2456,7 @@ class TyreControlApi {
       final data = await _db
           .from('revisiones_neumaticos_detalle')
           .select('revision_id, neumatico_id, posicion_id, profundidad_mm, presion_bar, created_at, '
-              'revision:revisiones_vehiculo(fecha_revision)')
+              'revision:revisiones_vehiculo(fecha_revision, tecnico_id)')
           .eq('vehiculo_id', vehiculoId)
           .order('created_at', ascending: false)
           .limit(limite);
@@ -2496,12 +2496,15 @@ class TyreControlApi {
           profundidadMm: (e['profundidad_mm'] as num?)?.toDouble(),
           presionBar: (e['presion_bar'] as num?)?.toDouble(),
           momento: creada,
+          // Con técnico es una medición a mano; sin él, del arco.
+          manual: rev is Map && rev['tecnico_id'] != null,
         ));
       }
 
-      // La profundidad, solo de revisiones que midieron todas sus ruedas; la
-      // presión, de la última que la traiga.
-      final reparto = repartirUltimasMediciones(filas, limite: limite);
+      // La profundidad, solo de revisiones que midieron todas sus ruedas y
+      // pasada por el protocolo (mediana de tres, ver
+      // protocolo_profundidad.dart); la presión, de la última que la traiga.
+      final reparto = repartirUltimasMediciones(filas, limite: limite, protocolo: true);
       return {
         for (final e in reparto.entries)
           // La fecha es la que decide si esta medición sigue valiendo o si la
@@ -2511,6 +2514,9 @@ class TyreControlApi {
             posicionId: '', neumaticoId: e.key,
             profundidadMm: e.value.profundidadMm, presionBar: e.value.presionBar,
             medidoEn: e.value.medidoEn,
+            confirmada: e.value.confirmada,
+            pendienteMm: e.value.pendienteMm,
+            pendienteEn: e.value.pendienteEn,
           ),
       };
     } catch (_) {

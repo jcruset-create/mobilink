@@ -365,6 +365,13 @@ class RevisionDetalleDraft {
   /// histórico; en un borrador que se está midiendo ahora es null.
   DateTime? medidoEn;
 
+  /// Del protocolo contra los falsos desgastes, y solo en las lecturas del
+  /// histórico: si la profundidad está respaldada por otra lectura, y la
+  /// última lectura cuando NO es la que se ha dado por buena.
+  bool confirmada;
+  double? pendienteMm;
+  DateTime? pendienteEn;
+
   RevisionDetalleDraft({
     required this.posicionId,
     this.neumaticoId,
@@ -378,6 +385,9 @@ class RevisionDetalleDraft {
     this.neumaticoAusente = false,
     List<String>? fotoPaths,
     this.medidoEn,
+    this.confirmada = true,
+    this.pendienteMm,
+    this.pendienteEn,
   }) : fotoPaths = fotoPaths ?? [];
 
   bool get medido => noAccesible || neumaticoAusente || (profundidadMm != null || presionBar != null);
@@ -398,6 +408,9 @@ class RevisionDetalleDraft {
         neumaticoAusente: neumaticoAusente,
         fotoPaths: fotoPaths,
         medidoEn: medidoEn,
+        confirmada: confirmada,
+        pendienteMm: pendienteMm,
+        pendienteEn: pendienteEn,
       );
 
   Map<String, dynamic> toJson({required String revisionId, required String empresaId, required String vehiculoId}) => {

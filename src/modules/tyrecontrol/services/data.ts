@@ -597,7 +597,7 @@ export async function listarUltimasMedicionesVehiculo(vehiculoId: string): Promi
   const { data: revs, error: e1 } = await supabase.from("revisiones_vehiculo")
     // created_at viaja porque hace falta saber si la medición es anterior a la
     // profundidad del propio neumático (ver utils/profundidad.ts).
-    .select("id, created_at, fecha_revision").eq("vehiculo_id", vehiculoId).neq("estado_revision", "anulada")
+    .select("id, created_at, fecha_revision, tecnico_id").eq("vehiculo_id", vehiculoId).neq("estado_revision", "anulada")
     .order("fecha_revision", { ascending: false }).order("created_at", { ascending: false });
   if (e1) throw new Error(e1.message);
   const ids = (revs ?? []).map((r) => r.id);

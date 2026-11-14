@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   agruparPorVehiculo, estadoDeRueda, edadEnTexto, fechaCorta, filtrarVehiculos,
-  mm, ordenarVehiculos, resumenDeTarjeta, type VehiculoConAlertas,
+  mm, ordenarVehiculos, resumenDeTarjeta, ruedasParaMedirConSonda, type VehiculoConAlertas,
 } from "./alertasPorVehiculo";
 import type { RuedaAlerta } from "../types/informes";
 
@@ -170,7 +170,7 @@ describe("agruparPorVehiculo", () => {
 describe("resumenDeTarjeta", () => {
   const base = (p: Partial<VehiculoConAlertas>): VehiculoConAlertas => ({
     vehiculoId: "v", matricula: "1234ABC", unidad: null, tipo: null, foto: null,
-    medidas: [], minimo: null, ruedas: [], paraCambiar: 0, conPresion: 0, peor: null,
+    medidas: [], minimo: null, ruedas: [], paraCambiar: 0, conPresion: 0, porConfirmar: 0, peor: null,
     medidoEl: null, diasDesdeMedicion: null, ...p,
   });
 
@@ -192,7 +192,7 @@ describe("resumenDeTarjeta", () => {
 describe("ordenar y filtrar", () => {
   const v = (p: Partial<VehiculoConAlertas>): VehiculoConAlertas => ({
     vehiculoId: p.matricula ?? "v", matricula: "0000AAA", unidad: null, tipo: null, foto: null,
-    medidas: [], minimo: null, ruedas: [], paraCambiar: 0, conPresion: 0, peor: null,
+    medidas: [], minimo: null, ruedas: [], paraCambiar: 0, conPresion: 0, porConfirmar: 0, peor: null,
     medidoEl: null, diasDesdeMedicion: null, ...p,
   });
 
@@ -235,5 +235,86 @@ describe("ordenar y filtrar", () => {
   it("«medición vieja» es a partir de 90 días, no a los 90 justos", () => {
     const justos = [v({ matricula: "X", diasDesdeMedicion: 90 }), v({ matricula: "Y", diasDesdeMedicion: 91 })];
     expect(filtrarVehiculos(justos, "vieja").map((x) => x.matricula)).toEqual(["Y"]);
+  });
+});
+
+describe("el protocolo en las alertas: por confirmar", () => {
+  it("sin las columnas nuevas todo va como antes: confirmado", () => {
+    expect(estadoDeRueda(fila({ profundidad_mm: 2 }))).toBe("cambiar");
+    expect(estadoDeRueda(fila({ profundidad_mm: 8 }))).toBe("ok");
+  });
+
+  it("un valor bajo confirmado es rojo; sin confirmar, no", () => {
+    expect(estadoDeRueda(fila({ profundidad_mm: 2, confirmada: true }))).toBe("cambiar");
+    expect(estadoDeRueda(fila({ profundidad_mm: 2, confirmada: false }))).toBe("por_confirmar");
+  });
+
+  it("el 4310JYJ: vale 8,5 y la última lectura de 1,8 queda pendiente", () => {
+    const r = fila({ profundidad_mm: 8.5, confirmada: true, pendiente_mm: 1.8, pendiente_fecha: "2026-11-12" });
+    expect(estadoDeRueda(r)).toBe("por_confirmar");
+  });
+
+  it("una pendiente por encima del mínimo no es incidencia", () => {
+    expect(estadoDeRueda(fila({ profundidad_mm: 8.5, confirmada: true, pendiente_mm: 12 }))).toBe("ok");
+  });
+
+  it("la presión sigue mandando sobre lo demás", () => {
+    expect(estadoDeRueda(fila({ profundidad_mm: 2, confirmada: false, presion_aviso_at: "2026-11-12T08:00:00Z" }))).toBe("presion");
+  });
+
+  const JYJ = [
+    fila({ vehiculo_id: "jyj", matricula: "4310JYJ", codigo_posicion: "E1_IZQ", profundidad_mm: 9 , confirmada: true }),
+    fila({ vehiculo_id: "jyj", matricula: "4310JYJ", posicion_id: "p2", codigo_posicion: "E2_DER_EXT", eje: 2, lado: "der", interior_exterior: "ext",
+      profundidad_mm: 8.5, fecha_revision: "2026-11-10", confirmada: true, pendiente_mm: 1.8, pendiente_fecha: "2026-11-12" }),
+  ];
+
+  it("el vehículo sale, cuenta la rueda aparte y no tiene «peor»", () => {
+    const [v] = agruparPorVehiculo(JYJ, HOY);
+    expect(v.paraCambiar).toBe(0);
+    expect(v.porConfirmar).toBe(1);
+    expect(v.peor).toBeNull();
+    expect(resumenDeTarjeta(v)).toBe("1 por confirmar");
+    // La fecha que importa es la de la lectura en duda.
+    expect(v.medidoEl).toBe("2026-11-12");
+  });
+
+  it("el recuadro enseña el valor que se mantiene y el aviso explica la duda", () => {
+    const [v] = agruparPorVehiculo(JYJ, HOY);
+    const r = v.ruedas.find((x) => x.codigo === "E2_DER_EXT")!;
+    expect(r.estado).toBe("por_confirmar");
+    expect(r.profundidad).toBe(8.5);
+    expect(r.pendiente).toBe(1.8);
+    expect(r.texto).toBe("8,5");
+    expect(r.titulo).toContain("última lectura 1,8 mm el 12/11/2026, sin confirmar");
+  });
+
+  it("con rojo y por confirmar, el resumen dice las dos cosas", () => {
+    const [v] = agruparPorVehiculo([...JYJ,
+      fila({ vehiculo_id: "jyj", matricula: "4310JYJ", posicion_id: "p3", codigo_posicion: "E2_IZQ_EXT", eje: 2, lado: "izq", interior_exterior: "ext",
+        profundidad_mm: 3.1, confirmada: true }),
+    ], HOY);
+    expect(resumenDeTarjeta(v)).toBe("1 rueda · peor 3,1 mm · 1 por confirmar");
+  });
+
+  it("la lista para medir con sonda: la lectura más baja primero, con su porqué", () => {
+    const vehiculos = agruparPorVehiculo([...JYJ,
+      fila({ vehiculo_id: "otro", matricula: "1111BBB", profundidad_mm: 3.5, fecha_revision: "2026-11-11", confirmada: false }),
+      fila({ vehiculo_id: "rojo", matricula: "2222CCC", profundidad_mm: 1, confirmada: true }),
+    ], HOY);
+    const lista = ruedasParaMedirConSonda(vehiculos);
+    expect(lista.map((f) => f.matricula)).toEqual(["4310JYJ", "1111BBB"]);
+    expect(lista[0]).toMatchObject({ codigo: "E2_DER_EXT", valor: 8.5, enDuda: 1.8, fecha: "2026-11-12" });
+    expect(lista[0].motivo).toBe("el arco ha leído 1,8 mm y las anteriores decían 8,5");
+    expect(lista[1]).toMatchObject({ valor: 3.5, enDuda: 3.5, fecha: "2026-11-11", motivo: "solo tiene una lectura" });
+  });
+
+  it("filtro y orden: los que solo están por confirmar van detrás de los confirmados", () => {
+    const vehiculos = agruparPorVehiculo([...JYJ,
+      fila({ vehiculo_id: "rojo", matricula: "2222CCC", profundidad_mm: 3.9, confirmada: true }),
+      fila({ vehiculo_id: "pres", matricula: "3333DDD", profundidad_mm: 9, presion_aviso_at: "2026-11-12T08:00:00Z" }),
+    ], HOY);
+    expect(filtrarVehiculos(vehiculos, "confirmar").map((v) => v.matricula)).toEqual(["4310JYJ"]);
+    expect(filtrarVehiculos(vehiculos, "cambiar").map((v) => v.matricula)).toEqual(["2222CCC"]);
+    expect(ordenarVehiculos(vehiculos, "peor").map((v) => v.matricula)).toEqual(["3333DDD", "2222CCC", "4310JYJ"]);
   });
 });

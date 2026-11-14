@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { profundidadVigente } from "../utils/profundidad";
+import type { Medicion } from "../services/ultimaMedicion";
 import { useSearchParams } from "react-router-dom";
 import {
   listarEmpresas, listarVehiculos, listarPosiciones, listarMontajesVehiculo, obtenerVehiculo,
@@ -78,7 +79,7 @@ export default function RevisionVehiculo() {
   const [fichaRevision, setFichaRevision] = useState<RevisionVehiculoT | null>(null);
   const [fichaDetalle, setFichaDetalle] = useState<RevisionDetalle[]>([]);
   const [cargandoFicha, setCargandoFicha] = useState(false);
-  const [medicionesActuales, setMedicionesActuales] = useState<Record<string, { profundidad_mm: number | null; presion_bar: number | null }>>({});
+  const [medicionesActuales, setMedicionesActuales] = useState<Record<string, Medicion>>({});
   const [presionesCatalogo, setPresionesCatalogo] = useState<Record<string, number>>({});
 
   const [searchParams] = useSearchParams();

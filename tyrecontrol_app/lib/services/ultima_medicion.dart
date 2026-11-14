@@ -33,10 +33,24 @@
 /// POSTERIOR y no «desde»: la lectura del mismo día del montaje suele ser la de
 /// la goma VIEJA, medida justo antes de cambiarla.
 ///
+/// ── El protocolo contra los falsos desgastes ───────────────────────────────
+///
+/// Repartiendo POR NEUMÁTICO (`protocolo: true`), la profundidad no es la
+/// última lectura sino la que da por buena `protocolo_profundidad.dart`: la
+/// mediana de las tres últimas, con la última como pendiente si discrepa.
+///
+/// Repartiendo por POSICIÓN no se aplica, y es a propósito: la serie de una
+/// posición no se corta al cambiar la goma, así que la primera lectura de una
+/// goma nueva (14 mm después de dos de 3) parecería el disparate y se quedaría
+/// la vieja. Por posición sigue valiendo la última lectura de una revisión
+/// completa, que es la referencia que el técnico ve mientras mide.
+///
 /// Es la misma regla que `services/ultimaMedicion.ts` en el panel y que
 /// `tc_informes_alertas_vehiculos` en la base. Las tres tienen que decir lo
 /// mismo: si cambia una, cambian las tres.
 library;
+
+import 'protocolo_profundidad.dart';
 
 /// Una fila de `revisiones_neumaticos_detalle`, con lo justo para repartir.
 class FilaMedicion {
@@ -54,6 +68,10 @@ class FilaMedicion {
   /// la lectura es posterior a su montaje. Null si no hay a quién.
   final String? claveHeredada;
 
+  /// La revisión la hizo un técnico (lleva `tecnico_id`), no el arco. Solo
+  /// importa con el protocolo: la medición a mano no espera confirmación.
+  final bool manual;
+
   const FilaMedicion({
     required this.revisionId,
     required this.clave,
@@ -61,6 +79,7 @@ class FilaMedicion {
     this.presionBar,
     this.momento,
     this.claveHeredada,
+    this.manual = false,
   });
 }
 
@@ -88,6 +107,14 @@ class MedicionVigente {
 
   /// De cuándo es la presión, por si no hay profundidad que fechar.
   DateTime? presionEn;
+
+  /// Si otra lectura, o un técnico, respalda la profundidad. Sin protocolo
+  /// (reparto por posición) es siempre true: es como era.
+  bool confirmada = true;
+
+  /// La última lectura, cuando NO es la que se ha dado por buena.
+  double? pendienteMm;
+  DateTime? pendienteEn;
 }
 
 /// Las revisiones cuyas filas traen TODAS profundidad.
@@ -117,11 +144,19 @@ Set<String> revisionesConTodasLasRuedas(Iterable<FilaMedicion> filas, {String? c
 /// [filas] tiene que venir de la MÁS RECIENTE a la más antigua. Si la consulta
 /// llevaba `limit` y lo ha agotado, se pasa [limite] para no fiarse de la
 /// revisión del final, que puede venir cortada.
-Map<String, MedicionVigente> repartirUltimasMediciones(List<FilaMedicion> filas, {int? limite}) {
+///
+/// Con [protocolo], la profundidad de cada clave es la que da por buena
+/// `valorDeLaSerie` sobre sus tres últimas lecturas válidas, no la última.
+Map<String, MedicionVigente> repartirUltimasMediciones(
+  List<FilaMedicion> filas, {
+  int? limite,
+  bool protocolo = false,
+}) {
   final cortada = (limite != null && filas.length >= limite && filas.isNotEmpty) ? filas.last.revisionId : null;
   final completas = revisionesConTodasLasRuedas(filas, cortada: cortada);
 
   final out = <String, MedicionVigente>{};
+  final series = <String, List<LecturaDeSerie>>{};
   for (final f in filas) {
     final deCompleta = f.revisionId != null && completas.contains(f.revisionId);
     final aportaProfundidad = f.profundidadMm != null && deCompleta;
@@ -135,7 +170,12 @@ Map<String, MedicionVigente> repartirUltimasMediciones(List<FilaMedicion> filas,
     };
     for (final clave in destinatarios) {
       final m = out.putIfAbsent(clave, MedicionVigente.new);
-      if (m.profundidadMm == null && aportaProfundidad) {
+      if (aportaProfundidad && protocolo) {
+        final serie = series.putIfAbsent(clave, () => []);
+        if (serie.length < 3) {
+          serie.add(LecturaDeSerie(f.profundidadMm!, manual: f.manual, fecha: f.momento));
+        }
+      } else if (m.profundidadMm == null && aportaProfundidad) {
         m.profundidadMm = f.profundidadMm;
         m.medidoEn = f.momento;
       }
@@ -144,6 +184,17 @@ Map<String, MedicionVigente> repartirUltimasMediciones(List<FilaMedicion> filas,
         m.presionEn = f.momento;
       }
     }
+  }
+
+  for (final e in series.entries) {
+    final valor = valorDeLaSerie(e.value);
+    if (valor == null) continue;
+    final m = out.putIfAbsent(e.key, MedicionVigente.new);
+    m.profundidadMm = valor.mm;
+    m.medidoEn = valor.fecha;
+    m.confirmada = valor.confirmada;
+    m.pendienteMm = valor.pendienteMm;
+    m.pendienteEn = valor.pendienteEn;
   }
   return out;
 }

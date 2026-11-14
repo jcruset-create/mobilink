@@ -87,6 +87,14 @@ export interface RuedaAlerta {
   desviacion_pct: number | null;
   presion_avisos: number | null;
   presion_aviso_at: string | null;
+  /**
+   * Las tres del protocolo (tyrecontrol_protocolo_falsos_desgastes.sql).
+   * Opcionales: si la base todavía tiene la función anterior no vienen, y
+   * entonces todo se trata como confirmado, que es como era.
+   */
+  confirmada?: boolean | null;
+  pendiente_mm?: number | null;
+  pendiente_fecha?: string | null;
 }
 
 export interface EconomicoInformes {
