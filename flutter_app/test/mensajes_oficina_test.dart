@@ -8,6 +8,11 @@ import 'package:sea_tarragona_operario/widgets/aviso_mensajes.dart';
 class _Avisador implements Avisador {
   final sonados = <int>[];
   final quitados = <int>[];
+  final otfSonadas = <int>[];
+  @override
+  Future<void> sonarOtf(Map<String, dynamic> otf) async => otfSonadas.add(otf['id'] as int);
+  @override
+  Future<void> quitarOtf(int otfId) async {}
   @override
   Future<void> preparar() async {}
   @override
@@ -21,12 +26,27 @@ class _Avisador implements Avisador {
 class _Api extends ApiService {
   _Api() : super(techName: 'Iván', code: '0000');
   List<Map<String, dynamic>>? pendientes = [];
+  List<Map<String, dynamic>> otfNuevas = [];
   final leidos = <int>[];
   final respuestas = <String>[];
+  final otfVistas = <int>[];
 
   @override
-  Future<({List<Map<String, dynamic>> mensajes, List<String> respuestasRapidas})?> getMensajesPendientes() async =>
-      pendientes == null ? null : (mensajes: pendientes!, respuestasRapidas: const ['Voy', 'Llamo ahora', 'Necesito ayuda']);
+  Future<
+      ({
+        List<Map<String, dynamic>> mensajes,
+        List<String> respuestasRapidas,
+        List<Map<String, dynamic>> otfNuevas,
+      })?> getMensajesPendientes() async => pendientes == null
+      ? null
+      : (mensajes: pendientes!, respuestasRapidas: const ['Voy', 'Llamo ahora', 'Necesito ayuda'], otfNuevas: otfNuevas);
+  @override
+  Future<void> marcarOtfVista(int otfId) async => otfVistas.add(otfId);
+  @override
+  Future<bool> enviarMensajeOtf(int otfId, String texto) async {
+    respuestas.add('otf$otfId:$texto');
+    return true;
+  }
   @override
   Future<bool> marcarMensajeLeido(int id) async {
     leidos.add(id);
@@ -102,7 +122,7 @@ void main() {
   test('contestar quita todos los de esa asistencia', () async {
     api.pendientes = [_msg(1), _msg(2), _msg(3, asistencia: 200)];
     await servicio.consultar(ahora: t0);
-    expect(await servicio.responder(191, 'Voy'), isTrue);
+    expect(await servicio.responder(assistanceId: 191, texto: 'Voy'), isTrue);
     expect(api.respuestas, ['191:Voy']);
     expect(servicio.pendientes.map((m) => m['id']), [3]);
   });
@@ -132,5 +152,59 @@ void main() {
     await tester.pump();
     expect(find.text('Has recibido un mensaje nuevo'), findsNothing);
     expect(api.leidos, [1]);
+  });
+
+  group('OTF', () {
+    Map<String, dynamic> otf(int id) => {'id': id, 'clientName': 'Conti 360', 'baseName': 'Riu Clar', 'numTrabajos': 3};
+
+    test('una OTF nueva suena una sola vez y cuenta en la pestaña', () async {
+      api.otfNuevas = [otf(7)];
+      await servicio.consultar(ahora: t0);
+      await servicio.consultar(ahora: t0.add(const Duration(seconds: 15)));
+      expect(avisador.otfSonadas, [7]);
+      expect(servicio.otfNuevas, hasLength(1));
+      expect(servicio.otfParaAvisar, hasLength(1));
+    });
+
+    test('«Más tarde» la quita del aviso pero sigue contando en la pestaña', () async {
+      api.otfNuevas = [otf(7)];
+      await servicio.consultar(ahora: t0);
+      servicio.otfPosponer(7);
+      expect(servicio.otfParaAvisar, isEmpty);
+      expect(servicio.otfNuevas, hasLength(1));
+    });
+
+    test('abrirla la deja vista aquí y en el servidor', () async {
+      api.otfNuevas = [otf(7)];
+      await servicio.consultar(ahora: t0);
+      await servicio.otfVista(7);
+      expect(servicio.otfNuevas, isEmpty);
+      expect(api.otfVistas, [7]);
+    });
+
+    test('contestar un mensaje de una OTF va a la OTF y quita los suyos', () async {
+      api.pendientes = [
+        {..._msg(1), 'assistanceId': null, 'otfId': 7},
+        _msg(2),
+      ];
+      await servicio.consultar(ahora: t0);
+      expect(await servicio.responder(otfId: 7, texto: 'Lo dejo'), isTrue);
+      expect(api.respuestas, ['otf7:Lo dejo']);
+      expect(servicio.pendientes.map((m) => m['id']), [2]);
+    });
+
+    testWidgets('el aviso de OTF nueva sale si no hay mensajes, y «Más tarde» lo cierra', (tester) async {
+      api.otfNuevas = [otf(7)];
+      await servicio.consultar(ahora: t0);
+      await tester.pumpWidget(MaterialApp(
+        builder: (context, child) => AvisoMensajes(mensajes: servicio, child: child!),
+        home: const Scaffold(body: Text('Asistencias')),
+      ));
+      expect(find.text('Tienes una OTF nueva'), findsOneWidget);
+      expect(find.text('Conti 360'), findsOneWidget);
+      await tester.tap(find.text('Más tarde'));
+      await tester.pump();
+      expect(find.text('Tienes una OTF nueva'), findsNothing);
+    });
   });
 }

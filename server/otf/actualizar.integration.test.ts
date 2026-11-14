@@ -5,7 +5,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { sqlActualizarOtf } from "./actualizar.ts";
+import { sqlActualizarOtf, sqlEstadoTrabajo } from "./actualizar.ts";
 
 const CORRE = process.env.RUN_DB_TESTS === "1" && Boolean(process.env.DATABASE_URL);
 const describeSiHayBase = CORRE ? describe : describe.skip;
@@ -45,5 +45,23 @@ describeSiHayBase("editar una OTF", () => {
     await db.query(u!.sql, u!.params);
     const r = (await db.query(`SELECT "assignedTechName", "baseName" FROM otf WHERE id = $1`, [otf])).rows[0];
     expect(r).toEqual({ assignedTechName: null, baseName: "Riu Clar" });
+  });
+
+  it("el tiempo de un trabajo: empezar, finalizar, no realizado con motivo y volver a pendiente", async () => {
+    const tid = Number((await db.query(
+      `INSERT INTO otf_trabajos ("otfId", plate, trabajo, "createdAtMs", "updatedAtMs") VALUES ($1,'R8535BBY','Cambiar 2',$2,$2) RETURNING id`,
+      [otf, ahora]
+    )).rows[0].id);
+    const aplicar = async (estado: string, motivo: unknown, t: number) => {
+      const c = sqlEstadoTrabajo(tid, estado, motivo, t);
+      return (await db.query(c.sql, c.params)).rows[0];
+    };
+
+    expect(await aplicar("en_proceso", null, 1000)).toMatchObject({ iniciadoAtMs: "1000", finalizadoAtMs: null });
+    // Volver a pulsar «Empezar» no reinicia el reloj.
+    expect((await aplicar("en_proceso", null, 5000)).iniciadoAtMs).toBe("1000");
+    expect(await aplicar("finalizado", "esto no se guarda", 9000)).toMatchObject({ finalizadoAtMs: "9000", motivoNoRealizado: null });
+    expect(await aplicar("no_realizado", "  No estaba en la base ", 9500)).toMatchObject({ motivoNoRealizado: "No estaba en la base" });
+    expect(await aplicar("pendiente", null, 9900)).toMatchObject({ iniciadoAtMs: null, finalizadoAtMs: null, motivoNoRealizado: null });
   });
 });

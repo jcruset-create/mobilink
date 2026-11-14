@@ -7,6 +7,10 @@ import '../services/api_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/plate_badge.dart';
 import '../services/camara.dart';
+import '../services/mensajes_oficina.dart';
+import '../services/navegar.dart';
+import '../widgets/conversacion_oficina.dart';
+import 'otf_trabajo_screens.dart';
 
 const _tipos = ['Tractora', 'Remolque', 'Camión rígido', 'Furgoneta', 'Turismo', 'Maquinaria', 'Otros'];
 
@@ -26,6 +30,20 @@ String _trabajoLabel(String s) {
     case 'no_realizado': return 'No realizado';
     default: return 'Pendiente';
   }
+}
+
+String? _fechaCorta(Object? ms) {
+  if (ms is! int) return null;
+  final d = DateTime.fromMillisecondsSinceEpoch(ms);
+  const dias = ['lun', 'mar', 'mié', 'jue', 'vie', 'sáb', 'dom'];
+  return '${dias[d.weekday - 1]} ${d.day}/${d.month}';
+}
+
+String? _duracion(Map<String, dynamic> t) {
+  final a = t['iniciadoAtMs'], b = t['finalizadoAtMs'];
+  if (a is! int || b is! int) return null;
+  final min = ((b - a) / 60000).round();
+  return min < 60 ? '$min min' : '${min ~/ 60} h ${min % 60} min';
 }
 
 // ── Lista de OTF (tab) ──
@@ -62,7 +80,7 @@ class _OtfListTabState extends State<OtfListTab> {
   @override
   Widget build(BuildContext context) {
     final tt = Theme.of(context).textTheme;
-    if (_loading) return Center(child: CircularProgressIndicator(color: AppColors.primary));
+    if (_loading) return const Center(child: CircularProgressIndicator(color: AppColors.primary));
     if (_error != null) {
       return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
         const Icon(Icons.wifi_off_outlined, color: AppColors.danger, size: 48),
@@ -96,16 +114,50 @@ class _OtfListTabState extends State<OtfListTab> {
               },
               child: Padding(
                 padding: const EdgeInsets.all(16),
-                child: Row(children: [
-                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(o['clientName'] ?? '', style: tt.titleMedium),
-                    const SizedBox(height: 4),
-                    Text(o['baseName'] ?? o['direccion'] ?? '—', style: tt.bodyMedium?.copyWith(color: AppColors.textHint)),
-                    const SizedBox(height: 8),
-                    Text('Progreso: ${prog['hechos'] ?? 0} / ${prog['total'] ?? 0}',
-                        style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.w700)),
-                  ])),
-                  const Icon(Icons.chevron_right, color: AppColors.primary, size: 28),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                  Row(children: [
+                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Row(children: [
+                        Flexible(child: Text(o['clientName'] ?? '', style: tt.titleMedium)),
+                        // Asignada y aún sin abrir en la tablet.
+                        if (o['vistaAtMs'] == null) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(color: const Color(0xFFFBBF24), borderRadius: BorderRadius.circular(999)),
+                            child: const Text('NUEVA', style: TextStyle(color: Color(0xFF0E1B2E), fontSize: 11, fontWeight: FontWeight.w900)),
+                          ),
+                        ],
+                        if (o['enEspera'] == true) ...[
+                          const SizedBox(width: 8),
+                          Text('pendiente · tras #${o['esperaAsistenciaId']}',
+                              style: const TextStyle(color: AppColors.warning, fontSize: 12, fontWeight: FontWeight.w700)),
+                        ],
+                      ]),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${o['baseName'] ?? o['direccion'] ?? '—'}${_fechaCorta(o['fechaProgramadaMs']) != null ? ' · ${_fechaCorta(o['fechaProgramadaMs'])}' : ''}',
+                        style: tt.bodyMedium?.copyWith(color: AppColors.textHint),
+                      ),
+                      const SizedBox(height: 8),
+                      Text('Progreso: ${prog['hechos'] ?? 0} / ${prog['total'] ?? 0}',
+                          style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.w700)),
+                    ])),
+                    const Icon(Icons.chevron_right, color: AppColors.primary, size: 28),
+                  ]),
+                  // Sin haber llegado: ir directo a la base desde la lista.
+                  if (o['arrivedAtBaseMs'] == null && (o['lat'] != null || o['direccion'] != null)) ...[
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      height: 48,
+                      child: FilledButton.icon(
+                        onPressed: () => navegarA(context, lat: o['lat'], lng: o['lng'], direccion: o['direccion'] as String?),
+                        icon: const Icon(Icons.navigation),
+                        label: const Text('Ir a la base', style: TextStyle(fontWeight: FontWeight.w900)),
+                        style: FilledButton.styleFrom(backgroundColor: const Color(0xFF2563EB)),
+                      ),
+                    ),
+                  ],
                 ]),
               ),
             ),
@@ -133,6 +185,8 @@ class _OtfDetailScreenState extends State<OtfDetailScreen> {
   void initState() {
     super.initState();
     _load();
+    // Abrirla es haberla visto: deja de avisarse como nueva.
+    MensajesOficina.instancia.otfVista(widget.otfId);
   }
 
   Future<void> _load() async {
@@ -208,7 +262,7 @@ class _OtfDetailScreenState extends State<OtfDetailScreen> {
         },
       ),
       body: _loading
-          ? Center(child: CircularProgressIndicator(color: AppColors.primary))
+          ? const Center(child: CircularProgressIndicator(color: AppColors.primary))
           : o == null
               ? const Center(child: Text('No se pudo cargar', style: TextStyle(color: AppColors.textSecondary)))
               : ListView(
@@ -218,32 +272,76 @@ class _OtfDetailScreenState extends State<OtfDetailScreen> {
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(12)),
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text(o['baseName'] ?? o['direccion'] ?? '—', style: const TextStyle(color: AppColors.textSecondary)),
+                        Text(o['baseName'] ?? o['direccion'] ?? '—',
+                            style: const TextStyle(color: AppColors.textPrimary, fontSize: 17, fontWeight: FontWeight.w800)),
+                        if (o['baseName'] != null && o['direccion'] != null)
+                          Text(o['direccion'], style: const TextStyle(color: AppColors.textSecondary)),
+                        if (_fechaCorta(o['fechaProgramadaMs']) != null)
+                          Text('Programada: ${_fechaCorta(o['fechaProgramadaMs'])}',
+                              style: const TextStyle(color: AppColors.textSecondary)),
                         const SizedBox(height: 8),
                         Text('Progreso: ${prog['hechos'] ?? 0} / ${prog['total'] ?? 0}',
                             style: const TextStyle(color: AppColors.primary, fontSize: 18, fontWeight: FontWeight.w800)),
                         if (o['arrivedAtBaseMs'] != null)
-                          Padding(padding: const EdgeInsets.only(top: 6), child: Text(
+                          const Padding(padding: EdgeInsets.only(top: 6), child: Text(
                             '✓ Llegada a base registrada',
-                            style: const TextStyle(color: AppColors.success, fontSize: 13, fontWeight: FontWeight.w700))),
-                        if (o['status'] == 'planificada' && o['arrivedAtBaseMs'] == null) ...[
-                          const SizedBox(height: 10),
-                          SizedBox(width: double.infinity, child: OutlinedButton.icon(
-                            onPressed: _checkin,
-                            icon: const Icon(Icons.location_on),
-                            label: const Text('Confirmar llegada a base'),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: AppColors.info,
-                              side: const BorderSide(color: AppColors.info),
-                              padding: const EdgeInsets.symmetric(vertical: 12),
+                            style: TextStyle(color: AppColors.success, fontSize: 13, fontWeight: FontWeight.w700))),
+                        if (o['arrivedAtBaseMs'] == null && o['status'] != 'finalizada') ...[
+                          const SizedBox(height: 12),
+                          SizedBox(
+                            width: double.infinity,
+                            height: 60,
+                            child: FilledButton.icon(
+                              onPressed: () => navegarA(context, lat: o['lat'], lng: o['lng'], direccion: o['direccion'] as String?),
+                              icon: const Icon(Icons.navigation),
+                              label: const Text('Navegar a la base', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+                              style: FilledButton.styleFrom(
+                                backgroundColor: const Color(0xFF2563EB),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                              ),
                             ),
-                          )),
+                          ),
+                          const SizedBox(height: 10),
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: AppColors.success.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: AppColors.success.withValues(alpha: 0.5)),
+                            ),
+                            child: const Text(
+                              'Llegada automática: al estar a menos de 300 m de la base se marca sola.',
+                              style: TextStyle(color: AppColors.success, fontSize: 14, fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                          if (o['status'] == 'planificada') ...[
+                            const SizedBox(height: 10),
+                            SizedBox(width: double.infinity, child: OutlinedButton.icon(
+                              onPressed: _checkin,
+                              icon: const Icon(Icons.location_on),
+                              label: const Text('He llegado a la base'),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: AppColors.success,
+                                side: const BorderSide(color: AppColors.success),
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                              ),
+                            )),
+                          ],
+                        ],
+                        if ((o['notas'] ?? '').toString().trim().isNotEmpty) ...[
+                          const SizedBox(height: 12),
+                          Text('Notas de la oficina: ${o['notas']}',
+                              style: const TextStyle(color: AppColors.textSecondary, fontSize: 14)),
                         ],
                       ]),
                     ),
                     const SizedBox(height: 16),
-                    ...trabajos.map((t) => _trabajoCard(t)),
+                    ...trabajos.asMap().entries.map((e) => _trabajoCard(e.value, e.key + 1, trabajos.length)),
                     const SizedBox(height: 16),
+                    if (o['status'] != 'finalizada' && o['status'] != 'cancelada') ...[
+                      ConversacionOficina(api: widget.api, otfId: widget.otfId),
+                      const SizedBox(height: 16),
+                    ],
                     if (o['status'] != 'finalizada')
                       SizedBox(width: double.infinity, child: ElevatedButton.icon(
                         onPressed: _finalizarVisita,
@@ -287,7 +385,29 @@ class _OtfDetailScreenState extends State<OtfDetailScreen> {
     if (ok == true) _load();
   }
 
-  Widget _trabajoCard(Map<String, dynamic> t) {
+  Future<void> _abrirTrabajo(Map<String, dynamic> t, int numero, int total, {required bool enCurso}) async {
+    final api = widget.api;
+    var cambio = await Navigator.of(context).push<bool>(MaterialPageRoute(
+      builder: (_) => enCurso
+          ? OtfTrabajoEnCursoScreen(api: api, trabajo: t, numero: numero, total: total)
+          : OtfInicioTrabajoScreen(api: api, trabajo: t, numero: numero, total: total),
+    ));
+    // Recién empezado: directo a «en curso», con el tiempo ya corriendo.
+    if (cambio == true && !enCurso) {
+      final otf = await api.getOtf(widget.otfId);
+      final actualizado = ((otf['trabajos'] as List<dynamic>?) ?? [])
+          .cast<Map<String, dynamic>>()
+          .firstWhere((x) => x['id'] == t['id'], orElse: () => t);
+      if (!mounted) return;
+      if (mounted) setState(() => _otf = otf);
+      cambio = await Navigator.of(context).push<bool>(MaterialPageRoute(
+        builder: (_) => OtfTrabajoEnCursoScreen(api: api, trabajo: actualizado, numero: numero, total: total),
+      ));
+    }
+    _load();
+  }
+
+  Widget _trabajoCard(Map<String, dynamic> t, int numero, int total) {
     final status = t['status'] as String? ?? 'pendiente';
     final color = _trabajoColor(status);
     final fotos = (t['fotos'] as List<dynamic>?)?.cast<Map<String, dynamic>>() ?? [];
@@ -337,31 +457,41 @@ class _OtfDetailScreenState extends State<OtfDetailScreen> {
             ),
           )),
         ),
+        if (_duracion(t) != null)
+          Padding(padding: const EdgeInsets.only(top: 6), child: Text('⏱ ${_duracion(t)}',
+              style: const TextStyle(color: AppColors.textSecondary, fontSize: 13))),
+        if (t['motivoNoRealizado'] != null)
+          Padding(padding: const EdgeInsets.only(top: 4), child: Text('No realizado: ${t['motivoNoRealizado']}',
+              style: const TextStyle(color: AppColors.danger, fontSize: 13, fontWeight: FontWeight.w700))),
         const SizedBox(height: 10),
-        Row(children: [
-          _statusBtn(t, 'en_proceso', 'Empezar', status),
-          const SizedBox(width: 8),
-          _statusBtn(t, 'finalizado', 'Finalizar', status),
-          const SizedBox(width: 8),
-          _statusBtn(t, 'no_realizado', 'No realizado', status),
-        ]),
+        // Pendiente → pantalla previa con las fotos; en curso → tiempo y cierre.
+        if (status == 'pendiente')
+          SizedBox(width: double.infinity, height: 50, child: FilledButton.icon(
+            onPressed: () => _abrirTrabajo(t, numero, total, enCurso: false),
+            icon: const Icon(Icons.play_arrow),
+            label: const Text('Empezar', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.info),
+          ))
+        else if (status == 'en_proceso')
+          SizedBox(width: double.infinity, height: 50, child: FilledButton.icon(
+            onPressed: () => _abrirTrabajo(t, numero, total, enCurso: true),
+            icon: const Icon(Icons.timer_outlined),
+            label: const Text('Continuar: finalizar o no realizado', style: TextStyle(fontWeight: FontWeight.w900)),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.success),
+          ))
+        else
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              onPressed: () => _setStatus(t, 'pendiente'),
+              child: const Text('Reabrir', style: TextStyle(color: AppColors.textHint)),
+            ),
+          ),
       ]),
     );
   }
 
-  Widget _statusBtn(Map<String, dynamic> t, String target, String label, String current) {
-    final active = current == target;
-    final color = _trabajoColor(target);
-    return Expanded(child: OutlinedButton(
-      onPressed: active ? null : () => _setStatus(t, target),
-      style: OutlinedButton.styleFrom(
-        backgroundColor: active ? color.withValues(alpha: 0.18) : Colors.transparent,
-        side: BorderSide(color: color.withValues(alpha: 0.5)),
-        padding: const EdgeInsets.symmetric(vertical: 8),
-      ),
-      child: Text(label, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w700)),
-    ));
-  }
+
 }
 
 // ── Añadir trabajo en campo (fotos obligatorias) ──
@@ -457,7 +587,7 @@ class _OtfAddTrabajoScreenState extends State<OtfAddTrabajoScreen> {
         backgroundColor: AppColors.surface, foregroundColor: AppColors.textPrimary,
       ),
       body: _saving
-          ? Center(child: CircularProgressIndicator(color: AppColors.primary))
+          ? const Center(child: CircularProgressIndicator(color: AppColors.primary))
           : SingleChildScrollView(
               padding: const EdgeInsets.all(16),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -554,6 +684,98 @@ class _OtfFirmaScreenState extends State<OtfFirmaScreen> {
   final _nombre = TextEditingController();
   final _dni = TextEditingController();
   bool _saving = false;
+  Map<String, dynamic>? _otf;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.api.getOtf(widget.otfId).then((o) {
+      if (mounted) setState(() => _otf = o);
+    }).catchError((_) {});
+  }
+
+  /// Sin nadie de la base para firmar: se cierra igual y queda dicho en el
+  /// informe.
+  Future<void> _sinResponsable() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: const Text('¿Cerrar sin firma?', style: TextStyle(color: AppColors.textPrimary)),
+        content: const Text(
+          'En el informe constará que no había ningún responsable en la base para firmar.',
+          style: TextStyle(color: AppColors.textSecondary, fontSize: 16),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Volver')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Cerrar sin firma')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _saving = true);
+    try {
+      await widget.api.finalizarOtf(widget.otfId, null, null, null, sinResponsable: true);
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(e.toString().replaceFirst('Exception: ', '')), backgroundColor: Colors.red));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Widget _resumen() {
+    final o = _otf;
+    if (o == null) return const SizedBox.shrink();
+    final trabajos = (o['trabajos'] as List<dynamic>?)?.cast<Map<String, dynamic>>() ?? [];
+    final llegada = o['arrivedAtBaseMs'];
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(12)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const Text('RESUMEN', style: TextStyle(color: AppColors.textHint, fontSize: 12, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 8),
+        for (final t in trabajos)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Row(children: [
+              Expanded(child: Text('${t['plate'] ?? '—'} · ${t['trabajo'] ?? ''}',
+                  maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: AppColors.textPrimary, fontSize: 14))),
+              const SizedBox(width: 8),
+              Text(
+                t['status'] == 'finalizado'
+                    ? 'Hecho${_duracion(t) != null ? ' · ${_duracion(t)}' : ''}'
+                    : t['status'] == 'no_realizado'
+                        ? 'No realizado'
+                        : 'Sin hacer',
+                style: TextStyle(
+                  color: t['status'] == 'finalizado' ? AppColors.success : AppColors.warning,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ]),
+          ),
+        if (llegada is int)
+          Text('En la base desde las ${_hora(llegada)} (${_desde(llegada)})',
+              style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+      ]),
+    );
+  }
+
+  String _hora(int ms) {
+    final d = DateTime.fromMillisecondsSinceEpoch(ms);
+    return '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+  }
+
+  String _desde(int ms) {
+    final min = DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(ms)).inMinutes;
+    return min < 60 ? '$min min' : '${min ~/ 60} h ${min % 60} min';
+  }
 
   @override
   void dispose() {
@@ -593,10 +815,11 @@ class _OtfFirmaScreenState extends State<OtfFirmaScreen> {
       backgroundColor: AppColors.background,
       appBar: AppBar(title: const Text('Firma de la visita'), backgroundColor: AppColors.surface, foregroundColor: AppColors.textPrimary),
       body: _saving
-          ? Center(child: CircularProgressIndicator(color: AppColors.primary))
+          ? const Center(child: CircularProgressIndicator(color: AppColors.primary))
           : SingleChildScrollView(
               padding: const EdgeInsets.all(16),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                _resumen(),
                 const Text('Firma única del responsable de la base (valida todos los trabajos de la visita).',
                     style: TextStyle(color: AppColors.textSecondary)),
                 const SizedBox(height: 14),
@@ -623,6 +846,17 @@ class _OtfFirmaScreenState extends State<OtfFirmaScreen> {
                   onPressed: _save, icon: const Icon(Icons.check),
                   label: const Text('Finalizar visita'),
                   style: ElevatedButton.styleFrom(backgroundColor: AppColors.success, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 16)),
+                )),
+                const SizedBox(height: 12),
+                SizedBox(width: double.infinity, child: OutlinedButton.icon(
+                  onPressed: _sinResponsable,
+                  icon: const Icon(Icons.person_off_outlined),
+                  label: const Text('Sin responsable en la base'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.warning,
+                    side: const BorderSide(color: AppColors.warning),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
                 )),
               ]),
             ),

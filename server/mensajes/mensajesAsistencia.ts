@@ -5,6 +5,9 @@
  * quien está en la calle («entra por la puerta 3», «lleva una llanta de
  * 22,5»), no un chat general. El cliente nunca los ve.
  *
+ * También sirven para una OTF: el mensaje lleva `assistanceId` o `otfId`, y
+ * todo lo demás (estados, urgente, escalado, respuestas) es igual.
+ *
  * ── Los estados de un mensaje de la oficina ─────────────────────────────────
  *
  *   enviado  → la oficina lo ha mandado.
@@ -26,6 +29,11 @@ export const ESCALADO_MS = 3 * 60_000;
 
 /** Los estados en que una asistencia ya no acepta mensajes. */
 export const ESTADOS_CERRADOS = ["llegada_taller", "cancelada", "redirigida"];
+/** Y una OTF. */
+export const ESTADOS_CERRADOS_OTF = ["finalizada", "cancelada"];
+
+/** A qué va un mensaje: una asistencia o una OTF. */
+export type Destino = { assistanceId: number; otfId?: undefined } | { otfId: number; assistanceId?: undefined };
 
 /** Textos rápidos de la oficina y respuestas rápidas del operario. */
 export const TEXTOS_RAPIDOS_OFICINA = [
@@ -40,7 +48,8 @@ export const MAX_TEXTO = 1000;
 
 export type Mensaje = {
   id: number;
-  assistanceId: number;
+  assistanceId: number | null;
+  otfId: number | null;
   techName: string;
   /** «oficina» = de la oficina a la tablet; «operario» = la respuesta. */
   de: "oficina" | "operario";
@@ -79,7 +88,8 @@ export function conEstado(m: Mensaje, ahoraMs: number): MensajeConEstado {
 function aMensaje(r: any): Mensaje {
   return {
     id: Number(r.id),
-    assistanceId: Number(r.assistanceId),
+    assistanceId: r.assistanceId != null ? Number(r.assistanceId) : null,
+    otfId: r.otfId != null ? Number(r.otfId) : null,
     techName: String(r.techName),
     de: r.de === "operario" ? "operario" : "oficina",
     texto: String(r.texto),
@@ -104,35 +114,44 @@ function limpiarTexto(texto: unknown): string {
   return t;
 }
 
-/** La asistencia, si está abierta y con operario: si no, no hay a quién mandar. */
-async function asistenciaAbierta(assistanceId: number): Promise<{ techName: string }> {
-  const r = await db.query(
-    `SELECT status, "assignedTechName" FROM roadside_assistances WHERE id = $1`,
-    [assistanceId]
-  );
+/** La asistencia u OTF, si está abierta y con operario: si no, no hay a quién mandar. */
+async function destinoAbierto(d: Destino): Promise<{ techName: string }> {
+  const esOtf = d.otfId != null;
+  const r = esOtf
+    ? await db.query(`SELECT status, "assignedTechName" FROM otf WHERE id = $1`, [d.otfId])
+    : await db.query(`SELECT status, "assignedTechName" FROM roadside_assistances WHERE id = $1`, [d.assistanceId]);
   const a = r.rows[0];
-  if (!a) throw new ErrorMensaje(404, "Asistencia no encontrada");
-  if (ESTADOS_CERRADOS.includes(String(a.status))) {
-    throw new ErrorMensaje(409, "La asistencia está cerrada: ya no se pueden mandar mensajes");
+  if (!a) throw new ErrorMensaje(404, esOtf ? "OTF no encontrada" : "Asistencia no encontrada");
+  if ((esOtf ? ESTADOS_CERRADOS_OTF : ESTADOS_CERRADOS).includes(String(a.status))) {
+    throw new ErrorMensaje(
+      409,
+      esOtf
+        ? "La OTF está cerrada: ya no se pueden mandar mensajes"
+        : "La asistencia está cerrada: ya no se pueden mandar mensajes"
+    );
   }
-  if (!a.assignedTechName) throw new ErrorMensaje(409, "La asistencia no tiene operario asignado");
+  if (!a.assignedTechName) {
+    throw new ErrorMensaje(409, esOtf ? "La OTF no tiene operario asignado" : "La asistencia no tiene operario asignado");
+  }
   return { techName: String(a.assignedTechName) };
 }
 
-/** La oficina manda un mensaje a la tablet del operario de la asistencia. */
+/** La oficina manda un mensaje a la tablet del operario de la asistencia u OTF. */
 export async function enviarDesdeOficina(args: {
-  assistanceId: number;
+  assistanceId?: number;
+  otfId?: number;
   texto: unknown;
   urgente: boolean;
   autor: string | null;
   ahoraMs?: number;
 }): Promise<Mensaje> {
   const texto = limpiarTexto(args.texto);
-  const { techName } = await asistenciaAbierta(args.assistanceId);
+  const destino = aDestino(args);
+  const { techName } = await destinoAbierto(destino);
   const r = await db.query(
-    `INSERT INTO asistencia_mensajes ("assistanceId", "techName", de, texto, urgente, autor, "creadoAtMs")
-     VALUES ($1, $2, 'oficina', $3, $4, $5, $6) RETURNING *`,
-    [args.assistanceId, techName, texto, args.urgente === true, args.autor, args.ahoraMs ?? Date.now()]
+    `INSERT INTO asistencia_mensajes ("assistanceId", "otfId", "techName", de, texto, urgente, autor, "creadoAtMs")
+     VALUES ($1, $2, $3, 'oficina', $4, $5, $6, $7) RETURNING *`,
+    [destino.assistanceId ?? null, destino.otfId ?? null, techName, texto, args.urgente === true, args.autor, args.ahoraMs ?? Date.now()]
   );
   return aMensaje(r.rows[0]);
 }
@@ -142,22 +161,32 @@ export async function enviarDesdeOficina(args: {
  * leído lo que le han dicho.
  */
 export async function responderDesdeTablet(args: {
-  assistanceId: number;
+  assistanceId?: number;
+  otfId?: number;
   techName: string;
   texto: unknown;
   ahoraMs?: number;
 }): Promise<Mensaje> {
   const texto = limpiarTexto(args.texto);
-  const { techName } = await asistenciaAbierta(args.assistanceId);
-  if (techName !== args.techName) throw new ErrorMensaje(403, "La asistencia no está asignada a ti");
+  const destino = aDestino(args);
+  const { techName } = await destinoAbierto(destino);
+  if (techName !== args.techName) {
+    throw new ErrorMensaje(403, destino.otfId != null ? "La OTF no está asignada a ti" : "La asistencia no está asignada a ti");
+  }
   const ahora = args.ahoraMs ?? Date.now();
-  await marcarLeidosDeAsistencia(args.assistanceId, args.techName, ahora);
+  await marcarLeidosDe(destino, args.techName, ahora);
   const r = await db.query(
-    `INSERT INTO asistencia_mensajes ("assistanceId", "techName", de, texto, urgente, autor, "creadoAtMs", "recibidoAtMs", "leidoAtMs")
-     VALUES ($1, $2, 'operario', $3, false, $2, $4, $4, $4) RETURNING *`,
-    [args.assistanceId, args.techName, texto, ahora]
+    `INSERT INTO asistencia_mensajes ("assistanceId", "otfId", "techName", de, texto, urgente, autor, "creadoAtMs", "recibidoAtMs", "leidoAtMs")
+     VALUES ($1, $2, $3, 'operario', $4, false, $3, $5, $5, $5) RETURNING *`,
+    [destino.assistanceId ?? null, destino.otfId ?? null, args.techName, texto, ahora]
   );
   return aMensaje(r.rows[0]);
+}
+
+function aDestino(args: { assistanceId?: number; otfId?: number }): Destino {
+  if (args.otfId != null && Number.isFinite(args.otfId)) return { otfId: args.otfId };
+  if (args.assistanceId != null && Number.isFinite(args.assistanceId)) return { assistanceId: args.assistanceId };
+  throw new ErrorMensaje(400, "Falta la asistencia o la OTF");
 }
 
 export async function listarDeAsistencia(assistanceId: number, ahoraMs = Date.now()) {
@@ -168,12 +197,21 @@ export async function listarDeAsistencia(assistanceId: number, ahoraMs = Date.no
   return r.rows.map((row: any) => conEstado(aMensaje(row), ahoraMs));
 }
 
+export async function listarDeOtf(otfId: number, ahoraMs = Date.now()) {
+  const r = await db.query(
+    `SELECT * FROM asistencia_mensajes WHERE "otfId" = $1 ORDER BY "creadoAtMs", id`,
+    [otfId]
+  );
+  return r.rows.map((row: any) => conEstado(aMensaje(row), ahoraMs));
+}
+
 /**
  * Lo que la tablet tiene que enseñar: los mensajes de la oficina sin leer, de
- * asistencias abiertas de este operario. Al recogerlos quedan «recibidos».
+ * asistencias y OTF abiertas de este operario. Al recogerlos quedan
+ * «recibidos».
  */
 export async function pendientesDeOperario(techName: string, ahoraMs = Date.now()) {
-  const r = await db.query(
+  const deAsistencias = await db.query(
     `UPDATE asistencia_mensajes m
         SET "recibidoAtMs" = COALESCE(m."recibidoAtMs", $2)
        FROM roadside_assistances a
@@ -184,9 +222,21 @@ export async function pendientesDeOperario(techName: string, ahoraMs = Date.now(
       RETURNING m.*`,
     [techName, ahoraMs, ESTADOS_CERRADOS]
   );
-  return r.rows
-    .map((row: any) => conEstado(aMensaje(row), ahoraMs))
-    .sort((x: MensajeConEstado, y: MensajeConEstado) => x.creadoAtMs - y.creadoAtMs);
+  const deOtf = await db.query(
+    `UPDATE asistencia_mensajes m
+        SET "recibidoAtMs" = COALESCE(m."recibidoAtMs", $2)
+       FROM otf o
+      WHERE o.id = m."otfId"
+        AND m."techName" = $1 AND o."assignedTechName" = $1
+        AND m.de = 'oficina' AND m."leidoAtMs" IS NULL
+        AND o.status <> ALL($3::text[])
+      RETURNING m.*, o."clientName" AS "otfCliente"`,
+    [techName, ahoraMs, ESTADOS_CERRADOS_OTF]
+  );
+  return [
+    ...deAsistencias.rows.map((row: any) => conEstado(aMensaje(row), ahoraMs)),
+    ...deOtf.rows.map((row: any) => ({ ...conEstado(aMensaje(row), ahoraMs), otfCliente: row.otfCliente ?? null })),
+  ].sort((x: MensajeConEstado, y: MensajeConEstado) => x.creadoAtMs - y.creadoAtMs);
 }
 
 /** «Entendido»: un mensaje, solo si es de este operario. */
@@ -200,11 +250,12 @@ export async function marcarLeido(id: number, techName: string, ahoraMs = Date.n
   return (r.rowCount ?? 0) > 0;
 }
 
-async function marcarLeidosDeAsistencia(assistanceId: number, techName: string, ahoraMs: number) {
+async function marcarLeidosDe(destino: Destino, techName: string, ahoraMs: number) {
+  const columna = destino.otfId != null ? `"otfId"` : `"assistanceId"`;
   await db.query(
     `UPDATE asistencia_mensajes
         SET "leidoAtMs" = $3, "recibidoAtMs" = COALESCE("recibidoAtMs", $3)
-      WHERE "assistanceId" = $1 AND "techName" = $2 AND de = 'oficina' AND "leidoAtMs" IS NULL`,
-    [assistanceId, techName, ahoraMs]
+      WHERE ${columna} = $1 AND "techName" = $2 AND de = 'oficina' AND "leidoAtMs" IS NULL`,
+    [destino.otfId ?? destino.assistanceId, techName, ahoraMs]
   );
 }

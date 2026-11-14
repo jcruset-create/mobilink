@@ -16,6 +16,11 @@ import 'avisador_mensajes.dart';
 /// Normal: suena una vez. Urgente, o normal con más de 3 min sin leer: vuelve
 /// a sonar cada 15 s. Quién es qué lo decide el servidor (`repetirSonido`), no
 /// la tablet: así la regla está en un solo sitio.
+///
+/// Los mensajes pueden ser de una asistencia (`assistanceId`) o de una OTF
+/// (`otfId`). Y en la misma consulta llegan las OTF que el operario aún no ha
+/// abierto: suenan una vez, se avisan a pantalla completa y cuentan en la
+/// pestaña OTF hasta que las abre.
 class MensajesOficina extends ChangeNotifier {
   MensajesOficina({Avisador? avisador}) : _avisador = avisador ?? AvisadorNotificaciones();
 
@@ -36,6 +41,20 @@ class MensajesOficina extends ChangeNotifier {
 
   /// Los mensajes sin leer, el más antiguo primero.
   List<Map<String, dynamic>> get pendientes => _pendientes;
+
+  List<Map<String, dynamic>> _otfNuevas = const [];
+  final Set<int> _otfAvisadas = {};
+  final Set<int> _otfPospuestas = {};
+
+  /// Las OTF asignadas que el operario aún no ha abierto (para la insignia).
+  List<Map<String, dynamic>> get otfNuevas => _otfNuevas;
+
+  /// Las que toca avisar a pantalla completa: nuevas y no pospuestas.
+  List<Map<String, dynamic>> get otfParaAvisar =>
+      _otfNuevas.where((o) => !_otfPospuestas.contains(o['id'])).toList();
+
+  /// La api con la que se trabaja, para abrir pantallas desde el aviso.
+  ApiService? get api => _api;
 
   bool get activo => _timer != null;
 
@@ -59,6 +78,9 @@ class MensajesOficina extends ChangeNotifier {
     _timer = null;
     _pendientes = const [];
     _sonado.clear();
+    _otfNuevas = const [];
+    _otfAvisadas.clear();
+    _otfPospuestas.clear();
     await _avisador.quitarTodos();
     notifyListeners();
   }
@@ -93,6 +115,12 @@ class MensajesOficina extends ChangeNotifier {
         await _avisador.quitar(id);
       }
       _pendientes = r.mensajes;
+      // OTF nuevas: suenan una vez cada una.
+      for (final o in r.otfNuevas) {
+        final id = o['id'];
+        if (id is int && _otfAvisadas.add(id)) await _avisador.sonarOtf(o);
+      }
+      _otfNuevas = r.otfNuevas;
       notifyListeners();
     } catch (e) {
       debugPrint('Mensajes de la oficina: $e');
@@ -108,19 +136,40 @@ class MensajesOficina extends ChangeNotifier {
     await _api?.marcarMensajeLeido(id);
   }
 
-  /// Contestar (rápida o escrita). En el servidor cuenta como leído todo lo
-  /// de esa asistencia.
-  Future<bool> responder(int assistanceId, String texto) async {
-    final ok = await _api?.enviarMensajeOperario(assistanceId, texto) ?? false;
+  /// Contestar (rápida o escrita) en una asistencia o en una OTF. En el
+  /// servidor cuenta como leído todo lo de esa asistencia u OTF.
+  Future<bool> responder({int? assistanceId, int? otfId, required String texto}) async {
+    final api = _api;
+    if (api == null || (assistanceId == null && otfId == null)) return false;
+    final ok = otfId != null
+        ? await api.enviarMensajeOtf(otfId, texto)
+        : await api.enviarMensajeOperario(assistanceId!, texto);
     if (ok) {
-      final quitados = _pendientes.where((m) => m['assistanceId'] == assistanceId).toList();
-      _quitarLocal((m) => m['assistanceId'] == assistanceId);
+      bool deAqui(Map<String, dynamic> m) =>
+          otfId != null ? m['otfId'] == otfId : m['assistanceId'] == assistanceId;
+      final quitados = _pendientes.where(deAqui).toList();
+      _quitarLocal(deAqui);
       for (final m in quitados) {
         final id = m['id'];
         if (id is int) await _avisador.quitar(id);
       }
     }
     return ok;
+  }
+
+  /// «Ver la OTF»: deja de ser nueva aquí y en el servidor.
+  Future<void> otfVista(int otfId) async {
+    _otfNuevas = _otfNuevas.where((o) => o['id'] != otfId).toList();
+    notifyListeners();
+    await _avisador.quitarOtf(otfId);
+    await _api?.marcarOtfVista(otfId);
+  }
+
+  /// «Más tarde»: no vuelve a salir a pantalla completa, pero sigue contando
+  /// en la pestaña hasta que la abra.
+  void otfPosponer(int otfId) {
+    _otfPospuestas.add(otfId);
+    notifyListeners();
   }
 
   void _quitarLocal(bool Function(Map<String, dynamic>) quitar) {

@@ -36,11 +36,19 @@ function estadoTexto(m: Mensaje) {
 
 export default function MensajesOperario({
   assistanceId,
+  otfId,
   techName,
 }: {
-  assistanceId: number;
+  /** Una de las dos: los mensajes son de una asistencia o de una OTF. */
+  assistanceId?: number;
+  otfId?: number;
   techName: string;
 }) {
+  const ruta = otfId != null
+    ? `${API_BASE}/api/otf/${otfId}/mensajes`
+    : `${API_BASE}/api/roadside-assistances/${assistanceId}/mensajes`;
+  const queEs = otfId != null ? `OTF #${otfId}` : `Asistencia #${assistanceId}`;
+  const clave = otfId != null ? `otf-${otfId}` : `asis-${assistanceId}`;
   const [mensajes, setMensajes] = useState<Mensaje[]>([]);
   const [textosRapidos, setTextosRapidos] = useState<string[]>([]);
   const [abierto, setAbierto] = useState(false);
@@ -50,7 +58,7 @@ export default function MensajesOperario({
   const [error, setError] = useState("");
 
   function cargar() {
-    apiFetch(`${API_BASE}/api/roadside-assistances/${assistanceId}/mensajes`)
+    apiFetch(ruta)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (!d) return;
@@ -65,13 +73,13 @@ export default function MensajesOperario({
     // Cada 15 s: para ver llegar el «Leído» y las respuestas.
     const intervalo = setInterval(cargar, 15_000);
     return () => clearInterval(intervalo);
-  }, [assistanceId]);
+  }, [ruta]);
 
   async function enviar() {
     setEnviando(true);
     setError("");
     try {
-      const r = await apiFetch(`${API_BASE}/api/roadside-assistances/${assistanceId}/mensajes`, {
+      const r = await apiFetch(ruta, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ texto, urgente }),
@@ -144,7 +152,7 @@ export default function MensajesOperario({
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-lg font-black">Mensaje a {techName}</div>
-                <div className="text-sm text-slate-600">Asistencia #{assistanceId} · le sonará en la tablet</div>
+                <div className="text-sm text-slate-600">{queEs} · le sonará en la tablet</div>
               </div>
               <button type="button" aria-label="Cerrar" onClick={() => setAbierto(false)} className="rounded-lg bg-slate-100 p-2 text-slate-700 hover:bg-slate-200">
                 <X className="h-5 w-5" />
@@ -166,9 +174,9 @@ export default function MensajesOperario({
               </div>
             )}
 
-            <label htmlFor={`mensaje-${assistanceId}`} className="text-xs font-bold text-slate-600">MENSAJE</label>
+            <label htmlFor={`mensaje-${clave}`} className="text-xs font-bold text-slate-600">MENSAJE</label>
             <textarea
-              id={`mensaje-${assistanceId}`}
+              id={`mensaje-${clave}`}
               value={texto}
               onChange={(e) => setTexto(e.target.value)}
               maxLength={1000}
@@ -180,11 +188,11 @@ export default function MensajesOperario({
             <fieldset className="flex flex-col gap-2">
               <legend className="mb-1 text-xs font-bold text-slate-600">AVISO EN LA TABLET</legend>
               <label className={`flex items-start gap-2 rounded-lg border p-2 text-sm ${!urgente ? "border-blue-600 bg-blue-50" : "border-slate-300"}`}>
-                <input type="radio" name={`tipo-${assistanceId}`} checked={!urgente} onChange={() => setUrgente(false)} className="mt-1" />
+                <input type="radio" name={`tipo-${clave}`} checked={!urgente} onChange={() => setUrgente(false)} className="mt-1" />
                 <span><strong>Normal</strong><br /><span className="text-slate-600">Suena y queda en pantalla. Si en 3 min no lo lee, pasa a sonar cada 15 s y sale en rojo aquí.</span></span>
               </label>
               <label className={`flex items-start gap-2 rounded-lg border p-2 text-sm ${urgente ? "border-red-600 bg-red-50" : "border-slate-300"}`}>
-                <input type="radio" name={`tipo-${assistanceId}`} checked={urgente} onChange={() => setUrgente(true)} className="mt-1" />
+                <input type="radio" name={`tipo-${clave}`} checked={urgente} onChange={() => setUrgente(true)} className="mt-1" />
                 <span><strong className="text-red-700">Urgente</strong><br /><span className="text-slate-600">Suena cada 15 s hasta que pulse «Entendido».</span></span>
               </label>
             </fieldset>
