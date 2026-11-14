@@ -18,6 +18,16 @@ import { elegirPosicion, horaWebfleet, type PosicionElegida } from "./core/posic
 import { crearCacheEta, ESTADOS_ETA_ESTIMADA, type EtaEstimada } from "./core/etaEstimada.ts";
 import { sqlActualizarOtf, sqlEstadoTrabajo } from "./otf/actualizar.ts";
 import {
+  codigoMaterial,
+  emailValido,
+  ErrorMaterial,
+  limpiarChecklist,
+  limpiarMaterial,
+  resultadoChecklist,
+  telefonoValido,
+  textoMaterial,
+} from "./otf/mejoras.ts";
+import {
   borrarPosicionTablet,
   guardarPosicionTablet,
   listarTabletsEnMapa,
@@ -16497,11 +16507,12 @@ async function checkOtfBaseArrival() {
         if (!pos || pos.antigua) continue;
         const dist = haversineDistanceM(pos.lat, pos.lng, Number(o.lat), Number(o.lng));
         if (dist <= KNOWN_PLACE_RADIUS_M) {
-          await db.query(
+          const marcada = await db.query(
             `UPDATE otf SET status = 'en_curso', "arrivedAtBaseMs" = $2, "updatedAtMs" = $2
              WHERE id = $1 AND status = 'planificada' AND "arrivedAtBaseMs" IS NULL`,
             [o.id, Date.now()]
           );
+          if ((marcada.rowCount ?? 0) > 0) await avisarLlegadaBase(Number(o.id));
           console.log(`✓ OTF #${o.id} → en_curso (check-in automático en base, ${pos.fuente}, ${Math.round(dist)}m)`);
         }
       } catch (err) {
@@ -18891,6 +18902,13 @@ function normalizeOtf(row: any) {
     // null = el operario aún no la ha abierto en la tablet: se le avisa.
     vistaAtMs: row.vistaAtMs != null ? Number(row.vistaAtMs) : null,
     sinResponsable: row.sinResponsable === true,
+    // Aviso al responsable de la base al llegar y correo del informe.
+    telefonoAviso: row.telefonoAviso ?? null,
+    emailInforme: row.emailInforme ?? null,
+    avisoLlegadaAtMs: row.avisoLlegadaAtMs != null ? Number(row.avisoLlegadaAtMs) : null,
+    avisoLlegadaResultado: row.avisoLlegadaResultado ?? null,
+    informeEnviadoAtMs: row.informeEnviadoAtMs != null ? Number(row.informeEnviadoAtMs) : null,
+    informeResultado: row.informeResultado ?? null,
     updatedAtMs: Number(row.updatedAtMs ?? Date.now()),
   };
 }
@@ -18918,6 +18936,7 @@ function normalizeOtfTrabajo(row: any) {
     motivoNoRealizado: row.motivoNoRealizado ?? null,
     matriculaLeida: row.matriculaLeida ?? null,
     matriculaNoCoincide: row.matriculaNoCoincide === true,
+    checklist: Array.isArray(row.checklist) ? row.checklist : null,
     createdAtMs: Number(row.createdAtMs ?? Date.now()),
   };
 }
@@ -18937,7 +18956,29 @@ async function otfWithDetails(id: number) {
     arr.push({ id: Number(file.id), kind: file.kind, url: file.url });
     filesByTrabajo.set(Number(file.trabajoId), arr);
   }
-  const trabajos = t.rows.map((r: any) => ({ ...normalizeOtfTrabajo(r), fotos: filesByTrabajo.get(Number(r.id)) ?? [] }));
+  // Lista de comprobación de cada plantilla, y el material montado.
+  const pl = await db.query(`SELECT nombre, checklist FROM otf_plantillas`);
+  const checklistPorPlantilla = new Map<string, string[]>(
+    pl.rows.map((p: any) => [String(p.nombre), limpiarChecklist(p.checklist)])
+  );
+  const mat = await db.query(`SELECT * FROM otf_trabajo_material WHERE "otfId" = $1 ORDER BY id ASC`, [id]);
+  const materialPorTrabajo = new Map<number, any[]>();
+  for (const m of mat.rows) {
+    const arr = materialPorTrabajo.get(Number(m.trabajoId)) ?? [];
+    arr.push({
+      id: Number(m.id), tipo: m.tipo, descripcion: m.descripcion, marca: m.marca ?? null,
+      estado: m.estado ?? null, cantidad: Number(m.cantidad), texto: textoMaterial({
+        descripcion: m.descripcion, marca: m.marca, estado: m.estado, cantidad: Number(m.cantidad),
+      }),
+    });
+    materialPorTrabajo.set(Number(m.trabajoId), arr);
+  }
+  const trabajos = t.rows.map((r: any) => ({
+    ...normalizeOtfTrabajo(r),
+    fotos: filesByTrabajo.get(Number(r.id)) ?? [],
+    checklistPlantilla: r.trabajoPlantilla ? checklistPorPlantilla.get(String(r.trabajoPlantilla)) ?? [] : [],
+    material: materialPorTrabajo.get(Number(r.id)) ?? [],
+  }));
   const total = trabajos.length;
   const hechos = trabajos.filter((x: any) => x.status === "finalizado" || x.status === "no_realizado").length;
   return { ...normalizeOtf(h.rows[0]), trabajos, progreso: { hechos, total } };
@@ -19185,7 +19226,7 @@ app.get("/api/otf-plantillas", requireSupervisorRole, async (req, res) => {
   try {
     const incluirInactivas = String(req.query.all || "") === "true";
     const r = await db.query(
-      `SELECT id, nombre, descripcion, activo FROM otf_plantillas
+      `SELECT id, nombre, descripcion, activo, checklist FROM otf_plantillas
        ${incluirInactivas ? "" : "WHERE activo = true"}
        ORDER BY nombre ASC`
     );
@@ -19194,6 +19235,8 @@ app.get("/api/otf-plantillas", requireSupervisorRole, async (req, res) => {
       nombre: p.nombre,
       descripcion: p.descripcion ?? null,
       activo: p.activo === true,
+      // Los puntos a comprobar en un trabajo de esta plantilla.
+      checklist: limpiarChecklist(p.checklist),
     })));
   } catch (e) {
     console.error("GET /api/otf-plantillas error:", e);
@@ -19230,11 +19273,13 @@ app.patch("/api/otf-plantillas/:id", requireSupervisorRole, async (req, res) => 
          nombre = COALESCE($2, nombre),
          descripcion = COALESCE($3, descripcion),
          activo = COALESCE($4, activo),
+         checklist = COALESCE($6::jsonb, checklist),
          "updatedAtMs" = $5
-       WHERE id = $1 RETURNING id, nombre, descripcion, activo`,
+       WHERE id = $1 RETURNING id, nombre, descripcion, activo, checklist`,
       [id, typeof b.nombre === "string" ? b.nombre.trim() : null,
        typeof b.descripcion === "string" ? b.descripcion.trim() : null,
-       typeof b.activo === "boolean" ? b.activo : null, Date.now()]
+       typeof b.activo === "boolean" ? b.activo : null, Date.now(),
+       b.checklist !== undefined ? JSON.stringify(limpiarChecklist(b.checklist)) : null]
     );
     if (!r.rows.length) return res.status(404).json({ error: "Plantilla no encontrada" });
     res.json(r.rows[0]);
@@ -19328,7 +19373,15 @@ app.post("/api/otf", requireSupervisorRole, async (req, res) => {
         b.webfleetVehicleId ?? null, b.notas ?? null, now, disp.esperaAsistenciaId ?? null,
       ]
     );
-    res.json({ ...normalizeOtf(r.rows[0]), enEspera: disp.esperaAsistenciaId != null });
+    // Teléfono de aviso y correo del informe (columnas añadidas después).
+    if (b.telefonoAviso !== undefined || b.emailInforme !== undefined) {
+      const u = sqlActualizarOtf(Number(r.rows[0].id), {
+        ...(b.telefonoAviso !== undefined ? { telefonoAviso: b.telefonoAviso } : {}),
+        ...(b.emailInforme !== undefined ? { emailInforme: b.emailInforme } : {}),
+      }, now);
+      if (u) await db.query(u.sql, u.params);
+    }
+    res.json({ ...normalizeOtf((await db.query(`SELECT * FROM otf WHERE id = $1`, [r.rows[0].id])).rows[0]), enEspera: disp.esperaAsistenciaId != null });
   } catch (e) {
     console.error("POST /api/otf error:", e);
     res.status(500).json({ error: "Error creando OTF" });
@@ -19494,6 +19547,85 @@ app.get("/api/roadside-operator/otf/:id", requireRoadsideOperator, async (req, r
   }
 });
 
+// Material montado en un trabajo (neumáticos, válvulas…): otf/mejoras.ts.
+app.post("/api/roadside-operator/otf/trabajos/:tid/material", requireRoadsideOperator, async (req, res) => {
+  try {
+    const operator = (req as any).roadsideOperator as { techName: string };
+    const tid = Number(req.params.tid);
+    if (req.body?.clientActionId && (await isDuplicateAction(req.body.clientActionId))) {
+      return res.json({ ok: true, deduped: true });
+    }
+    const m = limpiarMaterial(req.body ?? {});
+    const tr = await db.query(`SELECT "otfId" FROM otf_trabajos WHERE id = $1`, [tid]);
+    if (!tr.rows[0]) return res.status(404).json({ error: "Trabajo no encontrado" });
+    const r = await db.query(
+      `INSERT INTO otf_trabajo_material ("trabajoId","otfId",tipo,descripcion,marca,estado,cantidad,"creadoPor","createdAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+      [tid, tr.rows[0].otfId, m.tipo, m.descripcion, m.marca, m.estado, m.cantidad, operator.techName, Date.now()]
+    );
+    res.json({ ok: true, id: Number(r.rows[0].id), ...m, texto: textoMaterial(m) });
+  } catch (e: any) {
+    if (e instanceof ErrorMaterial) return res.status(400).json({ error: e.message });
+    console.error("POST otf material error:", e);
+    res.status(500).json({ error: "Error guardando el material" });
+  }
+});
+
+app.delete("/api/roadside-operator/otf/material/:id", requireRoadsideOperator, async (req, res) => {
+  try {
+    await db.query(`DELETE FROM otf_trabajo_material WHERE id = $1`, [Number(req.params.id)]);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("DELETE otf material error:", e);
+    res.status(500).json({ error: "Error borrando el material" });
+  }
+});
+
+/*
+ * Al llegar a la base, WhatsApp al responsable: «el técnico de Mobilink está
+ * en la puerta». Una sola vez por OTF. Es un mensaje que inicia Mobilink, así
+ * que WhatsApp exige una plantilla aprobada: TWILIO_TEMPLATE_OTF_LLEGADA, con
+ * {{1}} cliente, {{2}} técnico y {{3}} base. Sin plantilla o sin teléfono no
+ * se envía, y queda dicho por qué.
+ */
+async function avisarLlegadaBase(otfId: number): Promise<void> {
+  try {
+    const r = await db.query(
+      `UPDATE otf SET "avisoLlegadaAtMs" = $2
+        WHERE id = $1 AND "avisoLlegadaAtMs" IS NULL
+        RETURNING "clientName", "assignedTechName", "baseName", direccion, "telefonoAviso"`,
+      [otfId, Date.now()]
+    );
+    const o = r.rows[0];
+    if (!o) return; // ya se avisó
+    const resultado = await (async () => {
+      const tel = telefonoValido(o.telefonoAviso);
+      if (!tel) return "sin teléfono de aviso";
+      const plantilla = String(process.env.TWILIO_TEMPLATE_OTF_LLEGADA || "").trim();
+      if (!plantilla) return "falta la plantilla de WhatsApp";
+      if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) return "Twilio no configurado";
+      try {
+        await twilioClient.messages.create({
+          from: getWhatsAppFromNumber(),
+          to: `whatsapp:${normalizeSpanishPhone(tel)}`,
+          contentSid: plantilla,
+          contentVariables: JSON.stringify({
+            "1": o.clientName || "cliente",
+            "2": o.assignedTechName || "nuestro técnico",
+            "3": o.baseName || o.direccion || "la base",
+          }),
+        });
+        return "enviado";
+      } catch (err: any) {
+        return `error: ${String(err?.message ?? err).slice(0, 200)}`;
+      }
+    })();
+    await db.query(`UPDATE otf SET "avisoLlegadaResultado" = $2 WHERE id = $1`, [otfId, resultado]);
+  } catch (err) {
+    console.error(`Aviso de llegada OTF #${otfId}:`, err);
+  }
+}
+
 // El operario ha abierto la OTF en la tablet: deja de avisarse como nueva.
 app.post("/api/roadside-operator/otf/:id/vista", requireRoadsideOperator, async (req, res) => {
   try {
@@ -19534,6 +19666,7 @@ app.post("/api/roadside-operator/otf/:id/checkin", requireRoadsideOperator, asyn
        WHERE id = $1`,
       [id, now]
     );
+    await avisarLlegadaBase(id);
     res.json(await otfWithDetails(id));
   } catch (e) {
     console.error("POST otf checkin error:", e);
@@ -19595,7 +19728,17 @@ app.put("/api/roadside-operator/otf/trabajos/:tid/status", requireRoadsideOperat
     }
     // Con su tiempo y, si no se hizo, el motivo: otf/actualizar.ts.
     const cambio = sqlEstadoTrabajo(tid, status, req.body?.motivo, Date.now());
-    const r = await db.query(cambio.sql, cambio.params);
+    let r = await db.query(cambio.sql, cambio.params);
+    // Al finalizar, lo marcado de la lista de comprobación de su plantilla.
+    if (r.rows[0] && status === "finalizado" && req.body?.checklist !== undefined) {
+      const pl = await db.query(`SELECT checklist FROM otf_plantillas WHERE nombre = $1`, [r.rows[0].trabajoPlantilla]);
+      const puntos = limpiarChecklist(pl.rows[0]?.checklist);
+      if (puntos.length > 0) {
+        r = await db.query(`UPDATE otf_trabajos SET checklist = $2::jsonb WHERE id = $1 RETURNING *`, [
+          tid, JSON.stringify(resultadoChecklist(puntos, req.body.checklist)),
+        ]);
+      }
+    }
     if (!r.rows[0]) return res.status(404).json({ error: "Trabajo no encontrado" });
     res.json(normalizeOtfTrabajo(r.rows[0]));
   } catch (e) {
@@ -19669,6 +19812,39 @@ app.post(
   }
 );
 
+/*
+ * Manda el PDF de la OTF al correo de informes de la OTF. Deja escrito el
+ * resultado («enviado a …», «sin correo», el error) para que la oficina lo vea.
+ */
+async function enviarInformeOtf(id: number): Promise<void> {
+  const guardar = (resultado: string, enviado: boolean) =>
+    db.query(
+      `UPDATE otf SET "informeResultado" = $2, "informeEnviadoAtMs" = CASE WHEN $3 THEN $4::bigint ELSE "informeEnviadoAtMs" END
+        WHERE id = $1`,
+      [id, resultado, enviado, Date.now()]
+    );
+  try {
+    const o = (await db.query(`SELECT "clientName", "emailInforme" FROM otf WHERE id = $1`, [id])).rows[0];
+    const email = emailValido(o?.emailInforme);
+    if (!email) return void (await guardar("sin correo para el informe", false));
+    const transport = getMailTransport();
+    if (!transport) return void (await guardar("SMTP no configurado", false));
+    const pdf = await buildOtfReportPdfBuffer(id);
+    if (!pdf) return;
+    await transport.sendMail({
+      from: process.env.SMTP_FROM || process.env.SMTP_USER,
+      to: email,
+      subject: `Informe de la orden de trabajo de flota #${id} · Mobilink`,
+      text: `Hola, adjuntamos el informe de los trabajos realizados${o?.clientName ? ` para ${o.clientName}` : ""}.`,
+      attachments: [{ filename: `otf_${id}.pdf`, content: pdf, contentType: "application/pdf" }],
+    });
+    await guardar(`enviado a ${email}`, true);
+  } catch (err: any) {
+    console.error(`Informe OTF #${id} por correo:`, err);
+    await guardar(`error: ${String(err?.message ?? err).slice(0, 200)}`, false).catch(() => {});
+  }
+}
+
 // Finalizar OTF con firma única del responsable (operario)
 app.post(
   "/api/roadside-operator/otf/:id/finalizar",
@@ -19707,7 +19883,11 @@ app.post(
          WHERE id = $1`,
         [id, now, firmaUrl, firmanteNombre, firmanteDni, sinResponsable]
       );
+      // El informe al cliente, si se pidió y hay correo: después de contestar
+      // a la tablet, que no espere a que se genere y envíe el PDF.
+      const enviarInforme = String(req.body?.enviarInforme ?? "") === "true";
       res.json(await otfWithDetails(id));
+      if (enviarInforme) void enviarInformeOtf(id);
     } catch (e: any) {
       console.error("POST otf finalizar error:", e);
       res.status(500).json({ error: e?.message || "Error finalizando OTF" });
@@ -19716,11 +19896,13 @@ app.post(
 );
 
 // Informe PDF de la OTF
-app.get("/api/otf/:id/report.pdf", requireAdminRole, async (req, res) => {
-  try {
-    const id = Number(req.params.id);
+/*
+ * El PDF de la OTF. Lo usa la ruta del informe y el envío por correo al
+ * cliente al cerrar la visita. null si la OTF no existe.
+ */
+async function buildOtfReportPdfBuffer(id: number): Promise<Buffer | null> {
     const data = await otfWithDetails(id);
-    if (!data) return res.status(404).json({ error: "OTF no encontrada" });
+    if (!data) return null;
 
     const doc = new PDFDocument({ margin: 40, size: "A4" });
     const chunks: Buffer[] = [];
@@ -19767,6 +19949,18 @@ app.get("/api/otf/:id/report.pdf", requireAdminRole, async (req, res) => {
         );
       }
       if (t.motivoNoRealizado) doc.fontSize(8).font("Helvetica-Bold").text(`   No realizado: ${t.motivoNoRealizado}`);
+      // Material montado y lista de comprobación.
+      for (const m of t.material ?? []) {
+        doc.fontSize(8).font("Helvetica").text(`   Material: ${m.texto}`);
+      }
+      if (Array.isArray(t.checklist) && t.checklist.length > 0) {
+        doc.fontSize(8).font("Helvetica").text(
+          "   Comprobado: " +
+            t.checklist
+              .map((c: any) => `${c.hecho ? "✓" : "✗"} ${c.texto}${c.valor ? ` (${c.valor})` : ""}`)
+              .join(" · ")
+        );
+      }
       if (t.matriculaNoCoincide && t.matriculaLeida) {
         doc.fontSize(8).font("Helvetica-Oblique").text(`   Aviso: en la foto se leyó ${t.matriculaLeida}, no la matrícula del trabajo`);
       }
@@ -19829,7 +20023,14 @@ app.get("/api/otf/:id/report.pdf", requireAdminRole, async (req, res) => {
     }
 
     doc.end();
-    const buffer = await finished;
+    return await finished;
+}
+
+app.get("/api/otf/:id/report.pdf", requireAdminRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const buffer = await buildOtfReportPdfBuffer(id);
+    if (!buffer) return res.status(404).json({ error: "OTF no encontrada" });
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="otf_${id}.pdf"`);
     res.send(buffer);

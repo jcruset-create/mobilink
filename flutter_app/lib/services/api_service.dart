@@ -121,12 +121,15 @@ class ApiService {
   Future<void> _flushOutboxInner() async {
     for (final entry in OfflineStore.pending()) {
       final item = entry.value;
-      final id = item['assistanceId'] as int;
+      // Las de OTF no llevan asistencia.
+      final id = item['assistanceId'] as int? ?? 0;
       final type = item['type'] as String;
       final actionId = item['actionId'] as String;
       try {
         bool ok = false;
-        if (type == 'en_camino' || type == 'status') {
+        if (type.startsWith('otf_')) {
+          ok = await _enviarOtfEncolado(type, item, actionId);
+        } else if (type == 'en_camino' || type == 'status') {
           final url = type == 'en_camino'
               ? '$kBackendUrl/api/roadside-operator/assistances/$id/en-camino'
               : '$kBackendUrl/api/roadside-operator/assistances/$id/status';
@@ -236,6 +239,48 @@ class ApiService {
       }
       if (allOk) await OfflineStore.clearLocations();
     }
+  }
+
+  /// Un cambio de OTF que se hizo sin cobertura. true = enviado (o ya no se
+  /// puede enviar nunca y se saca de la cola).
+  Future<bool> _enviarOtfEncolado(String type, Map<String, dynamic> item, String actionId) async {
+    final tid = item['trabajoId'];
+    if (type == 'otf_status') {
+      final res = await http
+          .put(Uri.parse('$kBackendUrl/api/roadside-operator/otf/trabajos/$tid/status'),
+              headers: await _authHeaders(),
+              body: jsonEncode({
+                'status': item['status'],
+                if (item['motivo'] != null) 'motivo': item['motivo'],
+                if (item['checklist'] != null) 'checklist': item['checklist'],
+                'clientActionId': actionId,
+              }))
+          .timeout(const Duration(seconds: 12));
+      return res.statusCode == 200;
+    }
+    if (type == 'otf_material') {
+      final res = await http
+          .post(Uri.parse('$kBackendUrl/api/roadside-operator/otf/trabajos/$tid/material'),
+              headers: await _authHeaders(),
+              body: jsonEncode({...Map<String, dynamic>.from(item['material'] as Map), 'clientActionId': actionId}))
+          .timeout(const Duration(seconds: 12));
+      // Un 400 (dato inválido) no se arregla reintentando: fuera de la cola.
+      return res.statusCode == 200 || res.statusCode == 400;
+    }
+    if (type == 'otf_upload') {
+      final f = File(item['localPath'] as String);
+      if (!await f.exists()) return true; // el sistema borró la foto: no se puede subir nunca
+      final req = http.MultipartRequest(
+          'POST', Uri.parse('$kBackendUrl/api/roadside-operator/otf/trabajos/$tid/files'));
+      req.headers.addAll((await _authHeaders())..remove('Content-Type'));
+      req.fields['kind'] = item['kind'] as String;
+      req.fields['clientActionId'] = actionId;
+      req.files.add(await http.MultipartFile.fromPath('file', f.path));
+      final streamed = await req.send().timeout(const Duration(seconds: 60));
+      await streamed.stream.drain();
+      return streamed.statusCode == 200;
+    }
+    return true;
   }
 
   Future<List<Map<String, dynamic>>> getHistory() async {
@@ -530,21 +575,52 @@ class ApiService {
   }
 
   // ── OTF (Órdenes de Trabajo de Flota) ──
+  /// Sin cobertura: la última lista guardada en la tablet.
   Future<List<Map<String, dynamic>>> getOtfList() async {
-    final res = await http
-        .get(Uri.parse('$kBackendUrl/api/roadside-operator/otf'), headers: _headers)
-        .timeout(const Duration(seconds: 12));
-    if (res.statusCode != 200) throw Exception('Error cargando OTF');
-    return (jsonDecode(res.body) as List<dynamic>).cast<Map<String, dynamic>>();
+    try {
+      await flushOutbox();
+      final res = await http
+          .get(Uri.parse('$kBackendUrl/api/roadside-operator/otf'), headers: _headers)
+          .timeout(const Duration(seconds: 12));
+      if (res.statusCode != 200) throw Exception('Error cargando OTF');
+      final list = (jsonDecode(res.body) as List<dynamic>).cast<Map<String, dynamic>>();
+      await OfflineStore.cacheOtfList(list);
+      OfflineStore.offline.value = false;
+      return list;
+    } catch (e) {
+      if (_isNetworkError(e)) {
+        OfflineStore.offline.value = true;
+        return OfflineStore.cachedOtfList();
+      }
+      rethrow;
+    }
   }
 
+  /// Sin cobertura: la copia guardada al abrirla la última vez, con los
+  /// cambios hechos desde entonces.
   Future<Map<String, dynamic>> getOtf(int id) async {
-    final res = await http
-        .get(Uri.parse('$kBackendUrl/api/roadside-operator/otf/$id'), headers: _headers)
-        .timeout(const Duration(seconds: 12));
-    if (res.statusCode != 200) throw Exception('Error cargando OTF');
-    return jsonDecode(res.body) as Map<String, dynamic>;
+    try {
+      await flushOutbox();
+      final res = await http
+          .get(Uri.parse('$kBackendUrl/api/roadside-operator/otf/$id'), headers: _headers)
+          .timeout(const Duration(seconds: 12));
+      if (res.statusCode != 200) throw Exception('Error cargando OTF');
+      final otf = jsonDecode(res.body) as Map<String, dynamic>;
+      // Con cambios aún en cola, la copia local manda: el servidor aún no los tiene.
+      final pendientes = OfflineStore.pending().any((e) => (e.value['type'] as String).startsWith('otf_'));
+      if (!pendientes) await OfflineStore.cacheOtf(otf);
+      OfflineStore.offline.value = false;
+      return pendientes ? (OfflineStore.cachedOtf(id) ?? otf) : otf;
+    } catch (e) {
+      if (_isNetworkError(e)) {
+        OfflineStore.offline.value = true;
+        final copia = OfflineStore.cachedOtf(id);
+        if (copia != null) return copia;
+      }
+      rethrow;
+    }
   }
+
 
   Future<Map<String, dynamic>> addOtfFieldTrabajo(
     int otfId, {
@@ -577,12 +653,31 @@ class ApiService {
   }
 
   /// `motivo`: solo con «no_realizado» (no estaba el vehículo, falta material…).
-  Future<void> updateOtfTrabajoStatus(int trabajoId, String status, {String? motivo}) async {
-    final res = await http.put(
-      Uri.parse('$kBackendUrl/api/roadside-operator/otf/trabajos/$trabajoId/status'),
-      headers: await _authHeaders(),
-      body: jsonEncode({'status': status, if (motivo != null) 'motivo': motivo}),
-    );
+  /// `checklist`: al finalizar, lo marcado de la lista de su plantilla.
+  /// Sin cobertura se encola y se aplica a la copia local (`otfId`).
+  Future<void> updateOtfTrabajoStatus(int trabajoId, String status,
+      {String? motivo, List<Map<String, dynamic>>? checklist, int? otfId}) async {
+    final body = {
+      'status': status,
+      if (motivo != null) 'motivo': motivo,
+      if (checklist != null) 'checklist': checklist,
+    };
+    final http.Response res;
+    try {
+      res = await http
+          .put(
+            Uri.parse('$kBackendUrl/api/roadside-operator/otf/trabajos/$trabajoId/status'),
+            headers: await _authHeaders(),
+            body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 12));
+    } catch (e) {
+      if (!_isNetworkError(e)) rethrow;
+      await OfflineStore.enqueueOtf('otf_status', {'trabajoId': trabajoId, ...body});
+      if (otfId != null) await OfflineStore.applyLocalOtfTrabajo(otfId, trabajoId, status, motivo: motivo);
+      OfflineStore.offline.value = true;
+      return;
+    }
     if (res.statusCode != 200) throw Exception('Error actualizando estado');
   }
 
@@ -618,7 +713,7 @@ class ApiService {
   /// Sin firma (`firmaPng` null) solo con `sinResponsable`: no había nadie de
   /// la base para firmar.
   Future<void> finalizarOtf(int otfId, File? firmaPng, String? firmanteNombre, String? firmanteDni,
-      {bool sinResponsable = false}) async {
+      {bool sinResponsable = false, bool enviarInforme = false}) async {
     final req = http.MultipartRequest(
       'POST',
       Uri.parse('$kBackendUrl/api/roadside-operator/otf/$otfId/finalizar'),
@@ -630,6 +725,7 @@ class ApiService {
     if (firmanteNombre != null) req.fields['firmanteNombre'] = firmanteNombre;
     if (firmanteDni != null) req.fields['firmanteDni'] = firmanteDni;
     if (sinResponsable) req.fields['sinResponsable'] = 'true';
+    if (enviarInforme) req.fields['enviarInforme'] = 'true';
     if (firmaPng != null) req.files.add(await http.MultipartFile.fromPath('firma', firmaPng.path));
     final streamed = await req.send().timeout(const Duration(seconds: 30));
     await streamed.stream.drain();
@@ -652,7 +748,16 @@ class ApiService {
     if (actionId != null) req.fields['clientActionId'] = actionId;
     req.files.add(await http.MultipartFile.fromPath('file', file.path));
     // Más margen: con la matrícula, el servidor además la lee.
-    final streamed = await req.send().timeout(const Duration(seconds: 60));
+    final http.StreamedResponse streamed;
+    try {
+      streamed = await req.send().timeout(const Duration(seconds: 60));
+    } catch (e) {
+      if (!_isNetworkError(e)) rethrow;
+      // Sin cobertura: a la cola. La matrícula no se puede comprobar ahora.
+      await OfflineStore.enqueueOtf('otf_upload', {'trabajoId': trabajoId, 'kind': kind, 'localPath': file.path});
+      OfflineStore.offline.value = true;
+      return {'offline': true};
+    }
     final body = await streamed.stream.bytesToString();
     if (streamed.statusCode != 200) throw Exception('Error subiendo foto');
     try {
@@ -661,6 +766,38 @@ class ApiService {
     } catch (_) {
       return <String, dynamic>{};
     }
+  }
+
+  /// Neumático o material montado en un trabajo. Sin cobertura se encola y
+  /// devuelve `{offline: true}`.
+  Future<Map<String, dynamic>> addOtfMaterial(int trabajoId, Map<String, dynamic> material) async {
+    try {
+      final res = await http
+          .post(
+            Uri.parse('$kBackendUrl/api/roadside-operator/otf/trabajos/$trabajoId/material'),
+            headers: await _authHeaders(),
+            body: jsonEncode(material),
+          )
+          .timeout(const Duration(seconds: 12));
+      final data = jsonDecode(res.body);
+      if (res.statusCode != 200) {
+        throw Exception(data is Map ? (data['error'] ?? 'Error guardando el material') : 'Error guardando el material');
+      }
+      return Map<String, dynamic>.from(data as Map);
+    } catch (e) {
+      if (!_isNetworkError(e)) rethrow;
+      await OfflineStore.enqueueOtf('otf_material', {'trabajoId': trabajoId, 'material': material});
+      OfflineStore.offline.value = true;
+      return {'offline': true, ...material};
+    }
+  }
+
+  Future<void> deleteOtfMaterial(int materialId) async {
+    final res = await http
+        .delete(Uri.parse('$kBackendUrl/api/roadside-operator/otf/material/$materialId'),
+            headers: await _authHeaders())
+        .timeout(const Duration(seconds: 12));
+    if (res.statusCode != 200) throw Exception('Error borrando el material');
   }
 
   /// La OTF ya se ha abierto en la tablet: deja de avisarse como nueva.

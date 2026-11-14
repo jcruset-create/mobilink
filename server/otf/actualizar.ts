@@ -21,6 +21,9 @@ const CAMPOS: Record<string, { columna: string; valor: (v: unknown) => unknown }
   assignedVehicleName: { columna: `"assignedVehicleName"`, valor: textoONulo },
   webfleetVehicleId: { columna: `"webfleetVehicleId"`, valor: textoONulo },
   notas: { columna: `notas`, valor: textoONulo },
+  // A quién se avisa al llegar a la base y a quién va el informe.
+  telefonoAviso: { columna: `"telefonoAviso"`, valor: textoONulo },
+  emailInforme: { columna: `"emailInforme"`, valor: textoONulo },
 };
 
 function textoONulo(v: unknown) {

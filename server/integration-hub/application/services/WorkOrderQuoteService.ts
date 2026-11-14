@@ -19,6 +19,7 @@ import type { QuoteLineInput } from "../../domain/models.ts";
 import { resolveErpConnector } from "../../connectors/ConnectorRegistry.ts";
 import { resolveExternalId } from "./MappingService.ts";
 import { createQuoteFromWorkOrder, type CreateQuoteFromWorkOrderResult } from "./SalesQuoteService.ts";
+import { codigoMaterial, textoMaterial } from "../../../otf/mejoras.ts";
 
 export interface WorkOrderLinePreview {
   /** Id de la línea en otf_trabajos. */
@@ -144,9 +145,40 @@ export async function previewQuoteFromWorkOrder(params: {
     });
   }
 
+  /*
+   * El material montado en cada trabajo facturable (neumáticos, válvulas…),
+   * una línea por cada uno, con su cantidad. Se mapea con el artículo del ERP
+   * por su código («NEUMATICO 385/65R22.5 NUEVO»), como las plantillas.
+   */
+  const idsFacturables = facturables.map((t) => t.id);
+  if (idsFacturables.length > 0) {
+    const { rows: material } = await pool.query(
+      `SELECT * FROM otf_trabajo_material WHERE "trabajoId" = ANY($1) ORDER BY id ASC`,
+      [idsFacturables]
+    );
+    for (const m of material) {
+      const trabajo = facturables.find((t) => t.id === Number(m.trabajoId));
+      const mobilinkId = codigoMaterial({ tipo: m.tipo, descripcion: m.descripcion, estado: m.estado });
+      const resuelto = await resolveExternalId("product", mobilinkId, opts);
+      lines.push({
+        trabajoId: Number(m.trabajoId),
+        mobilinkId,
+        externalCode: resuelto.externalCode,
+        mapped: resuelto.mapped,
+        description: textoMaterial({
+          descripcion: m.descripcion, marca: m.marca, estado: m.estado, cantidad: Number(m.cantidad),
+        }).replace(/^\d+ × /, ""),
+        quantity: Number(m.cantidad),
+        plate: trabajo?.plate ?? null,
+      });
+    }
+  }
+
   const sinMapear = [
     ...(customer.mapped ? [] : [`cliente '${customerMobilinkId}'`]),
-    ...lines.filter((l) => !l.mapped).map((l) => `trabajo '${l.mobilinkId}'`),
+    ...lines
+      .filter((l) => !l.mapped)
+      .map((l) => `${/^(NEUMATICO|MATERIAL) /.test(l.mobilinkId) ? "material" : "trabajo"} '${l.mobilinkId}'`),
   ];
 
   return {

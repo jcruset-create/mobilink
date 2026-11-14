@@ -221,6 +221,8 @@ function NewOtfModal({ otf, places, techs, vehicles, onPlaceCreated, onClose, on
   const fechaInicial = fechaAInput(otf?.fechaProgramadaMs);
   const [fecha, setFecha] = useState(fechaInicial);
   const [notas, setNotas] = useState<string>(otf?.notas ?? "");
+  const [telefonoAviso, setTelefonoAviso] = useState<string>(otf?.telefonoAviso ?? "");
+  const [emailInforme, setEmailInforme] = useState<string>(otf?.emailInforme ?? "");
   const [saving, setSaving] = useState(false);
   const [showPlaceMap, setShowPlaceMap] = useState(false);
   const [error, setError] = useState("");
@@ -249,6 +251,8 @@ function NewOtfModal({ otf, places, techs, vehicles, onPlaceCreated, onClose, on
         }
         if (fecha !== fechaInicial) cambios.fechaProgramadaMs = inputAFecha(fecha);
         if (notas.trim() !== (otf.notas ?? "").trim()) cambios.notas = notas.trim() || null;
+        if (telefonoAviso.trim() !== (otf.telefonoAviso ?? "").trim()) cambios.telefonoAviso = telefonoAviso.trim() || null;
+        if (emailInforme.trim() !== (otf.emailInforme ?? "").trim()) cambios.emailInforme = emailInforme.trim() || null;
         if (Object.keys(cambios).length === 0) { onClose(); return; }
         onCreated(await updateOtf(otf.id, cambios));
         return;
@@ -265,6 +269,8 @@ function NewOtfModal({ otf, places, techs, vehicles, onPlaceCreated, onClose, on
         webfleetVehicleId: veh?.webfleetVehicleId ?? null,
         fechaProgramadaMs: inputAFecha(fecha),
         notas: notas.trim() || null,
+        telefonoAviso: telefonoAviso.trim() || null,
+        emailInforme: emailInforme.trim() || null,
       });
       onCreated(o);
     } catch (e) {
@@ -316,6 +322,14 @@ function NewOtfModal({ otf, places, techs, vehicles, onPlaceCreated, onClose, on
           <Field label="Notas">
             <textarea value={notas} onChange={(e) => setNotas(e.target.value)} rows={3} className={`${inputCls} resize-none`} placeholder="Para el operario o la oficina" />
           </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="WhatsApp del responsable (aviso al llegar)">
+              <input type="tel" value={telefonoAviso} onChange={(e) => setTelefonoAviso(e.target.value)} className={inputCls} placeholder="600 11 22 33" />
+            </Field>
+            <Field label="Correo para el informe">
+              <input type="email" value={emailInforme} onChange={(e) => setEmailInforme(e.target.value)} className={inputCls} placeholder="flota@cliente.es" />
+            </Field>
+          </div>
         </div>
         {error && (
           <div className="mt-3 rounded-lg border border-red-500/40 bg-red-500/15 px-3 py-2 text-sm font-bold text-red-300">
@@ -620,6 +634,20 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
 
       {presupuestando && <PresupuestarModal otf={otf} onClose={() => setPresupuestando(false)} />}
 
+      {(otf.avisoLlegadaResultado || otf.informeResultado) && (
+        <div className="mt-3 space-y-1 text-xs font-bold">
+          {otf.avisoLlegadaResultado && (
+            <div className={otf.avisoLlegadaResultado === "enviado" ? "text-emerald-300" : "text-amber-300"}>
+              WhatsApp al responsable al llegar: {otf.avisoLlegadaResultado}
+            </div>
+          )}
+          {otf.informeResultado && (
+            <div className={otf.informeResultado.startsWith("enviado") ? "text-emerald-300" : "text-amber-300"}>
+              Informe por correo: {otf.informeResultado}
+            </div>
+          )}
+        </div>
+      )}
       {otf.sinResponsable && otf.status === "finalizada" && (
         <div className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm font-bold text-amber-300">
           Cerrada sin responsable en la base: no hay firma.
@@ -660,6 +688,14 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
                 </div>
               )}
               {t.motivoNoRealizado && <div className="text-xs font-bold text-red-300">No realizado: {t.motivoNoRealizado}</div>}
+              {(t.material ?? []).map((m: any) => (
+                <div key={m.id} className="text-xs text-slate-300">🛞 {m.texto}</div>
+              ))}
+              {Array.isArray(t.checklist) && t.checklist.length > 0 && (
+                <div className="text-xs text-slate-400">
+                  {t.checklist.map((c: any) => `${c.hecho ? "✓" : "✗"} ${c.texto}${c.valor ? ` (${c.valor})` : ""}`).join(" · ")}
+                </div>
+              )}
               {t.matriculaNoCoincide && t.matriculaLeida && (
                 <div className="text-xs font-bold text-amber-300">⚠ En la foto se leyó {t.matriculaLeida}, no {t.plate}</div>
               )}
@@ -784,7 +820,8 @@ function PlantillasModal({ onClose, onChanged }: { onClose: () => void; onChange
           {items.length === 0 ? (
             <div className="py-8 text-center text-sm text-slate-500">Sin plantillas. Crea la primera arriba.</div>
           ) : items.map((p) => (
-            <div key={p.id} className={`flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 ${p.activo ? "" : "opacity-50"}`}>
+            <div key={p.id} className={`rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 ${p.activo ? "" : "opacity-50"}`}>
+            <div className="flex items-center gap-2">
               <input
                 defaultValue={p.nombre}
                 onBlur={async (e) => {
@@ -807,6 +844,26 @@ function PlantillasModal({ onClose, onChanged }: { onClose: () => void; onChange
               >
                 {p.activo ? "Activa" : "Inactiva"}
               </button>
+            </div>
+            {/* Lo que el operario tiene que comprobar al terminar un trabajo
+                de esta plantilla. Uno por línea. */}
+            <label className="mt-2 block">
+              <span className="mb-1 block text-[11px] font-bold text-slate-400">Lista de comprobación (un punto por línea)</span>
+              <textarea
+                defaultValue={(p.checklist ?? []).join("\n")}
+                rows={Math.max(2, (p.checklist ?? []).length + 1)}
+                placeholder={"Presiones\nPar de apriete\nProfundidad de dibujo"}
+                onBlur={async (e) => {
+                  const nuevo = e.target.value;
+                  if (nuevo.trim() !== (p.checklist ?? []).join("\n").trim()) {
+                    await updateOtfPlantilla(p.id, { checklist: nuevo });
+                    await load();
+                    onChanged();
+                  }
+                }}
+                className="w-full resize-none rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-200 outline-none focus:border-orange-500"
+              />
+            </label>
             </div>
           ))}
         </div>

@@ -943,6 +943,30 @@ export async function initDb() {
     ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS "motivoNoRealizado" TEXT;
     ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS "matriculaLeida" TEXT;
     ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS "matriculaNoCoincide" BOOLEAN NOT NULL DEFAULT false;
+    -- Lo marcado de la lista de comprobación al finalizar ([{texto, hecho, valor}]).
+    ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS checklist JSONB;
+    -- Aviso al responsable de la base al llegar, y correo del informe.
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "telefonoAviso" TEXT;
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "emailInforme" TEXT;
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "avisoLlegadaAtMs" BIGINT;
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "avisoLlegadaResultado" TEXT;
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "informeEnviadoAtMs" BIGINT;
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "informeResultado" TEXT;
+
+    -- Neumáticos y material montados en cada trabajo (server/otf/mejoras.ts).
+    CREATE TABLE IF NOT EXISTS otf_trabajo_material (
+      id SERIAL PRIMARY KEY,
+      "trabajoId" INTEGER NOT NULL REFERENCES otf_trabajos(id) ON DELETE CASCADE,
+      "otfId" INTEGER NOT NULL,
+      tipo TEXT NOT NULL DEFAULT 'neumatico',
+      descripcion TEXT NOT NULL,
+      marca TEXT,
+      estado TEXT,
+      cantidad INTEGER NOT NULL DEFAULT 1,
+      "creadoPor" TEXT,
+      "createdAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS otf_trabajo_material_otf_idx ON otf_trabajo_material("otfId");
 
     -- Catálogo de plantillas de trabajos OTF ("Revisar presiones", etc.).
     -- Sustituye el texto libre de trabajoPlantilla por opciones consistentes
@@ -955,6 +979,9 @@ export async function initDb() {
       "createdAtMs" BIGINT NOT NULL,
       "updatedAtMs" BIGINT NOT NULL
     );
+
+    -- Los puntos a comprobar en un trabajo de esta plantilla (presiones, par…).
+    ALTER TABLE otf_plantillas ADD COLUMN IF NOT EXISTS checklist JSONB NOT NULL DEFAULT '[]'::jsonb;
 
     CREATE TABLE IF NOT EXISTS otf_trabajo_files (
       id SERIAL PRIMARY KEY,
