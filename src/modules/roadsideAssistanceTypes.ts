@@ -257,6 +257,8 @@ export type RoadsideTrackingResponse = {
    * está ahora la furgoneta. No es el ETA del trayecto (eso es etaMinutos).
    */
   etaEstimada?: { minutos: number; kilometros: string; calculadaAtMs: number } | null;
+  /** Km desde la salida del taller, ida y vuelta (Webfleet o la tablet). */
+  kmRecorridos?: { km: number; fuente: "furgoneta" | "tablet" } | null;
   expired: boolean;
 };
 
