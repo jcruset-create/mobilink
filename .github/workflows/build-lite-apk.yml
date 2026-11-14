@@ -196,8 +196,10 @@ jobs:
       # ── Guardar la versión nueva en el repositorio ─────────────────────────
       #
       # Se guarda DESPUÉS de publicar: si el build falla, el número no se
-      # quema. El [skip ci] evita que este commit dispare otro build y, con
-      # él, un bucle infinito.
+      # quema. El [skip actions] evita que este commit dispare otro build y,
+      # con él, un bucle infinito. Es [skip actions] y NO [skip ci]: Codemagic
+      # también hace caso de [skip ci], y entonces no compilaría el iOS de abajo,
+      # que se lanza justo sobre este commit.
       #
       # POR QUÉ NO ES UN «git push» Y YA
       #
@@ -216,6 +218,7 @@ jobs:
       # entre medias, se repite. Y nunca se baja: si la punta ya lleva un
       # build más nuevo que el nuestro, no hay nada que guardar.
       - name: Guardar la versión nueva en el repositorio
+        id: guardar
         if: ${{ env.KS_B64 != '' }}
         run: |
           git config user.name "github-actions[bot]"
@@ -254,9 +257,10 @@ jobs:
             sed -i "s/^version: .*/version: $NOMBRE+$BUILD/" pubspec.yaml
             sed -i "s/^const String kAppVersion = .*/const String kAppVersion = '$NOMBRE+$BUILD';/" lib/config.dart
             git add -A
-            git commit -q -m "chore(lite): version $NOMBRE+$BUILD [skip ci]"
+            git commit -q -m "chore(lite): version $NOMBRE+$BUILD [skip actions]"
             if git push -q origin "HEAD:$RAMA"; then
               echo "Guardada la versión $NOMBRE+$BUILD en $RAMA (intento $INTENTO)."
+              echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
               exit 0
             fi
             # O alguien ha empujado, o la rama se ha borrado justo ahora. Lo
@@ -274,3 +278,21 @@ jobs:
                "tras cuatro intentos. La release está publicada. Si $RAMA es main, el" \
                "centro de descargas se ha quedado con la versión ANTERIOR: hay que" \
                "poner $NOMBRE+$BUILD en el pubspec a mano."
+
+      # ── Lanzar el iOS de esta misma versión ────────────────────────────────
+      #
+      # Cada merge a main que toca la app sube también la de iOS a TestFlight,
+      # con el MISMO número que la APK: se etiqueta el commit que lleva la
+      # versión nueva y Codemagic compila al ver la etiqueta (lite-ios-*).
+      # Decisión de 14/11/2026: hasta entonces el iOS se pedía a mano y se
+      # quedaba atrás.
+      #
+      # Solo en main y solo si la versión se ha guardado: si otra compilación
+      # ha guardado una más nueva entre medias, la etiqueta la pone ella.
+      - name: Lanzar la compilación de iOS
+        if: ${{ env.KS_B64 != '' && github.ref_name == 'main' && steps.guardar.outputs.sha != '' }}
+        run: |
+          ETIQUETA="lite-ios-${{ steps.ver.outputs.nombre }}-${{ steps.ver.outputs.build }}"
+          git tag "$ETIQUETA" "${{ steps.guardar.outputs.sha }}"
+          git push -q origin "$ETIQUETA"
+          echo "Etiqueta $ETIQUETA empujada: Codemagic compila el iOS de ${{ steps.ver.outputs.nombre }}+${{ steps.ver.outputs.build }}."

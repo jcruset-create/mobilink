@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
+import { rutaConFiltros, type DeDondeVengo } from "../../services/navegacionVolver";
 import { useInformesFiltros } from "./InformesLayout";
 import { listarAlertas, listarAlertasPorVehiculo } from "../../services/informes";
 import { listarUltimasMedicionesVehiculo } from "../../services/data";
@@ -29,7 +30,7 @@ function Muestra({ clase, children }: { clase: string; children: string }) {
   );
 }
 
-function TarjetaVehiculo({ v }: { v: VehiculoConAlertas }) {
+function TarjetaVehiculo({ v, volver }: { v: VehiculoConAlertas; volver: DeDondeVengo }) {
   const vieja = (v.diasDesdeMedicion ?? 0) > DIAS_MEDICION_VIEJA;
   const soloPresion = v.paraCambiar === 0 && v.conPresion > 0;
   // Nada confirmado: ni rojo ni ámbar, el violeta de «por confirmar».
@@ -60,7 +61,7 @@ function TarjetaVehiculo({ v }: { v: VehiculoConAlertas }) {
   return (
     <article className={`flex flex-col gap-3 rounded-xl border bg-slate-800 p-4 ${vieja ? "border-amber-700" : "border-slate-700"}`}>
       <div className="flex flex-wrap items-center gap-2">
-        <Link to={`/tyrecontrol/vehiculos/${v.vehiculoId}`} className="text-[17px] font-extrabold text-slate-100 hover:underline">
+        <Link to={`/tyrecontrol/vehiculos/${v.vehiculoId}`} state={volver} className="text-[17px] font-extrabold text-slate-100 hover:underline">
           {v.matricula || "sin matrícula"}
         </Link>
         <span className="flex-1" />
@@ -115,7 +116,7 @@ function TarjetaVehiculo({ v }: { v: VehiculoConAlertas }) {
           <span className="text-[12px] text-slate-400">Sin fecha de medición</span>
         )}
         <span className="flex-1" />
-        <Link to={`/tyrecontrol/vehiculos/${v.vehiculoId}`} className="text-[12px] font-bold text-sky-300 hover:underline">Ver</Link>
+        <Link to={`/tyrecontrol/vehiculos/${v.vehiculoId}`} state={volver} className="text-[12px] font-bold text-sky-300 hover:underline">Ver</Link>
       </div>
     </article>
   );
@@ -127,7 +128,25 @@ export default function InformeAlertas() {
   const [ruedas, setRuedas] = useState<RuedaAlerta[]>([]);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
-  const [filtro, setFiltro] = useState<FiltroVehiculos>("todo");
+  /*
+   * El filtro va en la dirección (?filtro=presion): así la ficha del vehículo
+   * puede ofrecer «← Alertas» y volver a la MISMA lista, con el mismo cuadro
+   * pulsado, en vez de a la lista entera.
+   */
+  const [params, setParams] = useSearchParams();
+  const FILTROS: FiltroVehiculos[] = ["todo", "cambiar", "presion", "confirmar", "vieja"];
+  const delEnlace = params.get("filtro") as FiltroVehiculos | null;
+  const [filtro, setFiltroLocal] = useState<FiltroVehiculos>(delEnlace && FILTROS.includes(delEnlace) ? delEnlace : "todo");
+  const setFiltro = (f: FiltroVehiculos) => {
+    setFiltroLocal(f);
+    const p = new URLSearchParams(params);
+    if (f === "todo") p.delete("filtro"); else p.set("filtro", f);
+    setParams(p, { replace: true });
+  };
+  const volver: DeDondeVengo = {
+    volverA: rutaConFiltros("/tyrecontrol/informes/alertas", { filtro: filtro === "todo" ? null : filtro }),
+    volverEtiqueta: "Alertas",
+  };
   const [orden, setOrden] = useState<OrdenVehiculos>("peor");
   const [verSinRevisar, setVerSinRevisar] = useState(false);
   const [verSonda, setVerSonda] = useState(false);
@@ -261,7 +280,7 @@ export default function InformeAlertas() {
         </div>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {visibles.map((v) => <TarjetaVehiculo key={v.vehiculoId} v={v} />)}
+          {visibles.map((v) => <TarjetaVehiculo key={v.vehiculoId} v={v} volver={volver} />)}
         </div>
       )}
 
@@ -296,7 +315,7 @@ export default function InformeAlertas() {
                 {paraSonda.map((f) => (
                   <tr key={`${f.vehiculoId}-${f.codigo}`} className="border-t border-slate-700">
                     <td className="py-1.5 pr-3">
-                      <Link to={`/tyrecontrol/vehiculos/${f.vehiculoId}`} className="font-bold text-slate-100 hover:underline">
+                      <Link to={`/tyrecontrol/vehiculos/${f.vehiculoId}`} state={volver} className="font-bold text-slate-100 hover:underline">
                         {f.matricula || "sin matrícula"}
                       </Link>
                       {f.unidad && <span className="text-slate-400"> · {f.unidad}</span>}
