@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'services/biometria.dart';
 import 'services/offline_store.dart';
 import 'services/seguimiento_ubicacion.dart';
 import 'services/supabase_service.dart';
 import 'models/incidencias.dart';
 import 'theme/app_theme.dart';
+import 'screens/bloqueo_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/cliente_screen.dart';
@@ -56,11 +58,22 @@ void main() async {
     if (!sinRed) OfflineStore.flush();
   });
 
-  runApp(const TyreControlApp());
+  /*
+   * Candado de Face ID / huella, si el técnico lo activó en este dispositivo.
+   * Se comprueba que siga habiendo sensor y cara o huella dada de alta: si se
+   * borraron del móvil, se entra como siempre en vez de dejar la app
+   * inservible en la pantalla de candado.
+   */
+  final candado = TyreControlApi.hasSession &&
+      await Biometria.activada() &&
+      await Biometria.disponible();
+
+  runApp(TyreControlApp(candado: candado));
 }
 
 class TyreControlApp extends StatelessWidget {
-  const TyreControlApp({super.key});
+  final bool candado;
+  const TyreControlApp({super.key, this.candado = false});
 
   @override
   Widget build(BuildContext context) {
@@ -70,9 +83,16 @@ class TyreControlApp extends StatelessWidget {
       theme: AppTheme.build(),
       // Gating de arranque: sin sesión → login; con sesión pero sin cliente
       // elegido → pantalla de selección de cliente; con cliente → home.
+      // Con Face ID activado, el candado va delante y deja pasar al mismo
+      // sitio.
       home: !TyreControlApi.hasSession
           ? const LoginScreen()
-          : (TyreControlApi.hayClienteSeleccionado ? const HomeScreen() : const ClienteScreen()),
+          : candado
+              ? BloqueoScreen(destino: (_) => _conSesion())
+              : _conSesion(),
     );
   }
+
+  static Widget _conSesion() =>
+      TyreControlApi.hayClienteSeleccionado ? const HomeScreen() : const ClienteScreen();
 }

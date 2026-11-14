@@ -51,6 +51,10 @@ dependencies:
   permission_handler: ^11.3.1
   device_info_plus: ^11.1.0
 
+  # Entrar con Face ID / huella en vez de nombre y PIN. Misma versión que
+  # lite_app (Mobilink Assist Lite), que ya lo usa: una sola que mantener.
+  local_auth: ^3.0.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

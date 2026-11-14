@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/offline_store.dart';
 import '../services/probe_session.dart';
+import '../services/biometria.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/status_bar.dart';
@@ -359,6 +360,7 @@ class _BigTile extends StatelessWidget {
 // Reexport util para logout desde ProfileScreen
 Future<void> doLogout(BuildContext context) async {
   await TyreControlApi.signOut(); // olvida el cliente activo
+  await Biometria.olvidar(); // quien entre después elige si lo quiere
   await OfflineStore.limpiarDatosCliente(); // limpia cachés del cliente
   if (!context.mounted) return;
   Navigator.of(context).pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const LoginScreen()), (_) => false);
