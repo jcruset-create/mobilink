@@ -28,7 +28,6 @@ import {
   List,
   Menu,
   Wifi,
-  Truck,
   Store,
   Building2,
   Contact,
@@ -37,6 +36,8 @@ import RoadsideBackofficeModal, { type BackofficeData } from "./RoadsideBackoffi
 import KnownPlaceMapModal from "./KnownPlaceMapModal";
 import LocationPickerModal from "./LocationPickerModal";
 import WhatsAppCaptureSection from "./WhatsAppCaptureSection";
+import MensajesOperario from "./MensajesOperario";
+import MenuOtf from "./MenuOtf";
 import type { RoadsideAssistanceFile } from "../modules/roadsideAssistanceTypes";
 import RoadsideMap from "./RoadsideMap";
 import {
@@ -336,6 +337,50 @@ function getNextStatus(
   if (index === -1) return null;
 
   return ROADSIDE_ASSISTANCE_STATUS_FLOW[index + 1] ?? null;
+}
+
+/*
+ * «Asignada», aún sin salir: cuánto tardaría aproximadamente desde donde está
+ * ahora la furgoneta. El servidor lo guarda unos minutos
+ * (`server/core/etaEstimada.ts`): cada cálculo es una llamada de pago a
+ * Google, así que aquí se pide cada minuto y no más.
+ */
+function EtaAproximada({ assistanceId }: { assistanceId: number }) {
+  const [eta, setEta] = useState<{
+    minutos: number; kilometros: string; calculadaAtMs: number; fuente: string | null;
+  } | null>(null);
+
+  useEffect(() => {
+    let vivo = true;
+    const cargar = () => {
+      apiFetch(`${API_BASE}/api/roadside-assistances/${assistanceId}/eta-estimada`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (vivo) setEta(d?.available ? d : null);
+        })
+        .catch(() => {});
+    };
+    cargar();
+    const intervalo = setInterval(cargar, 60_000);
+    return () => {
+      vivo = false;
+      clearInterval(intervalo);
+    };
+  }, [assistanceId]);
+
+  if (!eta) return null;
+  return (
+    <div
+      className="mt-4 flex items-center gap-2 rounded-lg border border-indigo-500/40 bg-indigo-500/15 px-3 py-2 text-sm font-bold text-indigo-300"
+      title={`Desde donde está ahora la furgoneta${eta.fuente === "tablet" ? " (posición de la tablet)" : ""}. Calculado a las ${new Date(eta.calculadaAtMs).toLocaleTimeString()}.`}
+    >
+      <img src="/van-icon.png" style={{height:24,width:"auto",flexShrink:0}} alt="furgoneta" />
+      <span>
+        Asignada — llegada aprox.: ~{eta.minutos} min · {eta.kilometros} km
+        <span className="ml-1 font-semibold text-indigo-400/80">(si sale ahora)</span>
+      </span>
+    </div>
+  );
 }
 
 function getActionLabel(status: RoadsideAssistanceStatus) {
@@ -691,6 +736,7 @@ export default function RoadsideAssistanceView({
   const [livePos, setLivePos] = useState<{
     lat: number; lng: number; speedKmh: number | null; moving: boolean | null;
     etaMinutos: number | null; etaKm: string | null; destino: string;
+    fuente: "furgoneta" | "tablet" | null; antigua: boolean; posicionAtMs: number | null;
   } | null>(null);
   const [reportAssistance, setReportAssistance] = useState<RoadsideAssistance | null>(null);
   const [reportChannels, setReportChannels] = useState<{ whatsapp: boolean; email: boolean }>({
@@ -855,6 +901,8 @@ export default function RoadsideAssistanceView({
             setLivePos({
               lat: d.lat, lng: d.lng, speedKmh: d.speedKmh, moving: d.moving,
               etaMinutos: d.etaMinutos, etaKm: d.etaKm, destino: d.destino,
+              fuente: d.fuente ?? null, antigua: d.antigua === true,
+              posicionAtMs: d.posicionAtMs ?? null,
             });
           }
         })
@@ -1578,6 +1626,8 @@ export default function RoadsideAssistanceView({
             </button>
           ))}
 
+          <MenuOtf />
+
           <div className="my-2 border-t border-slate-800" />
           <div className="px-3 pb-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">
             Herramientas
@@ -1619,14 +1669,6 @@ export default function RoadsideAssistanceView({
             className="flex items-center gap-2.5 rounded-lg px-3 py-2 font-medium text-slate-300 hover:bg-slate-800"
           >
             <MapPin className="h-4 w-4 shrink-0" /> Lugares
-          </a>
-          <a
-            href="/otf"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-2.5 rounded-lg px-3 py-2 font-medium text-slate-300 hover:bg-slate-800"
-          >
-            <Truck className="h-4 w-4 shrink-0" /> OTF
           </a>
           <a
             href="/vehiculo"
@@ -2830,6 +2872,15 @@ export default function RoadsideAssistanceView({
                       })()}
                     </div>
 
+                    {assistance.status === "asignada" && (
+                      <EtaAproximada assistanceId={assistance.id} />
+                    )}
+
+                    {/* Solo con operario y la asistencia abierta: es para quien está en la calle. */}
+                    {assistance.assignedTechName && !isClosed(assistance.status) && (
+                      <MensajesOperario assistanceId={assistance.id} techName={assistance.assignedTechName} />
+                    )}
+
                     {assistance.status === "en_camino" && (
                       <div className="mt-4 flex items-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/15 px-3 py-2 text-sm font-bold text-blue-300">
                         <img src="/van-icon.png" style={{height:24,width:"auto",flexShrink:0}} alt="furgoneta" />
@@ -2909,6 +2960,23 @@ export default function RoadsideAssistanceView({
                           className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm font-bold text-slate-200 hover:bg-slate-700"
                         >
                           🛰️ Seguimiento furgoneta
+                        </button>
+                      )}
+
+                      {assistance.assignedTechName && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void abrirInforme(
+                              `${API_BASE}/api/roadside-assistances/${assistance.id}/tablet-report.pdf`,
+                              `recorrido_tablet_${assistance.id}.pdf`,
+                              setLocalError
+                            )
+                          }
+                          title="Recorrido con el GPS de la tablet del operario, por si el de la furgoneta falla"
+                          className="inline-flex items-center gap-2 rounded-lg border border-teal-600/50 bg-teal-600/15 px-3 py-2 text-sm font-bold text-teal-300 hover:bg-teal-600/25"
+                        >
+                          📱 Recorrido tablet
                         </button>
                       )}
 
@@ -4169,7 +4237,28 @@ export default function RoadsideAssistanceView({
 
                   <div className="mt-2 text-xs font-bold text-slate-500">
                     {mapAssistance.status === "en_camino_base" && (
-                      <span className="mr-2 rounded-full bg-teal-500/20 px-2 py-0.5 text-teal-300">🚐 Vuelta al taller · posición Webfleet</span>
+                      <span className="mr-2 rounded-full bg-teal-500/20 px-2 py-0.5 text-teal-300">🚐 Vuelta al taller</span>
+                    )}
+                    {livePos?.fuente && (
+                      <span
+                        className={`mr-2 rounded-full px-2 py-0.5 ${
+                          livePos.fuente === "tablet"
+                            ? "bg-amber-500/20 text-amber-300"
+                            : "bg-blue-500/20 text-blue-300"
+                        }`}
+                        title={
+                          livePos.fuente === "tablet"
+                            ? "Webfleet no da posición reciente: se usa el GPS de la tablet del operario"
+                            : "GPS de la furgoneta (Webfleet)"
+                        }
+                      >
+                        {livePos.fuente === "tablet" ? "📱 Posición: tablet del operario" : "📡 Posición: Webfleet"}
+                      </span>
+                    )}
+                    {livePos?.antigua && livePos.posicionAtMs != null && (
+                      <span className="mr-2 rounded-full bg-red-500/20 px-2 py-0.5 text-red-300">
+                        ⚠ Última posición de las {new Date(livePos.posicionAtMs).toLocaleTimeString()}
+                      </span>
                     )}
                     {livePos
                       ? `Actualizado: ${new Date().toLocaleTimeString()}`

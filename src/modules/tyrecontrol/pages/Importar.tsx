@@ -4,9 +4,12 @@ import { importVehiculos, type ReporteImport } from "../services/importVehiculos
 import { importRevisiones, type ReporteRev } from "../services/importRevisiones";
 import { importCheckpoint, type ReporteCheckpoint } from "../services/importCheckpoint";
 import { HOJA_DETALLE } from "../services/checkpoint";
+import { pareceHoja1, pareceHoja2 } from "../services/importHistorico";
+import ImportarHistorico from "../components/ImportarHistorico";
+import ImportarTacografo from "../components/ImportarTacografo";
 import { TableWrap, tdCls, thCls } from "../components/ui";
 
-type Modo = "vehiculos" | "revisiones" | "checkpoint";
+type Modo = "vehiculos" | "revisiones" | "checkpoint" | "historico";
 
 export default function Importar() {
   const [nombreArchivo, setNombreArchivo] = useState("");
@@ -18,8 +21,19 @@ export default function Importar() {
   const [ejecutado, setEjecutado] = useState(false);
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState("");
+  // El histórico de albaranes (Hoja1 + Hoja2 del Excel de Genes) tiene su
+  // propio componente: no se parece a las plantillas de arriba.
+  const [historico, setHistorico] = useState<{ h1: any[]; h2: any[]; bytes: ArrayBuffer } | null>(null);
+  // Las cargas ya hechas se gestionan sin volver a subir el Excel.
+  const [soloCargas, setSoloCargas] = useState(false);
+  /**
+   * El informe de tacógrafo tiene su propio panel y lo lee el SERVIDOR, así
+   * que no pasa por la detección de arriba: no tendría sentido leerlo aquí
+   * para volver a mandarlo entero.
+   */
+  const [tacografo, setTacografo] = useState(false);
 
-  function reset() { setRepVeh(null); setRepRev(null); setRepChk(null); setEjecutado(false); setRows([]); setModo(null); setError(""); }
+  function reset() { setRepVeh(null); setRepRev(null); setRepChk(null); setEjecutado(false); setRows([]); setModo(null); setError(""); setHistorico(null); }
 
   async function onArchivo(file: File | undefined) {
     if (!file) return;
@@ -37,6 +51,34 @@ export default function Importar() {
         setModo("checkpoint"); setRows(validas);
         return;
       }
+      // El histórico de albaranes: una hoja con Documento/Matrícula/Código y
+      // otra con Cod. Articulo/Doc. Salida (los nombres «Hoja1»/«Hoja2» no se
+      // exigen: se reconocen por las cabeceras).
+      {
+        const hojas = wb.SheetNames.map((n) => XLSX.utils.sheet_to_json(wb.Sheets[n], { defval: "" }) as any[]);
+        const i1 = hojas.findIndex((h) => pareceHoja1(h[0]));
+        const i2 = hojas.findIndex((h) => pareceHoja2(h[0]));
+        if (i1 >= 0) {
+          setModo("historico"); setRows(hojas[i1]);
+          setHistorico({ h1: hojas[i1], h2: i2 >= 0 ? hojas[i2] : [], bytes: buf });
+          return;
+        }
+      }
+      // Si lo que han elegido es el informe de tacógrafo, se dice dónde va en
+      // vez de soltar un «no se han encontrado filas con matricula», que no
+      // ayuda a nadie. Su cabecera está en la tercera fila.
+      {
+        const primera = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],
+          { header: 1, defval: null, raw: true }) as unknown[][];
+        const esTacografo = primera.slice(0, 8).some((f) =>
+          (f ?? []).some((c) => String(c ?? "").trim().toLowerCase().includes("id intervención")));
+        if (esTacografo) {
+          setTacografo(true);
+          throw new Error("Esto es el informe de intervenciones de tacógrafo: tiene su propio "
+            + "apartado, que se acaba de abrir aquí debajo.");
+        }
+      }
+
       const tieneRev = wb.SheetNames.includes("Revisiones");
       const hoja = tieneRev ? "Revisiones" : (wb.Sheets["Vehiculos"] ? "Vehiculos" : wb.SheetNames[0]);
       const data = XLSX.utils.sheet_to_json(wb.Sheets[hoja], { defval: "" }) as any[];
@@ -78,20 +120,28 @@ export default function Importar() {
   return (
     <div>
       <h1 className="mb-1 text-lg font-black">Importar</h1>
-      <p className="mb-3 text-sm text-slate-400">Importación desde plantilla Excel. Detecta automáticamente si es de Vehículos, de Revisiones o el informe del CheckPoint.</p>
+      <p className="mb-3 text-sm text-slate-400">Importación desde plantilla Excel. Detecta automáticamente si es de Vehículos, de Revisiones, el informe del CheckPoint o el histórico de albaranes del taller. El informe de intervenciones de tacógrafo va en su propio apartado.</p>
 
       <div className="mb-3 rounded-lg bg-slate-800 p-3">
         <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-sky-600 px-3 py-2 text-sm font-bold text-sky-300">
           📁 Elegir archivo Excel
           <input type="file" accept=".xlsx,.xlsm,.xls" className="hidden" onChange={(e) => onArchivo(e.target.files?.[0])} />
         </label>
+        <button onClick={() => setSoloCargas((v) => !v)}
+          className="ml-3 rounded-lg border border-slate-600 px-3 py-2 text-[12px] text-slate-200 hover:bg-slate-700">
+          {soloCargas ? "Ocultar cargas del histórico" : "Cargas del histórico de albaranes"}
+        </button>
+        <button onClick={() => setTacografo((v) => !v)}
+          className="ml-2 rounded-lg border border-slate-600 px-3 py-2 text-[12px] text-slate-200 hover:bg-slate-700">
+          {tacografo ? "Ocultar tacógrafo" : "Informe de tacógrafo"}
+        </button>
         {nombreArchivo && (
           <span className="ml-3 text-[13px] text-slate-300">
             {nombreArchivo} · {rows.length} filas
-            {modo && <span className="ml-2 rounded-full bg-slate-700 px-2 py-0.5 text-[11px] font-bold text-slate-200">{modo === "revisiones" ? "Revisiones" : "Vehículos"}</span>}
+            {modo && <span className="ml-2 rounded-full bg-slate-700 px-2 py-0.5 text-[11px] font-bold text-slate-200">{modo === "revisiones" ? "Revisiones" : modo === "checkpoint" ? "CheckPoint" : modo === "historico" ? "Histórico de albaranes" : "Vehículos"}</span>}
           </span>
         )}
-        {rows.length > 0 && (
+        {rows.length > 0 && modo !== "historico" && (
           <div className="mt-3 flex gap-2">
             <button onClick={analizar} disabled={cargando} className="rounded bg-slate-700 px-3 py-1.5 text-[12px] font-bold text-white disabled:opacity-50">
               {cargando && !ejecutado ? "Analizando…" : "Analizar (vista previa)"}
@@ -104,6 +154,14 @@ export default function Importar() {
       </div>
 
       {error && <div className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 text-sm text-rose-200">{error}</div>}
+
+      {modo === "historico" && historico && (
+        <ImportarHistorico h1={historico.h1} h2={historico.h2} nombreArchivo={nombreArchivo} bytes={historico.bytes} />
+      )}
+      {soloCargas && modo !== "historico" && (
+        <ImportarHistorico h1={[]} h2={[]} nombreArchivo="" bytes={null} />
+      )}
+      {tacografo && <ImportarTacografo />}
       {ejecutado && reporte && <div className="mb-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 text-sm text-emerald-200">✔ Importación completada.</div>}
 
       {/* VEHÍCULOS */}

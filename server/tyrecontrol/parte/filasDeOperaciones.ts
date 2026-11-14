@@ -1,4 +1,6 @@
-import type { MovimientoFila } from "./armarParte.ts";
+import type { HistoricoFila, MovimientoFila } from "./armarParte.ts";
+import { esHistoricoAlbaran, textoPosicionHistorica } from "../../../shared/historicoAlbaran.ts";
+import { condicionDeOperacion } from "../../../shared/condicionNeumatico.ts";
 
 /**
  * Las filas del parte, sacadas de las OPERACIONES.
@@ -37,6 +39,15 @@ export interface OperacionFila {
   observaciones?: string | null;
   is_anulada?: boolean | null;
   status?: string | null;
+  /** Histórico de albaranes importado: sin ficha, con la referencia en texto.
+   *  El vínculo con el lote es el criterio (shared/historicoAlbaran.ts). */
+  importacion_lote_id?: string | null;
+  condicion?: string | null;
+  marca_txt?: string | null;
+  modelo_txt?: string | null;
+  medida_txt?: string | null;
+  posicion_fuente?: string | null;
+  km_vehiculo?: number | null;
   neumatico?: {
     marca?: string | null; modelo?: string | null; medida?: string | null;
     numero_serie?: string | null; dot?: string | null; numero_interno?: string | null;
@@ -91,7 +102,43 @@ export function serieDe(n: OperacionFila["neumatico"]): string | null {
 
 /** Una goma montada es NUEVA salvo que la RPC la marcara como usada. */
 export function esNuevo(o: OperacionFila): boolean {
-  return !(o.observaciones ?? "").includes("[USADO]");
+  // Criterio compartido con el panel (shared/condicionNeumatico.ts).
+  return condicionDeOperacion(o) === "nueva";
+}
+
+/**
+ * Los montajes HISTÓRICOS (albarán importado), para su tabla aparte del papel.
+ *
+ * No van a «Neumáticos montados» ni a «nuevos a facturar»: no son trabajo de
+ * este parte ni una venta, son lo que decía un albarán antiguo. Histórico no
+ * significa facturado: el estado administrativo del documento original se
+ * conserva en las líneas de origen y aquí no se afirma nada sobre él.
+ */
+export function filasHistoricas(ops: OperacionFila[]): HistoricoFila[] {
+  const out: HistoricoFila[] = [];
+  for (const o of ops) {
+    if (!esHistoricoAlbaran(o) || o.is_anulada) continue;
+    if (o.status != null && o.status !== "completada") continue;
+    if (o.tipo_operacion !== "montaje") continue;
+    out.push({
+      posicion: textoPosicionHistorica(o.posicion_destino?.codigo_posicion, o.posicion_fuente) || null,
+      descripcion: [o.medida_txt, o.marca_txt, o.modelo_txt].map((x) => (x ?? "").trim()).filter(Boolean).join(" ") || null,
+      condicion: o.condicion ?? null,
+      km: o.km_vehiculo ?? null,
+    });
+  }
+  return out;
+}
+
+/**
+ * Las SALIDAS del histórico: por cada montaje importado hay una retirada de
+ * la goma que ocupaba esa posición (regla de la casa). No se listan una a
+ * una en el papel —de casi ninguna consta la identidad— pero sí se dice
+ * cuántas fueron, para que el recuento cuadre.
+ */
+export function salidasHistoricas(ops: OperacionFila[]): number {
+  return ops.filter((o) => esHistoricoAlbaran(o) && !o.is_anulada
+    && (o.status == null || o.status === "completada") && o.tipo_operacion === "desmontaje").length;
 }
 
 /**
@@ -128,6 +175,10 @@ export function filasDeOperaciones(
 
     const tipo = tipoEnElPapel(o);
     if (tipo == null) continue;
+
+    // El histórico de albaranes tiene su propia tabla (filasHistoricas): no
+    // entra en montados ni en nuevos a facturar.
+    if (esHistoricoAlbaran(o)) continue;
 
     // Lo que el camión ya llevaba no se monta hoy: fuera del papel. El
     // DESMONTAJE de una de esas ruedas sí es trabajo y se queda.

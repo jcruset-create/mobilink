@@ -11,9 +11,45 @@ import sharp from "sharp";
 import nodemailer from "nodemailer";
 import { fileURLToPath } from "url";
 import db, { initDb } from "./db.ts";
-import { supabase, supabaseAnonAuth, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_BUCKET } from "./supabase.ts";
+import { supabase, supabaseAnonAuth, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_BUCKET, SUPABASE_DOCS_BUCKET } from "./supabase.ts";
 import { fallaAlFirmar, firmarEnFilas, firmarUrls } from "./core/fotosFirmadas.ts";
 import { descargarMedioTwilio, rescatarMedioDeTwilio } from "./core/medioTwilio.ts";
+import { elegirPosicion, horaWebfleet, type PosicionElegida } from "./core/posicionDoble.ts";
+import { crearCacheEta, ESTADOS_ETA_ESTIMADA, type EtaEstimada } from "./core/etaEstimada.ts";
+import { sqlActualizarOtf, sqlEstadoTrabajo } from "./otf/actualizar.ts";
+import {
+  codigoMaterial,
+  emailValido,
+  ErrorMaterial,
+  limpiarChecklist,
+  tiemposTrabajo,
+  horaEs,
+  duracionCorta,
+  ETIQUETA_FOTO,
+  limpiarMaterial,
+  resultadoChecklist,
+  telefonoValido,
+  textoMaterial,
+} from "./otf/mejoras.ts";
+import {
+  borrarPosicionTablet,
+  guardarPosicionTablet,
+  listarTabletsEnMapa,
+  rastroTablet,
+  ultimaPosicionTablet,
+} from "./tablets/posicionTablet.ts";
+import { analizarRecorrido, unirPuntos, type PuntoRecorrido } from "./tablets/recorrido.ts";
+import {
+  enviarDesdeOficina,
+  ErrorMensaje,
+  listarDeAsistencia,
+  listarDeOtf,
+  marcarLeido,
+  pendientesDeOperario,
+  responderDesdeTablet,
+  RESPUESTAS_RAPIDAS,
+  TEXTOS_RAPIDOS_OFICINA,
+} from "./mensajes/mensajesAsistencia.ts";
 import { guardarCodigoErp, SISTEMAS_NO_ERP } from "./clientes/codigoErp.ts";
 import { OTF_EN_ESPERA_SQL } from "./otf/espera.ts";
 import {
@@ -45,6 +81,7 @@ import { toFile } from "openai";
 import { findUserByPassword } from "./modules/users";
 import twilio from "twilio";
 import Stripe from "stripe";
+import { stripeOCortar } from "./core/stripeCliente.ts";
 import { initIntegrationHub, mountIntegrationHub, startIntegrationWorker } from "./integration-hub/index.ts";
 import { initCash, mountCash, startCashErpWorker, startCashEventWorker } from "./cash/index.ts";
 import { initTacografos, mountTacografos } from "./tacografos/index.ts";
@@ -96,9 +133,11 @@ import {
 import { createTyreControlRouter } from "./tyrecontrol/router.ts";
 import { createConciliacionRouter } from "./tyrecontrol/conciliacion/router.ts";
 import { createPresenciaRouter } from "./tyrecontrol/presencia/router.ts";
+import { createUbicacionRouter } from "./tyrecontrol/ubicacion/router.ts";
 import { createKilometrajeMensualRouter } from "./tyrecontrol/kilometrajeMensual/router.ts";
 import { createAltaOperativaRouter } from "./tyrecontrol/altaOperativa/router.ts";
 import { createKilometrajeActualRouter } from "./tyrecontrol/kilometrajeActual/router.ts";
+import { createParteFlotasRouter } from "./tyrecontrol/parteFlotas/router.ts";
 import { createParteProveedorRouter } from "./tyrecontrol/parteProveedor/router.ts";
 import { startConciliacionQuincenal } from "./tyrecontrol/conciliacion/worker.ts";
 import { startPresenciaBases } from "./tyrecontrol/presencia/worker.ts";
@@ -131,6 +170,11 @@ import { mountAsistente } from "./tyrecontrol/asistente.ts";
 import { mountFlanco } from "./tyrecontrol/flanco/index.ts";
 import { mountEtiquetas } from "./tyrecontrol/etiquetas/index.ts";
 import { mountParte } from "./tyrecontrol/parte/index.ts";
+import { mountInformeFlota } from "./tyrecontrol/informeFlota/index.ts";
+import { mountInformeRevisiones } from "./tyrecontrol/informeRevisiones/index.ts";
+import { mountInformePendientes } from "./tyrecontrol/informePendientes/index.ts";
+import { mountInformeMensual } from "./tyrecontrol/informeMensual/index.ts";
+import { mountTcTacografo } from "./tyrecontrol/tacografo/index.ts";
 import { masNuevaPrimero } from "./apkVersion.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
@@ -208,6 +252,8 @@ app.post(
   express.raw({ type: "application/json" }),
   async (req, res) => {
     const sig = req.headers["stripe-signature"];
+    const stripe = stripeOCortar(res);
+    if (!stripe) return;
 
     try {
       const event = stripe.webhooks.constructEvent(
@@ -370,6 +416,8 @@ app.post("/api/payments/create-deposit", authenticate, requireModule("administra
 
     const desc = String(description || "").trim();
 
+    const stripe = stripeOCortar(res);
+    if (!stripe) return;
     const session = await stripe.checkout.sessions.create({
             line_items: [
         {
@@ -769,9 +817,10 @@ const PORT = process.env.PORT || 4000;
 // El cliente de OpenAI vive en core/openaiService.ts: aquí no se crea ninguno.
 // Toda la IA de la plataforma pasa por pedirIA() / transcribirAudio().
 console.log("KEY:", process.env.OPENAI_API_KEY ? "OK" : "NO CARGADA");
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
-  apiVersion: "2026-04-22.dahlia",
-});
+// Stripe vive en core/stripeCliente.ts: aquí no se construye ninguno. Sin
+// STRIPE_SECRET_KEY el servidor arranca igual y las rutas de cobro responden
+// 503 antes de intentar nada (antes, el cliente se creaba en el arranque con
+// la clave vacía y la librería tumbaba el proceso entero).
 /* =========================================================
    HELPERS
 ========================================================= */
@@ -1522,6 +1571,58 @@ async function getWebfleetVehiclePosition(vehicleId: string): Promise<{
     speedKmh,
     moving,
   };
+}
+
+/*
+ * La posición de la furgoneta de una asistencia con doble fuente: Webfleet y,
+ * si falla o va con retraso, la tablet del operario. La regla está en
+ * `core/posicionDoble.ts`. Recibe la fila tal cual sale de la base.
+ */
+async function posicionDeAsistencia(row: any): Promise<
+  (PosicionElegida & { speedKmh: number | null; moving: boolean | null }) | null
+> {
+  const ahora = Date.now();
+  let furgoneta: { lat: number; lng: number; atMs: number } | null = null;
+  let speedKmh: number | null = null;
+  let moving: boolean | null = null;
+  if (row?.webfleetVehicleId) {
+    try {
+      const pos = await getWebfleetVehiclePosition(String(row.webfleetVehicleId));
+      furgoneta = { lat: pos.lat, lng: pos.lng, atMs: horaWebfleet(pos.timestamp, ahora) };
+      speedKmh = pos.speedKmh;
+      moving = pos.moving;
+    } catch (err: any) {
+      console.warn(`Webfleet sin posición para asistencia #${row.id}: ${err?.message ?? err}`);
+    }
+  }
+  /*
+   * La tablet, de dos sitios: lo que mandó a ESTA asistencia y la última
+   * posición de la tablet del operario asignado (la del Mapa flota). La
+   * segunda hace falta porque, si la asistencia se pone «En camino» desde el
+   * panel, la tablet no se entera hasta que el operario refresca su lista, y
+   * mientras tanto manda su posición a la ruta general, no a la asistencia.
+   */
+  const tLat = normalizeNullableNumber(row?.tabletLat);
+  const tLng = normalizeNullableNumber(row?.tabletLng);
+  let tablet =
+    tLat != null && tLng != null && row?.tabletLocationAtMs != null
+      ? { lat: tLat, lng: tLng, atMs: Number(row.tabletLocationAtMs) }
+      : null;
+  if (row?.assignedTechName) {
+    try {
+      const deLaTablet = await ultimaPosicionTablet(String(row.assignedTechName));
+      if (deLaTablet && (!tablet || deLaTablet.atMs > tablet.atMs)) tablet = deLaTablet;
+    } catch (err: any) {
+      console.warn(`Sin posición de tablet para ${row.assignedTechName}: ${err?.message ?? err}`);
+    }
+  }
+
+  const elegida = elegirPosicion({ furgoneta, tablet, ahoraMs: ahora });
+  if (!elegida) return null;
+  // Velocidad y «en marcha» solo los da Webfleet.
+  return elegida.fuente === "furgoneta"
+    ? { ...elegida, speedKmh, moving }
+    : { ...elegida, speedKmh: null, moving: null };
 }
 
 // ── Webfleet: viajes y recorrido para informe de seguimiento ──────────────────
@@ -2505,8 +2606,6 @@ app.post("/api/reset", requireAdminRole, async (req, res) => {
 
    await db.query(`DELETE FROM jobs`);
 await db.query(`DELETE FROM logs`);
-
-await ensureMaintenanceTables();
 
 await db.query(`DELETE FROM assigned_maintenance_tasks`);
 
@@ -6139,6 +6238,121 @@ app.get("/api/roadside-assistances/historial", requireSupervisorRole, async (req
   }
 });
 
+// ETA aproximada antes de salir, por asistencia: ver core/etaEstimada.ts.
+const cacheEtaEstimada = crearCacheEta();
+
+/*
+ * Asignada, aún sin salir: cuánto tardaría aproximadamente desde donde está
+ * ahora la furgoneta (Webfleet o, si falla, la tablet). No se guarda en
+ * etaMinutos: no es el trayecto real, es una estimación. La usan el
+ * seguimiento y la tarjeta del panel, con la misma caché.
+ */
+async function etaEstimadaDeAsistencia(row: any): Promise<EtaEstimada | null> {
+  const lat = normalizeNullableNumber(row?.latitude);
+  const lng = normalizeNullableNumber(row?.longitude);
+  if (
+    !ESTADOS_ETA_ESTIMADA.has(String(row?.status)) ||
+    lat == null || lng == null ||
+    (!row?.webfleetVehicleId && !row?.assignedTechName)
+  ) {
+    return null;
+  }
+  const id = Number(row.id);
+  const ahora = Date.now();
+  const guardada = cacheEtaEstimada.leer(id, ahora);
+  if (guardada) return guardada;
+  try {
+    const pos = await posicionDeAsistencia(row);
+    if (!pos) return null;
+    const eta = await calcularETA(pos, { lat, lng });
+    const nueva: EtaEstimada = {
+      minutos: eta.minutos,
+      kilometros: eta.kilometros,
+      calculadaAtMs: ahora,
+      posicion: {
+        lat: pos.lat, lng: pos.lng, fuente: pos.fuente, antigua: pos.antigua,
+        atMs: pos.atMs, speedKmh: pos.speedKmh, moving: pos.moving,
+      },
+    };
+    cacheEtaEstimada.guardar(id, nueva);
+    return nueva;
+  } catch (err: any) {
+    console.warn(`ETA aproximada #${id}: ${err?.message ?? err}`);
+    return null;
+  }
+}
+
+/*
+ * Kilómetros recorridos en una asistencia, para el contador del seguimiento:
+ * desde la salida del taller hasta la llegada al taller (o ahora), ida y
+ * vuelta, que es lo que se factura.
+ *
+ * Fuente: los trayectos de Webfleet de la furgoneta, que miden con el
+ * odómetro; si fallan o no hay furgoneta, el GPS de la tablet (el mismo
+ * cálculo que el informe de recorrido). Se guarda 2 minutos por asistencia:
+ * la página se refresca cada 20 s y Webfleet limita las peticiones.
+ */
+const cacheKmAsistencia = new Map<number, { atMs: number; km: number; fuente: "furgoneta" | "tablet" }>();
+const TTL_KM_ASISTENCIA_MS = 2 * 60_000;
+
+async function kmRecorridosDeAsistencia(
+  a: ReturnType<typeof normalizeRoadsideAssistanceRow>
+): Promise<{ km: number; fuente: "furgoneta" | "tablet" } | null> {
+  if (!a.departedAtMs) return null;
+  const ahora = Date.now();
+  const guardado = cacheKmAsistencia.get(a.id);
+  // Cerrada: lo calculado ya no cambia, se queda.
+  const cerrada = a.arrivedAtWorkshopMs != null || a.cancelledAtMs != null;
+  if (guardado && (cerrada || ahora - guardado.atMs < TTL_KM_ASISTENCIA_MS)) return guardado;
+
+  const desde = a.departedAtMs;
+  const hasta = a.arrivedAtWorkshopMs || a.cancelledAtMs || ahora;
+  let resultado: { km: number; fuente: "furgoneta" | "tablet" } | null = null;
+
+  if (a.webfleetVehicleId) {
+    try {
+      const trips = await getWebfleetTrips(a.webfleetVehicleId, desde, hasta);
+      if (trips.length > 0) {
+        resultado = {
+          km: trips.reduce((s, t) => s + (t.distance || 0), 0) / 1000,
+          fuente: "furgoneta",
+        };
+      }
+    } catch (err: any) {
+      console.warn(`Km asistencia #${a.id} (Webfleet): ${err?.message ?? err}`);
+    }
+  }
+  if (!resultado && a.assignedTechName) {
+    try {
+      const deLaAsistencia = await db.query(
+        `SELECT lat, lng, "ts", "accuracyM", "speedKmh" FROM roadside_operator_track
+          WHERE "assistanceId" = $1 AND "ts" BETWEEN $2 AND $3 ORDER BY "ts"`,
+        [a.id, desde, hasta]
+      );
+      const puntos = unirPuntos(
+        deLaAsistencia.rows.map((p: any) => ({
+          lat: Number(p.lat), lng: Number(p.lng), atMs: Number(p.ts),
+          accuracyM: p.accuracyM != null ? Number(p.accuracyM) : null,
+          speedKmh: p.speedKmh != null ? Number(p.speedKmh) : null,
+        })),
+        await rastroTablet(a.assignedTechName, desde, hasta)
+      );
+      if (puntos.length >= 2) resultado = { km: analizarRecorrido(puntos).km, fuente: "tablet" };
+    } catch (err: any) {
+      console.warn(`Km asistencia #${a.id} (tablet): ${err?.message ?? err}`);
+    }
+  }
+  if (resultado) {
+    cacheKmAsistencia.set(a.id, { ...resultado, atMs: ahora });
+    if (cacheKmAsistencia.size > 500) {
+      for (const [id, v] of cacheKmAsistencia) {
+        if (ahora - v.atMs > 24 * 60 * 60_000) cacheKmAsistencia.delete(id);
+      }
+    }
+  }
+  return resultado;
+}
+
 app.get("/api/roadside-tracking/:token", async (req, res) => {
   try {
     const token = String(req.params.token || "").trim();
@@ -6165,24 +6379,22 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
 
     // Recalcular ETA en tiempo real si la furgoneta está en camino
     let etaWarning: string | null = null;
-    let vehiclePosition: {
-      lat: number;
-      lng: number;
-      speedKmh: number | null;
-      moving: boolean | null;
-    } | null = null;
+    let vehiclePosition: Awaited<ReturnType<typeof posicionDeAsistencia>> = null;
 
-    // En camino al punto (en_camino) o de vuelta al taller (en_camino_base)
+    // En camino al punto (en_camino) o de vuelta al taller (en_camino_base).
+    // Sin furgoneta de Webfleet también: la tablet puede dar la posición.
     const enCaminoBase = assistance.status === "en_camino_base";
     const canRecalculate =
       (assistance.status === "en_camino" || enCaminoBase) &&
-      assistance.webfleetVehicleId &&
       assistance.latitude != null &&
       assistance.longitude != null;
 
     if (canRecalculate) {
       try {
-        vehiclePosition = await getWebfleetVehiclePosition(assistance.webfleetVehicleId!);
+        vehiclePosition = await posicionDeAsistencia(assistanceResult.rows[0]);
+        if (!vehiclePosition) {
+          throw new Error("Sin posición: ni Webfleet ni la tablet del operario");
+        }
 
         // Destino: si vuelve al taller, ETA al taller; si no, al punto de avería
         let destino = { lat: assistance.latitude!, lng: assistance.longitude! };
@@ -6214,6 +6426,10 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
         console.error("tracking ETA recalc error:", etaWarning);
       }
     }
+
+    // Asignada, aún sin salir: ETA aproximada desde donde está la furgoneta.
+    const etaEstimada = await etaEstimadaDeAsistencia(assistanceResult.rows[0]);
+    if (etaEstimada?.posicion) vehiclePosition = etaEstimada.posicion;
 
     const [eventsResult, filesResult] = await Promise.all([
       db.query(
@@ -6304,9 +6520,24 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
             lng: Math.round(vehiclePosition.lng * 1000) / 1000,
             speedKmh: vehiclePosition.speedKmh,
             moving: vehiclePosition.moving,
+            // De dónde sale: «furgoneta» (Webfleet) o «tablet» (el operario).
+            fuente: vehiclePosition.fuente,
+            antigua: vehiclePosition.antigua,
+            atMs: vehiclePosition.atMs,
           }
         : null,
       etaWarning,
+      // Contador de km del seguimiento: ida y vuelta, desde la salida del taller.
+      kmRecorridos: await kmRecorridosDeAsistencia(assistance).then((k) =>
+        k ? { km: Math.round(k.km * 10) / 10, fuente: k.fuente } : null
+      ),
+      etaEstimada: etaEstimada
+        ? {
+            minutos: etaEstimada.minutos,
+            kilometros: etaEstimada.kilometros,
+            calculadaAtMs: etaEstimada.calculadaAtMs,
+          }
+        : null,
       expired:
         assistance.status === "llegada_taller" ||
         assistance.status === "cancelada",
@@ -7195,12 +7426,9 @@ async function ponerAsistenciaEnCamino(
       };
     }
 
-    let origen: { lat: number; lng: number };
-    if (row.webfleetVehicleId) {
-      origen = await getWebfleetVehiclePosition(row.webfleetVehicleId);
-    } else {
-      origen = { lat: 41.1452, lng: 1.3987 };
-    }
+    // Webfleet o, si falla, la tablet. Sin ninguna, el taller como origen.
+    const posicion = await posicionDeAsistencia(row);
+    const origen: { lat: number; lng: number } = posicion ?? { lat: 41.1452, lng: 1.3987 };
 
     const destino = { lat: destLat, lng: destLng };
     const eta = await calcularETA(origen, destino);
@@ -7501,11 +7729,19 @@ app.post(
       await db.query(
         `
           UPDATE roadside_assistances
-          SET "operatorLat" = $2, "operatorLng" = $3, "operatorLocationAtMs" = $4
+          SET "operatorLat" = $2, "operatorLng" = $3, "operatorLocationAtMs" = $4,
+              "tabletLat" = $2, "tabletLng" = $3, "tabletLocationAtMs" = $4
           WHERE id = $1
         `,
         [id, lat, lng, ahora]
       );
+      // Y la del operario en el Mapa flota: dentro de una asistencia la tablet
+      // manda solo a esta ruta, no a la general.
+      await guardarPosicionTablet(operator.techName, {
+        lat, lng, atMs: ahora,
+        accuracyM: normalizeNullableNumber(req.body?.accuracyM ?? req.body?.accuracy),
+        speedKmh: normalizeNullableNumber(req.body?.speedKmh ?? req.body?.speed),
+      });
 
       /*
        * Y la posición se GUARDA como rastro, no solo se pisa la última.
@@ -7582,6 +7818,68 @@ app.post(
   }
 );
 
+/*
+ * La posición de la tablet fuera de una asistencia, para el Mapa flota. La
+ * manda la APK mientras el operario tiene la sesión abierta; al cerrar sesión
+ * la borra (DELETE) y deja de salir en el mapa. Ver tablets/posicionTablet.ts.
+ */
+app.post("/api/roadside-operator/location", requireRoadsideOperator, async (req, res) => {
+  try {
+    const operator = (req as any).roadsideOperator as { techName: string };
+    const lat = normalizeNullableNumber(req.body?.lat);
+    const lng = normalizeNullableNumber(req.body?.lng);
+    if (lat == null || lng == null) {
+      return res.status(400).json({ error: "Coordenadas no validas" });
+    }
+    await guardarPosicionTablet(operator.techName, {
+      lat, lng, atMs: Date.now(),
+      accuracyM: normalizeNullableNumber(req.body?.accuracyM ?? req.body?.accuracy),
+      speedKmh: normalizeNullableNumber(req.body?.speedKmh ?? req.body?.speed),
+    });
+    /*
+     * Si la oficina ha puesto en camino una asistencia de este operario, se le
+     * dice a la tablet: no refresca su lista sola, y sin esto seguiría
+     * mandando aquí en vez de a la asistencia (sin rastro ni kilómetros).
+     */
+    const enCamino = await db.query(
+      `SELECT id FROM roadside_assistances
+        WHERE "assignedTechName" = $1 AND status IN ('en_camino', 'en_camino_base')
+        ORDER BY "updatedAtMs" DESC NULLS LAST LIMIT 1`,
+      [operator.techName]
+    );
+    res.json({
+      ok: true,
+      asistenciaEnCamino: enCamino.rows[0] ? Number(enCamino.rows[0].id) : null,
+    });
+  } catch (error) {
+    console.error("POST /api/roadside-operator/location error:", error);
+    res.status(500).json({ error: "Error guardando ubicacion" });
+  }
+});
+
+app.delete("/api/roadside-operator/location", requireRoadsideOperator, async (req, res) => {
+  try {
+    const operator = (req as any).roadsideOperator as { techName: string };
+    await borrarPosicionTablet(operator.techName);
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("DELETE /api/roadside-operator/location error:", error);
+    res.status(500).json({ error: "Error borrando ubicacion" });
+  }
+});
+
+app.get("/api/tablets/posiciones", exigirCredencial(requirePanelRole), async (req, res) => {
+  try {
+    // Igual que las furgonetas: las de otro taller se ven, marcadas como ajenas.
+    const panelUser = await getAssistPanelUser(req);
+    const miTallerId = panelUser && !panelUser.esAdmin ? panelUser.tallerId : null;
+    res.json(await listarTabletsEnMapa(miTallerId ?? null));
+  } catch (error) {
+    console.error("GET /api/tablets/posiciones error:", error);
+    res.status(500).json({ error: "Error listando tablets" });
+  }
+});
+
 // Lote de posiciones capturadas offline (migas de pan). Se envían al recuperar señal.
 app.post(
   "/api/roadside-operator/assistances/:id/locations-batch",
@@ -7640,9 +7938,16 @@ app.post(
       if (valid.length > 0) {
         const last = valid[valid.length - 1];
         await db.query(
-          `UPDATE roadside_assistances SET "operatorLat" = $2, "operatorLng" = $3, "operatorLocationAtMs" = $4 WHERE id = $1`,
+          `UPDATE roadside_assistances
+              SET "operatorLat" = $2, "operatorLng" = $3, "operatorLocationAtMs" = $4,
+                  "tabletLat" = $2, "tabletLng" = $3, "tabletLocationAtMs" = $4
+            WHERE id = $1 AND COALESCE("tabletLocationAtMs", 0) <= $4`,
           [id, last.lat, last.lng, last.ts]
         );
+        await guardarPosicionTablet(operator.techName, {
+          lat: last.lat, lng: last.lng, atMs: last.ts,
+          accuracyM: last.accuracyM, speedKmh: last.speedKmh,
+        });
         const cfg = await getWorkshopConfig();
         const tLat = parseFloat(cfg.taller_lat), tLng = parseFloat(cfg.taller_lng);
         const radioM = parseFloat(cfg.taller_radio_m) || 300;
@@ -8092,6 +8397,8 @@ app.post(
       if (!reference) return res.status(400).json({ success: false, message: "Referencia obligatoria" });
       if (!amountCents || amountCents < 100) return res.status(400).json({ success: false, message: "Importe mínimo 1 €" });
 
+      const stripe = stripeOCortar(res);
+      if (!stripe) return;
       const session = await stripe.checkout.sessions.create({
         line_items: [{
           price_data: {
@@ -8487,6 +8794,184 @@ app.get("/api/roadside-assistances/:id", exigirCredencial(authenticate), async (
   }
 });
 
+/* =========================================================
+   MENSAJES OFICINA ⇄ TABLET (server/mensajes/mensajesAsistencia.ts)
+========================================================= */
+
+function responderErrorMensaje(res: express.Response, error: any, donde: string) {
+  if (error instanceof ErrorMensaje) return res.status(error.status).json({ error: error.message });
+  console.error(`${donde} error:`, error);
+  return res.status(500).json({ error: "Error con los mensajes" });
+}
+
+app.get("/api/roadside-assistances/:id/mensajes", exigirCredencial(authenticate), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    res.json({ mensajes: await listarDeAsistencia(id), textosRapidos: TEXTOS_RAPIDOS_OFICINA });
+  } catch (error) {
+    responderErrorMensaje(res, error, "GET mensajes");
+  }
+});
+
+app.post("/api/roadside-assistances/:id/mensajes", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    const autor =
+      (req as any).authCtx?.nombre ?? (req as any).assistPanelUser?.nombre ?? "Oficina";
+    const mensaje = await enviarDesdeOficina({
+      assistanceId: id,
+      texto: req.body?.texto,
+      urgente: req.body?.urgente === true,
+      autor,
+    });
+    res.status(201).json(mensaje);
+  } catch (error) {
+    responderErrorMensaje(res, error, "POST mensajes");
+  }
+});
+
+// Los mismos mensajes, en una OTF (panel).
+app.get("/api/otf/:id/mensajes", exigirCredencial(authenticate), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    res.json({ mensajes: await listarDeOtf(id), textosRapidos: TEXTOS_RAPIDOS_OFICINA });
+  } catch (error) {
+    responderErrorMensaje(res, error, "GET mensajes OTF");
+  }
+});
+
+app.post("/api/otf/:id/mensajes", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    const autor =
+      (req as any).authCtx?.nombre ?? (req as any).assistPanelUser?.nombre ?? "Oficina";
+    res.status(201).json(
+      await enviarDesdeOficina({ otfId: id, texto: req.body?.texto, urgente: req.body?.urgente === true, autor })
+    );
+  } catch (error) {
+    responderErrorMensaje(res, error, "POST mensajes OTF");
+  }
+});
+
+app.get("/api/roadside-operator/otf/:id/mensajes", requireRoadsideOperator, async (req, res) => {
+  try {
+    const operator = (req as any).roadsideOperator as { techName: string };
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    const mensajes = (await listarDeOtf(id)).filter((m) => m.techName === operator.techName);
+    res.json({ mensajes, respuestasRapidas: RESPUESTAS_RAPIDAS });
+  } catch (error) {
+    responderErrorMensaje(res, error, "GET mensajes OTF (operario)");
+  }
+});
+
+app.post("/api/roadside-operator/otf/:id/mensajes", requireRoadsideOperator, async (req, res) => {
+  try {
+    const operator = (req as any).roadsideOperator as { techName: string };
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    res.status(201).json(
+      await responderDesdeTablet({ otfId: id, techName: operator.techName, texto: req.body?.texto })
+    );
+  } catch (error) {
+    responderErrorMensaje(res, error, "POST mensaje OTF (operario)");
+  }
+});
+
+// La tablet pregunta cada 15 s. Recoger los pendientes los marca «recibidos».
+// También van las OTF que el operario aún no ha abierto, para avisarle.
+app.get("/api/roadside-operator/mensajes/pendientes", requireRoadsideOperator, async (req, res) => {
+  try {
+    const operator = (req as any).roadsideOperator as { techName: string };
+    const nuevas = await db.query(
+      `SELECT o.*, ${OTF_EN_ESPERA_SQL} AS "enEspera",
+              (SELECT COUNT(*) FROM otf_trabajos t WHERE t."otfId" = o.id) AS "numTrabajos"
+         FROM otf o
+        WHERE o."assignedTechName" = $1 AND o."vistaAtMs" IS NULL
+          AND o.status NOT IN ('finalizada', 'cancelada')
+        ORDER BY o."createdAtMs"`,
+      [operator.techName]
+    );
+    res.json({
+      mensajes: await pendientesDeOperario(operator.techName),
+      respuestasRapidas: RESPUESTAS_RAPIDAS,
+      otfNuevas: nuevas.rows.map((x: any) => ({ ...normalizeOtf(x), numTrabajos: Number(x.numTrabajos) })),
+    });
+  } catch (error) {
+    responderErrorMensaje(res, error, "GET mensajes pendientes");
+  }
+});
+
+app.post("/api/roadside-operator/mensajes/:id/leido", requireRoadsideOperator, async (req, res) => {
+  try {
+    const operator = (req as any).roadsideOperator as { techName: string };
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    const ok = await marcarLeido(id, operator.techName);
+    if (!ok) return res.status(404).json({ error: "Mensaje no encontrado" });
+    res.json({ ok: true });
+  } catch (error) {
+    responderErrorMensaje(res, error, "POST mensaje leído");
+  }
+});
+
+app.get("/api/roadside-operator/assistances/:id/mensajes", requireRoadsideOperator, async (req, res) => {
+  try {
+    const operator = (req as any).roadsideOperator as { techName: string };
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    const mensajes = (await listarDeAsistencia(id)).filter((m) => m.techName === operator.techName);
+    res.json({ mensajes, respuestasRapidas: RESPUESTAS_RAPIDAS });
+  } catch (error) {
+    responderErrorMensaje(res, error, "GET mensajes (operario)");
+  }
+});
+
+app.post("/api/roadside-operator/assistances/:id/mensajes", requireRoadsideOperator, async (req, res) => {
+  try {
+    const operator = (req as any).roadsideOperator as { techName: string };
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    const mensaje = await responderDesdeTablet({
+      assistanceId: id,
+      techName: operator.techName,
+      texto: req.body?.texto,
+    });
+    res.status(201).json(mensaje);
+  } catch (error) {
+    responderErrorMensaje(res, error, "POST mensaje (operario)");
+  }
+});
+
+// ETA aproximada antes de salir, para la tarjeta del panel («Asignada»).
+app.get("/api/roadside-assistances/:id/eta-estimada", exigirCredencial(authenticate), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    const r = await db.query(`SELECT * FROM roadside_assistances WHERE id = $1 LIMIT 1`, [id]);
+    if (r.rows.length === 0) return res.status(404).json({ error: "Asistencia no encontrada" });
+    const eta = await etaEstimadaDeAsistencia(r.rows[0]);
+    res.json(
+      eta
+        ? {
+            available: true,
+            minutos: eta.minutos,
+            kilometros: eta.kilometros,
+            calculadaAtMs: eta.calculadaAtMs,
+            fuente: eta.posicion?.fuente ?? null,
+          }
+        : { available: false }
+    );
+  } catch (error) {
+    console.error("GET /api/roadside-assistances/:id/eta-estimada error:", error);
+    res.status(500).json({ error: "Error calculando la ETA aproximada" });
+  }
+});
+
 // Posición en vivo (Webfleet) + velocidad + ETA al destino correcto.
 // Para en_camino → ETA al punto de avería; en_camino_base → ETA al taller.
 app.get("/api/roadside-assistances/:id/live-position", exigirCredencial(authenticate), async (req, res) => {
@@ -8497,10 +8982,6 @@ app.get("/api/roadside-assistances/:id/live-position", exigirCredencial(authenti
     const r = await db.query(`SELECT * FROM roadside_assistances WHERE id = $1 LIMIT 1`, [id]);
     if (r.rows.length === 0) return res.status(404).json({ error: "Asistencia no encontrada" });
     const a = normalizeRoadsideAssistanceRow(r.rows[0]);
-
-    if (!a.webfleetVehicleId) {
-      return res.json({ available: false, reason: "sin_furgoneta" });
-    }
 
     const enCaminoBase = a.status === "en_camino_base";
     let destino: { lat: number; lng: number } | null = null;
@@ -8513,7 +8994,13 @@ app.get("/api/roadside-assistances/:id/live-position", exigirCredencial(authenti
       destino = { lat: a.latitude, lng: a.longitude };
     }
 
-    const pos = await getWebfleetVehiclePosition(a.webfleetVehicleId);
+    const pos = await posicionDeAsistencia(r.rows[0]);
+    if (!pos) {
+      return res.json({
+        available: false,
+        reason: a.webfleetVehicleId ? "sin_posicion" : "sin_furgoneta",
+      });
+    }
 
     let etaMinutos: number | null = null;
     let etaKm: string | null = null;
@@ -8534,6 +9021,9 @@ app.get("/api/roadside-assistances/:id/live-position", exigirCredencial(authenti
       etaMinutos,
       etaKm,
       destino: enCaminoBase ? "taller" : "punto",
+      fuente: pos.fuente,
+      antigua: pos.antigua,
+      posicionAtMs: pos.atMs,
       updatedAtMs: Date.now(),
     });
   } catch (error: any) {
@@ -10847,6 +11337,212 @@ app.get("/api/webfleet/vehicle/:objectno/tracking-report.pdf", requireAdminRole,
   }
 });
 
+/*
+ * El nombre de una parada de la tablet: un lugar conocido a menos de 200 m
+ * (taller, cliente...) o, si no, la dirección de OpenStreetMap. Nominatim pide
+ * no pasar de una consulta por segundo: se espera entre una y otra, y a partir
+ * de 15 paradas se dan las coordenadas.
+ */
+async function nombresDeParadas(paradas: { lat: number; lng: number }[]): Promise<string[]> {
+  const lugares = await db
+    .query(`SELECT nombre, lat, lng FROM roadside_known_places WHERE active = true`)
+    .then((r) => r.rows)
+    .catch(() => [] as any[]);
+  const nombres: string[] = [];
+  let consultas = 0;
+  for (const p of paradas) {
+    const conocido = lugares.find(
+      (l: any) => haversineDistanceM(p.lat, p.lng, Number(l.lat), Number(l.lng)) <= 200
+    );
+    if (conocido) {
+      nombres.push(String(conocido.nombre));
+      continue;
+    }
+    const coords = `${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}`;
+    if (consultas >= 15) {
+      nombres.push(coords);
+      continue;
+    }
+    if (consultas > 0) await new Promise((r) => setTimeout(r, 1100));
+    consultas++;
+    try {
+      const resp = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?lat=${p.lat}&lon=${p.lng}&format=json&zoom=17`,
+        { headers: { "User-Agent": "sea-tarragona-app/1.0" }, signal: AbortSignal.timeout(5000) }
+      );
+      const data: any = resp.ok ? await resp.json() : null;
+      // La dirección entera es larguísima («…, Tarragonès, Tarragona,
+      // Catalunya, 43006, España»): con las tres primeras partes basta.
+      const corto = String(data?.display_name ?? "").split(",").slice(0, 3).join(",").trim();
+      nombres.push(corto || coords);
+    } catch {
+      nombres.push(coords);
+    }
+  }
+  return nombres;
+}
+
+async function buildTabletTrackingPdfBuffer(
+  techName: string,
+  fromMs: number,
+  toMs: number,
+  opts: { minStopSec?: number; titleExtra?: string; puntos?: PuntoRecorrido[] } = {}
+): Promise<Buffer> {
+  const puntos = opts.puntos ?? (await rastroTablet(techName, fromMs, toMs));
+  const r = analizarRecorrido(puntos, { minParadaSec: opts.minStopSec ?? 180 });
+  const nombres = await nombresDeParadas(r.paradas);
+
+  const doc = new PDFDocument({ margin: 40, size: "A4" });
+  const chunks: Buffer[] = [];
+  doc.on("data", (c) => chunks.push(c));
+  const finished = new Promise<Buffer>((resolve) => doc.on("end", () => resolve(Buffer.concat(chunks))));
+
+  attachBrandedHeader(
+    doc,
+    "Recorrido de la tablet",
+    `${techName}${opts.titleExtra ? ` · ${opts.titleExtra}` : ""}`
+  );
+  doc.fontSize(10).font("Helvetica").fillColor("#64748b")
+    .text(`${formatDateEs(fromMs)}  –  ${formatDateEs(toMs)}`, 40, doc.y, { align: "left" });
+  doc.fillColor("#000000").moveDown(0.8);
+
+  function row(label: string, value: string) {
+    doc.fontSize(10).font("Helvetica-Bold").text(label, { continued: true, width: 180 });
+    doc.font("Helvetica").text(value);
+  }
+
+  doc.fontSize(13).font("Helvetica-Bold").text("Resumen");
+  doc.moveDown(0.3);
+  row("Operario:", techName);
+  row("Km recorridos:", `${r.km.toFixed(1)} km`);
+  row("Tiempo en marcha:", fmtDuration(r.enMarchaSec));
+  row("Tiempo parado total:", fmtDuration(r.paradoSec));
+  row("Nº de paradas:", String(r.paradas.length));
+  row("Primera salida:", r.primeraSalidaMs ? formatDateEs(r.primeraSalidaMs) : "-");
+  row("Última llegada:", r.ultimaLlegadaMs ? formatDateEs(r.ultimaLlegadaMs) : "-");
+  row("Posiciones GPS:", String(puntos.length));
+  doc.moveDown(0.3);
+  doc.fontSize(8).font("Helvetica").fillColor("#64748b").text(
+    "Calculado con el GPS de la tablet del operario (una posición por minuto, cada 30 s durante una asistencia). " +
+    "Los km son aproximados: los de la furgoneta los da Webfleet."
+  );
+  doc.fillColor("#000000");
+
+  if (r.track.length > 0) {
+    doc.moveDown(0.8);
+    doc.fontSize(13).font("Helvetica-Bold").text("Recorrido");
+    doc.moveDown(0.3);
+    try {
+      const mapBuf = await buildTrackMapImage(r.track, r.paradas);
+      if (mapBuf) doc.image(mapBuf, { fit: [480, 380] as [number, number] });
+    } catch { /* sin mapa */ }
+  }
+
+  doc.moveDown(0.8);
+  doc.fontSize(13).font("Helvetica-Bold").text("Paradas");
+  doc.moveDown(0.3);
+  if (r.paradas.length === 0) {
+    doc.fontSize(10).font("Helvetica").text(
+      puntos.length === 0
+        ? "La tablet no mandó ninguna posición en el periodo."
+        : "Sin paradas registradas en el periodo."
+    );
+  } else {
+    r.paradas.forEach((p, k) => {
+      doc.fontSize(10).font("Helvetica-Bold").text(`${p.n}. ${nombres[k]}`);
+      doc.fontSize(9).font("Helvetica").text(
+        `   Llegada: ${formatDateEs(p.llegadaMs)}  ·  Salida: ${formatDateEs(p.salidaMs)}  ·  Parado: ${fmtDuration(p.duracionSec)}`
+      );
+      doc.moveDown(0.2);
+    });
+  }
+
+  doc.moveDown(0.6);
+  doc.fontSize(13).font("Helvetica-Bold").text("Trayectos");
+  doc.moveDown(0.3);
+  if (r.trayectos.length === 0) {
+    doc.fontSize(10).font("Helvetica").text("Sin trayectos en el periodo.");
+  } else {
+    for (const t of r.trayectos) {
+      doc.fontSize(9).font("Helvetica").text(
+        `${formatDateEs(t.inicioMs)} → ${formatDateEs(t.finMs)}  ·  ${t.km.toFixed(1)} km  ·  ` +
+        `${fmtDuration(t.duracionSec)}  ·  máx ${t.maxKmh ?? "-"} km/h`
+      );
+    }
+  }
+
+  doc.end();
+  return finished;
+}
+
+// Recorrido de la tablet de un operario, por rango de fechas (como el de la furgoneta).
+app.get("/api/tablets/:techName/recorrido.pdf", requireAdminRole, async (req, res) => {
+  try {
+    const techName = String(req.params.techName);
+    const from = Number(req.query.from);
+    const to = Number(req.query.to);
+    const minStop = req.query.minStop ? Number(req.query.minStop) : 180;
+    if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) {
+      return res.status(400).json({ error: "Parámetros from/to (ms) requeridos" });
+    }
+    const buffer = await buildTabletTrackingPdfBuffer(techName, from, to, { minStopSec: minStop });
+    const nombreFichero = techName.normalize("NFD").replace(/[^\w-]+/g, "_");
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="recorrido_tablet_${nombreFichero}.pdf"`);
+    res.send(buffer);
+  } catch (error: any) {
+    console.error("GET /api/tablets/:techName/recorrido.pdf error:", error);
+    if (!res.headersSent) res.status(500).json({ error: error?.message || "Error generando informe" });
+  }
+});
+
+/*
+ * El recorrido de la tablet del operario durante una asistencia: el mismo
+ * periodo que el de la furgoneta (salida → llegada al taller, o ahora).
+ * Junta el rastro de la asistencia, que existe desde siempre, con el rastro
+ * general de la tablet, que es más nuevo pero también cubre los ratos en que
+ * la tablet mandaba a la ruta general (asistencia puesta en camino desde el
+ * panel, por ejemplo).
+ */
+app.get("/api/roadside-assistances/:id/tablet-report.pdf", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    const r = await db.query(`SELECT * FROM roadside_assistances WHERE id = $1 LIMIT 1`, [id]);
+    if (r.rows.length === 0) return res.status(404).json({ error: "Asistencia no encontrada" });
+    const a = normalizeRoadsideAssistanceRow(r.rows[0]);
+    if (!a.assignedTechName) return res.status(400).json({ error: "La asistencia no tiene operario asignado" });
+
+    const fromMs = a.departedAtMs || a.assignedAtMs || a.createdAtMs;
+    const toMs = a.arrivedAtWorkshopMs || a.cancelledAtMs || a.finishedAtMs || Date.now();
+    const deLaAsistencia = await db.query(
+      `SELECT lat, lng, "ts", "accuracyM", "speedKmh" FROM roadside_operator_track
+        WHERE "assistanceId" = $1 ORDER BY "ts"`,
+      [id]
+    );
+    const puntos = unirPuntos(
+      deLaAsistencia.rows.map((p: any) => ({
+        lat: Number(p.lat),
+        lng: Number(p.lng),
+        atMs: Number(p.ts),
+        accuracyM: p.accuracyM != null ? Number(p.accuracyM) : null,
+        speedKmh: p.speedKmh != null ? Number(p.speedKmh) : null,
+      })),
+      await rastroTablet(a.assignedTechName, fromMs, toMs)
+    );
+    const buffer = await buildTabletTrackingPdfBuffer(a.assignedTechName, fromMs, toMs, {
+      titleExtra: `Asistencia #${a.id}`,
+      puntos,
+    });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="recorrido_tablet_asistencia_${id}.pdf"`);
+    res.send(buffer);
+  } catch (error: any) {
+    console.error("GET tablet-report.pdf (asistencia) error:", error);
+    if (!res.headersSent) res.status(500).json({ error: error?.message || "Error generando informe" });
+  }
+});
+
 // Por asistencia (recorrido durante la asistencia: salida → llegada al taller o ahora)
 app.get("/api/roadside-assistances/:id/tracking-report.pdf", requireSupervisorRole, async (req, res) => {
   try {
@@ -11989,6 +12685,126 @@ const DEFAULT_MAINTENANCE_TASKS: MaintenanceTask[] = [
   },
 ];
 
+/**
+ * Las plantillas del taller que trae el sistema de serie.
+ *
+ * Vivían DENTRO de `GET /api/quick-templates`, y el manejador las volvía a
+ * sembrar en CADA lectura: tres `INSERT` por petición que no cambiaban nada,
+ * porque las tres ya estaban. Medido en producción con `pg_stat_statements`,
+ * esa sentencia llevaba 16.783.907 ejecuciones —84.000 al día— y era la más
+ * ejecutada de toda la instalación.
+ *
+ * Ahora se siembran UNA VEZ al arrancar, desde `initTallerEsquema`, y en una
+ * sola sentencia. El `ON CONFLICT (key) DO NOTHING` se conserva tal cual: una
+ * plantilla nueva en esta lista sigue entrando sola en el siguiente arranque y
+ * ninguna de las que ya existen se pisa.
+ */
+const PLANTILLAS_RAPIDAS_POR_DEFECTO = [
+  {
+    key: "alineacion_camion",
+    label: "Alineación Camión",
+    area: "camion",
+    mode: "single",
+    allowedTechs: JSON.stringify(["Anthoni", "Alejandro", "José"]),
+    priorityOrder: JSON.stringify(["Anthoni", "Alejandro", "José"]),
+    standardMinutes: 90,
+  },
+  {
+    key: "pinchazo_camion",
+    label: "Pinchazo camión",
+    area: "camion",
+    mode: "single",
+    allowedTechs: JSON.stringify([
+      "José",
+      "Iván",
+      "Alejandro",
+      "Jesús",
+      "Anthoni",
+      "David",
+    ]),
+    priorityOrder: JSON.stringify([
+      "José",
+      "Iván",
+      "Alejandro",
+      "Jesús",
+      "Anthoni",
+      "David",
+    ]),
+    standardMinutes: 25,
+  },
+  {
+    key: "cambio_4_neumaticos_camion",
+    label: "Cambio de 4 neumáticos de camión",
+    area: "camion",
+    mode: "team",
+    allowedTechs: JSON.stringify([
+      "José",
+      "Iván",
+      "Alejandro",
+      "Jesús",
+      "Anthoni",
+      "David",
+    ]),
+    priorityOrder: JSON.stringify([
+      "José",
+      "Iván",
+      "Alejandro",
+      "Jesús",
+      "Anthoni",
+      "David",
+    ]),
+    standardMinutes: 60,
+  },
+];
+
+/** Siembra las plantillas de serie. Una sentencia, no una por plantilla. */
+async function sembrarPlantillasRapidas(): Promise<void> {
+  if (PLANTILLAS_RAPIDAS_POR_DEFECTO.length === 0) return;
+  const valores: unknown[] = [];
+  const tuplas = PLANTILLAS_RAPIDAS_POR_DEFECTO.map((item, i) => {
+    const b = i * 7;
+    valores.push(
+      item.key,
+      item.label,
+      item.area,
+      item.mode,
+      item.allowedTechs,
+      item.priorityOrder,
+      item.standardMinutes ?? null
+    );
+    return `($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5}, $${b + 6}, $${b + 7})`;
+  });
+  await db.query(
+    `
+      INSERT INTO quick_templates
+        (key, label, area, mode, "allowedTechs", "priorityOrder", "standardMinutes")
+      VALUES ${tuplas.join(", ")}
+      ON CONFLICT (key) DO NOTHING
+    `,
+    valores
+  );
+}
+
+/**
+ * El esquema del taller, preparado al arrancar y no en cada petición.
+ *
+ * `ensureMaintenanceTables` y `ensureAppUsersTable` se llamaban desde dentro de
+ * los manejadores —catorce y cuatro sitios— así que cada petición lanzaba sus
+ * `CREATE TABLE IF NOT EXISTS`. En producción eso eran 5.600.813 ejecuciones de
+ * un `CREATE TABLE`, 28.000 al día y 3.390 segundos de CPU, para crear unas
+ * tablas que ya existían desde la primera vez.
+ *
+ * Entra en la cadena de `prepararEsquema` como un módulo más: termina antes de
+ * que el servidor escuche, así que cuando llega la primera petición las tablas
+ * están. Si falla, `prepararEsquema` lo registra y el servidor arranca igual.
+ */
+async function initTallerEsquema(): Promise<void> {
+  await ensureMaintenanceTables();
+  await ensureAppUsersTable();
+  await sembrarPlantillasRapidas();
+}
+
+
 async function ensureMaintenanceTables() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS maintenance_tasks (
@@ -12044,7 +12860,6 @@ function normalizeDbAppUser(data: any): DbAppUser | null {
 }
 
 async function listDbAppUsers(): Promise<DbAppUser[]> {
-  await ensureAppUsersTable();
   const r = await db.query(`SELECT data FROM app_users ORDER BY data->>'name'`);
   return r.rows.map((row: any) => normalizeDbAppUser(row.data)).filter(Boolean) as DbAppUser[];
 }
@@ -12216,7 +13031,6 @@ function normalizeAssignedMaintenanceTask(
 }
 
 async function getBlockedOutsideMaintenanceTechNames(techNames: string[]) {
-  await ensureMaintenanceTables();
 
   const uniqueTechNames = Array.from(
     new Set(
@@ -12250,7 +13064,6 @@ async function getBlockedOutsideMaintenanceTechNames(techNames: string[]) {
 }
 
 async function interruptWorkshopMaintenanceForTechs(techNames: string[]) {
-  await ensureMaintenanceTables();
 
   const uniqueTechNames = Array.from(
     new Set(
@@ -12307,7 +13120,6 @@ async function interruptWorkshopMaintenanceForTechs(techNames: string[]) {
 }
 
 async function seedDefaultMaintenanceTasksIfEmpty() {
-  await ensureMaintenanceTables();
 
   const countResult = await db.query(`
     SELECT COUNT(*)::int AS count
@@ -12356,7 +13168,6 @@ app.get("/api/maintenance-tasks", exigirCredencial(requirePanelRole), async (_re
 
 app.post("/api/maintenance-tasks", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
-    await ensureMaintenanceTables();
 
     const task = normalizeMaintenanceTask({
       id: req.body?.id || `maintenance-${Date.now()}`,
@@ -12393,7 +13204,6 @@ app.post("/api/maintenance-tasks", exigirCredencial(requirePanelRole), async (re
 
 app.put("/api/maintenance-tasks/:id", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
-    await ensureMaintenanceTables();
 
     const id = String(req.params.id || "").trim();
 
@@ -12451,7 +13261,6 @@ app.put("/api/maintenance-tasks/:id", exigirCredencial(requirePanelRole), async 
 
 app.delete("/api/maintenance-tasks/:id", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
-    await ensureMaintenanceTables();
 
     const id = String(req.params.id || "").trim();
 
@@ -12470,7 +13279,6 @@ app.delete("/api/maintenance-tasks/:id", exigirCredencial(requirePanelRole), asy
 
 app.get("/api/assigned-maintenance-tasks", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
-    await ensureMaintenanceTables();
 
     const result = await db.query(`
       SELECT data
@@ -12493,7 +13301,6 @@ app.get("/api/assigned-maintenance-tasks", exigirCredencial(requirePanelRole), a
 
 app.get("/api/maintenance-availability", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
-    await ensureMaintenanceTables();
 
     const result = await db.query(`
   SELECT data
@@ -12549,7 +13356,6 @@ const interruptedTasks = activeMaintenanceTasks.filter(
 
 app.post("/api/assigned-maintenance-tasks", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
-    await ensureMaintenanceTables();
 
     const task = normalizeAssignedMaintenanceTask({
       id: req.body?.id || `assigned-maintenance-${Date.now()}`,
@@ -12614,7 +13420,6 @@ async function updateAssignedMaintenanceTaskStatus(
   status: AssignedMaintenanceTaskStatus,
   extra: Record<string, unknown> = {}
 ) {
-  await ensureMaintenanceTables();
 
   const existingResult = await db.query(
     `
@@ -12717,7 +13522,6 @@ app.put("/api/assigned-maintenance-tasks/:id/resume", exigirCredencial(requirePa
 
 app.delete("/api/assigned-maintenance-tasks/history", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
-    await ensureMaintenanceTables();
 
     await db.query(`
       DELETE FROM assigned_maintenance_tasks
@@ -12743,7 +13547,6 @@ app.delete(
   requireSupervisorRole,
   async (req, res) => {
     try {
-      await ensureMaintenanceTables();
 
       const olderThanMs = Date.now() - 12 * 60 * 60 * 1000;
       const dryRun = String(req.query.dryRun || "") === "true";
@@ -12809,7 +13612,6 @@ app.delete(
 
 app.delete("/api/assigned-maintenance-tasks/:id", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
-    await ensureMaintenanceTables();
 
     const id = String(req.params.id || "").trim();
 
@@ -12901,84 +13703,6 @@ app.get("/api/rules", exigirCredencial(requirePanelRole), async (_req, res) => {
  */
 app.get("/api/quick-templates", requirePanelRole, async (_req, res) => {
   try {
-    const defaults = [
-      {
-        key: "alineacion_camion",
-        label: "Alineación Camión",
-        area: "camion",
-        mode: "single",
-        allowedTechs: JSON.stringify(["Anthoni", "Alejandro", "José"]),
-        priorityOrder: JSON.stringify(["Anthoni", "Alejandro", "José"]),
-        standardMinutes: 90,
-      },
-      {
-        key: "pinchazo_camion",
-        label: "Pinchazo camión",
-        area: "camion",
-        mode: "single",
-        allowedTechs: JSON.stringify([
-          "José",
-          "Iván",
-          "Alejandro",
-          "Jesús",
-          "Anthoni",
-          "David",
-        ]),
-        priorityOrder: JSON.stringify([
-          "José",
-          "Iván",
-          "Alejandro",
-          "Jesús",
-          "Anthoni",
-          "David",
-        ]),
-        standardMinutes: 25,
-      },
-      {
-        key: "cambio_4_neumaticos_camion",
-        label: "Cambio de 4 neumáticos de camión",
-        area: "camion",
-        mode: "team",
-        allowedTechs: JSON.stringify([
-          "José",
-          "Iván",
-          "Alejandro",
-          "Jesús",
-          "Anthoni",
-          "David",
-        ]),
-        priorityOrder: JSON.stringify([
-          "José",
-          "Iván",
-          "Alejandro",
-          "Jesús",
-          "Anthoni",
-          "David",
-        ]),
-        standardMinutes: 60,
-      },
-    ];
-
-    for (const item of defaults) {
-      await db.query(
-        `
-        INSERT INTO quick_templates
-          (key, label, area, mode, "allowedTechs", "priorityOrder", "standardMinutes")
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT (key) DO NOTHING
-        `,
-        [
-          item.key,
-          item.label,
-          item.area,
-          item.mode,
-          item.allowedTechs,
-          item.priorityOrder,
-          item.standardMinutes ?? null,
-        ]
-      );
-    }
-
     const result = await db.query(`
       SELECT *
       FROM quick_templates
@@ -14930,7 +15654,6 @@ app.post("/api/users", requireAdminRole, async (req, res) => {
     if (!name || !password) {
       return res.status(400).json({ error: "Nombre y contraseña obligatorios" });
     }
-    await ensureAppUsersTable();
     const id = `user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const user = normalizeDbAppUser({ id, name, password, role, allowedViews });
     await db.query(
@@ -14947,7 +15670,6 @@ app.post("/api/users", requireAdminRole, async (req, res) => {
 app.put("/api/users/:id", requireAdminRole, async (req, res) => {
   try {
     const id = String(req.params.id || "").trim();
-    await ensureAppUsersTable();
     const existing = await db.query(`SELECT data FROM app_users WHERE id = $1`, [id]);
     if (existing.rows.length === 0) {
       return res.status(404).json({ error: "Usuario no encontrado" });
@@ -14974,7 +15696,6 @@ app.put("/api/users/:id", requireAdminRole, async (req, res) => {
 
 app.delete("/api/users/:id", requireAdminRole, async (req, res) => {
   try {
-    await ensureAppUsersTable();
     await db.query(`DELETE FROM app_users WHERE id = $1`, [String(req.params.id || "").trim()]);
     res.json({ ok: true });
   } catch (error) {
@@ -15650,7 +16371,8 @@ async function checkWebfleetWorkshopArrival() {
   try {
     // Busca asistencias en_camino_base con furgoneta Webfleet asignada
     const result = await db.query(`
-      SELECT ra.id, ra."webfleetVehicleId", ra."workshopId"
+      SELECT ra.id, ra."webfleetVehicleId", ra."workshopId", ra."assignedTechName",
+             ra."tabletLat", ra."tabletLng", ra."tabletLocationAtMs"
       FROM roadside_assistances ra
       WHERE ra.status = 'en_camino_base'
         AND ra."arrivedAtWorkshopMs" IS NULL
@@ -15667,19 +16389,23 @@ async function checkWebfleetWorkshopArrival() {
         const radioM = parseFloat(cfg.taller_radio_m) || 300;
         if (!isFinite(tallerLat) || !isFinite(tallerLng)) continue;
 
-        const pos = await getWebfleetVehiclePosition(row.webfleetVehicleId);
+        // Webfleet y, si falla o va con retraso, la tablet del operario: así
+        // la llegada se detecta aunque el equipo de la furgoneta esté caído.
+        const pos = await posicionDeAsistencia(row);
+        if (!pos) continue;
         const distM = haversineDistanceM(pos.lat, pos.lng, tallerLat, tallerLng);
-        console.log(`Webfleet geofence check #${row.id} (${row.webfleetVehicleId}): ${Math.round(distM)}m al taller`);
+        console.log(`Geofence taller #${row.id} (${pos.fuente}${pos.antigua ? ", antigua" : ""}): ${Math.round(distM)}m al taller`);
 
         // Actualizar posición del operario para que el mapa del panel esté en vivo
         await db.query(
           `UPDATE roadside_assistances
            SET "operatorLat" = $2, "operatorLng" = $3, "operatorLocationAtMs" = $4
            WHERE id = $1 AND status = 'en_camino_base'`,
-          [row.id, pos.lat, pos.lng, Date.now()]
+          [row.id, pos.lat, pos.lng, pos.atMs]
         );
 
-        if (distM <= radioM) {
+        // Con una posición antigua no se cierra nada: no dice dónde está AHORA.
+        if (!pos.antigua && distM <= radioM) {
           const now = Date.now();
           const upd = await db.query(
             `UPDATE roadside_assistances
@@ -15690,17 +16416,19 @@ async function checkWebfleetWorkshopArrival() {
           );
           await db.query(
             `INSERT INTO roadside_assistance_events ("assistanceId", status, note, "createdBy", "createdAtMs")
-             VALUES ($1, 'llegada_taller', 'Llegada al taller detectada por Webfleet GPS', 'sistema', $2)`,
-            [row.id, now]
+             VALUES ($1, 'llegada_taller', $3, 'sistema', $2)`,
+            [row.id, now, pos.fuente === "tablet"
+              ? "Llegada al taller detectada por la tablet del operario"
+              : "Llegada al taller detectada por Webfleet GPS"]
           );
           // Liberar al técnico al cerrar la asistencia
           if (upd.rows[0]?.assignedTechName) {
             await freeTechFromRoadside(upd.rows[0].assignedTechName, row.id);
           }
-          console.log(`✓ Asistencia #${row.id} → llegada_taller (Webfleet geofence)`);
+          console.log(`✓ Asistencia #${row.id} → llegada_taller (${pos.fuente})`);
         }
       } catch (err) {
-        console.warn(`Webfleet geofence error para asistencia #${row.id}:`, err);
+        console.warn(`Geofence taller: error en asistencia #${row.id}:`, err);
       }
     }
   } catch (err) {
@@ -15767,24 +16495,29 @@ async function reconcileTechRoadsideOccupation() {
 async function checkOtfBaseArrival() {
   try {
     const r = await db.query(`
-      SELECT o.id, o."webfleetVehicleId", o.lat, o.lng FROM otf o
+      SELECT o.id, o."webfleetVehicleId", o."assignedTechName", o.lat, o.lng FROM otf o
       WHERE o.status = 'planificada' AND o."arrivedAtBaseMs" IS NULL
-        AND o."webfleetVehicleId" IS NOT NULL AND o.lat IS NOT NULL AND o.lng IS NOT NULL
+        AND (o."webfleetVehicleId" IS NOT NULL OR o."assignedTechName" IS NOT NULL)
+        AND o.lat IS NOT NULL AND o.lng IS NOT NULL
         -- La furgoneta puede pasar por la base de la OTF pendiente mientras
         -- sigue con la asistencia: eso no es empezar la OTF.
         AND NOT ${OTF_EN_ESPERA_SQL}
     `);
     for (const o of r.rows) {
       try {
-        const pos = await getWebfleetVehiclePosition(o.webfleetVehicleId);
+        // Webfleet o, si falla o no hay furgoneta, la tablet del operario. Con
+        // una posición antigua no se marca nada: no dice dónde está ahora.
+        const pos = await posicionDeAsistencia(o);
+        if (!pos || pos.antigua) continue;
         const dist = haversineDistanceM(pos.lat, pos.lng, Number(o.lat), Number(o.lng));
         if (dist <= KNOWN_PLACE_RADIUS_M) {
-          await db.query(
+          const marcada = await db.query(
             `UPDATE otf SET status = 'en_curso', "arrivedAtBaseMs" = $2, "updatedAtMs" = $2
              WHERE id = $1 AND status = 'planificada' AND "arrivedAtBaseMs" IS NULL`,
             [o.id, Date.now()]
           );
-          console.log(`✓ OTF #${o.id} → en_curso (check-in automático en base, ${Math.round(dist)}m)`);
+          if ((marcada.rowCount ?? 0) > 0) await avisarLlegadaBase(Number(o.id));
+          console.log(`✓ OTF #${o.id} → en_curso (check-in automático en base, ${pos.fuente}, ${Math.round(dist)}m)`);
         }
       } catch (err) {
         console.warn(`OTF check-in error #${o.id}:`, err);
@@ -18170,6 +18903,16 @@ function normalizeOtf(row: any) {
     // viene calculado en las consultas que lo piden con OTF_EN_ESPERA_SQL).
     esperaAsistenciaId: row.esperaAsistenciaId != null ? Number(row.esperaAsistenciaId) : null,
     enEspera: row.enEspera === true,
+    // null = el operario aún no la ha abierto en la tablet: se le avisa.
+    vistaAtMs: row.vistaAtMs != null ? Number(row.vistaAtMs) : null,
+    sinResponsable: row.sinResponsable === true,
+    // Aviso al responsable de la base al llegar y correo del informe.
+    telefonoAviso: row.telefonoAviso ?? null,
+    emailInforme: row.emailInforme ?? null,
+    avisoLlegadaAtMs: row.avisoLlegadaAtMs != null ? Number(row.avisoLlegadaAtMs) : null,
+    avisoLlegadaResultado: row.avisoLlegadaResultado ?? null,
+    informeEnviadoAtMs: row.informeEnviadoAtMs != null ? Number(row.informeEnviadoAtMs) : null,
+    informeResultado: row.informeResultado ?? null,
     updatedAtMs: Number(row.updatedAtMs ?? Date.now()),
   };
 }
@@ -18191,6 +18934,15 @@ function normalizeOtfTrabajo(row: any) {
     fechaAltaCampoMs: row.fechaAltaCampoMs != null ? Number(row.fechaAltaCampoMs) : null,
     observaciones: row.observaciones ?? null,
     requiereAprobacion: row.requiereAprobacion === true,
+    // Tiempo del trabajo, por qué no se hizo y la matrícula leída de la foto.
+    iniciadoAtMs: row.iniciadoAtMs != null ? Number(row.iniciadoAtMs) : null,
+    finalizadoAtMs: row.finalizadoAtMs != null ? Number(row.finalizadoAtMs) : null,
+    motivoNoRealizado: row.motivoNoRealizado ?? null,
+    explicacionNoRealizado: row.explicacionNoRealizado ?? null,
+    updatedAtMs: row.updatedAtMs != null ? Number(row.updatedAtMs) : null,
+    matriculaLeida: row.matriculaLeida ?? null,
+    matriculaNoCoincide: row.matriculaNoCoincide === true,
+    checklist: Array.isArray(row.checklist) ? row.checklist : null,
     createdAtMs: Number(row.createdAtMs ?? Date.now()),
   };
 }
@@ -18207,10 +18959,32 @@ async function otfWithDetails(id: number) {
   const filesByTrabajo = new Map<number, any[]>();
   for (const file of f.rows) {
     const arr = filesByTrabajo.get(Number(file.trabajoId)) ?? [];
-    arr.push({ id: Number(file.id), kind: file.kind, url: file.url });
+    arr.push({ id: Number(file.id), kind: file.kind, url: file.url, createdAtMs: Number(file.createdAtMs) || null });
     filesByTrabajo.set(Number(file.trabajoId), arr);
   }
-  const trabajos = t.rows.map((r: any) => ({ ...normalizeOtfTrabajo(r), fotos: filesByTrabajo.get(Number(r.id)) ?? [] }));
+  // Lista de comprobación de cada plantilla, y el material montado.
+  const pl = await db.query(`SELECT nombre, checklist FROM otf_plantillas`);
+  const checklistPorPlantilla = new Map<string, string[]>(
+    pl.rows.map((p: any) => [String(p.nombre), limpiarChecklist(p.checklist)])
+  );
+  const mat = await db.query(`SELECT * FROM otf_trabajo_material WHERE "otfId" = $1 ORDER BY id ASC`, [id]);
+  const materialPorTrabajo = new Map<number, any[]>();
+  for (const m of mat.rows) {
+    const arr = materialPorTrabajo.get(Number(m.trabajoId)) ?? [];
+    arr.push({
+      id: Number(m.id), tipo: m.tipo, descripcion: m.descripcion, marca: m.marca ?? null,
+      estado: m.estado ?? null, cantidad: Number(m.cantidad), texto: textoMaterial({
+        descripcion: m.descripcion, marca: m.marca, estado: m.estado, cantidad: Number(m.cantidad),
+      }),
+    });
+    materialPorTrabajo.set(Number(m.trabajoId), arr);
+  }
+  const trabajos = t.rows.map((r: any) => ({
+    ...normalizeOtfTrabajo(r),
+    fotos: filesByTrabajo.get(Number(r.id)) ?? [],
+    checklistPlantilla: r.trabajoPlantilla ? checklistPorPlantilla.get(String(r.trabajoPlantilla)) ?? [] : [],
+    material: materialPorTrabajo.get(Number(r.id)) ?? [],
+  }));
   const total = trabajos.length;
   const hechos = trabajos.filter((x: any) => x.status === "finalizado" || x.status === "no_realizado").length;
   return { ...normalizeOtf(h.rows[0]), trabajos, progreso: { hechos, total } };
@@ -18458,7 +19232,7 @@ app.get("/api/otf-plantillas", requireSupervisorRole, async (req, res) => {
   try {
     const incluirInactivas = String(req.query.all || "") === "true";
     const r = await db.query(
-      `SELECT id, nombre, descripcion, activo FROM otf_plantillas
+      `SELECT id, nombre, descripcion, activo, checklist FROM otf_plantillas
        ${incluirInactivas ? "" : "WHERE activo = true"}
        ORDER BY nombre ASC`
     );
@@ -18467,6 +19241,8 @@ app.get("/api/otf-plantillas", requireSupervisorRole, async (req, res) => {
       nombre: p.nombre,
       descripcion: p.descripcion ?? null,
       activo: p.activo === true,
+      // Los puntos a comprobar en un trabajo de esta plantilla.
+      checklist: limpiarChecklist(p.checklist),
     })));
   } catch (e) {
     console.error("GET /api/otf-plantillas error:", e);
@@ -18503,11 +19279,13 @@ app.patch("/api/otf-plantillas/:id", requireSupervisorRole, async (req, res) => 
          nombre = COALESCE($2, nombre),
          descripcion = COALESCE($3, descripcion),
          activo = COALESCE($4, activo),
+         checklist = COALESCE($6::jsonb, checklist),
          "updatedAtMs" = $5
-       WHERE id = $1 RETURNING id, nombre, descripcion, activo`,
+       WHERE id = $1 RETURNING id, nombre, descripcion, activo, checklist`,
       [id, typeof b.nombre === "string" ? b.nombre.trim() : null,
        typeof b.descripcion === "string" ? b.descripcion.trim() : null,
-       typeof b.activo === "boolean" ? b.activo : null, Date.now()]
+       typeof b.activo === "boolean" ? b.activo : null, Date.now(),
+       b.checklist !== undefined ? JSON.stringify(limpiarChecklist(b.checklist)) : null]
     );
     if (!r.rows.length) return res.status(404).json({ error: "Plantilla no encontrada" });
     res.json(r.rows[0]);
@@ -18601,7 +19379,15 @@ app.post("/api/otf", requireSupervisorRole, async (req, res) => {
         b.webfleetVehicleId ?? null, b.notas ?? null, now, disp.esperaAsistenciaId ?? null,
       ]
     );
-    res.json({ ...normalizeOtf(r.rows[0]), enEspera: disp.esperaAsistenciaId != null });
+    // Teléfono de aviso y correo del informe (columnas añadidas después).
+    if (b.telefonoAviso !== undefined || b.emailInforme !== undefined) {
+      const u = sqlActualizarOtf(Number(r.rows[0].id), {
+        ...(b.telefonoAviso !== undefined ? { telefonoAviso: b.telefonoAviso } : {}),
+        ...(b.emailInforme !== undefined ? { emailInforme: b.emailInforme } : {}),
+      }, now);
+      if (u) await db.query(u.sql, u.params);
+    }
+    res.json({ ...normalizeOtf((await db.query(`SELECT * FROM otf WHERE id = $1`, [r.rows[0].id])).rows[0]), enEspera: disp.esperaAsistenciaId != null });
   } catch (e) {
     console.error("POST /api/otf error:", e);
     res.status(500).json({ error: "Error creando OTF" });
@@ -18633,34 +19419,41 @@ app.put("/api/otf/:id", requireSupervisorRole, async (req, res) => {
   try {
     const id = Number(req.params.id);
     const b = req.body ?? {};
+    const actual = await db.query(`SELECT "knownPlaceId", "assignedTechName" FROM otf WHERE id = $1`, [id]);
+    if (actual.rows.length === 0) return res.status(404).json({ error: "OTF no encontrada" });
 
-    if (b.assignedTechName) {
-      const disp = await checkTechDisponibleParaOtf(
-        b.assignedTechName,
-        b.knownPlaceId != null ? Number(b.knownPlaceId) : null,
-        id
-      );
-      if (!disp.ok) return res.status(409).json({ error: disp.error, code: "TECH_OCUPADO" });
-      // Cambiar de operario cambia detrás de qué espera: se recalcula.
-      await db.query(`UPDATE otf SET "esperaAsistenciaId" = $2 WHERE id = $1`, [
-        id,
-        disp.esperaAsistenciaId ?? null,
-      ]);
+    // Solo si cambia el operario: comprobar que puede y recalcular detrás de
+    // qué asistencia espera. Sin operario, no espera a nadie.
+    if (Object.prototype.hasOwnProperty.call(b, "assignedTechName")) {
+      if (b.assignedTechName) {
+        const base = Object.prototype.hasOwnProperty.call(b, "knownPlaceId")
+          ? b.knownPlaceId
+          : actual.rows[0].knownPlaceId;
+        const disp = await checkTechDisponibleParaOtf(
+          b.assignedTechName,
+          base != null ? Number(base) : null,
+          id
+        );
+        if (!disp.ok) return res.status(409).json({ error: disp.error, code: "TECH_OCUPADO" });
+        await db.query(`UPDATE otf SET "esperaAsistenciaId" = $2 WHERE id = $1`, [
+          id,
+          disp.esperaAsistenciaId ?? null,
+        ]);
+      } else {
+        await db.query(`UPDATE otf SET "esperaAsistenciaId" = NULL WHERE id = $1`, [id]);
+      }
     }
 
-    await db.query(
-      `UPDATE otf SET
-         "clientName" = COALESCE($2,"clientName"),
-         "knownPlaceId" = $3, "baseName" = $4, direccion = $5, lat = $6, lng = $7,
-         "fechaProgramadaMs" = $8, status = COALESCE($9,status),
-         "assignedTechName" = $10, "assignedVehicleName" = $11, "webfleetVehicleId" = $12,
-         notas = $13, "updatedAtMs" = $14
-       WHERE id = $1`,
-      [id, b.clientName ?? null, b.knownPlaceId ?? null, b.baseName ?? null, b.direccion ?? null,
-       b.lat != null ? Number(b.lat) : null, b.lng != null ? Number(b.lng) : null,
-       b.fechaProgramadaMs ?? null, b.status ?? null, b.assignedTechName ?? null,
-       b.assignedVehicleName ?? null, b.webfleetVehicleId ?? null, b.notas ?? null, Date.now()]
-    );
+    // Solo los campos que llegan: ver otf/actualizar.ts.
+    const update = sqlActualizarOtf(id, b, Date.now());
+    if (update) await db.query(update.sql, update.params);
+    // Otro operario: para él es una OTF nueva, y su tablet tiene que avisarle.
+    if (
+      Object.prototype.hasOwnProperty.call(b, "assignedTechName") &&
+      (b.assignedTechName || null) !== (actual.rows[0].assignedTechName ?? null)
+    ) {
+      await db.query(`UPDATE otf SET "vistaAtMs" = NULL WHERE id = $1`, [id]);
+    }
     res.json(await otfWithDetails(id));
   } catch (e) {
     console.error("PUT /api/otf/:id error:", e);
@@ -18760,6 +19553,100 @@ app.get("/api/roadside-operator/otf/:id", requireRoadsideOperator, async (req, r
   }
 });
 
+// Material montado en un trabajo (neumáticos, válvulas…): otf/mejoras.ts.
+app.post("/api/roadside-operator/otf/trabajos/:tid/material", requireRoadsideOperator, async (req, res) => {
+  try {
+    const operator = (req as any).roadsideOperator as { techName: string };
+    const tid = Number(req.params.tid);
+    if (req.body?.clientActionId && (await isDuplicateAction(req.body.clientActionId))) {
+      return res.json({ ok: true, deduped: true });
+    }
+    const m = limpiarMaterial(req.body ?? {});
+    const tr = await db.query(`SELECT "otfId" FROM otf_trabajos WHERE id = $1`, [tid]);
+    if (!tr.rows[0]) return res.status(404).json({ error: "Trabajo no encontrado" });
+    const r = await db.query(
+      `INSERT INTO otf_trabajo_material ("trabajoId","otfId",tipo,descripcion,marca,estado,cantidad,"creadoPor","createdAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+      [tid, tr.rows[0].otfId, m.tipo, m.descripcion, m.marca, m.estado, m.cantidad, operator.techName, Date.now()]
+    );
+    res.json({ ok: true, id: Number(r.rows[0].id), ...m, texto: textoMaterial(m) });
+  } catch (e: any) {
+    if (e instanceof ErrorMaterial) return res.status(400).json({ error: e.message });
+    console.error("POST otf material error:", e);
+    res.status(500).json({ error: "Error guardando el material" });
+  }
+});
+
+app.delete("/api/roadside-operator/otf/material/:id", requireRoadsideOperator, async (req, res) => {
+  try {
+    await db.query(`DELETE FROM otf_trabajo_material WHERE id = $1`, [Number(req.params.id)]);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("DELETE otf material error:", e);
+    res.status(500).json({ error: "Error borrando el material" });
+  }
+});
+
+/*
+ * Al llegar a la base, WhatsApp al responsable: «el técnico de Mobilink está
+ * en la puerta». Una sola vez por OTF. Es un mensaje que inicia Mobilink, así
+ * que WhatsApp exige una plantilla aprobada: TWILIO_TEMPLATE_OTF_LLEGADA, con
+ * {{1}} cliente, {{2}} técnico y {{3}} base. Sin plantilla o sin teléfono no
+ * se envía, y queda dicho por qué.
+ */
+async function avisarLlegadaBase(otfId: number): Promise<void> {
+  try {
+    const r = await db.query(
+      `UPDATE otf SET "avisoLlegadaAtMs" = $2
+        WHERE id = $1 AND "avisoLlegadaAtMs" IS NULL
+        RETURNING "clientName", "assignedTechName", "baseName", direccion, "telefonoAviso"`,
+      [otfId, Date.now()]
+    );
+    const o = r.rows[0];
+    if (!o) return; // ya se avisó
+    const resultado = await (async () => {
+      const tel = telefonoValido(o.telefonoAviso);
+      if (!tel) return "sin teléfono de aviso";
+      const plantilla = String(process.env.TWILIO_TEMPLATE_OTF_LLEGADA || "").trim();
+      if (!plantilla) return "falta la plantilla de WhatsApp";
+      if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) return "Twilio no configurado";
+      try {
+        await twilioClient.messages.create({
+          from: getWhatsAppFromNumber(),
+          to: `whatsapp:${normalizeSpanishPhone(tel)}`,
+          contentSid: plantilla,
+          contentVariables: JSON.stringify({
+            "1": o.clientName || "cliente",
+            "2": o.assignedTechName || "nuestro técnico",
+            "3": o.baseName || o.direccion || "la base",
+          }),
+        });
+        return "enviado";
+      } catch (err: any) {
+        return `error: ${String(err?.message ?? err).slice(0, 200)}`;
+      }
+    })();
+    await db.query(`UPDATE otf SET "avisoLlegadaResultado" = $2 WHERE id = $1`, [otfId, resultado]);
+  } catch (err) {
+    console.error(`Aviso de llegada OTF #${otfId}:`, err);
+  }
+}
+
+// El operario ha abierto la OTF en la tablet: deja de avisarse como nueva.
+app.post("/api/roadside-operator/otf/:id/vista", requireRoadsideOperator, async (req, res) => {
+  try {
+    const operator = (req as any).roadsideOperator as { techName: string };
+    await db.query(
+      `UPDATE otf SET "vistaAtMs" = COALESCE("vistaAtMs", $3) WHERE id = $1 AND "assignedTechName" = $2`,
+      [Number(req.params.id), operator.techName, Date.now()]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("POST otf vista error:", e);
+    res.status(500).json({ error: "Error marcando la OTF como vista" });
+  }
+});
+
 // Check-in manual a la base (si el GPS automático falla)
 app.post("/api/roadside-operator/otf/:id/checkin", requireRoadsideOperator, async (req, res) => {
   try {
@@ -18785,6 +19672,7 @@ app.post("/api/roadside-operator/otf/:id/checkin", requireRoadsideOperator, asyn
        WHERE id = $1`,
       [id, now]
     );
+    await avisarLlegadaBase(id);
     res.json(await otfWithDetails(id));
   } catch (e) {
     console.error("POST otf checkin error:", e);
@@ -18844,10 +19732,19 @@ app.put("/api/roadside-operator/otf/trabajos/:tid/status", requireRoadsideOperat
       const cur = await db.query(`SELECT * FROM otf_trabajos WHERE id = $1`, [tid]);
       return res.json(cur.rows[0] ? normalizeOtfTrabajo(cur.rows[0]) : { ok: true });
     }
-    const r = await db.query(
-      `UPDATE otf_trabajos SET status = $2, "updatedAtMs" = $3 WHERE id = $1 RETURNING *`,
-      [tid, status, Date.now()]
-    );
+    // Con su tiempo y, si no se hizo, el motivo: otf/actualizar.ts.
+    const cambio = sqlEstadoTrabajo(tid, status, req.body?.motivo, Date.now(), req.body?.explicacion);
+    let r = await db.query(cambio.sql, cambio.params);
+    // Al finalizar, lo marcado de la lista de comprobación de su plantilla.
+    if (r.rows[0] && status === "finalizado" && req.body?.checklist !== undefined) {
+      const pl = await db.query(`SELECT checklist FROM otf_plantillas WHERE nombre = $1`, [r.rows[0].trabajoPlantilla]);
+      const puntos = limpiarChecklist(pl.rows[0]?.checklist);
+      if (puntos.length > 0) {
+        r = await db.query(`UPDATE otf_trabajos SET checklist = $2::jsonb WHERE id = $1 RETURNING *`, [
+          tid, JSON.stringify(resultadoChecklist(puntos, req.body.checklist)),
+        ]);
+      }
+    }
     if (!r.rows[0]) return res.status(404).json({ error: "Trabajo no encontrado" });
     res.json(normalizeOtfTrabajo(r.rows[0]));
   } catch (e) {
@@ -18884,13 +19781,75 @@ app.post(
         `INSERT INTO otf_trabajo_files ("trabajoId","otfId",kind,url,"createdAtMs") VALUES ($1,$2,$3,$4,$5) RETURNING *`,
         [tid, otfId, kind, pub.publicUrl, Date.now()]
       );
-      res.json({ ok: true, file: { id: Number(r.rows[0].id), kind, url: pub.publicUrl } });
+
+      /*
+       * La foto de la matrícula se lee y se compara con la del trabajo: en una
+       * base con cuarenta remolques iguales, cambiar ruedas al equivocado es
+       * fácil. Si no se lee, no se dice nada (no bloquea: la luz, el barro…).
+       */
+      let matricula: { leida: string | null; esperada: string | null; coincide: boolean | null } | null = null;
+      if (kind === "matricula") {
+        try {
+          const t = (await db.query(
+            `SELECT plate, "plateRemolque", "tipoVehiculo" FROM otf_trabajos WHERE id = $1`, [tid]
+          )).rows[0];
+          const esRemolque = /remolque/i.test(String(t?.tipoVehiculo ?? ""));
+          const leida = normalizePlateText(
+            await detectPlateFromImage(pub.publicUrl, { preferColor: esRemolque ? "red" : "white" })
+          ) || null;
+          const esperadas = [t?.plate, t?.plateRemolque].map(normalizePlateText).filter(Boolean);
+          const coincide = leida && esperadas.length ? esperadas.includes(leida) : null;
+          matricula = { leida, esperada: esperadas[0] ?? null, coincide };
+          if (leida) {
+            await db.query(
+              `UPDATE otf_trabajos SET "matriculaLeida" = $2, "matriculaNoCoincide" = $3 WHERE id = $1`,
+              [tid, leida, coincide === false]
+            );
+          }
+        } catch (err: any) {
+          console.warn(`OTF trabajo #${tid}: no se pudo leer la matrícula: ${err?.message ?? err}`);
+        }
+      }
+      res.json({ ok: true, file: { id: Number(r.rows[0].id), kind, url: pub.publicUrl }, matricula });
     } catch (e: any) {
       console.error("POST otf trabajo files error:", e);
       res.status(500).json({ error: e?.message || "Error subiendo foto" });
     }
   }
 );
+
+/*
+ * Manda el PDF de la OTF al correo de informes de la OTF. Deja escrito el
+ * resultado («enviado a …», «sin correo», el error) para que la oficina lo vea.
+ */
+async function enviarInformeOtf(id: number): Promise<void> {
+  const guardar = (resultado: string, enviado: boolean) =>
+    db.query(
+      `UPDATE otf SET "informeResultado" = $2, "informeEnviadoAtMs" = CASE WHEN $3 THEN $4::bigint ELSE "informeEnviadoAtMs" END
+        WHERE id = $1`,
+      [id, resultado, enviado, Date.now()]
+    );
+  try {
+    const o = (await db.query(`SELECT "clientName", "emailInforme" FROM otf WHERE id = $1`, [id])).rows[0];
+    const email = emailValido(o?.emailInforme);
+    if (!email) return void (await guardar("sin correo para el informe", false));
+    const transport = getMailTransport();
+    if (!transport) return void (await guardar("SMTP no configurado", false));
+    const pdf = await buildOtfReportPdfBuffer(id);
+    if (!pdf) return;
+    await transport.sendMail({
+      from: process.env.SMTP_FROM || process.env.SMTP_USER,
+      to: email,
+      subject: `Informe de la orden de trabajo de flota #${id} · Mobilink`,
+      text: `Hola, adjuntamos el informe de los trabajos realizados${o?.clientName ? ` para ${o.clientName}` : ""}.`,
+      attachments: [{ filename: `otf_${id}.pdf`, content: pdf, contentType: "application/pdf" }],
+    });
+    await guardar(`enviado a ${email}`, true);
+  } catch (err: any) {
+    console.error(`Informe OTF #${id} por correo:`, err);
+    await guardar(`error: ${String(err?.message ?? err).slice(0, 200)}`, false).catch(() => {});
+  }
+}
 
 // Finalizar OTF con firma única del responsable (operario)
 app.post(
@@ -18900,9 +19859,14 @@ app.post(
   async (req, res) => {
     try {
       const id = Number(req.params.id);
-      const firmanteNombre = String(req.body?.firmanteNombre || "").trim() || null;
-      const firmanteDni = String(req.body?.firmanteDni || "").trim() || null;
+      // Sin nadie de la base para firmar: se cierra igual y queda dicho.
+      const sinResponsable = String(req.body?.sinResponsable ?? "") === "true";
+      const firmanteNombre = sinResponsable ? null : String(req.body?.firmanteNombre || "").trim() || null;
+      const firmanteDni = sinResponsable ? null : String(req.body?.firmanteDni || "").trim() || null;
       let firmaUrl: string | null = null;
+      if (!sinResponsable && !req.file) {
+        return res.status(400).json({ error: "Falta la firma (o marca «Sin responsable en la base»)" });
+      }
 
       if (req.file) {
         const storagePath = `otf/${id}/firma_${Date.now()}.png`;
@@ -18920,11 +19884,16 @@ app.post(
            "firmaUrl" = COALESCE($3, "firmaUrl"),
            "firmanteNombre" = COALESCE($4, "firmanteNombre"),
            "firmanteDni" = COALESCE($5, "firmanteDni"),
+           "sinResponsable" = $6,
            "updatedAtMs" = $2
          WHERE id = $1`,
-        [id, now, firmaUrl, firmanteNombre, firmanteDni]
+        [id, now, firmaUrl, firmanteNombre, firmanteDni, sinResponsable]
       );
+      // El informe al cliente, si se pidió y hay correo: después de contestar
+      // a la tablet, que no espere a que se genere y envíe el PDF.
+      const enviarInforme = String(req.body?.enviarInforme ?? "") === "true";
       res.json(await otfWithDetails(id));
+      if (enviarInforme) void enviarInformeOtf(id);
     } catch (e: any) {
       console.error("POST otf finalizar error:", e);
       res.status(500).json({ error: e?.message || "Error finalizando OTF" });
@@ -18933,11 +19902,13 @@ app.post(
 );
 
 // Informe PDF de la OTF
-app.get("/api/otf/:id/report.pdf", requireAdminRole, async (req, res) => {
-  try {
-    const id = Number(req.params.id);
+/*
+ * El PDF de la OTF. Lo usa la ruta del informe y el envío por correo al
+ * cliente al cerrar la visita. null si la OTF no existe.
+ */
+async function buildOtfReportPdfBuffer(id: number): Promise<Buffer | null> {
     const data = await otfWithDetails(id);
-    if (!data) return res.status(404).json({ error: "OTF no encontrada" });
+    if (!data) return null;
 
     const doc = new PDFDocument({ margin: 40, size: "A4" });
     const chunks: Buffer[] = [];
@@ -18960,7 +19931,7 @@ app.get("/api/otf/:id/report.pdf", requireAdminRole, async (req, res) => {
     row("Base:", data.baseName || data.direccion || "-");
     row("Operario:", data.assignedTechName || "-");
     row("Furgoneta:", data.assignedVehicleName || "-");
-    row("Estado:", data.status);
+    row("Estado:", ({ planificada: "Planificada", pendiente: "Pendiente", en_curso: "En curso", finalizada: "Finalizada", cancelada: "Cancelada" } as Record<string, string>)[data.status] ?? data.status);
     row("Progreso:", `${data.progreso.hechos} / ${data.progreso.total}`);
 
     doc.moveDown(1);
@@ -18969,37 +19940,124 @@ app.get("/api/otf/:id/report.pdf", requireAdminRole, async (req, res) => {
     const planificados = data.trabajos.filter((t: any) => t.origen !== "tecnico_campo");
     const enCampo = data.trabajos.filter((t: any) => t.origen === "tecnico_campo");
 
-    const FOTO_LABELS: Record<string, string> = { matricula: "Matrícula", averia: "Avería" };
-    const printT = async (t: any) => {
-      if (doc.y > 700) doc.addPage();
-      doc.fontSize(10).font("Helvetica-Bold").text(`${t.plate || "—"} · ${t.tipoVehiculo || ""}  [${t.status}]`);
-      doc.fontSize(9).font("Helvetica").text(`   ${t.trabajo || ""}`);
-      if (t.observaciones) doc.fontSize(8).font("Helvetica").text(`   Observaciones: ${t.observaciones}`);
-      if (t.motivoAltaCampo) doc.fontSize(8).font("Helvetica-Oblique").text(`   Motivo alta en campo: ${t.motivoAltaCampo}`);
-      // Fotos del trabajo (matrícula, avería…): fila de miniaturas etiquetadas
-      const fotos = (t.fotos ?? []).slice(0, 4);
-      if (fotos.length > 0) {
-        if (doc.y > 640) doc.addPage();
-        const y0 = doc.y + 4;
-        let x = 50;
-        for (const f of fotos) {
-          try {
-            const buf = await fetchImageForPdf(f.url);
-            doc.image(buf, x, y0, { fit: [110, 80] });
-            const label = FOTO_LABELS[String(f.kind)] ?? "";
-            if (label) {
-              doc.fontSize(7).font("Helvetica").fillColor("#555555")
-                .text(label, x, y0 + 83, { width: 110, align: "center" });
-              doc.fillColor("#000000");
-            }
-            x += 120;
-          } catch { /* foto no accesible: se omite */ }
-        }
-        doc.x = 40;
-        doc.y = y0 + 96;
-      }
-      doc.moveDown(0.2);
+    // Cada trabajo: matrícula y estado en una línea, el trabajo, una banda con
+    // hora de inicio, hora de fin y tiempo, y si no se hizo, el motivo y la
+    // explicación del técnico en un recuadro rojo con sus fotos.
+    const L = 50;
+    const W = 495;
+    const ESTADO_PDF: Record<string, [string, string]> = {
+      finalizado: ["REALIZADO", "#067647"],
+      no_realizado: ["NO REALIZADO", "#B42318"],
+      en_proceso: ["EN CURSO", "#B54708"],
+      pendiente: ["PENDIENTE", "#475467"],
     };
+    const fotosPdf = async (fotos: any[], x0 = L) => {
+      if (fotos.length === 0) return;
+      if (doc.y > 640) doc.addPage();
+      const y0 = doc.y + 4;
+      let x = x0;
+      for (const f of fotos.slice(0, 4)) {
+        try {
+          const buf = await fetchImageForPdf(f.url);
+          doc.image(buf, x, y0, { fit: [110, 80] });
+          const label = ETIQUETA_FOTO[String(f.kind)] ?? "";
+          if (label) {
+            doc.fontSize(7).font("Helvetica").fillColor("#555555")
+              .text(label, x, y0 + 83, { width: 110, align: "center" });
+            doc.fillColor("#000000");
+          }
+          x += 120;
+        } catch { /* foto no accesible: se omite */ }
+      }
+      doc.x = L;
+      doc.y = y0 + 96;
+    };
+    const printT = async (t: any) => {
+      if (doc.y > 680) doc.addPage();
+      const [estado, color] = ESTADO_PDF[t.status] ?? [String(t.status ?? "").toUpperCase(), "#475467"];
+      const yT = doc.y;
+      doc.fontSize(11).font("Helvetica-Bold").fillColor("#111111")
+        .text(`${t.plate || "—"}${t.tipoVehiculo ? ` · ${t.tipoVehiculo}` : ""}`, L, yT, { width: W - 130 });
+      const yFinTitulo = doc.y;
+      doc.fontSize(9).font("Helvetica-Bold").fillColor(color).text(estado, L + W - 130, yT + 1, { width: 130, align: "right" });
+      doc.fillColor("#000000");
+      doc.x = L;
+      doc.y = Math.max(yFinTitulo, yT + 14);
+      doc.fontSize(9).font("Helvetica").text(t.trabajo || "", L, doc.y, { width: W });
+      if (t.observaciones) doc.fontSize(8).fillColor("#555555").text(`Observaciones: ${t.observaciones}`, { width: W }).fillColor("#000000");
+      if (t.motivoAltaCampo) doc.fontSize(8).font("Helvetica-Oblique").text(`Motivo alta en campo: ${t.motivoAltaCampo}`, { width: W });
+
+      // Inicio · Fin · Tiempo (sin fecha: ya está en la cabecera).
+      const tiempos = tiemposTrabajo(t);
+      if (t.status === "finalizado" && (tiempos.inicioMs || tiempos.finMs)) {
+        const yB = doc.y + 4;
+        doc.save().rect(L, yB, W, 20).fill("#F2F4F7").restore();
+        const col = W / 3;
+        const celda = (i: number, et: string, v: string) => {
+          doc.fontSize(8).font("Helvetica").fillColor("#555555").text(et, L + 10 + i * col, yB + 6, { continued: true });
+          doc.font("Helvetica-Bold").fillColor("#111111").text(` ${v}`);
+        };
+        celda(0, "Inicio", horaEs(tiempos.inicioMs));
+        celda(1, "Fin", horaEs(tiempos.finMs));
+        celda(2, "Tiempo", duracionCorta(tiempos.segundos));
+        doc.fillColor("#000000");
+        doc.x = L;
+        doc.y = yB + 24;
+      }
+
+      for (const m of t.material ?? []) doc.fontSize(8).font("Helvetica").text(`Material: ${m.texto}`, L, doc.y, { width: W });
+      if (Array.isArray(t.checklist) && t.checklist.length > 0) {
+        doc.fontSize(8).font("Helvetica").text(
+          "Comprobado: " +
+            t.checklist.map((c: any) => `${c.hecho ? "✓" : "✗"} ${c.texto}${c.valor ? ` (${c.valor})` : ""}`).join(" · "),
+          L, doc.y, { width: W }
+        );
+      }
+      if (t.matriculaNoCoincide && t.matriculaLeida) {
+        doc.fontSize(8).font("Helvetica-Oblique").text(`Aviso: en la foto se leyó ${t.matriculaLeida}, no la matrícula del trabajo`, L, doc.y, { width: W });
+      }
+
+      if (t.status === "no_realizado") {
+        // Recuadro rojo: motivo, explicación, quién y a qué hora, y sus fotos.
+        const y0 = doc.y + 4;
+        const campo = (et: string, v: string, italic = false) => {
+          const y = doc.y;
+          doc.fontSize(9).font("Helvetica-Bold").fillColor("#111111").text(et, L + 10, y, { width: 120 });
+          doc.font(italic ? "Helvetica-Oblique" : "Helvetica").text(v, L + 135, y, { width: W - 145 });
+          doc.y = Math.max(doc.y, y + 12);
+        };
+        doc.y = y0 + 8;
+        campo("Motivo:", t.motivoNoRealizado || "No indicado");
+        if (t.explicacionNoRealizado) campo("Explicación del técnico:", `«${t.explicacionNoRealizado}»`, true);
+        if (tiempos.finMs) campo("Técnico · hora:", `${data.assignedTechName || "—"} · ${horaEs(tiempos.finMs)}`);
+        const fotosNo = (t.fotos ?? []).filter((f: any) => f.kind === "no_realizado");
+        if (fotosNo.length) await fotosPdf(fotosNo, L + 10);
+        const y1 = doc.y + 4;
+        doc.save().lineWidth(1.2).rect(L, y0, W, y1 - y0).stroke("#B42318").restore();
+        doc.x = L;
+        doc.y = y1 + 4;
+        // Las demás fotos (matrícula, antes…) debajo, como en los hechos.
+        await fotosPdf((t.fotos ?? []).filter((f: any) => f.kind !== "no_realizado"));
+      } else {
+        await fotosPdf(t.fotos ?? []);
+      }
+      // Separador fino entre trabajos.
+      const yS = doc.y + 4;
+      doc.save().lineWidth(0.5).moveTo(L, yS).lineTo(L + W, yS).stroke("#DDDDDD").restore();
+      doc.x = L;
+      doc.y = yS + 8;
+    };
+
+    // Resumen: cuántos hechos y cuántos no.
+    {
+      const n = (st: string) => data.trabajos.filter((x: any) => x.status === st).length;
+      const partes = [`${n("finalizado")} realizados`];
+      if (n("no_realizado")) partes.push(`${n("no_realizado")} no realizados`);
+      const pend = data.trabajos.length - n("finalizado") - n("no_realizado");
+      if (pend) partes.push(`${pend} sin hacer`);
+      doc.fontSize(9).font("Helvetica").fillColor("#555555").text(`Resumen: ${partes.join(" · ")}`, L, doc.y).fillColor("#000000");
+      doc.moveDown(0.4);
+    }
 
     doc.fontSize(11).font("Helvetica-Bold").text("Planificados por oficina:");
     if (planificados.length === 0) doc.fontSize(9).font("Helvetica").text("  (ninguno)");
@@ -19011,6 +20069,13 @@ app.get("/api/otf/:id/report.pdf", requireAdminRole, async (req, res) => {
     if (enCampo.length === 0) doc.fontSize(9).font("Helvetica").text("  (ninguno)");
     for (const t of enCampo) await printT(t);
 
+    // Cerrada sin nadie de la base que firmara.
+    if (data.sinResponsable) {
+      doc.moveDown(0.6);
+      doc.fontSize(13).font("Helvetica-Bold").text("Conformidad del responsable");
+      doc.moveDown(0.3);
+      doc.fontSize(10).font("Helvetica").text("Sin responsable en la base: la visita se cerró sin firma.");
+    }
     // Firma única
     if (data.firmaUrl || data.firmanteNombre) {
       doc.moveDown(1);
@@ -19028,7 +20093,14 @@ app.get("/api/otf/:id/report.pdf", requireAdminRole, async (req, res) => {
     }
 
     doc.end();
-    const buffer = await finished;
+    return await finished;
+}
+
+app.get("/api/otf/:id/report.pdf", requireAdminRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const buffer = await buildOtfReportPdfBuffer(id);
+    if (!buffer) return res.status(404).json({ error: "OTF no encontrada" });
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="otf_${id}.pdf"`);
     res.send(buffer);
@@ -19657,7 +20729,7 @@ app.post(
    se toca aquí: esto solo deja los datos listos para revisar.
 ========================================================= */
 
-const BUCKET_DOCS = "tc-documentos";
+const BUCKET_DOCS = SUPABASE_DOCS_BUCKET;
 const fichaOcr = new OpenAiFichaTecnicaOcr();
 
 /// URL firmada (el bucket es privado: la ficha lleva VIN y titular).
@@ -21644,6 +22716,22 @@ mountEtiquetas(app, authenticate, requireModule("tyrecontrol"));
 // guardar lo decide el técnico, y aterriza en la intervención y los montajes
 // que ya existen.
 mountParte(app, authenticate, requireModule("tyrecontrol"));
+mountInformeFlota(app, authenticate, requireModule("tyrecontrol"));
+mountInformeRevisiones(app, authenticate, requireModule("tyrecontrol"));
+
+// La hoja del patio: quién está dentro de una base ahora y le toca revisión.
+// Ver server/tyrecontrol/informePendientes/.
+mountInformePendientes(app, authenticate, requireModule("tyrecontrol"));
+
+// Informe mensual de flota: la réplica del informe del centro técnico.
+// De momento la cabecera y los recuentos. Ver server/tyrecontrol/informeMensual/.
+mountInformeMensual(app, authenticate, requireModule("tyrecontrol"));
+
+// Tacógrafo de TyreControl: simular, importar por lotes, deshacer, el control
+// de flota y las propuestas de medida. Ver server/tyrecontrol/tacografo/.
+// Ojo: `mountTacografos`, en plural, es el módulo de expedientes del anexo II
+// y no tiene nada que ver con esto.
+mountTcTacografo(app, authenticate, requireModule("tyrecontrol"));
 
 /*
  * Lectura de TyreControl desde Assist. Solo lectura: en esta fase el módulo no
@@ -21661,6 +22749,8 @@ mountParte(app, authenticate, requireModule("tyrecontrol"));
  */
 app.use("/api/tyrecontrol/conciliacion", createConciliacionRouter());
 app.use("/api/tyrecontrol/presencia-bases", createPresenciaRouter());
+// La tablet dice dónde está. Solo escribe: el panel lo lee por Supabase.
+app.use("/api/tyrecontrol/ubicacion", createUbicacionRouter());
 // Kilómetros mensuales: mismo motivo que la conciliación para ir ANTES del router general.
 app.use("/api/tyrecontrol/kilometraje-mensual", createKilometrajeMensualRouter());
 // El alta operativa va ANTES del router general de TyreControl, igual que el
@@ -21668,6 +22758,7 @@ app.use("/api/tyrecontrol/kilometraje-mensual", createKilometrajeMensualRouter()
 app.use("/api/tyrecontrol/alta-operativa", createAltaOperativaRouter());
 app.use("/api/tyrecontrol/kilometraje-actual", createKilometrajeActualRouter());
 app.use("/api/tyrecontrol/parte-proveedor", createParteProveedorRouter());
+app.use("/api/tyrecontrol/parte-flotas", createParteFlotasRouter());
 app.use("/api/tyrecontrol", createTyreControlRouter(requireSupervisorRole));
 mountCorreo(app, requireSupervisorRole);
 app.use("/api/excepciones", createExcepcionesRouter(requireSupervisorRole));
@@ -21915,6 +23006,10 @@ async function prepararEsquema(nombre: string, fn: () => Promise<void>): Promise
 }
 
 initDb()
+  // Taller: las tablas de mantenimiento, las de usuarios del panel y las
+  // plantillas de serie. Va la primera porque no depende de nadie y porque
+  // los manejadores ya no las preparan por su cuenta.
+  .then(() => prepararEsquema("Taller", initTallerEsquema))
   .then(() => prepararEsquema("Integration Hub", initIntegrationHub))
   .then(() => prepararEsquema("Licencias", initLicenses))
   .then(() => prepararEsquema("Connect Pro", initConnect))

@@ -8,6 +8,7 @@ import '../services/lectura_km.dart';
 import '../services/offline_store.dart';
 import '../services/pausa_controller.dart';
 import '../services/probe_session.dart';
+import '../services/seguimiento_ubicacion.dart';
 import '../services/supabase_service.dart';
 import '../services/tlgx_probe_service.dart';
 import '../theme/app_theme.dart';
@@ -15,6 +16,7 @@ import '../widgets/km_vehiculo.dart';
 import '../widgets/pausa_trabajo.dart';
 import '../widgets/vehicle_schema.dart';
 import '../widgets/vehicle_layout_image.dart';
+import 'alta_operativa_screen.dart';
 import 'incidencia_flow_screen.dart';
 import 'tire_detail_screen.dart';
 
@@ -45,6 +47,13 @@ class ReviewScreen extends StatefulWidget {
 class _ReviewScreenState extends State<ReviewScreen> {
   bool _cargando = true;
   String? _error;
+  /// El error es «a este vehículo le falta la ficha», que tiene arreglo aquí
+  /// mismo. Cualquier otro error no se arregla desde el patio.
+  bool _faltaFicha = false;
+  /// El tipo del vehículo, en estado y no leído del widget: si se completa la
+  /// ficha sin salir de aquí, el objeto que llegó por el constructor se queda
+  /// con el tipo viejo (null) y la revisión volvería al mismo callejón.
+  String? _tipoId;
 
   List<PosicionVehiculo> _posiciones = [];
   final Map<String, MontajeActual> _montajePorPosicion = {};
@@ -78,6 +87,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
   @override
   void initState() {
     super.initState();
+    _tipoId = widget.vehiculo.tipoVehiculoId;
     _cargar();
     _lecturaSub = _sonda.onLectura.listen(_onLectura);
     _sonda.addListener(_onSonda);
@@ -100,14 +110,27 @@ class _ReviewScreenState extends State<ReviewScreen> {
     setState(() {
       _cargando = true;
       _error = null;
+      _faltaFicha = false;
     });
     try {
-      final tipoId = widget.vehiculo.tipoVehiculoId;
+      final tipoId = _tipoId;
       if (tipoId == null) {
-        setState(() => _error = 'Este vehículo no tiene un tipo con posiciones configuradas.');
+        setState(() {
+          _error = 'Este vehículo no tiene un tipo con posiciones configuradas.';
+          _faltaFicha = true;
+        });
         return;
       }
       final posiciones = await TyreControlApi.listarPosiciones(tipoId);
+      if (posiciones.isEmpty) {
+        // Tiene tipo, pero ese tipo no tiene plano: para el técnico es el
+        // mismo callejón, así que se ofrece la misma salida (elegir otro tipo).
+        setState(() {
+          _error = 'El tipo de este vehículo no tiene posiciones configuradas.';
+          _faltaFicha = true;
+        });
+        return;
+      }
       // Orden de revisión: si está configurado en el panel (orden_revision),
       // se respeta; si no, recorrido físico alrededor del vehículo → lado
       // derecho de delante hacia atrás, luego izquierdo de atrás hacia delante
@@ -183,6 +206,14 @@ class _ReviewScreenState extends State<ReviewScreen> {
        */
       final capturado = _lecturaKm?['capturadoAt'] as String?;
       final antiguedad = (_lecturaKm?['antiguedadMin'] as num?)?.round();
+      /*
+       * Dónde se abre la revisión. Se pide ANTES de crearla para que viaje en
+       * el mismo insert; si el GPS no fija a tiempo, devuelve null y la
+       * revisión se crea igual, sin coordenadas.
+       */
+      final dondeEmpieza = widget.revisionExistente == null
+          ? await SeguimientoUbicacion.instancia.posicionParaRevision()
+          : null;
       _revision = widget.revisionExistente ??
           await TyreControlApi.crearRevision(
             empresaId: widget.vehiculo.empresaId,
@@ -191,6 +222,9 @@ class _ReviewScreenState extends State<ReviewScreen> {
             origenKm: capturado != null ? 'telematica' : null,
             kmCapturadoAt: capturado != null ? DateTime.tryParse(capturado) : null,
             kmDesfaseMin: antiguedad != null ? -antiguedad : null,
+            lat: dondeEmpieza?.latitude,
+            lng: dondeEmpieza?.longitude,
+            precisionM: dondeEmpieza?.accuracy,
           );
       // Cronometraje: inicio_at lo puso la BD al crear la revisión; aquí solo
       // se gestionan las pausas de inactividad.
@@ -639,6 +673,10 @@ class _ReviewScreenState extends State<ReviewScreen> {
       // introduce nada a mano. Una pausa sin reanudar se cierra aquí.
       await _pausas?.cerrarSiActiva();
       final finAt = DateTime.now();
+      // Dónde se cierra. Viaja en `extra` por lo mismo que `finAt`: si el
+      // cierre sale por la cola horas después, el sitio bueno es este, no
+      // donde esté la tablet cuando haya red.
+      final dondeAcaba = await SeguimientoUbicacion.instancia.posicionParaRevision();
       final conPresion = _detalles.values.any((d) => d.presionBar != null);
       final nNeu = _detalles.values.where((d) => d.medido && !d.noAccesible && !d.neumaticoAusente).length;
       final extra = {
@@ -647,6 +685,11 @@ class _ReviewScreenState extends State<ReviewScreen> {
         'nNeumaticos': nNeu,
         'pausaSeg': _pausas?.pausaSeg ?? 0,
         'nPausas': _pausas?.numPausas ?? 0,
+        if (dondeAcaba != null) ...{
+          'finLat': dondeAcaba.latitude,
+          'finLng': dondeAcaba.longitude,
+          'finPrecisionM': dondeAcaba.accuracy,
+        },
       };
       if (OfflineStore.pendingCount.value > 0) {
         // Hay detalles en cola (no había cobertura al medirlos): encolamos el
@@ -665,6 +708,9 @@ class _ReviewScreenState extends State<ReviewScreen> {
             nNeumaticos: nNeu,
             pausaSeg: _pausas?.pausaSeg ?? 0,
             nPausas: _pausas?.numPausas ?? 0,
+            finLat: dondeAcaba?.latitude,
+            finLng: dondeAcaba?.longitude,
+            finPrecisionM: dondeAcaba?.accuracy,
           );
           OfflineStore.offline.value = false;
         } on PostgrestException {
@@ -706,6 +752,36 @@ class _ReviewScreenState extends State<ReviewScreen> {
     }
   }
 
+  /// Completa la ficha del vehículo sin salir de la revisión.
+  ///
+  /// Al volver se recarga: si ya tiene tipo y plano, la revisión arranca sola
+  /// y el técnico sigue donde estaba. El inventario inicial va dentro de ese
+  /// mismo recorrido, así que las gomas que ya lleva montadas quedan apuntadas
+  /// como lo que son —ya estaban ahí— y no como un montaje de hoy.
+  Future<void> _configurarVehiculo() async {
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => AltaOperativaScreen(
+          vehiculoId: widget.vehiculo.id,
+          matricula: widget.vehiculo.matricula,
+          tipoIdActual: _tipoId,
+        ),
+      ),
+    );
+    if (!mounted) return;
+    // El tipo se vuelve a leer de la base: lo que trajo el constructor es de
+    // antes de configurar y seguiría diciendo que no hay ninguno.
+    try {
+      final v = await TyreControlApi.obtenerVehiculoCompleto(widget.vehiculo.id);
+      _tipoId = v?['tipo_vehiculo_id'] as String?;
+    } catch (_) {
+      // Si no se puede releer, _cargar() enseñará el mismo aviso y el botón
+      // sigue ahí: se vuelve a intentar. No se borra lo que ya se sabía.
+    }
+    if (!mounted) return;
+    await _cargar();
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_cargando) {
@@ -714,7 +790,35 @@ class _ReviewScreenState extends State<ReviewScreen> {
     if (_error != null) {
       return Scaffold(
         appBar: AppBar(title: const Text('Revisión')),
-        body: Center(child: Padding(padding: const EdgeInsets.all(24), child: Text(_error!, textAlign: TextAlign.center))),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Text(_error!, textAlign: TextAlign.center),
+              // Sin esto, el técnico se queda delante del camión con un
+              // mensaje y ninguna salida: tenía que volver a oficina para que
+              // alguien tocara la ficha. La ficha se puede completar aquí.
+              if (_faltaFicha) ...[
+                const SizedBox(height: 10),
+                const Text(
+                  'Puedes completarlo ahora y seguir con la revisión.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: AppColors.textSecondary),
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  height: 56,
+                  child: FilledButton.icon(
+                    onPressed: _configurarVehiculo,
+                    icon: const Icon(Icons.build_outlined),
+                    label: const Text('Configurar vehículo',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                  ),
+                ),
+              ],
+            ]),
+          ),
+        ),
       );
     }
 

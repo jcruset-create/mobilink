@@ -260,6 +260,41 @@ export interface WebfleetAlerta {
   created_at?: string | null;
 }
 
+/**
+ * Un aviso de presión del sensor de Goodyear.
+ *
+ * NO es una revisión: nadie ha ido al vehículo. Llega por correo y vive en su
+ * propia tabla, `tc_alertas_presion`. Una fila por RUEDA mientras siga
+ * abierta, no una por correo: `avisos` cuenta cuántas veces ha avisado la
+ * misma, que es lo que distingue una presión baja de una fuga.
+ */
+export interface AlertaPresion {
+  id: string;
+  empresa_id: string;
+  vehiculo_id: string;
+  posicion_id: string;
+  neumatico_id?: string | null;
+  tipo: "presion_baja" | "desinflado";
+  severidad: "alta" | "media";
+  presion_recomendada_bar?: number | null;
+  /** Nula en los avisos de «desinflado»: el correo pone `!!!`, no un número. */
+  presion_bar?: number | null;
+  /** El que dice el correo, con su signo. No se recalcula desde los bares. */
+  desviacion_pct?: number | null;
+  umbral_pct?: number | null;
+  medido_at: string;
+  estado: "abierta" | "resuelta" | "descartada";
+  avisos: number;
+  primer_aviso_at: string;
+  ultimo_aviso_at: string;
+  resuelta_at?: string | null;
+  nota?: string | null;
+  posicion?: { codigo_posicion?: string | null; nombre?: string | null } | null;
+  /** Solo cuando se pide para la campana, que necesita decir de qué vehículo. */
+  vehiculo?: { matricula?: string | null } | null;
+  neumatico?: { codigo_interno?: string | null; numero_serie?: string | null } | null;
+}
+
 // ── Planificación de revisiones periódicas (mantenimiento) ──────
 export type EstadoPlan =
   | "correcta" | "proxima" | "vence_hoy" | "atrasada" | "planificada"
@@ -446,6 +481,23 @@ export interface Vehiculo {
   // Nació en la tablet con lo mínimo (tc_alta_vehiculo_desde_parte) y le
   // faltan marca, modelo o delegación. Un administrador lo completa.
   pendiente_validar?: boolean;
+  /**
+   * Si entra en el mantenimiento integral.
+   *
+   * En `false` el vehículo sigue ACTIVO y sigue en la telemática, pero no
+   * cuenta para revisiones ni para informes: son matrículas que circulan y a
+   * las que nadie revisa las gomas. No confundir con `activo` —dado de baja—
+   * ni con `pendiente_validar` —le faltan datos administrativos—: las tres
+   * son independientes.
+   *
+   * Solo se cambia por `tc_vehiculo_seguimiento`, nunca escribiendo la
+   * columna: el motivo es obligatorio al quitarlo y eso lo exige la base.
+   */
+  en_seguimiento?: boolean;
+  /** Por qué se dejó sin seguimiento. Null cuando lo tiene. */
+  seguimiento_motivo?: string | null;
+  seguimiento_cambiado_en?: string | null;
+  seguimiento_cambiado_por?: string | null;
   creado_por?: string | null;
   creado_desde?: "panel" | "tablet" | "importacion" | null;
   // Los datos de la ficha técnica NO viven aquí: cada código de la tarjeta
@@ -745,6 +797,22 @@ export interface OperacionNeumatico {
   coste?: number | null;
   created_by?: string | null;
   assigned_by?: string | null;
+  /** Histórico de albaranes importado (ver shared/historicoAlbaran.ts): el
+   *  vínculo con el lote es EL criterio; el resto son los datos que no tienen
+   *  ficha de neumático de la que salir. */
+  importacion_lote_id?: string | null;
+  origen_sistema?: string | null;
+  origen_linea?: string | null;
+  grupo_origen?: string | null;
+  condicion?: "nueva" | "usada" | "recauchutada" | null;
+  marca_txt?: string | null;
+  modelo_txt?: string | null;
+  medida_txt?: string | null;
+  posicion_fuente?: "indicada" | "deducida" | "desconocida" | null;
+  /** Une la entrada y la salida de una sustitución histórica. */
+  grupo_sustitucion?: string | null;
+  /** Solo en la fila de salida: si consta quién se retiró. */
+  identidad_retirado?: "respaldada" | "reconstruida" | "desconocida" | null;
   empresa?: Empresa | null;
   vehiculo?: Vehiculo | null;
   neumatico?: Neumatico | null;

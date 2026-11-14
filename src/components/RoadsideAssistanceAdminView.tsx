@@ -30,6 +30,7 @@ import {
   saveWorkshopConfigToBackend,
   type WorkshopConfig,
 } from "../modules/roadsideAssistanceApi";
+import MenuOtf from "./MenuOtf";
 
 const INITIAL_VEHICLE_DRAFT: RoadsideVehicleDraft = {
   name: "",
@@ -395,6 +396,8 @@ export default function RoadsideAssistanceAdminView({
             <FileText className="h-4 w-4 shrink-0" /> Historial
           </button>
 
+          <MenuOtf />
+
           <div className="my-2 border-t border-slate-800" />
           <div className="px-3 pb-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">
             Configuración
@@ -415,9 +418,6 @@ export default function RoadsideAssistanceAdminView({
           </a>
           <a href="/asistencias/talleres" className={enlaceLateral}>
             <Store className="h-4 w-4 shrink-0" /> Talleres
-          </a>
-          <a href="/otf" target="_blank" rel="noopener noreferrer" className={enlaceLateral}>
-            <Truck className="h-4 w-4 shrink-0" /> OTF
           </a>
           <a href="/vehiculo" target="_blank" rel="noopener noreferrer" className={enlaceLateral}>
             <List className="h-4 w-4 shrink-0" /> Historial vehículo

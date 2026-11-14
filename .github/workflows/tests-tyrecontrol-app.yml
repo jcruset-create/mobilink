@@ -1,0 +1,53 @@
+# Pruebas de la APK de TyreControl, en los PR.
+#
+# Hasta ahora un PR que tocara SOLO `tyrecontrol_app/` salía con cero checks:
+# `tests.yml` filtra por `server/**`, `src/**`, `autoscan_agent/**` y
+# `scripts/**`, y el único sitio donde se analizaba la app era
+# `build-tyrecontrol-apk.yml`, que corre después del merge —solo en `main`— y
+# además no ejecutaba `flutter test`. Es decir: la lógica de la tablet se podía
+# romper y el PR seguía en verde porque no había nada que mirar.
+#
+# Este workflow no compila ni publica nada: solo analiza y prueba. La APK la
+# sigue haciendo `build-tyrecontrol-apk.yml` al entrar en `main`.
+#
+# Las otras apps Flutter (flutter_app, lite_app, safety_app, almacen_app,
+# toolcontrol_app, presencia_app) están en la misma situación. `taller_app` no:
+# su workflow ya ejecuta `flutter test`. Se arregla aquí la que hace falta
+# ahora; las demás, cuando se toquen.
+name: Tests TyreControl APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "tyrecontrol_app/**"
+      - ".github/workflows/tests-tyrecontrol-app.yml"
+  pull_request:
+    paths:
+      - "tyrecontrol_app/**"
+      - ".github/workflows/tests-tyrecontrol-app.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tyrecontrol_app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          # La misma que compila la APK. Dos versiones distintas de Flutter
+          # para la misma app son dos resultados distintos que nadie podría
+          # explicar el día que uno pase y el otro no.
+          flutter-version: "3.35.4"
+          cache: true
+
+      - run: flutter pub get
+
+      - run: flutter analyze --no-fatal-infos
+
+      - run: flutter test

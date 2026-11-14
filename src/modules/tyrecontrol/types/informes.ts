@@ -34,6 +34,40 @@ export interface EstadoFlota {
   urgente: number;
   pendiente: number;
   evolucion: { mes: string; revisiones: number }[];
+  /**
+   * Los vehículos uno a uno, con la misma clasificación de los recuentos.
+   * Opcional: lo añade tyrecontrol_cuadros_que_filtran.sql; sin él los
+   * semáforos siguen saliendo pero no pueden enseñar cuáles son.
+   */
+  vehiculos?: VehiculoFlota[];
+}
+
+export type EstadoDeFlota = "correcto" | "revisar" | "urgente" | "pendiente";
+
+export interface VehiculoFlota {
+  vehiculo_id: string;
+  matricula: string | null;
+  numero_unidad: string | null;
+  estado: EstadoDeFlota;
+  /** La profundidad más baja de su última revisión: la que decide el estado. */
+  prof_min: number | null;
+  fecha_revision: string | null;
+}
+
+/**
+ * Una celda del inventario: cuántos neumáticos hay con ese estado, marca,
+ * modelo, medida y rango de profundidad (tc_informes_inventario_cubo).
+ */
+export interface CeldaInventario {
+  estado: string;
+  marca: string;
+  modelo: string;
+  medida: string;
+  /** Ficha creada por la importación del histórico: no cuenta en las tablas. */
+  de_lote: boolean;
+  /** `null` si el neumático no tiene ninguna profundidad medida. */
+  rango: "r0_2" | "r2_4" | "r4_6" | "r6_8" | "r8_10" | "r10" | null;
+  n: number;
 }
 
 export interface DimensionTotal {
@@ -57,6 +91,44 @@ export interface Alerta {
   posicion: string | null;
   detalle: string;
   valor: number | null;
+}
+
+/**
+ * Una RUEDA de un vehículo con alguna incidencia, tal como la devuelve
+ * `tc_informes_alertas_vehiculos`. Vienen todas las del vehículo, también las
+ * que están bien: la tarjeta pinta el plano entero.
+ */
+export interface RuedaAlerta {
+  vehiculo_id: string | null;
+  matricula: string | null;
+  numero_unidad: string | null;
+  tipo_vehiculo: string | null;
+  config_ejes: string | null;
+  imagen_chasis_url: string | null;
+  posicion_id: string | null;
+  codigo_posicion: string | null;
+  eje: number | null;
+  lado: string | null;
+  interior_exterior: string | null;
+  neumatico_id: string | null;
+  codigo: string | null;
+  medida: string | null;
+  profundidad_mm: number | null;
+  minimo_mm: number | null;
+  fecha_revision: string | null;
+  presion_bar: number | null;
+  presion_recomendada_bar: number | null;
+  desviacion_pct: number | null;
+  presion_avisos: number | null;
+  presion_aviso_at: string | null;
+  /**
+   * Las tres del protocolo (tyrecontrol_protocolo_falsos_desgastes.sql).
+   * Opcionales: si la base todavía tiene la función anterior no vienen, y
+   * entonces todo se trata como confirmado, que es como era.
+   */
+  confirmada?: boolean | null;
+  pendiente_mm?: number | null;
+  pendiente_fecha?: string | null;
 }
 
 export interface EconomicoInformes {
@@ -96,6 +168,63 @@ export interface OperacionesInforme {
   por_tipo: { tipo: string; n: number }[];
   por_motivo: { motivo: string; n: number }[];
   evolucion: { mes: string; n: number }[];
+  /** Lo mismo partido por tipo. Opcionales: sin ellos los cuadros no filtran. */
+  por_tipo_motivo?: { tipo: string; motivo: string; n: number }[];
+  evolucion_tipo?: { mes: string; tipo: string; n: number }[];
+}
+
+/** Informe «Montajes de neumáticos»: cuenta UNIDADES QUE ENTRAN. Las salidas
+ *  van aparte y no inflan el recuento (4 sustituciones = 4 montajes). */
+export type OrigenMontajes = "historico" | "normal" | "ambos";
+export interface MontajesInforme {
+  desde: string; hasta: string; origen: OrigenMontajes;
+  total: number; total_historico: number; total_normal: number;
+  desmontajes: number; desmontajes_historico: number; registros: number;
+  por_condicion: { condicion: string; n: number; historico: number; normal: number }[];
+  por_referencia: { marca: string; modelo: string; medida: string; condicion: string; n: number; historico: number; normal: number }[];
+  por_vehiculo: { vehiculo_id: string | null; matricula: string; n: number; nuevas: number; usadas: number; recauchutadas: number }[];
+  evolucion: { mes: string; n: number; historico: number; normal: number }[];
+  por_posicion: { clase: "registrada" | "deducida" | "desconocida"; n: number }[];
+  excluidas: { anuladas: number; correcciones: number; declaradas: number; no_completadas: number };
+  /** Cobertura de las medias de recorrido ESTIMADO del mismo periodo: sobre
+   *  cuántos intervalos salen y qué queda fuera. Una media sin esto no se
+   *  publica. Puede faltar si la base todavía no tiene la fase 3. */
+  recorridos_estimados?: CoberturaRecorridosInforme | null;
+}
+
+/** Lo que devuelve tc_informes_recorridos_estimados. Los motivos de exclusión
+ *  SE SOLAPAN: un intervalo puede tener varios, así que no se suman. Para
+ *  sumar están las combinaciones. */
+export interface CoberturaRecorridosInforme {
+  nivel: "estimado"; aviso: string;
+  periodo: { desde: string; hasta: string; origen: string };
+  poblacion: { intervalos: number; vehiculos: number; posiciones: number;
+               cerrados: number; abiertos: number; interrumpidos: number };
+  /** Tener un recorrido que se puede restar no es lo mismo que poder usarlo:
+   *  se publican los dos números. */
+  embudo: { con_recorrido_aritmetico: number; elegibles_tras_filtros: number; que_es: string };
+  /** Tres grupos que suman la población: identidad respaldada por una
+   *  persona, ficha reconstruida por la importación (tiene número interno,
+   *  pero no demuestra qué goma era) y ocupación sin ficha. «Sin
+   *  identificación física» no es lo mismo que «sin ficha». */
+  identidad: { respaldada: number; reconstruida: number; sin_ficha: number; que_es: string };
+  incluidos: { n: number; respaldada: number; reconstruida: number; sin_ficha: number;
+               aceptados_km: number; aceptados_continuidad: number };
+  recorrido: Record<"identidad_respaldada" | "ficha_reconstruida" | "ocupacion_sin_ficha", {
+    n: number; media: number | null; mediana: number | null;
+    minimo: number | null; maximo: number | null; total_km: number | null; que_es: string }>;
+  excluidos: { n: number; motivos_se_solapan: boolean; nota: string;
+               motivos: { motivo: string; n: number }[];
+               combinaciones: { motivos: string[]; n: number }[] };
+  revision: { km_pendientes: number; km_aceptados: number; km_rechazados: number;
+              continuidad_pendientes: number; continuidad_aceptadas: number; continuidad_rechazadas: number };
+  limite_km_dia: number | null;
+}
+
+export interface InventarioResumen {
+  neumaticos_reales: number;
+  fichas_historicas: number;
+  unidades_sin_ficha: number;
 }
 
 export interface PresionNeumatico {
@@ -117,14 +246,83 @@ export interface ProductividadTecnico {
   operaciones: number;
 }
 
+/**
+ * Una fila de `tc_informes_km_por_mm`: un modelo de neumático en un eje, con
+ * lo que le aguanta cada milímetro de dibujo.
+ *
+ * `km_por_mm` ya viene calculado por la base para ESE eje. El del modelo
+ * entero se saca sumando `km_totales` y `mm_totales` de sus ejes, nunca
+ * promediando los `km_por_mm` — ver `services/kmPorMm.ts`.
+ */
+export interface KmPorMmFila {
+  marca: string;
+  modelo: string;
+  /** `null` si la medición no tenía posición conocida. */
+  eje: number | null;
+  /** Tramos limpios: una goma viviendo en un sitio, de punta a punta. */
+  tramos: number;
+  neumaticos: number;
+  km_totales: number;
+  mm_totales: number;
+  km_por_mm: number;
+  p25: number;
+  mediana: number;
+  p75: number;
+  /** Percentil 99 de lo medido del modelo: con qué dibujo entra, aproximado. */
+  mm_nuevo: number | null;
+  /** Percentil 1: con cuál se retira. */
+  mm_retirada: number | null;
+  /** Gomas distintas del modelo entero, ya sin contar dos veces las que han pasado por dos ejes. */
+  neumaticos_modelo: number;
+}
+
+/**
+ * Una fila de `tc_informes_sustituciones_previstas`: una MEDIDA y un PLAZO.
+ *
+ * `montados`, `sin_datos`, `sin_fecha` y `vencidos` son de la medida entera y
+ * vienen repetidos en cada una de sus filas de plazo; `en_el_tramo` y `acumulado` son
+ * del plazo. El giro a tabla de compra lo hace `services/previsionMedida.ts`.
+ */
+export interface PrevisionMedida {
+  medida: string;
+  /** Gomas de esa medida montadas hoy, tengan mediciones o no. */
+  montados: number;
+  /** De ésas, las que no tienen NINGUNA medición: el arco no las lee. */
+  sin_datos: number;
+  /** Medidas pero sin predicción: ni ritmo propio ni de su modelo. */
+  sin_fecha: number;
+  /** A las que ya se les pasó la fecha prevista. */
+  vencidos: number;
+  dias: number;
+  /** Las que caen entre el plazo anterior y éste: lo que se compra ese mes. */
+  en_el_tramo: number;
+  /** Vencidas más todo lo que cae hasta este plazo: lo que hay que tener. */
+  acumulado: number;
+}
+
+/**
+ * Una fila de `tc_informes_desgaste`: cuándo tocará cambiar esta goma.
+ *
+ * El ritmo se mide sobre el ÚLTIMO tramo del neumático —la vida que está
+ * viviendo ahora—, no sobre todo su historial, que puede incluir la goma
+ * anterior. Y cuando ese tramo todavía es corto, el ritmo se toma prestado del
+ * modelo y el eje: `origen_ritmo` dice cuál de las dos cosas es, y la pantalla
+ * lo enseña. Un informe que no distingue lo medido de lo supuesto no sirve
+ * para decidir.
+ */
 export interface DesgasteNeumatico {
   neumatico_id: string;
   codigo: string | null;
   marca: string | null;
   modelo: string | null;
   medida: string | null;
+  /** El vehículo en el que está montada ahora. */
+  matricula: string | null;
   ultima_prof: number | null;
+  ultima_fecha: string | null;
   mm_por_1000km: number | null;
+  /** «neumatico» si el ritmo es suyo medido; «modelo» si es prestado. */
+  origen_ritmo: "neumatico" | "modelo" | null;
   km_restantes: number | null;
   fecha_prevista: string | null;
   n_medidas: number;

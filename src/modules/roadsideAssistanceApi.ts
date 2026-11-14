@@ -114,7 +114,14 @@ export async function cancelOtf(id: number) {
 }
 
 // ── Plantillas de trabajos OTF ──
-export type OtfPlantilla = { id: number; nombre: string; descripcion: string | null; activo: boolean };
+export type OtfPlantilla = {
+  id: number;
+  nombre: string;
+  descripcion: string | null;
+  activo: boolean;
+  /** Puntos a comprobar en un trabajo de esta plantilla (presiones, par…). */
+  checklist?: string[];
+};
 
 export async function fetchOtfPlantillas(all = false): Promise<OtfPlantilla[]> {
   const res = await fetchWithTimeout(`${API_BASE}/api/otf-plantillas${all ? "?all=true" : ""}`, {

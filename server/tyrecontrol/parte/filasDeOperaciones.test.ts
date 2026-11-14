@@ -6,7 +6,7 @@
  * tc_desmontar_neumatico y tc_montar_desde_catalogo no escriben.
  */
 import { describe, it, expect } from "vitest";
-import { filasDeOperaciones, tipoEnElPapel, serieDe, esNuevo, esDeclarado,
+import { filasDeOperaciones, filasHistoricas, tipoEnElPapel, serieDe, esNuevo, esDeclarado,
          type OperacionFila } from "./filasDeOperaciones.ts";
 import { armarParte } from "./armarParte.ts";
 
@@ -202,5 +202,43 @@ describe("lo que el camión ya llevaba no es trabajo", () => {
     expect(p.montados![0].descripcion).toContain("Continental");
     expect(p.nuevos).toHaveLength(1);
     expect(p.nuevos![0].unidades).toBe(1);
+  });
+});
+
+describe("el histórico de albaranes importado", () => {
+  const hist = (o: Partial<OperacionFila> = {}): OperacionFila => op({
+    tipo_operacion: "montaje", estado_anterior: null, neumatico: null, posicion_origen: null,
+    importacion_lote_id: "11111111-1111-4111-8111-111111111111",
+    condicion: "nueva", marca_txt: "Hankook", modelo_txt: "AH51 156L", medida_txt: "315/80R22.5",
+    posicion_fuente: "deducida", posicion_destino: { codigo_posicion: "E1_IZQ" }, km_vehiculo: 268659,
+    ...o,
+  });
+  it("no entra en montados ni en nuevos a facturar: tiene su hoja aparte", () => {
+    const ops = [hist(), hist({ posicion_destino: { codigo_posicion: "E1_DER" } }),
+                 hist({ condicion: "usada", marca_txt: null, modelo_txt: null, posicion_fuente: "desconocida", posicion_destino: null })];
+    const p = armarParte({}, filasDeOperaciones(ops), [], filasHistoricas(ops));
+    expect(p.montados).toHaveLength(0);
+    expect(p.nuevos).toHaveLength(0);
+    expect(p.historicos).toHaveLength(3);
+    expect(p.historicos![0]).toEqual({ posicion: "E1_IZQ (deducida)", descripcion: "315/80R22.5 Hankook AH51 156L", condicion: "nueva", km: 268659 });
+    expect(p.historicos![2]).toEqual({ posicion: "— (desconocida)", descripcion: "315/80R22.5", condicion: "usada", km: 268659 });
+  });
+  it("un recauchutado histórico NO es nuevo aunque no lleve [USADO]", () => {
+    expect(esNuevo(hist({ condicion: "recauchutada", observaciones: "" }))).toBe(false);
+    expect(esNuevo(hist({ condicion: "usada", observaciones: "" }))).toBe(false);
+    expect(esNuevo(hist({ condicion: "nueva" }))).toBe(true);
+  });
+  it("source='import' sin vínculo NO es histórico: sigue el camino de siempre", () => {
+    const o = op({ tipo_operacion: "montaje", estado_anterior: "almacen" });
+    (o as any).source = "import";
+    const p = armarParte({}, filasDeOperaciones([o]), [], filasHistoricas([o]));
+    expect(p.montados).toHaveLength(1);
+    expect(p.historicos).toBeUndefined();
+  });
+  it("una intervención normal sigue contando sus nuevos igual", () => {
+    const o = op({ tipo_operacion: "montaje", estado_anterior: "almacen", posicion_destino: { codigo_posicion: "E1_IZQ" } });
+    const p = armarParte({}, filasDeOperaciones([o]), [], filasHistoricas([o]));
+    expect(p.montados).toHaveLength(1);
+    expect(p.nuevos).toHaveLength(1);
   });
 });

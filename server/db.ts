@@ -347,6 +347,18 @@ export async function initDb() {
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "operatorLocationAtMs" BIGINT;
 
+    -- La última posición de la TABLET, aparte: operatorLat/Lng la pisan
+    -- también las lecturas de Webfleet, y para usarla de respaldo hay que
+    -- saber de dónde viene (server/core/posicionDoble.ts).
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "tabletLat" DOUBLE PRECISION;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "tabletLng" DOUBLE PRECISION;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "tabletLocationAtMs" BIGINT;
+
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "plateMismatch" BOOLEAN NOT NULL DEFAULT false;
 
@@ -610,6 +622,60 @@ export async function initDb() {
       "createdAtMs" BIGINT NOT NULL
     );
 
+    /*
+     * La última posición de la tablet de cada operario, para el Mapa flota.
+     * Una fila por operario: se pisa con cada envío y se borra al cerrar
+     * sesión (server/tablets/posicionTablet.ts).
+     */
+    /*
+     * El rastro de la tablet de cada operario: todas sus posiciones, para el
+     * informe de recorrido del día (server/tablets/recorrido.ts). Se guarda
+     * 90 días y luego se borra solo.
+     */
+    /*
+     * Mensajes entre la oficina y la tablet del operario de una asistencia
+     * (server/mensajes/mensajesAsistencia.ts).
+     */
+    CREATE TABLE IF NOT EXISTS asistencia_mensajes (
+      id BIGSERIAL PRIMARY KEY,
+      "assistanceId" INTEGER NOT NULL,
+      "techName" TEXT NOT NULL,
+      de TEXT NOT NULL,
+      texto TEXT NOT NULL,
+      urgente BOOLEAN NOT NULL DEFAULT false,
+      autor TEXT,
+      "creadoAtMs" BIGINT NOT NULL,
+      "recibidoAtMs" BIGINT,
+      "leidoAtMs" BIGINT
+    );
+    CREATE INDEX IF NOT EXISTS asistencia_mensajes_asist_idx ON asistencia_mensajes("assistanceId");
+    CREATE INDEX IF NOT EXISTS asistencia_mensajes_pend_idx
+      ON asistencia_mensajes("techName") WHERE "leidoAtMs" IS NULL;
+    -- También en una OTF: el mensaje es de una asistencia o de una OTF.
+    ALTER TABLE asistencia_mensajes ADD COLUMN IF NOT EXISTS "otfId" INTEGER;
+    ALTER TABLE asistencia_mensajes ALTER COLUMN "assistanceId" DROP NOT NULL;
+    CREATE INDEX IF NOT EXISTS asistencia_mensajes_otf_idx ON asistencia_mensajes("otfId");
+
+    CREATE TABLE IF NOT EXISTS tablet_rastro (
+      id BIGSERIAL PRIMARY KEY,
+      "techName" TEXT NOT NULL,
+      lat DOUBLE PRECISION NOT NULL,
+      lng DOUBLE PRECISION NOT NULL,
+      "accuracyM" DOUBLE PRECISION,
+      "speedKmh" DOUBLE PRECISION,
+      "atMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS tablet_rastro_tech_at_idx ON tablet_rastro("techName", "atMs");
+
+    CREATE TABLE IF NOT EXISTS tablet_posicion (
+      "techName" TEXT PRIMARY KEY,
+      lat DOUBLE PRECISION NOT NULL,
+      lng DOUBLE PRECISION NOT NULL,
+      "accuracyM" DOUBLE PRECISION,
+      "speedKmh" DOUBLE PRECISION,
+      "atMs" BIGINT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS roadside_operator_track (
       id SERIAL PRIMARY KEY,
       "assistanceId" INTEGER NOT NULL,
@@ -831,6 +897,21 @@ export async function initDb() {
     ALTER TABLE otf ADD COLUMN IF NOT EXISTS "arrivedAtWorkshopMs" BIGINT;
     ALTER TABLE otf ADD COLUMN IF NOT EXISTS "salidaArmada" BOOLEAN NOT NULL DEFAULT false;
 
+    -- Cuándo vio el operario la OTF en la tablet. Mientras es null, la tablet
+    -- la avisa como nueva (con sonido) y la marca en la pestaña. Al crear la
+    -- columna, las OTF que ya existían se dan por vistas: si no, cada operario
+    -- recibiría de golpe un aviso por cada OTF abierta que ya conoce.
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_name = 'otf' AND column_name = 'vistaAtMs'
+      ) THEN
+        ALTER TABLE otf ADD COLUMN "vistaAtMs" BIGINT;
+        UPDATE otf SET "vistaAtMs" = "updatedAtMs";
+      END IF;
+    END $$;
+
     CREATE TABLE IF NOT EXISTS otf_trabajos (
       id SERIAL PRIMARY KEY,
       "otfId" INTEGER NOT NULL REFERENCES otf(id) ON DELETE CASCADE,
@@ -853,6 +934,40 @@ export async function initDb() {
       "updatedAtMs" BIGINT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS otf_trabajos_otf_idx ON otf_trabajos("otfId");
+    -- Tiempo de cada trabajo, por qué no se hizo, y la matrícula leída de la
+    -- foto (para avisar si no es el vehículo del trabajo).
+    -- Visita cerrada sin nadie de la base para firmar (botón en la tablet).
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "sinResponsable" BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS "iniciadoAtMs" BIGINT;
+    ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS "finalizadoAtMs" BIGINT;
+    ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS "motivoNoRealizado" TEXT;
+    ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS "explicacionNoRealizado" TEXT;
+    ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS "matriculaLeida" TEXT;
+    ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS "matriculaNoCoincide" BOOLEAN NOT NULL DEFAULT false;
+    -- Lo marcado de la lista de comprobación al finalizar ([{texto, hecho, valor}]).
+    ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS checklist JSONB;
+    -- Aviso al responsable de la base al llegar, y correo del informe.
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "telefonoAviso" TEXT;
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "emailInforme" TEXT;
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "avisoLlegadaAtMs" BIGINT;
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "avisoLlegadaResultado" TEXT;
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "informeEnviadoAtMs" BIGINT;
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "informeResultado" TEXT;
+
+    -- Neumáticos y material montados en cada trabajo (server/otf/mejoras.ts).
+    CREATE TABLE IF NOT EXISTS otf_trabajo_material (
+      id SERIAL PRIMARY KEY,
+      "trabajoId" INTEGER NOT NULL REFERENCES otf_trabajos(id) ON DELETE CASCADE,
+      "otfId" INTEGER NOT NULL,
+      tipo TEXT NOT NULL DEFAULT 'neumatico',
+      descripcion TEXT NOT NULL,
+      marca TEXT,
+      estado TEXT,
+      cantidad INTEGER NOT NULL DEFAULT 1,
+      "creadoPor" TEXT,
+      "createdAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS otf_trabajo_material_otf_idx ON otf_trabajo_material("otfId");
 
     -- Catálogo de plantillas de trabajos OTF ("Revisar presiones", etc.).
     -- Sustituye el texto libre de trabajoPlantilla por opciones consistentes
@@ -865,6 +980,9 @@ export async function initDb() {
       "createdAtMs" BIGINT NOT NULL,
       "updatedAtMs" BIGINT NOT NULL
     );
+
+    -- Los puntos a comprobar en un trabajo de esta plantilla (presiones, par…).
+    ALTER TABLE otf_plantillas ADD COLUMN IF NOT EXISTS checklist JSONB NOT NULL DEFAULT '[]'::jsonb;
 
     CREATE TABLE IF NOT EXISTS otf_trabajo_files (
       id SERIAL PRIMARY KEY,

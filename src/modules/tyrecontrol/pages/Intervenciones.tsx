@@ -6,6 +6,7 @@ import type { Empresa, Vehiculo, Perfil, PosicionVehiculo, Neumatico, OperacionN
 import { TIPO_OPERACION_LABELS, ESTADO_OPERACION_LABELS, PRIORIDAD_OPERACION_LABELS } from "../types";
 import { TableWrap, tdCls, thCls, inputCls, Modal, Field } from "../components/ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
+import { esHistoricoAlbaran, etiquetaHistorico } from "../../../../shared/historicoAlbaran";
 
 /**
  * Intervenciones: el PARTE de trabajo (la sesión), no la operación suelta.
@@ -194,7 +195,10 @@ export default function Intervenciones() {
             const est = estadoIntervencion(i);
             return (
               <tr key={i.id} className="border-t border-slate-700/60">
-                <td className={tdCls + " font-mono text-slate-300"}>{i.numero ?? "—"}</td>
+                <td className={tdCls + " font-mono text-slate-300"}>
+                  {i.numero ?? "—"}
+                  {esHistoricoAlbaran(i) && <span className="ml-1 rounded bg-slate-700 px-1 font-sans text-[10px] uppercase text-slate-300" title={etiquetaHistorico(i)}>histórico</span>}
+                </td>
                 <td className={tdCls + " text-slate-400"}>{i.fecha}</td>
                 <td className={tdCls + " text-slate-400"}>{i.empresa?.nombre ?? "—"}</td>
                 <td className={tdCls + " text-slate-400"}>{i.vehiculo?.matricula ?? "—"}</td>

@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import '../services/seguimiento_ubicacion.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import 'cliente_screen.dart';
@@ -37,6 +39,13 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
       // Tras el login se pasa SIEMPRE por la selección de cliente.
       TyreControlApi.clienteActivo.value = null;
+      /*
+       * Y arranca el envío de ubicación. `main()` lo arranca al abrir la app
+       * con la sesión ya puesta; por aquí se entra cuando NO la había, que es
+       * el otro camino. Sin await: pedir el permiso la primera vez no puede
+       * dejar al operario mirando la pantalla de login.
+       */
+      unawaited(SeguimientoUbicacion.instancia.iniciar());
       Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const ClienteScreen()));
     } catch (e) {
       setState(() => _error = e.toString().replaceFirst('Exception: ', ''));

@@ -1,96 +1,378 @@
-import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
+import { rutaConFiltros, type DeDondeVengo } from "../../services/navegacionVolver";
 import { useInformesFiltros } from "./InformesLayout";
-import { listarAlertas } from "../../services/informes";
-import type { Alerta } from "../../types/informes";
+import { listarAlertas, listarAlertasPorVehiculo } from "../../services/informes";
+import { listarUltimasMedicionesVehiculo } from "../../services/data";
+import type { Alerta, RuedaAlerta } from "../../types/informes";
 import { KpiCard } from "../../components/informes/KpiCard";
+import PlanoMiniVehiculo from "../../components/informes/PlanoMiniVehiculo";
 import { descargarCSV } from "../../utils/exportar";
+import {
+  agruparPorVehiculo, edadEnTexto, fechaCorta, filtrarVehiculos, mm, ordenarVehiculos,
+  resumenDeTarjeta, ruedasEnPresion, ruedasParaMedirConSonda, DIAS_MEDICION_VIEJA,
+  type FiltroVehiculos, type OrdenVehiculos, type VehiculoConAlertas,
+} from "../../services/alertasPorVehiculo";
 
-const TIPO_LABEL: Record<string, string> = {
-  bajo_minimo: "Bajo mínimo legal",
-  proximo_sustitucion: "Próximo a sustitución",
-  vehiculo_sin_revisar: "Vehículo sin revisar",
-};
+const ORDENES: { valor: OrdenVehiculos; texto: string }[] = [
+  { valor: "peor", texto: "La goma más gastada primero" },
+  { valor: "ruedas", texto: "Más ruedas afectadas primero" },
+  { valor: "antiguedad", texto: "Medición más antigua primero" },
+  { valor: "matricula", texto: "Matrícula" },
+];
 
-const SEV_ESTILO: Record<string, { punto: string; texto: string }> = {
-  alta: { punto: "#ef4444", texto: "text-rose-300" },
-  media: { punto: "#f59e0b", texto: "text-amber-300" },
-  baja: { punto: "#22c55e", texto: "text-emerald-300" },
-};
+/** Una muestra del relleno, para la leyenda. */
+function Muestra({ clase, children }: { clase: string; children: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 text-[11px] text-slate-400">
+      <span className={`min-w-[28px] rounded px-1 py-[2px] text-center text-[11px] font-extrabold tabular-nums ${clase}`}>{children}</span>
+    </span>
+  );
+}
+
+function TarjetaVehiculo({ v, volver }: { v: VehiculoConAlertas; volver: DeDondeVengo }) {
+  const vieja = (v.diasDesdeMedicion ?? 0) > DIAS_MEDICION_VIEJA;
+  const soloPresion = v.paraCambiar === 0 && v.conPresion > 0;
+  // Nada confirmado: ni rojo ni ámbar, el violeta de «por confirmar».
+  const soloPorConfirmar = v.paraCambiar === 0 && v.conPresion === 0;
+
+  /*
+   * En un vehículo con aviso de presión, el plano puede enseñar los bares en
+   * vez de los milímetros. Las ruedas con aviso ya traen su lectura; la última
+   * presión de las demás se pide al pulsar —una vez por tarjeta—, que es la
+   * misma consulta de la ficha del vehículo. Si falla, se enseña lo que hay.
+   */
+  const [verPresion, setVerPresion] = useState(false);
+  const [presiones, setPresiones] = useState<Record<string, number | null> | null>(null);
+  const [sinPresiones, setSinPresiones] = useState(false);
+
+  const pasarAPresion = () => {
+    setVerPresion(true);
+    if (presiones !== null) return;
+    listarUltimasMedicionesVehiculo(v.vehiculoId)
+      .then((m) => setPresiones(Object.fromEntries(Object.entries(m).map(([id, x]) => [id, x.presion_bar]))))
+      .catch(() => { setPresiones({}); setSinPresiones(true); });
+  };
+
+  const ruedas = verPresion ? ruedasEnPresion(v.ruedas, presiones) : v.ruedas;
+  const boton = (activo: boolean) => `px-2 py-[3px] text-[11px] font-extrabold ${
+    activo ? "bg-amber-400 text-slate-900" : "bg-slate-900 text-slate-300 hover:bg-slate-700"}`;
+
+  return (
+    <article className={`flex flex-col gap-3 rounded-xl border bg-slate-800 p-4 ${vieja ? "border-amber-700" : "border-slate-700"}`}>
+      <div className="flex flex-wrap items-center gap-2">
+        <Link to={`/tyrecontrol/vehiculos/${v.vehiculoId}`} state={volver} className="text-[17px] font-extrabold text-slate-100 hover:underline">
+          {v.matricula || "sin matrícula"}
+        </Link>
+        <span className="flex-1" />
+        {v.conPresion > 0 && (
+          <span className="inline-flex overflow-hidden rounded-full border border-amber-500/60" role="group" aria-label="Qué enseña el plano">
+            <button type="button" aria-pressed={!verPresion} onClick={() => setVerPresion(false)}
+                    title="Ver la profundidad de cada rueda, en milímetros" className={boton(!verPresion)}>mm</button>
+            <button type="button" aria-pressed={verPresion} onClick={pasarAPresion}
+                    title="Ver la presión de cada rueda, en bar" className={boton(verPresion)}>bar</button>
+          </span>
+        )}
+        <span className={`whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-extrabold ${
+          soloPorConfirmar ? "bg-violet-500/20 text-violet-200"
+            : soloPresion ? "bg-amber-500/20 text-amber-200" : "bg-red-500/20 text-red-200"}`}>
+          {resumenDeTarjeta(v)}
+        </span>
+      </div>
+
+      <div>
+        <div className="text-[13px] font-bold text-slate-300">{v.medidas.length > 0 ? v.medidas.join(" · ") : "sin medida"}</div>
+        <div className="text-[12px] text-slate-400">
+          {[v.unidad && `unidad ${v.unidad}`, v.tipo, v.minimo != null && `mínimo ${mm(v.minimo)} mm`]
+            .filter(Boolean).join(" · ")}
+        </div>
+      </div>
+
+      <PlanoMiniVehiculo
+        foto={v.foto}
+        ruedas={ruedas}
+        alt={`Plano de ${v.matricula} con la ${verPresion ? "presión" : "profundidad"} de cada rueda`}
+      />
+
+      {verPresion && (
+        <div className="text-[11px] text-slate-400">
+          Presión en <b className="text-slate-300">bar</b>. En ámbar, la rueda con aviso abierto y lo que leyó el sensor;
+          en azul, la última presión medida de las demás.
+          {sinPresiones && <span className="text-amber-300"> No se han podido leer las de las demás ruedas.</span>}
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-2 border-t border-slate-700 pt-2.5">
+        {v.medidoEl ? (
+          <>
+            <span className="text-[12px] text-slate-400">Medido el <b className="text-slate-300">{fechaCorta(v.medidoEl)}</b></span>
+            <span className={vieja
+              ? "rounded-full bg-amber-500/15 px-2 py-[2px] text-[11px] font-bold text-amber-200"
+              : "text-[11px] text-slate-400"}>
+              {edadEnTexto(v.diasDesdeMedicion)}
+            </span>
+          </>
+        ) : (
+          <span className="text-[12px] text-slate-400">Sin fecha de medición</span>
+        )}
+        <span className="flex-1" />
+        <Link to={`/tyrecontrol/vehiculos/${v.vehiculoId}`} state={volver} className="text-[12px] font-bold text-sky-300 hover:underline">Ver</Link>
+      </div>
+    </article>
+  );
+}
 
 export default function InformeAlertas() {
   const { filtros } = useInformesFiltros();
   const [alertas, setAlertas] = useState<Alerta[]>([]);
+  const [ruedas, setRuedas] = useState<RuedaAlerta[]>([]);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
+  /*
+   * El filtro va en la dirección (?filtro=presion): así la ficha del vehículo
+   * puede ofrecer «← Alertas» y volver a la MISMA lista, con el mismo cuadro
+   * pulsado, en vez de a la lista entera.
+   */
+  const [params, setParams] = useSearchParams();
+  const FILTROS: FiltroVehiculos[] = ["todo", "cambiar", "presion", "confirmar", "vieja"];
+  const delEnlace = params.get("filtro") as FiltroVehiculos | null;
+  const [filtro, setFiltroLocal] = useState<FiltroVehiculos>(delEnlace && FILTROS.includes(delEnlace) ? delEnlace : "todo");
+  const setFiltro = (f: FiltroVehiculos) => {
+    setFiltroLocal(f);
+    const p = new URLSearchParams(params);
+    if (f === "todo") p.delete("filtro"); else p.set("filtro", f);
+    setParams(p, { replace: true });
+  };
+  const volver: DeDondeVengo = {
+    volverA: rutaConFiltros("/tyrecontrol/informes/alertas", { filtro: filtro === "todo" ? null : filtro }),
+    volverEtiqueta: "Alertas",
+  };
+  const [orden, setOrden] = useState<OrdenVehiculos>("peor");
+  const [verSinRevisar, setVerSinRevisar] = useState(false);
+  const [verSonda, setVerSonda] = useState(false);
 
   useEffect(() => {
     let vivo = true;
     setCargando(true); setError("");
-    listarAlertas(filtros)
-      .then((a) => { if (vivo) setAlertas(a); })
+    Promise.all([listarAlertas(filtros), listarAlertasPorVehiculo(filtros)])
+      .then(([a, r]) => { if (vivo) { setAlertas(a); setRuedas(r); } })
       .catch((e) => { if (vivo) setError(e?.message || "Error al cargar las alertas"); })
       .finally(() => { if (vivo) setCargando(false); });
     return () => { vivo = false; };
   }, [filtros]);
 
-  if (cargando && alertas.length === 0) return <div className="text-slate-400">Cargando alertas…</div>;
+  const vehiculos = useMemo(() => agruparPorVehiculo(ruedas), [ruedas]);
+  const visibles = useMemo(() => ordenarVehiculos(filtrarVehiculos(vehiculos, filtro), orden), [vehiculos, filtro, orden]);
+
+  const nCambiar = vehiculos.reduce((t, v) => t + v.paraCambiar, 0);
+  const nPresion = vehiculos.reduce((t, v) => t + v.conPresion, 0);
+  const nVieja = filtrarVehiculos(vehiculos, "vieja").length;
+  const paraSonda = useMemo(() => ruedasParaMedirConSonda(vehiculos), [vehiculos]);
+  const sinRevisar = alertas.filter((a) => a.tipo === "vehiculo_sin_revisar");
+
+  if (cargando && ruedas.length === 0) return <div className="text-slate-400">Cargando alertas…</div>;
   if (error) return <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">{error}</div>;
 
-  const nAlta = alertas.filter((a) => a.severidad === "alta").length;
-  const nMedia = alertas.filter((a) => a.severidad === "media").length;
-  const porTipo = (t: string) => alertas.filter((a) => a.tipo === t).length;
+  const chips: { valor: FiltroVehiculos; texto: string }[] = [
+    { valor: "todo", texto: `Todo (${vehiculos.length})` },
+    { valor: "cambiar", texto: `Cambiar ya (${filtrarVehiculos(vehiculos, "cambiar").length})` },
+    { valor: "presion", texto: `Presión (${filtrarVehiculos(vehiculos, "presion").length})` },
+    { valor: "confirmar", texto: `Por confirmar (${filtrarVehiculos(vehiculos, "confirmar").length})` },
+    { valor: "vieja", texto: `Medición vieja (${nVieja})` },
+  ];
 
   return (
-    <div>
-      <div className="mb-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-        <KpiCard title="Alertas críticas" value={nAlta} tono={nAlta > 0 ? "danger" : "ok"} />
-        <KpiCard title="Alertas medias" value={nMedia} tono={nMedia > 0 ? "warn" : "ok"} />
-        <KpiCard title="Bajo mínimo legal" value={porTipo("bajo_minimo")} hint="≤ 1,6 mm" />
-        <KpiCard title="Sin revisar" value={porTipo("vehiculo_sin_revisar")} />
+    <div className="flex flex-col gap-4">
+      {/*
+        Cada cuadro filtra lo suyo: el de presión deja solo los de presión, y
+        así con todos. El KPI es la pregunta y la rejilla de abajo es la
+        respuesta, así que pulsarlo tiene que llevar a esa respuesta y no ser
+        un número de adorno.
+      */}
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+        <KpiCard title="Vehículos con incidencia" value={vehiculos.length} tono={vehiculos.length > 0 ? "danger" : "ok"}
+                 onClick={() => { setFiltro("todo"); setVerSinRevisar(false); }} />
+        <KpiCard title="Cambiar ya" value={nCambiar} tono={nCambiar > 0 ? "danger" : "ok"}
+                 hint="22.5 ≤ 4 mm · 19.5/17.5 ≤ 3 · 16 o menos ≤ 2"
+                 activo={filtro === "cambiar"}
+                 onClick={() => { setFiltro("cambiar"); setVerSinRevisar(false); }} />
+        <KpiCard title="Presión" value={nPresion} tono={nPresion > 0 ? "danger" : "ok"} hint="Sensor Goodyear"
+                 activo={filtro === "presion"}
+                 onClick={() => { setFiltro("presion"); setVerSinRevisar(false); }} />
+        {/*
+          Lecturas bajas que el protocolo no da por buenas todavía. Pulsarlo
+          deja sus vehículos en la rejilla y abre la lista para ir con la sonda.
+        */}
+        <KpiCard title="Por confirmar" value={paraSonda.length} tono={paraSonda.length > 0 ? "info" : "ok"}
+                 hint={paraSonda.length > 0 ? "medir con sonda" : "nada en duda"}
+                 activo={filtro === "confirmar"}
+                 onClick={() => { setFiltro("confirmar"); setVerSonda(true); setVerSinRevisar(false); }} />
+        <KpiCard title="Medición vieja" value={nVieja} tono={nVieja > 0 ? "warn" : "ok"} hint={`más de ${DIAS_MEDICION_VIEJA} días`}
+                 activo={filtro === "vieja"}
+                 onClick={() => { setFiltro("vieja"); setVerSinRevisar(false); }} />
+        {/*
+          Éste no filtra la rejilla porque sus vehículos NO están en ella: no
+          tienen ni una medición, así que no hay plano que pintar. Pulsarlo
+          abre su lista, que es donde está su respuesta.
+        */}
+        <KpiCard title="Sin revisar" value={sinRevisar.length}
+                 hint={sinRevisar.length > 0 ? "ver la lista" : undefined}
+                 onClick={sinRevisar.length > 0 ? () => setVerSinRevisar(true) : undefined} />
       </div>
 
-      <div className="rounded-lg bg-slate-800 p-3">
-        <div className="mb-2 flex items-center justify-between">
-          <div className="text-[11px] font-bold uppercase text-slate-400">Alertas activas ({alertas.length})</div>
+      <div className="flex flex-wrap items-center gap-2">
+        {chips.map((c) => (
           <button
-            onClick={() => descargarCSV("alertas", ["Severidad", "Tipo", "Matrícula", "Posición", "Neumático", "Detalle"],
-              alertas.map((a) => [a.severidad, TIPO_LABEL[a.tipo] ?? a.tipo, a.matricula, a.posicion, a.codigo, a.detalle]))}
-            className="rounded border border-slate-600 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-700"
-          >Exportar CSV</button>
-        </div>
-
-        {alertas.length === 0 ? (
-          <div className="p-4 text-sm text-emerald-300">✔ Sin alertas. Toda la flota dentro de parámetros.</div>
-        ) : (
-          <div className="flex flex-col divide-y divide-slate-700/60">
-            {alertas.map((a, i) => {
-              const sev = SEV_ESTILO[a.severidad] ?? SEV_ESTILO.media;
-              return (
-                <div key={i} className="flex items-center gap-3 py-2">
-                  <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: sev.punto }} />
-                  <div className="min-w-0 flex-1">
-                    <div className="text-[13px] font-semibold text-slate-100">
-                      <span className={sev.texto}>{TIPO_LABEL[a.tipo] ?? a.tipo}</span>
-                      {a.matricula && <span className="text-slate-300"> · {a.matricula}</span>}
-                      {a.posicion && <span className="text-slate-400"> · {a.posicion}</span>}
-                    </div>
-                    <div className="truncate text-[12px] text-slate-400">{a.detalle}{a.codigo ? ` · ${a.codigo}` : ""}</div>
-                  </div>
-                  <div className="flex shrink-0 gap-2">
-                    {a.neumatico_id && <Link to={`/tyrecontrol/neumaticos/${a.neumatico_id}`} className="text-[12px] text-sky-300 hover:underline">Neumático</Link>}
-                    {a.vehiculo_id && <Link to={`/tyrecontrol/vehiculos/${a.vehiculo_id}`} className="text-[12px] text-sky-300 hover:underline">Vehículo</Link>}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+            key={c.valor}
+            type="button"
+            onClick={() => setFiltro(c.valor)}
+            className={`rounded-full border px-3 py-1.5 text-[12px] font-bold ${
+              filtro === c.valor
+                ? "border-slate-300 bg-slate-300 text-slate-900"
+                : "border-slate-600 bg-slate-800 text-slate-300 hover:bg-slate-700"}`}
+          >{c.texto}</button>
+        ))}
+        <span className="flex-1" />
+        <label htmlFor="orden-alertas" className="text-[12px] text-slate-400">Ordenar por</label>
+        <select
+          id="orden-alertas"
+          value={orden}
+          onChange={(e) => setOrden(e.target.value as OrdenVehiculos)}
+          className="rounded-lg border border-slate-600 bg-slate-800 px-2.5 py-1.5 text-[12px] text-slate-100"
+        >
+          {ORDENES.map((o) => <option key={o.valor} value={o.valor}>{o.texto}</option>)}
+        </select>
+        <button
+          type="button"
+          onClick={() => descargarCSV(
+            "alertas-por-vehiculo",
+            ["Matrícula", "Unidad", "Tipo", "Posición", "Estado", "Profundidad mm", "Mínimo mm", "Medida", "Medido el",
+              "Lectura sin confirmar mm", "Leída el"],
+            visibles.flatMap((v) => v.ruedas
+              .filter((r) => r.estado === "cambiar" || r.estado === "presion" || r.estado === "por_confirmar")
+              .map((r) => [v.matricula, v.unidad, v.tipo, r.codigo,
+                r.estado === "presion" ? "Presión baja" : r.estado === "por_confirmar" ? "Por confirmar" : "Cambiar ya",
+                r.profundidad, r.minimo, v.medidas.join(" / "), fechaCorta(r.fecha),
+                r.estado === "por_confirmar" ? r.pendiente ?? r.profundidad : null,
+                r.estado === "por_confirmar" ? fechaCorta(r.fechaPendiente ?? r.fecha) : ""])),
+          )}
+          className="rounded border border-slate-600 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-700"
+        >Exportar CSV</button>
       </div>
 
-      <div className="mt-3 text-[11px] text-slate-500">
-        Reglas: bajo mínimo ≤ 1,6 mm · próximo a sustitución ≤ 3,0 mm (sobre la última medición de cada neumático montado) ·
-        vehículos activos sin ninguna revisión. Umbrales configurables por empresa y por medida en la ficha de la empresa (Empresas → ficha → Umbrales de profundidad).
+      <div className="flex flex-wrap items-center gap-4">
+        <Muestra clase="bg-green-800 text-white">7,2</Muestra>
+        <span className="text-[11px] text-slate-400">por encima del mínimo</span>
+        <Muestra clase="bg-red-600 text-white ring-[1.5px] ring-red-200">1,7</Muestra>
+        <span className="text-[11px] text-slate-400">hay que cambiarla</span>
+        <Muestra clase="bg-amber-700 text-white ring-[1.5px] ring-amber-200">12,0</Muestra>
+        <span className="text-[11px] text-slate-400">aviso de presión</span>
+        <Muestra clase="bg-violet-700 text-white ring-[1.5px] ring-violet-200">8,5</Muestra>
+        <span className="text-[11px] text-slate-400">lectura baja por confirmar</span>
+        <Muestra clase="bg-slate-600 text-slate-100">—</Muestra>
+        <span className="text-[11px] text-slate-400">sin medir</span>
+        <span className="text-[11px] text-slate-500">· los milímetros son la última lectura de cada rueda; si esa da alerta, decide la mediana de las tres últimas</span>
+      </div>
+
+      {visibles.length === 0 ? (
+        <div className="rounded-lg bg-slate-800 p-4 text-sm text-emerald-300">
+          ✔ {vehiculos.length === 0 ? "Sin alertas. Toda la flota dentro de parámetros." : "Ningún vehículo con ese filtro."}
+        </div>
+      ) : (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {visibles.map((v) => <TarjetaVehiculo key={v.vehiculoId} v={v} volver={volver} />)}
+        </div>
+      )}
+
+      {paraSonda.length > 0 && (
+        <details
+          className="rounded-lg border border-violet-800/60 bg-slate-800 p-3"
+          open={verSonda}
+          onToggle={(e) => setVerSonda((e.currentTarget as HTMLDetailsElement).open)}
+        >
+          <summary className="cursor-pointer text-[11px] font-bold uppercase text-violet-200">
+            Para medir con sonda ({paraSonda.length})
+          </summary>
+          {/*
+            La «E» del protocolo: una lectura baja que nadie ha respaldado no
+            enciende el rojo, pero tampoco se calla. Se mide a mano; la medición
+            del técnico manda y la saca de aquí, sea para confirmarla o para
+            desmentirla. Si nadie va, lo decide la siguiente pasada del arco.
+          */}
+          <div className="mt-2 overflow-x-auto">
+            <table className="w-full min-w-[560px] text-left text-[12px]">
+              <thead className="text-[10px] uppercase tracking-wide text-slate-400">
+                <tr>
+                  <th className="py-1 pr-3 font-bold">Vehículo</th>
+                  <th className="py-1 pr-3 font-bold">Rueda</th>
+                  <th className="py-1 pr-3 text-right font-bold">Lectura en duda</th>
+                  <th className="py-1 pr-3 text-right font-bold">Mínimo</th>
+                  <th className="py-1 pr-3 font-bold">Leída el</th>
+                  <th className="py-1 font-bold">Por qué no se da por buena</th>
+                </tr>
+              </thead>
+              <tbody className="tabular-nums text-slate-200">
+                {paraSonda.map((f) => (
+                  <tr key={`${f.vehiculoId}-${f.codigo}`} className="border-t border-slate-700">
+                    <td className="py-1.5 pr-3">
+                      <Link to={`/tyrecontrol/vehiculos/${f.vehiculoId}`} state={volver} className="font-bold text-slate-100 hover:underline">
+                        {f.matricula || "sin matrícula"}
+                      </Link>
+                      {f.unidad && <span className="text-slate-400"> · {f.unidad}</span>}
+                    </td>
+                    <td className="py-1.5 pr-3">{f.codigo}</td>
+                    <td className="py-1.5 pr-3 text-right font-bold text-violet-200">{mm(f.enDuda)} mm</td>
+                    <td className="py-1.5 pr-3 text-right text-slate-400">{mm(f.minimo)}</td>
+                    <td className="py-1.5 pr-3 text-slate-400">{fechaCorta(f.fecha) || "—"}</td>
+                    <td className="py-1.5 text-slate-400">{f.motivo}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
+
+      {sinRevisar.length > 0 && (
+        <details
+          className="rounded-lg bg-slate-800 p-3"
+          open={verSinRevisar}
+          onToggle={(e) => setVerSinRevisar((e.currentTarget as HTMLDetailsElement).open)}
+        >
+          <summary className="cursor-pointer text-[11px] font-bold uppercase text-slate-400">
+            Vehículos sin revisar ({sinRevisar.length})
+          </summary>
+          {/*
+            Éstos no tienen tarjeta porque no tienen NADA que pintar: ni una
+            medición en ninguna rueda. Su problema no es una goma, es que el
+            vehículo no ha pasado nunca por una revisión.
+          */}
+          <div className="mt-2 flex flex-wrap gap-2">
+            {sinRevisar.map((a, i) => (
+              <Link
+                key={a.vehiculo_id ?? i}
+                to={a.vehiculo_id ? `/tyrecontrol/vehiculos/${a.vehiculo_id}` : "#"}
+                className="rounded border border-slate-600 px-2 py-1 text-[12px] text-slate-200 hover:bg-slate-700"
+              >{a.matricula}</Link>
+            ))}
+          </div>
+        </details>
+      )}
+
+      <div className="text-[11px] text-slate-500">
+        Una tarjeta por vehículo con alguna incidencia: una goma en el mínimo de su llanta o por debajo
+        (22.5 ≤ 4 mm · 19.5 y 17.5 ≤ 3 · 16 o menos ≤ 2), una lectura baja por confirmar, o un aviso de presión abierto. El plano es el mismo de la ficha
+        del vehículo, con la foto de su configuración de ejes y un recuadro por rueda; pasando el ratón por encima sale la
+        posición, los milímetros y el día en que se midió ESA rueda, que dentro de un mismo vehículo pueden ser días
+        distintos. La fecha del pie es la más reciente de las ruedas que avisan.
+        {" "}La profundidad de cada rueda es su <b>última lectura</b>. Solo cuando esa lectura la deja en el mínimo o por
+        debajo —cuando daría la alerta— se mira más atrás: vale la <b>mediana de las tres últimas</b>, porque el arco suelta
+        de vez en cuando una lectura imposible y una sola no puede encender el rojo. Lo que mide un técnico a mano vale
+        siempre. Una lectura baja que todavía no tiene otra que la respalde sale en violeta, <b>por confirmar</b>, y va a la
+        lista para medir con sonda; si la siguiente pasada la lee bien, se coge la buena.
+        {" "}Las de <b>presión</b> no salen de una revisión: las manda el sensor de Goodyear por correo y se cierran solas
+        cuando el vehículo vuelve a pasar por el arco y da bien.
+        {" "}Los vehículos <b>dados de baja</b> no salen: a un autobús que ya no circula no se le cambian las gomas.
       </div>
     </div>
   );

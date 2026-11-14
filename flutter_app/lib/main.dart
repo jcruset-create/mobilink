@@ -11,6 +11,8 @@ import 'services/copia_local.dart';
 import 'services/offline_store.dart';
 import 'services/sesion_segura.dart';
 import 'theme/app_theme.dart';
+import 'navegacion.dart';
+import 'widgets/aviso_mensajes.dart';
 
 // Notifier global accesible desde cualquier pantalla
 final exteriorMode = ValueNotifier<bool>(false);
@@ -45,6 +47,9 @@ class SeaApp extends StatelessWidget {
           title: 'Mobilink Assist',
           debugShowCheckedModeBanner: false,
           theme: AppTheme.build(exterior: exterior),
+          // Los mensajes de la oficina, encima de cualquier pantalla.
+          navigatorKey: navegadorApp,
+          builder: (context, child) => AvisoMensajes(child: child ?? const SizedBox.shrink()),
           home: const SplashScreen(),
         );
       },

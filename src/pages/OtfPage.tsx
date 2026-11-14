@@ -3,6 +3,7 @@ import {
   fetchOtfList,
   fetchOtf,
   createOtf,
+  updateOtf,
   addOtfTrabajo,
   updateOtfTrabajo,
   deleteOtfTrabajo,
@@ -19,8 +20,19 @@ import type { KnownPlace } from "../modules/roadsideAssistanceTypes";
 import KnownPlaceMapModal from "../components/KnownPlaceMapModal";
 import TyreControlVehiculo from "../components/TyreControlVehiculo";
 import AssistSidebar from "../components/AssistSidebar";
+import MensajesOperario from "../components/MensajesOperario";
+import { leerPestana, otfDeLaPestana, TITULO_PESTANA } from "../modules/otfPestanas";
 import { apiFetch } from "../modules/apiFetch";
 import { abrirPdfConSesion } from "../modules/pdfConSesion";
+
+/** Cómo se llama cada tipo de foto de un trabajo (igual que en el informe). */
+const ETIQUETA_FOTO: Record<string, string> = {
+  matricula: "Matrícula",
+  averia: "Avería",
+  inicial: "Antes",
+  final: "Trabajo hecho",
+  no_realizado: "No realizado",
+};
 
 const STATUS_OTF: Record<string, string> = {
   planificada: "border-amber-500/40 bg-amber-500/15 text-amber-300",
@@ -38,12 +50,28 @@ const STATUS_TRABAJO: Record<string, string> = {
 
 const TIPOS_VEHICULO = ["Tractora", "Remolque", "Camión rígido", "Furgoneta", "Turismo", "Maquinaria", "Otros"];
 
+// «2026-11-20» ↔ milisegundos, en hora local: es un día, no un instante.
+function fechaAInput(ms: number | null | undefined) {
+  if (ms == null) return "";
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function inputAFecha(v: string): number | null {
+  if (!v) return null;
+  const [a, m, d] = v.split("-").map(Number);
+  return new Date(a, m - 1, d).getTime();
+}
+
 export default function OtfPage() {
+  // La pestaña del menú lateral (Programadas, Activas, Últimas cerradas…).
+  const pestana = leerPestana(new URLSearchParams(window.location.search).get("tab"));
   const [list, setList] = useState<any[]>([]);
   const [places, setPlaces] = useState<KnownPlace[]>([]);
   const [sel, setSel] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
-  const [showNew, setShowNew] = useState(false);
+  const [showNew, setShowNew] = useState(pestana === "nueva");
+  // La OTF que se está editando (misma ventana que «Nueva OTF», ya rellena).
+  const [editing, setEditing] = useState<any | null>(null);
   const [techs, setTechs] = useState<any[]>([]);
   const [vehicles, setVehicles] = useState<any[]>([]);
   const [plantillas, setPlantillas] = useState<OtfPlantilla[]>([]);
@@ -57,6 +85,8 @@ export default function OtfPage() {
       setLoading(false);
     }
   }
+
+  const visibles = otfDeLaPestana(list, pestana);
 
   useEffect(() => {
     loadList();
@@ -75,7 +105,7 @@ export default function OtfPage() {
 
   return (
     <div className="flex min-h-screen bg-slate-900 text-slate-100">
-      <AssistSidebar active="otf" />
+      <AssistSidebar otf={pestana ?? null} />
 
       <div className="flex min-w-0 flex-1 flex-col">
       <header className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-slate-900/95 px-4 py-2.5 pl-14 backdrop-blur md:pl-4">
@@ -83,7 +113,10 @@ export default function OtfPage() {
           <img src="/logo_horizontal.png" alt="Mobilink Assist" className="h-9 md:h-12" />
           <div>
             <h1 className="text-sm font-bold md:text-base">Órdenes de Trabajo de Flota (OTF)</h1>
-            <div className="text-xs text-slate-400">{list.length} órdenes</div>
+            <div className="text-xs text-slate-400">
+              {pestana && pestana !== "nueva" ? `${TITULO_PESTANA[pestana]} · ` : ""}
+              {visibles.length} órdenes
+            </div>
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -101,10 +134,12 @@ export default function OtfPage() {
           <div className="space-y-2">
             {loading ? (
               <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-6 text-center text-sm text-slate-500">Cargando…</div>
-            ) : list.length === 0 ? (
-              <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-6 text-center text-sm text-slate-500">Sin OTF. Crea una nueva.</div>
+            ) : visibles.length === 0 ? (
+              <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-6 text-center text-sm text-slate-500">
+                {pestana && pestana !== "nueva" ? `Sin OTF en «${TITULO_PESTANA[pestana]}».` : "Sin OTF. Crea una nueva."}
+              </div>
             ) : (
-              list.map((o) => (
+              visibles.map((o) => (
                 <button
                   key={o.id}
                   onClick={() => openOtf(o.id)}
@@ -122,7 +157,10 @@ export default function OtfPage() {
                       <span className={`rounded-full border px-2 py-0.5 text-[11px] font-bold ${STATUS_OTF[o.status] ?? ""}`}>{o.status}</span>
                     )}
                   </div>
-                  <div className="mt-1 text-xs text-slate-400">{o.baseName || o.direccion || "—"}</div>
+                  <div className="mt-1 text-xs text-slate-400">
+                    {o.baseName || o.direccion || "—"}
+                    {o.fechaProgramadaMs ? ` · ${new Date(o.fechaProgramadaMs).toLocaleDateString("es-ES", { weekday: "short", day: "numeric", month: "short" })}` : ""}
+                  </div>
                   <div className="mt-1 text-xs font-bold text-slate-300">
                     Progreso: {o.progreso?.hechos ?? 0} / {o.progreso?.total ?? 0}
                     {o.assignedTechName ? ` · ${o.assignedTechName}` : ""}
@@ -135,7 +173,7 @@ export default function OtfPage() {
           {/* Detalle */}
           <div>
             {sel ? (
-              <OtfDetail otf={sel} plantillas={plantillas} onChange={async () => { setSel(await fetchOtf(sel.id)); loadList(); }} />
+              <OtfDetail otf={sel} plantillas={plantillas} onChange={async () => { setSel(await fetchOtf(sel.id)); loadList(); }} onEdit={() => setEditing(sel)} />
             ) : (
               <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-10 text-center text-sm text-slate-500">Selecciona una OTF</div>
             )}
@@ -147,6 +185,18 @@ export default function OtfPage() {
         <PlantillasModal
           onClose={() => setShowPlantillas(false)}
           onChanged={() => fetchOtfPlantillas().then(setPlantillas).catch(() => {})}
+        />
+      )}
+
+      {editing && (
+        <NewOtfModal
+          otf={editing}
+          places={places}
+          techs={techs}
+          vehicles={vehicles}
+          onPlaceCreated={(p) => setPlaces((prev) => [p, ...prev])}
+          onClose={() => setEditing(null)}
+          onCreated={async (o) => { setEditing(null); setSel(o); loadList(); }}
         />
       )}
 
@@ -165,11 +215,23 @@ export default function OtfPage() {
   );
 }
 
-function NewOtfModal({ places, techs, vehicles, onPlaceCreated, onClose, onCreated }: { places: KnownPlace[]; techs: any[]; vehicles: any[]; onPlaceCreated: (p: KnownPlace) => void; onClose: () => void; onCreated: (o: any) => void }) {
-  const [clientName, setClientName] = useState("");
-  const [placeId, setPlaceId] = useState("");
-  const [tech, setTech] = useState("");
-  const [vehicleName, setVehicleName] = useState("");
+/*
+ * Nueva OTF y, con `otf`, editar una: la misma ventana ya rellena. Al editar
+ * se manda solo lo que ha cambiado (el servidor deja el resto como estaba:
+ * `server/otf/actualizar.ts`), y nunca los trabajos.
+ */
+function NewOtfModal({ otf, places, techs, vehicles, onPlaceCreated, onClose, onCreated }: { otf?: any; places: KnownPlace[]; techs: any[]; vehicles: any[]; onPlaceCreated: (p: KnownPlace) => void; onClose: () => void; onCreated: (o: any) => void }) {
+  const editando = otf != null;
+  const placeInicial = otf?.knownPlaceId != null ? String(otf.knownPlaceId) : "";
+  const [clientName, setClientName] = useState<string>(otf?.clientName ?? "");
+  const [placeId, setPlaceId] = useState(placeInicial);
+  const [tech, setTech] = useState<string>(otf?.assignedTechName ?? "");
+  const [vehicleName, setVehicleName] = useState<string>(otf?.assignedVehicleName ?? "");
+  const fechaInicial = fechaAInput(otf?.fechaProgramadaMs);
+  const [fecha, setFecha] = useState(fechaInicial);
+  const [notas, setNotas] = useState<string>(otf?.notas ?? "");
+  const [telefonoAviso, setTelefonoAviso] = useState<string>(otf?.telefonoAviso ?? "");
+  const [emailInforme, setEmailInforme] = useState<string>(otf?.emailInforme ?? "");
   const [saving, setSaving] = useState(false);
   const [showPlaceMap, setShowPlaceMap] = useState(false);
   const [error, setError] = useState("");
@@ -181,6 +243,29 @@ function NewOtfModal({ places, techs, vehicles, onPlaceCreated, onClose, onCreat
     try {
       const place = places.find((p) => String(p.id) === placeId);
       const veh = vehicles.find((v) => v.name === vehicleName);
+      if (editando) {
+        const cambios: Record<string, unknown> = {};
+        if (clientName.trim() !== otf.clientName) cambios.clientName = clientName.trim();
+        if (placeId !== placeInicial) {
+          cambios.knownPlaceId = place?.id ?? null;
+          cambios.baseName = place?.nombre ?? null;
+          cambios.direccion = place?.direccion ?? null;
+          cambios.lat = place?.lat ?? null;
+          cambios.lng = place?.lng ?? null;
+        }
+        if ((tech || null) !== (otf.assignedTechName ?? null)) cambios.assignedTechName = tech || null;
+        if ((vehicleName || null) !== (otf.assignedVehicleName ?? null)) {
+          cambios.assignedVehicleName = vehicleName || null;
+          cambios.webfleetVehicleId = veh?.webfleetVehicleId ?? null;
+        }
+        if (fecha !== fechaInicial) cambios.fechaProgramadaMs = inputAFecha(fecha);
+        if (notas.trim() !== (otf.notas ?? "").trim()) cambios.notas = notas.trim() || null;
+        if (telefonoAviso.trim() !== (otf.telefonoAviso ?? "").trim()) cambios.telefonoAviso = telefonoAviso.trim() || null;
+        if (emailInforme.trim() !== (otf.emailInforme ?? "").trim()) cambios.emailInforme = emailInforme.trim() || null;
+        if (Object.keys(cambios).length === 0) { onClose(); return; }
+        onCreated(await updateOtf(otf.id, cambios));
+        return;
+      }
       const o = await createOtf({
         clientName: clientName.trim(),
         knownPlaceId: place?.id ?? null,
@@ -191,10 +276,14 @@ function NewOtfModal({ places, techs, vehicles, onPlaceCreated, onClose, onCreat
         assignedTechName: tech || null,
         assignedVehicleName: vehicleName || null,
         webfleetVehicleId: veh?.webfleetVehicleId ?? null,
+        fechaProgramadaMs: inputAFecha(fecha),
+        notas: notas.trim() || null,
+        telefonoAviso: telefonoAviso.trim() || null,
+        emailInforme: emailInforme.trim() || null,
       });
       onCreated(o);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "No se pudo crear la OTF");
+      setError(e instanceof Error ? e.message : editando ? "No se pudo guardar la OTF" : "No se pudo crear la OTF");
     } finally {
       setSaving(false);
     }
@@ -203,13 +292,13 @@ function NewOtfModal({ places, techs, vehicles, onPlaceCreated, onClose, onCreat
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 p-4 pt-12">
       <div className="w-full max-w-lg rounded-2xl border border-slate-700 bg-slate-800 p-5 text-slate-100 shadow-2xl">
-        <h2 className="mb-3 text-lg font-black">Nueva OTF</h2>
+        <h2 className="mb-3 text-lg font-black">{editando ? `Editar OTF · ${otf.clientName}` : "Nueva OTF"}</h2>
         <div className="space-y-3">
           <Field label="Cliente *"><input value={clientName} onChange={(e) => setClientName(e.target.value)} className={inputCls} /></Field>
           <Field label="Base (lugar conocido)">
             <div className="flex gap-2">
               <select value={placeId} onChange={(e) => setPlaceId(e.target.value)} className={inputCls}>
-                <option value="">— Elegir base —</option>
+                <option value="">{editando && !placeInicial && otf.baseName ? `${otf.baseName} (actual, sin lugar conocido)` : "— Elegir base —"}</option>
                 {places.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
               </select>
               <button
@@ -236,6 +325,20 @@ function NewOtfModal({ places, techs, vehicles, onPlaceCreated, onClose, onCreat
               </select>
             </Field>
           </div>
+          <Field label="Fecha programada">
+            <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} className={inputCls} />
+          </Field>
+          <Field label="Notas">
+            <textarea value={notas} onChange={(e) => setNotas(e.target.value)} rows={3} className={`${inputCls} resize-none`} placeholder="Para el operario o la oficina" />
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="WhatsApp del responsable (aviso al llegar)">
+              <input type="tel" value={telefonoAviso} onChange={(e) => setTelefonoAviso(e.target.value)} className={inputCls} placeholder="600 11 22 33" />
+            </Field>
+            <Field label="Correo para el informe">
+              <input type="email" value={emailInforme} onChange={(e) => setEmailInforme(e.target.value)} className={inputCls} placeholder="flota@cliente.es" />
+            </Field>
+          </div>
         </div>
         {error && (
           <div className="mt-3 rounded-lg border border-red-500/40 bg-red-500/15 px-3 py-2 text-sm font-bold text-red-300">
@@ -244,7 +347,7 @@ function NewOtfModal({ places, techs, vehicles, onPlaceCreated, onClose, onCreat
         )}
         <div className="mt-4 flex justify-end gap-2">
           <button onClick={onClose} className="rounded-lg border border-slate-600 px-4 py-2 text-sm font-bold text-slate-300 hover:bg-slate-700">Cancelar</button>
-          <button onClick={save} disabled={saving} className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-black text-white hover:bg-orange-500 disabled:opacity-50">{saving ? "…" : "Crear"}</button>
+          <button onClick={save} disabled={saving} className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-black text-white hover:bg-orange-500 disabled:opacity-50">{saving ? "…" : editando ? "Guardar" : "Crear"}</button>
         </div>
       </div>
 
@@ -415,7 +518,7 @@ function PresupuestarModal({ otf, onClose }: { otf: any; onClose: () => void }) 
   );
 }
 
-function OtfDetail({ otf, plantillas, onChange }: { otf: any; plantillas: OtfPlantilla[]; onChange: () => void }) {
+function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas: OtfPlantilla[]; onChange: () => void; onEdit: () => void }) {
   const [presupuestando, setPresupuestando] = useState(false);
   const [plate, setPlate] = useState("");
   const [tipo, setTipo] = useState("Tractora");
@@ -505,6 +608,14 @@ function OtfDetail({ otf, plantillas, onChange }: { otf: any; plantillas: OtfPla
           >
             📄 Informe PDF
           </button>
+          {otf.status !== "finalizada" && otf.status !== "cancelada" && (
+            <button
+              onClick={onEdit}
+              className="mt-2 ml-2 rounded-lg border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs font-black text-slate-200 hover:bg-slate-700"
+            >
+              ✎ Editar
+            </button>
+          )}
           <button
             onClick={() => setPresupuestando(true)}
             className="mt-2 ml-2 rounded-lg border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs font-black text-slate-200 hover:bg-slate-700"
@@ -532,6 +643,34 @@ function OtfDetail({ otf, plantillas, onChange }: { otf: any; plantillas: OtfPla
 
       {presupuestando && <PresupuestarModal otf={otf} onClose={() => setPresupuestando(false)} />}
 
+      {(otf.avisoLlegadaResultado || otf.informeResultado) && (
+        <div className="mt-3 space-y-1 text-xs font-bold">
+          {otf.avisoLlegadaResultado && (
+            <div className={otf.avisoLlegadaResultado === "enviado" ? "text-emerald-300" : "text-amber-300"}>
+              WhatsApp al responsable al llegar: {otf.avisoLlegadaResultado}
+            </div>
+          )}
+          {otf.informeResultado && (
+            <div className={otf.informeResultado.startsWith("enviado") ? "text-emerald-300" : "text-amber-300"}>
+              Informe por correo: {otf.informeResultado}
+            </div>
+          )}
+        </div>
+      )}
+      {otf.sinResponsable && otf.status === "finalizada" && (
+        <div className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm font-bold text-amber-300">
+          Cerrada sin responsable en la base: no hay firma.
+        </div>
+      )}
+      {otf.assignedTechName && otf.vistaAtMs == null && otf.status !== "finalizada" && otf.status !== "cancelada" && (
+        <div className="mt-3 text-xs font-bold text-slate-400">{otf.assignedTechName} aún no la ha abierto en la tablet.</div>
+      )}
+
+      {/* Mensajes con el operario, como en las asistencias. */}
+      {otf.assignedTechName && otf.status !== "finalizada" && otf.status !== "cancelada" && (
+        <MensajesOperario otfId={otf.id} techName={otf.assignedTechName} />
+      )}
+
       {/* Lista de trabajos */}
       <div className="mt-4 space-y-2">
         {(otf.trabajos ?? []).map((t: any) => (
@@ -549,10 +688,35 @@ function OtfDetail({ otf, plantillas, onChange }: { otf: any; plantillas: OtfPla
               <div className="text-sm text-slate-200">{t.trabajo}</div>
               {t.observaciones && <div className="text-xs font-semibold text-amber-300">📌 {t.observaciones}</div>}
               {t.motivoAltaCampo && <div className="text-xs italic text-slate-500">Motivo: {t.motivoAltaCampo}</div>}
+              {/* Lo que dice la tablet: tiempo, por qué no se hizo y la matrícula leída. */}
+              {t.iniciadoAtMs && (
+                <div className="text-xs text-slate-400">
+                  ⏱ {t.finalizadoAtMs
+                    ? `${Math.max(1, Math.round((t.finalizadoAtMs - t.iniciadoAtMs) / 60000))} min`
+                    : `en curso desde las ${new Date(t.iniciadoAtMs).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}`}
+                </div>
+              )}
+              {t.motivoNoRealizado && <div className="text-xs font-bold text-red-300">No realizado: {t.motivoNoRealizado}</div>}
+              {t.explicacionNoRealizado && (
+                <div className="text-xs italic text-red-200">«{t.explicacionNoRealizado}»</div>
+              )}
+              {(t.material ?? []).map((m: any) => (
+                <div key={m.id} className="text-xs text-slate-300">🛞 {m.texto}</div>
+              ))}
+              {Array.isArray(t.checklist) && t.checklist.length > 0 && (
+                <div className="text-xs text-slate-400">
+                  {t.checklist.map((c: any) => `${c.hecho ? "✓" : "✗"} ${c.texto}${c.valor ? ` (${c.valor})` : ""}`).join(" · ")}
+                </div>
+              )}
+              {t.matriculaNoCoincide && t.matriculaLeida && (
+                <div className="text-xs font-bold text-amber-300">⚠ En la foto se leyó {t.matriculaLeida}, no {t.plate}</div>
+              )}
               {(t.fotos ?? []).length > 0 && (
                 <div className="mt-1 flex gap-1">
                   {t.fotos.map((f: any) => (
-                    <a key={f.id} href={f.url} target="_blank" rel="noreferrer"><img src={f.url} className="h-10 w-10 rounded border border-slate-700 object-cover" /></a>
+                    <a key={f.id} href={f.url} target="_blank" rel="noreferrer" title={ETIQUETA_FOTO[f.kind] ?? f.kind}>
+                      <img src={f.url} className={`h-10 w-10 rounded border object-cover ${f.kind === "no_realizado" ? "border-red-500" : "border-slate-700"}`} />
+                    </a>
                   ))}
                 </div>
               )}
@@ -670,7 +834,8 @@ function PlantillasModal({ onClose, onChanged }: { onClose: () => void; onChange
           {items.length === 0 ? (
             <div className="py-8 text-center text-sm text-slate-500">Sin plantillas. Crea la primera arriba.</div>
           ) : items.map((p) => (
-            <div key={p.id} className={`flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 ${p.activo ? "" : "opacity-50"}`}>
+            <div key={p.id} className={`rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 ${p.activo ? "" : "opacity-50"}`}>
+            <div className="flex items-center gap-2">
               <input
                 defaultValue={p.nombre}
                 onBlur={async (e) => {
@@ -693,6 +858,26 @@ function PlantillasModal({ onClose, onChanged }: { onClose: () => void; onChange
               >
                 {p.activo ? "Activa" : "Inactiva"}
               </button>
+            </div>
+            {/* Lo que el operario tiene que comprobar al terminar un trabajo
+                de esta plantilla. Uno por línea. */}
+            <label className="mt-2 block">
+              <span className="mb-1 block text-[11px] font-bold text-slate-400">Lista de comprobación (un punto por línea)</span>
+              <textarea
+                defaultValue={(p.checklist ?? []).join("\n")}
+                rows={Math.max(2, (p.checklist ?? []).length + 1)}
+                placeholder={"Presiones\nPar de apriete\nProfundidad de dibujo"}
+                onBlur={async (e) => {
+                  const nuevo = e.target.value;
+                  if (nuevo.trim() !== (p.checklist ?? []).join("\n").trim()) {
+                    await updateOtfPlantilla(p.id, { checklist: nuevo });
+                    await load();
+                    onChanged();
+                  }
+                }}
+                className="w-full resize-none rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-200 outline-none focus:border-orange-500"
+              />
+            </label>
             </div>
           ))}
         </div>

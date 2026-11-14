@@ -14,7 +14,7 @@ publish_to: 'none'
 # tienda —la APK se instala a mano— así que subir de 0.46 a 1.1 no le afecta:
 # lo único que Android exige es que el número de build crezca, y ese lo pone el
 # contador de la CI.
-version: 1.1.5+266
+version: 1.2.6+277
 
 environment:
   sdk: ^3.8.1
@@ -31,6 +31,10 @@ dependencies:
   package_info_plus: ^8.0.0
 
   url_launcher: ^6.3.0
+
+  # Ubicación de la tablet. Misma versión que flutter_app (Mobilink Assist),
+  # que lleva tiempo con ella en producción: una sola versión que mantener.
+  geolocator: ^13.0.2
 
   image_picker: ^1.1.2
   # Escanear el QR de la etiqueta del neumático al montar. Misma versión que

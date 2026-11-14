@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { HandCoins, Banknote, ArrowLeftRight, Repeat, ClipboardCheck, Lock, PlayCircle, Link2 } from "lucide-react";
+import { HandCoins, Banknote, ArrowLeftRight, Repeat, ClipboardCheck, Lock, PlayCircle, Link2, Undo2 } from "lucide-react";
 import { useCash } from "../contexts/CashContext";
 import DenominationGrid, { type CantidadesPorValor, lineasDesde } from "../components/DenominationGrid";
 import { Aviso, BotonAccion, Cabecera, Card, ErrorBox, Modal, btnDanger, btnSecondary, inputCls } from "../components/ui";
@@ -93,6 +93,16 @@ export default function JornadaActual() {
         {puede("cash.payment.create") && (
           <BotonAccion tono="pago" icono={<Banknote className="h-5 w-5" />} onClick={() => navigate("/cash/pagos")}>
             Pago / salida
+          </BotonAccion>
+        )}
+        {/*
+          Devolverle dinero a un cliente: un cobro deshecho, en efectivo o por
+          donde se cobró. Antes solo se llegaba escaneando la rectificativa.
+          El permiso es el de cobrar a mano, como en el servidor.
+        */}
+        {puede("cash.collection.create_manual") && (
+          <BotonAccion icono={<Undo2 className="h-5 w-5" />} onClick={() => navigate("/cash/pagos?modo=abono")}>
+            Abono / devolución
           </BotonAccion>
         )}
         {puede("cash.movement.create") && (

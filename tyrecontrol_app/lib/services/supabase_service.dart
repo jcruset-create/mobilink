@@ -5,10 +5,14 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 import 'fotos.dart';
+import 'protocolo_profundidad.dart';
+import 'ultima_medicion.dart';
 import '../config.dart';
 import '../models/models.dart';
 import '../models/incidencias.dart';
 import '../models/cliente_activo.dart';
+import '../models/presencia_vista.dart';
+import '../models/alerta_presion.dart';
 
 /// Capa fina sobre supabase_flutter. No reimplementa reglas de negocio:
 /// las mismas RLS y RPCs que usa el panel web protegen y validan aqui.
@@ -157,10 +161,71 @@ class TyreControlApi {
     }
   }
 
+  /*
+   * Qué hay que parar antes de cerrar sesión.
+   *
+   * Lo registra `main()` con el seguimiento de ubicación. Es un gancho y no un
+   * import directo para no montar un ciclo: el seguimiento ya importa esta
+   * clase para mandar la posición, y que esta importara aquella cerraría el
+   * círculo.
+   */
+  static Future<void> Function()? alCerrarSesion;
+
   static Future<void> signOut() async {
+    // Primero parar y borrar la posición, y DESPUÉS cerrar: al cerrar se va el
+    // token y la llamada de borrado ya no valdría.
+    try {
+      await alCerrarSesion?.call();
+    } catch (_) {/* parar el GPS no puede impedir cerrar sesión */}
+    try {
+      await borrarMiUbicacion();
+    } catch (_) {/* sin red, la posición caduca sola a las 24 h */}
     // Al cerrar sesión se olvida el cliente para obligar a re-seleccionar.
     clienteActivo.value = null;
     await _db.auth.signOut();
+  }
+
+  /*
+   * La posición de la tablet, al backend.
+   *
+   * Pasa por el servidor y no por Supabase porque `tc_posicion_tablet` no
+   * tiene política de escritura para `authenticated`: escribe el backend con
+   * la clave de servicio. Si la tablet pudiera escribir con su propio token,
+   * cualquiera podría colocarse donde le conviniera.
+   *
+   * `vistoAt` viaja porque es el momento en que se TOMÓ la posición, que con
+   * la red mala no es el momento en que llega.
+   */
+  static Future<void> enviarMiUbicacion({
+    required double lat,
+    required double lng,
+    double? precisionM,
+    double? velocidadKmh,
+    DateTime? vistoAt,
+  }) async {
+    final token = currentSessionToken;
+    if (token == null) return;
+    await http.post(
+      Uri.parse('$kBackendUrl/api/tyrecontrol/ubicacion'),
+      headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'lat': lat,
+        'lng': lng,
+        if (precisionM != null) 'precisionM': precisionM,
+        if (velocidadKmh != null) 'velocidadKmh': velocidadKmh,
+        'vistoAt': (vistoAt ?? DateTime.now()).toUtc().toIso8601String(),
+      }),
+    ).timeout(const Duration(seconds: 10));
+  }
+
+  /// Al cerrar sesión. Quien ha cerrado sesión no sale en ninguna pantalla.
+  static Future<void> borrarMiUbicacion() async {
+    final token = currentSessionToken;
+    if (token == null) return;
+    await http.delete(
+      Uri.parse('$kBackendUrl/api/tyrecontrol/ubicacion'),
+      headers: {'Authorization': 'Bearer $token'},
+    ).timeout(const Duration(seconds: 10));
   }
 
   static Future<Map<String, dynamic>?> obtenerMiPerfil() async {
@@ -391,11 +456,22 @@ class TyreControlApi {
     /// lectura es anterior, que es el caso bueno —no puede contener
     /// kilómetros posteriores—. El valor absoluto borraría esa distinción.
     int? kmDesfaseMin,
+    /// Dónde estaba la tablet al abrirla. Opcional: si el GPS no fija, la
+    /// revisión se crea igual, que es lo que pasaba antes de que esto
+    /// existiera.
+    double? lat,
+    double? lng,
+    double? precisionM,
   }) async {
     final uid = _db.auth.currentUser?.id;
     final data = await _db
         .from('revisiones_vehiculo')
         .insert({
+          if (lat != null && lng != null) ...{
+            'inicio_lat': lat,
+            'inicio_lng': lng,
+            if (precisionM != null) 'inicio_precision_m': precisionM,
+          },
           'empresa_id': empresaId,
           'vehiculo_id': vehiculoId,
           'km_vehiculo': kmVehiculo,
@@ -428,8 +504,19 @@ class TyreControlApi {
     int? nNeumaticos,
     int? pausaSeg,
     int? nPausas,
+    /// Dónde estaba la tablet al pulsar Finalizar. Viaja por la cola offline
+    /// junto con `finAt`, por lo mismo: el sitio bueno es el de entonces, no
+    /// el del momento en que haya red.
+    double? finLat,
+    double? finLng,
+    double? finPrecisionM,
   }) async {
     final upd = <String, dynamic>{'estado_revision': estado};
+    if (finLat != null && finLng != null) {
+      upd['fin_lat'] = finLat;
+      upd['fin_lng'] = finLng;
+      if (finPrecisionM != null) upd['fin_precision_m'] = finPrecisionM;
+    }
     if (finAt != null) {
       upd['fin_at'] = finAt.toUtc().toIso8601String();
       // inicio_at se fijó al crear la revisión; se lee para la duración.
@@ -876,6 +963,24 @@ class TyreControlApi {
         .toList();
   }
 
+  /// Los tipos de llanta del catálogo, para elegir en el alta.
+  ///
+  /// Aparte de `listarTiposLlantaCat`, que es para pintar etiquetas y se traga
+  /// los errores: en un selector, una lista vacía por un fallo de red se lee
+  /// como «no hay catálogo» y el técnico se queda sin saber qué ha pasado.
+  static Future<List<Map<String, dynamic>>> tiposLlantaParaAlta() async {
+    final data = await _db
+        .from('tc_tipos_llanta')
+        // Todo el detalle: lo que distingue dos llantas que por lo demás se
+        // llaman igual son los agujeros, el centrado y el tapacubo.
+        .select('id, material, medida, agujeros, centrado, tapacubo, orden')
+        .eq('activo', true)
+        .order('orden')
+        .order('material')
+        .order('medida');
+    return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
   /// Las medidas del catálogo del vehículo (que NO es el de los neumáticos:
   /// tc_vehiculos.medida_id apunta a tc_cat_medidas_neumatico).
   static Future<List<Map<String, dynamic>>> listarMedidasVehiculo() async {
@@ -1059,6 +1164,12 @@ class TyreControlApi {
 
   /// Última medición conocida por posición (de revisiones YA completadas),
   /// para mostrarla como referencia en el plano. Excluye la revisión actual.
+  ///
+  /// La PROFUNDIDAD sale de la última revisión que midió todas sus ruedas y la
+  /// presión de la última que la traiga: ver `ultima_medicion.dart`. Antes se
+  /// cogía la última revisión de cada posición tal cual, así que una pasada
+  /// del arco con lluvia —presión sí, profundidad no, o una sola y mala— le
+  /// dejaba al técnico de referencia un hueco o un número falso.
   static Future<Map<String, UltimaMedicion>> ultimasMedicionesVehiculo(
     String vehiculoId, {
     String? excluirRevisionId,
@@ -1071,26 +1182,35 @@ class TyreControlApi {
     final completadas = {
       'completada', 'completada_con_incidencias', 'completada_incidencia_pendiente', 'enviada'
     };
-    final porPos = <String, UltimaMedicion>{};
-    final tsPorPos = <String, int>{};
+    final conOrden = <({FilaMedicion fila, int ts})>[];
     for (final r in (rows as List)) {
       final rev = r['revision'];
       if (rev is! Map) continue;
       if (!completadas.contains(rev['estado_revision'])) continue;
       if (excluirRevisionId != null && rev['id'] == excluirRevisionId) continue;
-      final posId = r['posicion_id'] as String?;
-      if (posId == null) continue;
       final createdAt = DateTime.tryParse('${rev['created_at'] ?? ''}');
-      final ts = createdAt?.millisecondsSinceEpoch ?? 0;
-      if (tsPorPos.containsKey(posId) && ts <= tsPorPos[posId]!) continue;
-      tsPorPos[posId] = ts;
-      porPos[posId] = UltimaMedicion(
-        fecha: DateTime.tryParse('${rev['fecha_revision'] ?? ''}') ?? createdAt,
-        profundidadMm: (r['profundidad_mm'] as num?)?.toDouble(),
-        presionBar: (r['presion_bar'] as num?)?.toDouble(),
-      );
+      conOrden.add((
+        fila: FilaMedicion(
+          revisionId: rev['id'] as String?,
+          clave: r['posicion_id'] as String?,
+          profundidadMm: (r['profundidad_mm'] as num?)?.toDouble(),
+          presionBar: (r['presion_bar'] as num?)?.toDouble(),
+          momento: DateTime.tryParse('${rev['fecha_revision'] ?? ''}') ?? createdAt,
+        ),
+        ts: createdAt?.millisecondsSinceEpoch ?? 0,
+      ));
     }
-    return porPos;
+    // De la más reciente a la más antigua, que es como reparte.
+    conOrden.sort((a, b) => b.ts.compareTo(a.ts));
+    final reparto = repartirUltimasMediciones([for (final f in conOrden) f.fila]);
+    return {
+      for (final e in reparto.entries)
+        e.key: UltimaMedicion(
+          fecha: e.value.medidoEn ?? e.value.presionEn,
+          profundidadMm: e.value.profundidadMm,
+          presionBar: e.value.presionBar,
+        ),
+    };
   }
 
   /// Umbrales de profundidad de la empresa + overrides por medida.
@@ -1891,23 +2011,28 @@ class TyreControlApi {
     return altaPendienteCount.value;
   }
 
-  /// Pone el tipo de vehículo durante el alta operativa.
+  /// Completa la ficha operativa de un vehículo desde la tablet: tipo,
+  /// medida de neumático y tipo de llanta, en una sola llamada.
   ///
-  /// Va por una RPC y no por un `update` porque la escritura de `tc_vehiculos`
-  /// es solo para administradores, y eso no se amplía: dársela al técnico para
-  /// que pueda poner un tipo le daría de paso la matrícula, la empresa y el
-  /// estado de baja.
+  /// Lo guarda `tc_alta_operativa_ficha`, que delega el tipo en la función de
+  /// siempre (`tc_alta_operativa_tipo`) y hereda de ella los permisos y la
+  /// regla que evita el destrozo: con neumáticos montados no se cambia el
+  /// tipo, porque sus montajes quedarían en posiciones de otro plano.
   ///
-  /// La base se niega a cambiar el tipo si el vehículo ya tiene neumáticos
-  /// montados —sus montajes quedarían en posiciones de otro plano— y repetir
-  /// la misma petición no escribe nada, así que un doble toque es inocuo.
-  static Future<Map<String, dynamic>> ponerTipoDeAlta({
+  /// [medidaId] y [tipoLlantaId] en null significan «no se ha preguntado» y
+  /// dejan lo que hubiera. Desde el patio se rellena, no se vacía: para borrar
+  /// un dato de la ficha está el panel.
+  static Future<Map<String, dynamic>> guardarFichaDeAlta({
     required String vehiculoId,
     required String tipoId,
+    String? medidaId,
+    String? tipoLlantaId,
   }) async {
-    final data = await _db.rpc('tc_alta_operativa_tipo', params: {
+    final data = await _db.rpc('tc_alta_operativa_ficha', params: {
       'p_vehiculo': vehiculoId,
       'p_tipo': tipoId,
+      'p_medida': medidaId,
+      'p_llanta': tipoLlantaId,
     });
     return Map<String, dynamic>.from(data as Map);
   }
@@ -2218,6 +2343,70 @@ class TyreControlApi {
     }
   }
 
+  /*
+   * Lo mismo, pero entero.
+   *
+   * `revisionEstadoPorVehiculo` se queda con el estado y tira el resto, que es
+   * lo que necesitan las dos pantallas que ya la usan. «Vehículos en bases»
+   * necesita además la fecha de la última revisión, quién la hizo, los días de
+   * retraso —para ordenar— y la periodicidad, que es lo que separa un «al día»
+   * de verdad de uno que solo significa que nadie ha dicho cada cuánto toca.
+   *
+   * Se deja la otra como estaba en vez de cambiarle el tipo de vuelta: no hay
+   * nada que ganar tocando dos pantallas que funcionan.
+   */
+  static Future<Map<String, RevisionEstado>> revisionEstadoCompleto() async {
+    try {
+      final data = await _db.rpc('tc_revision_estado');
+      final m = <String, RevisionEstado>{};
+      for (final e in (data as List)) {
+        final r = RevisionEstado.desdeJson(Map<String, dynamic>.from(e as Map));
+        if (r.vehiculoId.isNotEmpty) m[r.vehiculoId] = r;
+      }
+      return m;
+    } catch (_) {
+      return {};
+    }
+  }
+
+  /*
+   * Dónde está cada vehículo, para «Vehículos en bases».
+   *
+   * Pasa por el backend y no por Supabase, igual que en el panel: la tabla de
+   * presencia la escribe el barrido con service_role y la lectura la resuelve
+   * el endpoint, que además trae las bases con geo-zona y las cuentas de
+   * telemática dadas de alta (sin esas dos cosas no se puede explicar una
+   * pantalla vacía).
+   *
+   * La empresa VIAJA en la petición, y es imprescindible: el técnico trabaja
+   * para varios clientes y la empresa de su perfil es la de servicio, que no
+   * tiene flota. El servidor comprueba que puede verla
+   * (`server/tyrecontrol/presencia/empresaPedida.ts`); un 403 aquí significa
+   * que el cliente elegido no le corresponde, no que falle la red.
+   *
+   * Aquí NO hay «barrer ahora»: el barrido corre solo en el servidor cada diez
+   * minutos y cuesta una llamada al proveedor para toda la flota. Lo que se
+   * enseña es lo último que se supo, con la hora a la vista.
+   */
+  static Future<PresenciaBases> presenciaBases(String empresaId) async {
+    final token = currentSessionToken;
+    if (token == null) throw Exception('Sesión caducada: vuelve a entrar');
+    final res = await http.get(
+      Uri.parse(
+        '$kBackendUrl/api/tyrecontrol/presencia-bases'
+        '?empresaId=${Uri.encodeComponent(empresaId)}',
+      ),
+      headers: {'Authorization': 'Bearer $token'},
+    ).timeout(const Duration(seconds: 30));
+    if (res.statusCode == 403) {
+      throw Exception('Este cliente no está asignado a tu usuario');
+    }
+    if (res.statusCode != 200) {
+      throw Exception('No se ha podido leer dónde están los vehículos');
+    }
+    return PresenciaBases.desdeJson(jsonDecode(res.body) as Map<String, dynamic>);
+  }
+
   /// Catálogo de medidas id→valor (p. ej. "385/65R22.5").
   static Future<Map<String, String>> mapaMedidas() async {
     try {
@@ -2264,57 +2453,117 @@ class TyreControlApi {
   /// montado no hereda la medición del que había antes en esa posición.
   static Future<Map<String, RevisionDetalleDraft>> ultimasMedicionesPorNeumatico(String vehiculoId) async {
     try {
+      const limite = 400;
       final data = await _db
           .from('revisiones_neumaticos_detalle')
-          .select('neumatico_id, profundidad_mm, presion_bar, created_at')
+          .select('revision_id, neumatico_id, posicion_id, profundidad_mm, presion_bar, created_at, '
+              'revision:revisiones_vehiculo(fecha_revision, tecnico_id)')
           .eq('vehiculo_id', vehiculoId)
           .order('created_at', ascending: false)
-          .limit(400);
-      final out = <String, RevisionDetalleDraft>{};
+          .limit(limite);
+      // Qué goma hay hoy en cada posición y desde cuándo: lo medido en la
+      // posición después de su montaje es suyo, esté a nombre de la anterior o
+      // de ninguna (ver ultima_medicion.dart).
+      final montajes = await _db
+          .from('tc_montajes_actuales')
+          .select('posicion_id, neumatico_id, fecha_montaje, neumatico:tc_neumaticos(medida)')
+          .eq('vehiculo_id', vehiculoId);
+      // El mínimo de cada goma montada, por su llanta: el protocolo solo entra
+      // si su última lectura lo toca (ver protocolo_profundidad.dart).
+      final minimos = <String, double?>{
+        for (final m in (montajes as List))
+          if (m['neumatico_id'] != null)
+            m['neumatico_id'] as String: profundidadMinimaPorLlanta(
+                (m['neumatico'] is Map ? m['neumatico']['medida'] : null) as String?),
+      };
+      final montado = <String, ({String neumatico, DateTime? desde})>{
+        for (final m in (montajes as List))
+          if (m['posicion_id'] != null && m['neumatico_id'] != null)
+            m['posicion_id'] as String: (
+              neumatico: m['neumatico_id'] as String,
+              desde: DateTime.tryParse('${m['fecha_montaje'] ?? ''}'),
+            ),
+      };
+
+      final filas = <FilaMedicion>[];
       for (final e in (data as List)) {
-        final r = Map<String, dynamic>.from(e as Map);
-        final nid = r['neumatico_id'] as String?;
-        if (nid == null || out.containsKey(nid)) continue;
-        final prof = (r['profundidad_mm'] as num?)?.toDouble();
-        final pres = (r['presion_bar'] as num?)?.toDouble();
-        if (prof == null && pres == null) continue;
-        // La fecha es la que decide si esta medición sigue valiendo o si la
-        // profundidad del propio neumático es más reciente (ver
-        // profundidadVigente en models.dart).
-        out[nid] = RevisionDetalleDraft(
-          posicionId: '', neumaticoId: nid, profundidadMm: prof, presionBar: pres,
-          medidoEn: DateTime.tryParse('${r['created_at'] ?? ''}'),
-        );
+        final nid = (e as Map)['neumatico_id'] as String?;
+        final creada = DateTime.tryParse('${e['created_at'] ?? ''}');
+        // El día de la REVISIÓN, no el de su entrada en la base: el arco entra
+        // al día siguiente, y con ese sello una lectura del mismo día del
+        // montaje parecería posterior.
+        final rev = e['revision'];
+        final dia = (rev is Map ? DateTime.tryParse('${rev['fecha_revision'] ?? ''}') : null) ?? creada;
+        final enPosicion = montado[e['posicion_id']];
+        final hereda = enPosicion != null &&
+            enPosicion.neumatico != nid &&
+            esPosteriorAlMontaje(dia, enPosicion.desde);
+        filas.add(FilaMedicion(
+          revisionId: e['revision_id'] as String?,
+          clave: nid,
+          claveHeredada: hereda ? enPosicion.neumatico : null,
+          profundidadMm: (e['profundidad_mm'] as num?)?.toDouble(),
+          presionBar: (e['presion_bar'] as num?)?.toDouble(),
+          momento: creada,
+          // Con técnico es una medición a mano; sin él, del arco.
+          manual: rev is Map && rev['tecnico_id'] != null,
+        ));
       }
-      return out;
+
+      // La profundidad, solo de revisiones que midieron todas sus ruedas y
+      // pasada por el protocolo (mediana de tres, ver
+      // protocolo_profundidad.dart); la presión, de la última que la traiga.
+      final reparto = repartirUltimasMediciones(filas, limite: limite, protocolo: true, minimos: minimos);
+      return {
+        for (final e in reparto.entries)
+          // La fecha es la que decide si esta medición sigue valiendo o si la
+          // profundidad del propio neumático es más reciente (ver
+          // profundidadVigente en models.dart): por eso es la de la PROFUNDIDAD.
+          e.key: RevisionDetalleDraft(
+            posicionId: '', neumaticoId: e.key,
+            profundidadMm: e.value.profundidadMm, presionBar: e.value.presionBar,
+            medidoEn: e.value.medidoEn,
+            confirmada: e.value.confirmada,
+            pendienteMm: e.value.pendienteMm,
+            pendienteEn: e.value.pendienteEn,
+          ),
+      };
     } catch (_) {
       return {};
     }
   }
 
+  /// Las filas de detalle, tal como llegan de la consulta —ya ordenadas de la
+  /// más reciente a la más antigua—, listas para repartir por [campoClave].
+  static List<FilaMedicion> _filasDeMedicion(List data, String campoClave) => [
+        for (final e in data)
+          FilaMedicion(
+            revisionId: (e as Map)['revision_id'] as String?,
+            clave: e[campoClave] as String?,
+            profundidadMm: (e['profundidad_mm'] as num?)?.toDouble(),
+            presionBar: (e['presion_bar'] as num?)?.toDouble(),
+            momento: DateTime.tryParse('${e['created_at'] ?? ''}'),
+          ),
+      ];
+
   static Future<Map<String, RevisionDetalleDraft>> ultimasMedicionesPorPosicion(String vehiculoId) async {
     try {
+      const limite = 120;
       final data = await _db
           .from('revisiones_neumaticos_detalle')
-          .select('posicion_id, profundidad_mm, presion_bar, created_at')
+          .select('revision_id, posicion_id, profundidad_mm, presion_bar, created_at')
           .eq('vehiculo_id', vehiculoId)
           .order('created_at', ascending: false)
-          .limit(120);
-      final out = <String, RevisionDetalleDraft>{};
-      for (final e in (data as List)) {
-        final r = Map<String, dynamic>.from(e as Map);
-        final posId = r['posicion_id'] as String?;
-        if (posId == null || out.containsKey(posId)) continue; // la más reciente gana
-        final prof = (r['profundidad_mm'] as num?)?.toDouble();
-        final pres = (r['presion_bar'] as num?)?.toDouble();
-        if (prof == null && pres == null) continue;
-        out[posId] = RevisionDetalleDraft(
-          posicionId: posId,
-          profundidadMm: prof,
-          presionBar: pres,
-        );
-      }
-      return out;
+          .limit(limite);
+      final reparto = repartirUltimasMediciones(_filasDeMedicion(data as List, 'posicion_id'), limite: limite);
+      return {
+        for (final e in reparto.entries)
+          e.key: RevisionDetalleDraft(
+            posicionId: e.key,
+            profundidadMm: e.value.profundidadMm,
+            presionBar: e.value.presionBar,
+          ),
+      };
     } catch (_) {
       return {};
     }
@@ -2348,6 +2597,51 @@ class TyreControlApi {
         return (j['error'] as String?) ?? 'Error al sincronizar';
       }
       return null; // sin error
+    } catch (e) {
+      return '$e';
+    }
+  }
+
+  /// Los avisos de presión ABIERTOS de un vehículo.
+  ///
+  /// Vienen del sensor de Goodyear por correo, no de una revisión. Se piden
+  /// solo los abiertos porque es lo que contesta la pregunta que se hace
+  /// delante del vehículo —¿tiene algo ahora mismo?—; los resueltos no cambian
+  /// lo que hay que hacer hoy.
+  ///
+  /// Nunca lanza: devuelve lista vacía si algo falla. Un técnico que no puede
+  /// empezar la revisión porque no se han podido leer los avisos sería peor
+  /// que uno que la empieza sin verlos.
+  static Future<List<AlertaPresion>> listarAlertasPresionVehiculo(String vehiculoId) async {
+    try {
+      final r = await _db
+          .from('tc_alertas_presion')
+          .select(
+            '*, posicion:tc_posiciones_vehiculo(codigo_posicion), '
+            'neumatico:tc_neumaticos(codigo_interno, numero_serie)',
+          )
+          .eq('vehiculo_id', vehiculoId)
+          .eq('estado', 'abierta')
+          .order('ultimo_aviso_at', ascending: false);
+      return (r as List)
+          .map((e) => AlertaPresion.desdeJson(e as Map<String, dynamic>))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Dar por resuelto un aviso. Goodyear no avisa de que se haya arreglado:
+  /// lo cierra quien infla la rueda.
+  static Future<String?> resolverAlertaPresion(String id, {String? nota}) async {
+    try {
+      await _db.from('tc_alertas_presion').update({
+        'estado': 'resuelta',
+        'resuelta_at': DateTime.now().toUtc().toIso8601String(),
+        'nota': nota,
+        'actualizado_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', id);
+      return null;
     } catch (e) {
       return '$e';
     }

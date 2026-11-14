@@ -1,10 +1,11 @@
 import type { Express, RequestHandler } from "express";
+import { esHistoricoAlbaran, etiquetaHistorico } from "../../../shared/historicoAlbaran.ts";
 import { hayIA } from "../../core/openaiService.ts";
 import { supabase } from "../../supabase.ts";
 import { puedeVerEmpresaDeRequest } from "../empresaAcceso.ts";
 import { LectorParteIA, type LectorParte } from "./lectorParte.ts";
 import { armarParte, type MovimientoFila } from "./armarParte.ts";
-import { filasDeOperaciones, type OperacionFila, type MedicionPos }
+import { filasDeOperaciones, filasHistoricas, salidasHistoricas, type OperacionFila, type MedicionPos }
   from "./filasDeOperaciones.ts";
 import { quitarFondoNegro } from "./fondoPlano.ts";
 import { generarPartePdf } from "./generarPdf.ts";
@@ -201,6 +202,7 @@ export function mountParte(app: Express, ...guards: RequestHandler[]): void {
         .from("operaciones_neumaticos")
         .select(`tipo_operacion, motivo, destino, estado_anterior, estado_nuevo,
                  observaciones, is_anulada, status,
+                 importacion_lote_id, condicion, marca_txt, modelo_txt, medida_txt, posicion_fuente, km_vehiculo,
                  neumatico:tc_neumaticos(marca, modelo, medida, numero_serie, dot, numero_interno),
                  posicion_origen:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_origen_id_fkey(codigo_posicion),
                  posicion_destino:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_destino_id_fkey(codigo_posicion)`)
@@ -282,6 +284,7 @@ export function mountParte(app: Express, ...guards: RequestHandler[]): void {
       const parte = armarParte(
         {
           ...interv,
+          historico_etiqueta: esHistoricoAlbaran(interv) ? etiquetaHistorico(interv) : null,
           matricula: interv.vehiculo?.matricula ?? null,
           flota: interv.vehiculo?.empresa?.nombre ?? null,
           km: interv.vehiculo?.km_actual ?? null,
@@ -291,6 +294,8 @@ export function mountParte(app: Express, ...guards: RequestHandler[]): void {
         },
         filas,
         (servicios ?? []) as { servicio: string; cantidad: number }[],
+        filasHistoricas((ops ?? []) as OperacionFila[]),
+        salidasHistoricas((ops ?? []) as OperacionFila[]),
       );
 
       const pdf = await generarPartePdf({

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'services/offline_store.dart';
+import 'services/seguimiento_ubicacion.dart';
 import 'services/supabase_service.dart';
 import 'models/incidencias.dart';
 import 'theme/app_theme.dart';
@@ -32,6 +33,21 @@ void main() async {
     OfflineStore.cacheJson('motivos_pendiente', filas);
     aplicarMotivosDesdeJson(filas);
   }).catchError((_) {/* sin red: se conserva lo cacheado o la semilla */}));
+
+  /*
+   * Ubicación de la tablet: arrancar y parar, en un solo sitio.
+   *
+   * El arranque pide el permiso la primera vez, así que va aquí y no en el
+   * login: al reabrir la app con la sesión ya puesta no se pasa por el login y
+   * el envío tiene que retomarse solo.
+   *
+   * La parada se cuelga de `signOut`, que es quien la llama antes de tirar el
+   * token (hace falta para poder borrar la posición del servidor).
+   */
+  TyreControlApi.alCerrarSesion = SeguimientoUbicacion.instancia.detener;
+  if (TyreControlApi.hasSession) {
+    unawaited(SeguimientoUbicacion.instancia.iniciar());
+  }
 
   // En cuanto detectamos red, intentamos vaciar la cola sola.
   Connectivity().onConnectivityChanged.listen((results) {

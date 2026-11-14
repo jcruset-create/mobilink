@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 let otfRows: any[] = [];
 let trabajoRows: any[] = [];
+let materialRows: any[] = [];
 const mapeos = new Map<string, string>();
 /** Última entrada recibida por el servicio de presupuestos. */
 let quoteInput: any = null;
@@ -17,6 +18,7 @@ let quoteInput: any = null;
 vi.mock("../../../db.ts", () => ({
   default: {
     query: async (sql: string) => {
+      if (sql.includes("FROM otf_trabajo_material")) return { rows: materialRows };
       if (sql.includes("FROM otf_trabajos")) return { rows: trabajoRows };
       if (sql.includes("FROM otf")) return { rows: otfRows };
       return { rows: [] };
@@ -52,6 +54,7 @@ const { previewQuoteFromWorkOrder, createQuoteFromWorkOrderId } = await import("
 const TENANT = "default";
 
 beforeEach(() => {
+  materialRows = [];
   otfRows = [{ id: 548, clientName: "Transportes Pérez", clientId: 125, status: "finalizada", notas: null }];
   trabajoRows = [
     {
@@ -89,6 +92,23 @@ describe("previewQuoteFromWorkOrder", () => {
     expect(preview.lines[0].externalCode).toBe("1896-S");
     expect(preview.sinMapear).toEqual([]);
     expect(preview.listo).toBe(true);
+  });
+
+  it("el material montado entra como línea propia, con su cantidad", async () => {
+    mapeos.set("customer:125", "10000");
+    mapeos.set("product:CAMBIO-PASTILLAS", "1896-S");
+    materialRows = [
+      { id: 9, trabajoId: 1, tipo: "neumatico", descripcion: "385/65R22.5", marca: "Continental", estado: "nuevo", cantidad: 2 },
+    ];
+
+    const preview = await previewQuoteFromWorkOrder({ tenantId: TENANT, otfId: 548 });
+
+    expect(preview.lines.map((l) => [l.mobilinkId, l.quantity])).toEqual([
+      ["CAMBIO-PASTILLAS", 1],
+      ["NEUMATICO 385/65R22.5 NUEVO", 2],
+    ]);
+    expect(preview.lines[1].description).toBe("385/65R22.5 Continental (nuevo)");
+    expect(preview.sinMapear).toEqual(["material 'NEUMATICO 385/65R22.5 NUEVO'"]);
   });
 
   it("excluye los trabajos no realizados, que no se facturan", async () => {

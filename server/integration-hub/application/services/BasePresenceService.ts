@@ -53,6 +53,17 @@ export interface VehiculoConBase {
   delegacionId: string | null;
   activo: boolean;
   /**
+   * ¿Está dentro del mantenimiento integral?
+   *
+   * Un vehículo puede estar activo y en la telemática y aun así no tocarle
+   * revisión: son matrículas que el cliente tiene de alta pero fuera del
+   * contrato. Se barren igual que los de baja, es decir, no se barren.
+   *
+   * Opcional porque quien llama puede no saberlo —y entonces se barre, que es
+   * lo que se hacía antes—, pero `leerFlota` sí lo trae.
+   */
+  enSeguimiento?: boolean;
+  /**
    * Un enlace con el proveedor que quien llama YA conocía, sin pasar por el Hub.
    *
    * Existe por los clientes de Webfleet de toda la vida: su vínculo vive en
@@ -329,6 +340,10 @@ export async function barrerPresenciaBases(
     // Los inactivos no se barren: un vehículo dado de baja no se va a revisar,
     // y llenar la pantalla con ellos esconde a los que sí.
     if (!v.activo) continue;
+    // Y por lo mismo, los que están fuera del mantenimiento integral: están
+    // activos y emiten posición, pero no les toca revisión. Preguntarle al
+    // proveedor dónde están es gastar cuota en un dato que nadie va a mirar.
+    if (v.enSeguimiento === false) continue;
 
     const enlace = enlacePorVehiculo.get(v.id) ?? enlaceHeredadoDe(v, cuentasPorConector);
     // Vehículo de una cuenta que ha fallado: no se toca. Su fila anterior sigue

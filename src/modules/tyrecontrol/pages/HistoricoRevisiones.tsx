@@ -1,8 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { listarRevisionesHistorico, listarEmpresas, listarUsuarios, listarDetalleRevision, listarIncidenciasDeRevision, listarTiposIncidencia, listarMotivosPendiente } from "../services/data";
+import { listarRevisionesHistorico, listarEmpresas, listarUsuarios, listarDetalleRevision, listarIncidenciasDeRevision, listarTiposIncidencia, listarMotivosPendiente, abrirInformeRevisionesPdf } from "../services/data";
 import type { Empresa, Perfil, RevisionDetalle } from "../types";
 import type { MontajeSnapshot } from "../services/data";
+import {
+  desglosePausas,
+  duracionCorta,
+  motivoSinDuracion,
+  resumenDuracion,
+  tieneDuracion,
+} from "../services/duracionRevision";
+import { esEnPapel } from "../services/revisionEnPapel";
 import { presionTxt } from "../types";
 import { TableWrap, tdCls, thCls, inputCls, Modal } from "../components/ui";
 import PlanoSnapshot from "../components/PlanoSnapshot";
@@ -61,6 +69,29 @@ type Fila = {
   incidenciasAbiertas: number;
   vehiculoId?: string;
   chasisImg: string | null;
+  /*
+   * El cronómetro, tal como lo guarda la APK. Null en las del CheckPoint —el
+   * arco mide al paso y no hay nada que empiece— y en las de técnico
+   * anteriores a que esto se guardara.
+   */
+  duracion_seg: number | null;
+  trabajo_seg: number | null;
+  pausa_seg: number | null;
+  n_pausas: number | null;
+  /*
+   * `inventario_inicial` = la toma de entrada del vehículo, no una revisión
+   * de las de cada X. Cuenta como revisión a todos los efectos —fecha, gomas,
+   * profundidades— pero conviene distinguirla: es la única que no busca
+   * desgaste, sino dejar constancia de con qué entró.
+   */
+  tipo_revision: string | null;
+  /*
+   * Hecha en papel y tecleada después: su `fecha_revision` es anterior al día
+   * en que se creó la fila. Se deduce, no se guarda; ver
+   * `services/revisionEnPapel.ts`. Importa para no decirle a una revisión de
+   * esta semana que es «anterior al cronómetro de la APK».
+   */
+  enPapel: boolean;
 };
 
 function hoyISO(): string {
@@ -80,6 +111,8 @@ function fechaCorta(iso: string): string {
   const [y, m, dd] = iso.split("-");
   return y && m && dd ? `${dd}/${m}/${y}` : iso;
 }
+
+type FormatoPdf = "resumen" | "detalle" | "vehiculo";
 
 export default function HistoricoRevisiones() {
   const navigate = useNavigate();
@@ -114,6 +147,34 @@ export default function HistoricoRevisiones() {
   const [hasta, setHasta] = useState(hoyISO());
   const [fEmpresa, setFEmpresa] = useState("");
   const [fTecnico, setFTecnico] = useState("");
+  const [formatoPdf, setFormatoPdf] = useState<FormatoPdf>("resumen");
+  const [generandoPdf, setGenerandoPdf] = useState(false);
+  // Por defecto NO se filtra: dejar de imprimir revisiones que existen es
+  // decisión de quien pide el informe, y se avisa en el propio PDF.
+  const [soloConDatos, setSoloConDatos] = useState(false);
+
+  /*
+   * Abre el PDF en otra pestaña.
+   *
+   * Va por `window.open` y no por `fetch` + Blob porque el navegador ya sabe
+   * enseñar un PDF y así el usuario puede imprimirlo o guardarlo con sus
+   * propios botones. La sesión viaja en la cookie, igual que el resto del
+   * panel.
+   */
+  async function abrirPdf(ambito: "cliente" | "interno") {
+    if (!fEmpresa || generandoPdf) return;
+    setGenerandoPdf(true); setError("");
+    try {
+      await abrirInformeRevisionesPdf({
+        empresaId: fEmpresa, desde, hasta, formato: formatoPdf, ambito,
+        soloConMediciones: soloConDatos,
+      });
+    } catch (e: unknown) {
+      setError(e instanceof Error && e.message ? e.message : "No se ha podido generar el informe");
+    } finally {
+      setGenerandoPdf(false);
+    }
+  }
 
   useEffect(() => {
     Promise.all([listarEmpresas(), listarUsuarios()])
@@ -168,6 +229,12 @@ export default function HistoricoRevisiones() {
           incidenciasAbiertas: incs.filter((i) => !["solucionada", "cancelada", "no_procede"].includes(i.estado)).length,
           vehiculoId: r.vehiculo?.id ?? undefined,
           chasisImg: r.vehiculo?.tipo?.imagen_chasis_url ?? null,
+          tipo_revision: r.tipo_revision ?? null,
+          enPapel: esEnPapel({ fecha_revision: r.fecha_revision, created_at: r.created_at }),
+          duracion_seg: r.duracion_seg ?? null,
+          trabajo_seg: r.trabajo_seg ?? null,
+          pausa_seg: r.pausa_seg ?? null,
+          n_pausas: r.n_pausas ?? null,
         };
       }));
     } catch (e: any) { setError(e?.message || "Error"); }
@@ -186,6 +253,16 @@ export default function HistoricoRevisiones() {
     const pend = filas.filter((f) => f.incidenciasAbiertas > 0).length;
     return { total: filas.length, conInc, pend };
   }, [filas]);
+
+  /*
+   * Cuántas de las que se ven están cronometradas y cuánto duran.
+   *
+   * Hace falta decirlo aquí porque la columna va a salir casi toda a rayas y
+   * eso, sin explicación, parece un dato que falta: en esta instalación nueve
+   * de cada diez revisiones son del CheckPoint, que mide al paso. El número de
+   * cronometradas dice cuántas hay de verdad, y la mediana para qué sirve.
+   */
+  const tiempos = useMemo(() => resumenDuracion(filas), [filas]);
 
   // Cuántas ha hecho cada uno, con los MISMOS filtros que la tabla — se cuenta
   // sobre las filas ya cargadas, así que no puede discrepar de lo que se ve.
@@ -237,8 +314,54 @@ export default function HistoricoRevisiones() {
         </select>
         <span className="pb-2 text-xs text-slate-500">
           {topeAlcanzado ? "Primeras " : ""}{resumen.total} revisión(es) · {resumen.conInc} con incidencias · {resumen.pend} con incidencia pendiente
+          {tiempos.cronometradas > 0 && (
+            <span title="El CheckPoint mide al paso del vehículo, así que sus revisiones no tienen duración. Solo se cronometran las que hace un operario con la APK.">
+              {" · "}{tiempos.cronometradas} cronometrada(s), mediana {duracionCorta(tiempos.medianaSeg)}
+            </span>
+          )}
           {topeAlcanzado && <span className="ml-1 text-amber-400">· hay más: acota las fechas</span>}
         </span>
+      </div>
+
+      {/*
+        El informe en PDF, con el MISMO periodo y el MISMO cliente que la
+        tabla de abajo. Se reutilizan los filtros a propósito: un informe que
+        se configura aparte acaba sacando un periodo distinto del que el
+        usuario está mirando, y nadie se da cuenta hasta que lo ha enviado.
+
+        Hace falta elegir cliente: un PDF de «todos los clientes» mezclaría
+        flotas de empresas distintas en un documento que se manda a una.
+      */}
+      <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-slate-700 bg-slate-800/60 p-2">
+        <span className="text-[11px] font-bold uppercase text-slate-400">Informe PDF</span>
+        {!fEmpresa ? (
+          <span className="text-[12px] text-amber-300">Elige un cliente arriba para poder sacarlo.</span>
+        ) : (
+          <>
+            <select className={`${inputCls} w-auto`} value={formatoPdf}
+                    onChange={(e) => setFormatoPdf(e.target.value as FormatoPdf)}>
+              <option value="resumen">Resumen · una línea por revisión</option>
+              <option value="detalle">Detalle · rueda a rueda</option>
+              <option value="vehiculo">Agrupado por vehículo</option>
+            </select>
+            <button onClick={() => void abrirPdf("cliente")} disabled={generandoPdf}
+              className="rounded-lg bg-sky-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-sky-500 disabled:opacity-50">
+              {generandoPdf ? "Generando…" : "Para el cliente"}
+            </button>
+            <button onClick={() => void abrirPdf("interno")} disabled={generandoPdf}
+              className="rounded-lg border border-slate-500 px-3 py-1.5 text-[12px] font-bold text-slate-200 hover:bg-slate-700 disabled:opacity-50">
+              Interno
+            </button>
+            <label className="flex items-center gap-1.5 text-[12px] text-slate-300"
+                   title="Deja fuera las revisiones que no tienen ninguna medición guardada. El PDF dice cuántas se han quitado.">
+              <input type="checkbox" checked={soloConDatos} onChange={(e) => setSoloConDatos(e.target.checked)} />
+              Solo las que tienen mediciones
+            </label>
+            <span className="text-[11px] text-slate-500">
+              Del {desde || "—"} al {hasta || "—"}. El del cliente no lleva técnicos, códigos internos ni revisiones sin terminar.
+            </span>
+          </>
+        )}
       </div>
 
       {porQuien.length > 0 && (
@@ -266,14 +389,18 @@ export default function HistoricoRevisiones() {
           <th className={thCls}>Fecha</th><th className={thCls}>Hora</th><th className={thCls}>Matrícula</th>
           <th className={thCls}>Nº unidad</th>
           <th className={thCls}>Cliente</th><th className={thCls}>Base</th><th className={thCls}>Operario</th>
+          {/* Lo que tardó, de abrir la revisión a cerrarla. Va pegada a
+              Operario porque es su dato: dice cuánto le costó a esa persona,
+              y al lado del nombre se lee de corrido. */}
+          <th className={thCls}>Duración</th>
           <th className={thCls}>Km</th><th className={thCls}>Incidencias</th><th className={thCls}>Estado</th>
           <th className={thCls}></th>
         </tr></thead>
         <tbody>
           {loading ? (
-            <tr><td className={tdCls + " text-slate-500"} colSpan={11}>Cargando…</td></tr>
+            <tr><td className={tdCls + " text-slate-500"} colSpan={12}>Cargando…</td></tr>
           ) : filas.length === 0 ? (
-            <tr><td className={tdCls + " text-slate-500"} colSpan={11}>Sin revisiones en este periodo.</td></tr>
+            <tr><td className={tdCls + " text-slate-500"} colSpan={12}>Sin revisiones en este periodo.</td></tr>
           ) : filas.map((f) => {
             const meta = ESTADO_META[f.estado] ?? { label: f.estado, cls: "bg-slate-500/15 text-slate-300" };
             return (
@@ -291,6 +418,29 @@ export default function HistoricoRevisiones() {
                         {f.matricula}
                       </button>
                     : f.matricula}
+                  {/*
+                    El inventario de entrada se distingue, porque no es una
+                    revisión de las de cada X: es la toma con la que el
+                    vehículo entró. Sin esto, en la lista son idénticas y
+                    alguien contaría la entrada como un control de desgaste.
+                  */}
+                  {f.tipo_revision === "inventario_inicial" && (
+                    <span className="ml-1.5 rounded-full bg-violet-500/15 px-2 py-0.5 text-[10px] font-bold text-violet-300"
+                          title="Inventario inicial: las gomas con las que el vehículo entró en Mobilink. No descontó stock ni generó coste.">
+                      Inventario
+                    </span>
+                  )}
+                  {/*
+                    Y la que se pasó a mano desde el escritorio. Se distingue
+                    porque no tiene cronómetro ni coordenadas, y sin decirlo
+                    parecería una revisión a la que le faltan datos.
+                  */}
+                  {f.enPapel && (
+                    <span className="ml-1.5 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-300"
+                          title="Hecha en papel y pasada después desde el escritorio.">
+                      En papel
+                    </span>
+                  )}
                 </td>
                 {/* El número de unidad es como llaman al vehículo dentro de la
                     empresa: al ir pegado a la matrícula y en letra pequeña se
@@ -306,6 +456,17 @@ export default function HistoricoRevisiones() {
                   {f.esArco
                     ? <span className="rounded-full bg-sky-500/15 px-2 py-0.5 text-[11px] font-bold text-sky-300">CheckPoint</span>
                     : f.tecnico}
+                </td>
+                <td className={tdCls}>
+                  {/* La raya lleva el motivo en el título: no es lo mismo que
+                      falte el dato que que no exista. Del arco no habrá número
+                      nunca; de una revisión vieja, lo habrá en la siguiente. */}
+                  {tieneDuracion(f)
+                    ? <span className="font-semibold text-slate-200" title={desglosePausas(f) ?? undefined}>
+                        {duracionCorta(f.duracion_seg)}
+                      </span>
+                    : <span className="text-slate-500"
+                            title={motivoSinDuracion(f.esArco, f.tipo_revision === "inventario_inicial", f.enPapel)}>—</span>}
                 </td>
                 <td className={tdCls + " text-slate-400"}>{f.km != null ? f.km.toLocaleString("es-ES") : "—"}</td>
                 <td className={tdCls}>
@@ -335,8 +496,27 @@ export default function HistoricoRevisiones() {
       {ficha && (
         <Modal title={`Revisión ${ficha.matricula} · ${fechaCorta(ficha.fecha)}${ficha.hora ? ` · ${ficha.hora}` : ""}`} onClose={() => setFicha(null)} size="xl">
           <div className="mb-2 text-[12px] text-slate-400">
+            {ficha.tipo_revision === "inventario_inicial" && (
+              <span className="mr-2 rounded-full bg-violet-500/15 px-2 py-0.5 text-[11px] font-bold text-violet-300">
+                Inventario inicial
+              </span>
+            )}
+            {ficha.enPapel && (
+              <span className="mr-2 rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-bold text-amber-300">
+                Hecha en papel
+              </span>
+            )}
             {ficha.cliente} · Base {ficha.base} · {ficha.esArco ? "Medido por el CheckPoint" : `Operario: ${ficha.tecnico}`}
             {ficha.km != null ? ` · ${ficha.km.toLocaleString("es-ES")} km` : ""}
+            {/* Lo que costó hacerla. En la ficha se dice entero —con el
+                desglose de pausas si las hubo— porque aquí hay sitio; en la
+                tabla solo cabe el número. */}
+            {tieneDuracion(ficha) && (
+              <>
+                {" · "}Duración: {duracionCorta(ficha.duracion_seg)}
+                {desglosePausas(ficha) ? ` (${desglosePausas(ficha)})` : ""}
+              </>
+            )}
             {" · "}Estado: {ESTADO_META[ficha.estado]?.label ?? ficha.estado}
             {/* Mirando una revisión, lo siguiente que se quiere ver es el
                 vehículo entero. Cierra el modal para no dejarlo colgando

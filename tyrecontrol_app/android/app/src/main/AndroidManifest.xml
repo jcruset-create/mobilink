@@ -9,8 +9,28 @@
     <!-- Bluetooth para Android 11 e inferiores -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30"/>
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30"/>
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30"/>
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false"/>
+
+    <!--
+      Ubicación de la tablet. Mismo juego de permisos que Mobilink Assist.
+
+      Ojo: hasta ahora ACCESS_FINE_LOCATION estaba aquí con maxSdkVersion="30"
+      y NO era para ubicar nada: era lo que Android 11 e inferiores exigían
+      para poder ESCANEAR por Bluetooth (la sonda TLGX). Por eso BLUETOOTH_SCAN
+      lleva usesPermissionFlags="neverForLocation". Ahora sí se usa para
+      ubicar, así que se queda sin tope de versión; el escaneo Bluetooth sigue
+      cubierto por el mismo permiso.
+
+      El servicio en primer plano con su notificación fija no es un detalle
+      técnico: es lo que Android exige para seguir enviando con la pantalla
+      apagada, y a la vez lo que deja claro al operario que se está enviando.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
 
     <application
         android:label="Mobilink TyreControl"

@@ -53,5 +53,13 @@
 	<string>Mobilink TyreControl usa Bluetooth para conectar con la sonda de medición compatible que lee la profundidad, la presión y las etiquetas RFID de los neumáticos.</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Mobilink TyreControl envía la ubicación de la tablet mientras tienes la sesión abierta, también con la pantalla apagada, y la guarda con cada revisión para dejar constancia de dónde se hizo.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Mobilink TyreControl guarda dónde se abre y dónde se cierra cada revisión, para dejar constancia de dónde se hizo.</string>
 </dict>
 </plist>

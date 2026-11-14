@@ -14,6 +14,19 @@ export interface Anterior {
   estado: string;
   delegacion_id: string | null;
   entrada_base_at: string | null;
+  // Y lo demás que se compara para saber si la fila cambia. Opcional porque
+  // `mismaEstancia` solo necesita las tres de arriba y se llama desde sitios
+  // que no leen el resto.
+  es_su_base?: boolean | null;
+  distancia_m?: number | null;
+  lat?: number | null;
+  lng?: number | null;
+  velocidad_kmh?: number | null;
+  posicion_at?: string | null;
+  proveedor?: string | null;
+  cuenta?: string | null;
+  externo?: boolean | null;
+  motivo?: string | null;
 }
 
 /**
@@ -75,4 +88,69 @@ export function filaDePresencia(
       calculado_at: f.calculadoAt.toISOString(),
       updated_at: ahora,
   };
+}
+
+/**
+ * ── Qué cuenta como «ha cambiado» ───────────────────────────────────────────
+ *
+ * El barrido escribía las 717 filas en cada vuelta. Medido el 10/11/2026, solo
+ * 356 de los 717 vehículos traen posición más fresca que el intervalo de diez
+ * minutos: los otros 361 —155 de ellos dormidos, con posición de hace más de
+ * una hora— se reescribían para no decir nada nuevo.
+ *
+ * Lo que sí cambiaba en TODAS eran tres columnas que no son el dato sino la
+ * contabilidad del barrido: `calculado_at` y `updated_at` son la hora de la
+ * vuelta, y `antiguedad_min` es «cuánto hace de la posición», que crece sola
+ * aunque no llegue nada nuevo. Por eso las tres quedan fuera de la
+ * comparación: `antiguedad_min` se recalcula al LEER (`frescura.ts`) y el
+ * instante del barrido se guarda una vez por vuelta en `tc_presencia_barrido`,
+ * en vez de 717 veces aquí.
+ *
+ * `vehiculo_id` y `empresa_id` tampoco se comparan: son la identidad de la
+ * fila, iguales por definición.
+ */
+export const COLUMNAS_COMPARABLES = [
+  "estado",
+  "delegacion_id",
+  "es_su_base",
+  "distancia_m",
+  "lat",
+  "lng",
+  "velocidad_kmh",
+  "posicion_at",
+  "entrada_base_at",
+  "proveedor",
+  "cuenta",
+  "externo",
+  "motivo",
+] as const;
+
+/**
+ * Las que son instantes.
+ *
+ * Importa: lo que escribimos es `toISOString()` —«…T16:21:12.315Z»— y lo que
+ * devuelve Supabase es «…T16:21:12.315+00:00». Es el MISMO instante escrito de
+ * dos formas, y compararlo como texto daría «ha cambiado» siempre, con lo que
+ * no se saltaría ni una fila y todo esto no serviría de nada.
+ */
+const INSTANTES: ReadonlySet<string> = new Set(["posicion_at", "entrada_base_at"]);
+
+function comparable(columna: string, valor: unknown): string {
+  if (valor == null) return "";
+  if (INSTANTES.has(columna)) {
+    const t = Date.parse(String(valor));
+    return Number.isNaN(t) ? String(valor) : String(t);
+  }
+  return String(valor);
+}
+
+/** ¿Hay que escribir esta fila, o dice exactamente lo mismo que la guardada? */
+export function filaCambia(
+  nueva: Record<string, unknown>,
+  prev: Anterior | undefined,
+): boolean {
+  if (!prev) return true; // No había fila: hay que crearla.
+  return COLUMNAS_COMPARABLES.some(
+    (c) => comparable(c, nueva[c]) !== comparable(c, (prev as unknown as Record<string, unknown>)[c]),
+  );
 }

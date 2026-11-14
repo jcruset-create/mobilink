@@ -40,6 +40,7 @@ import { resumirKilometraje } from "./resumen.ts";
 import { rankingDeKilometraje, type VehiculoDeFlota } from "./ranking.ts";
 import { iniciarRelleno, pararRelleno, tareasDeEmpresa } from "./rellenoWorker.ts";
 import { intervaloValido } from "./relleno.ts";
+import { contarPorClase, mesesQueFaltan, proveedorDe } from "./huecos.ts";
 import {
   estadoRellenoRevisiones, iniciarRellenoRevisiones, pararRellenoRevisiones,
 } from "../kilometrajeRevisiones/worker.ts";
@@ -198,6 +199,88 @@ export function createKilometrajeMensualRouter(): Router {
         esperaMaximaMs: ESPERA_MAXIMA_MS,
       });
       res.json(r);
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /**
+   * Rehacer los meses que le faltan a UN vehículo, y solo a ese.
+   *
+   * Es el botón de la fila del ranking. Existe porque las dos alternativas
+   * no servían: el relleno recorre la flota entera y tarda horas, y
+   * `/sincronizar` pide un RANGO contiguo cuando los huecos van salteados
+   * («Ene, May, Sept»), así que para rehacer tres meses se pedían nueve que
+   * ya estaban bien. Eso es cupo del proveedor gastado en vano.
+   *
+   * Qué meses se piden lo decide el servidor leyendo las filas del propio
+   * vehículo (`huecos.ts`), no el navegador: la regla vive en un sitio y no
+   * se puede mandar una lista equivocada desde fuera.
+   *
+   * El proveedor y la cuenta también salen del vehículo. No se le preguntan
+   * al usuario, que no tiene por qué saberlo, y un vehículo sin ninguna fila
+   * no se puede resolver: se dice en vez de adivinar.
+   *
+   * Cuerpo: { empresaId?, vehiculoId, incluirSinDato? }
+   */
+  router.post("/huecos-vehiculo", async (req, res) => {
+    try {
+      const empresaId = empresaDe((req as Peticion).solicitante!, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const vehiculoId = String(req.body?.vehiculoId ?? "").trim();
+      if (!vehiculoId) return res.status(400).json({ error: "Falta el vehículo" });
+
+      // El vehículo tiene que ser de la empresa de la sesión. Sin esto, un
+      // admin podría rehacer los kilómetros de la flota de otro cliente.
+      const { data: v } = await supabase
+        .from("tc_vehiculos").select("id, empresa_id, matricula").eq("id", vehiculoId).maybeSingle();
+      if (!v || String((v as any).empresa_id ?? "") !== empresaId) {
+        return res.status(404).json({ error: "Vehículo no encontrado" });
+      }
+
+      const filas = await listMonthlyMileage({ tenantId: empresaId, mobilinkId: vehiculoId });
+      if (filas.length === 0) {
+        return res.status(400).json({
+          error: "Este vehículo no tiene ningún mes guardado, así que no se sabe de qué proveedor es. "
+            + "Sincronízalo primero desde la ficha o enlázalo con la telemática.",
+        });
+      }
+
+      const configs = await listConnectorConfigs(empresaId);
+      const zona = String((configs.find((c: any) => c.enabled)?.config as any)?.zonaHoraria ?? ZONA_HORARIA_POR_DEFECTO);
+      const huecos = mesesQueFaltan(filas, {
+        mesActual: mesDe(new Date(), zona),
+        incluirSinDato: req.body?.incluirSinDato !== false,
+        maximo: MAX_MESES_MANUAL,
+      });
+      const cuenta = proveedorDe(filas);
+      if (!cuenta) return res.status(400).json({ error: "Las filas de este vehículo no dicen de qué cuenta son" });
+
+      // Sin huecos no se llama al proveedor: pulsar el botón dos veces no
+      // puede costar una petición de más.
+      if (huecos.length === 0) {
+        return res.json({
+          vehiculoId, matricula: (v as any).matricula ?? null,
+          huecos: [], porClase: contarPorClase([]), pedidos: 0, sincronizacion: null,
+        });
+      }
+
+      const r = await syncMonthlyMileage({
+        tenantId: empresaId,
+        connectorKey: cuenta.system,
+        accountKey: cuenta.accountKey,
+        meses: huecos.map(({ year, month }) => ({ year, month })),
+        mobilinkIds: [vehiculoId],
+        // Se fuerza a propósito: lo que se está rehaciendo son meses que ya
+        // tienen fila (en error o sin datos), y sin esto se saltarían.
+        forzar: true,
+        esperaMaximaMs: ESPERA_MAXIMA_MS,
+      });
+
+      res.json({
+        vehiculoId, matricula: (v as any).matricula ?? null,
+        huecos, porClase: contarPorClase(huecos), pedidos: huecos.length, sincronizacion: r,
+      });
     } catch (e) {
       fallo(res, e);
     }

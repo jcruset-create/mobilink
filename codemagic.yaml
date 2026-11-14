@@ -40,12 +40,14 @@ workflows:
     #   git tag assist-ios-1 && git push origin assist-ios-1
     #   git push origin main:assist-ios/1
     #
-    # Y con etiqueta a propósito, no en cada push a main: cada build gasta un
-    # número de build de TestFlight y cuarenta minutos de Mac, así que subir
-    # a TestFlight es una decisión, no un efecto secundario de mergear.
+    # Desde el 14/11/2026 la etiqueta la pone sola el workflow de la APK
+    # (build-assist-apk.yml) en cada merge a main que toca flutter_app, sobre
+    # el commit con la versión nueva: assist-ios-<versión>-<build>. Cada merge
+    # gasta un build de TestFlight y unos cuarenta minutos de Mac; se decidió
+    # así para que el iOS no se quede atrás de la APK.
     #
     # El número que va detrás no es la versión de la app —ésa la pone
-    # IOS_VERSION más abajo— sino sólo para no repetir etiqueta.
+    # el pubspec, como la APK— sino sólo para no repetir etiqueta.
     #
     # El botón de la UI sigue funcionando igual.
     triggering:
@@ -93,17 +95,11 @@ workflows:
         distribution_type: app_store
         bundle_identifier: com.mobilink.assist
       vars:
-        # ── La versión de iOS va aparte de la de Android, y hay motivo ─────
-        #
-        # «pubspec.yaml» lleva la numeración de la APK, con decenas de entregas
-        # a las tablets. Bajarla para estrenar en la App Store convertiría la
-        # siguiente APK en una actualización «hacia atrás» y Android no la
-        # instalaría encima.
-        #
-        # Así que el nombre de versión de iOS se pone aquí y el número de build
-        # lo pone Codemagic, que es monótono por definición. Para la segunda
-        # entrega, se sube este número y ya está.
-        IOS_VERSION: "1.0.0"
+        # El identificador para preguntar a App Store Connect por el último
+        # build. Tiene que decir lo mismo que bundle_identifier de arriba.
+        BUNDLE_ID: com.mobilink.assist
+        # La versión de iOS sale del pubspec, la misma que la APK: ver el paso
+        # «Versión, la misma que la APK».
 
     working_directory: flutter_app
     scripts:
@@ -147,6 +143,37 @@ workflows:
           fi
           echo "export_options.plist generado en $HOME/export_options.plist"
 
+      - name: Versión, la misma que la APK
+        script: |
+          # ── Una sola numeración (desde el 14/11/2026) ─────────────────────
+          #
+          # El nombre de versión y el número de build salen del pubspec, el
+          # mismo que lleva la APK, como en TyreControl. Antes el nombre de iOS
+          # estaba fijo aquí («1.0») y en el iPhone no se sabía qué entrega era.
+          #
+          # El build sigue pasando por App Store Connect porque TestFlight
+          # RECHAZA un número repetido: se coge el MAYOR entre el del pubspec y
+          # el siguiente al último subido. Nunca baja.
+          set -e
+          VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}')
+          NOMBRE=${VERSION%%+*}
+          DEL_PUBSPEC=${VERSION##*+}
+          APPLE_ID="${APP_STORE_APPLE_ID:-}"
+          if [ -z "$APPLE_ID" ]; then
+            APPLE_ID=$(app-store-connect apps list --bundle-id "$BUNDLE_ID" --json | jq -r '.[0].id // empty')
+          fi
+          if [ -z "$APPLE_ID" ]; then
+            echo "No encuentro la app $BUNDLE_ID en App Store Connect." >&2
+            exit 1
+          fi
+          ULTIMO=$(app-store-connect get-latest-testflight-build-number "$APPLE_ID" 2>/dev/null || true)
+          ULTIMO=${ULTIMO:-0}
+          SIGUIENTE=$((ULTIMO + 1))
+          if [ "$DEL_PUBSPEC" -ge "$SIGUIENTE" ]; then NUMERO=$DEL_PUBSPEC; else NUMERO=$SIGUIENTE; fi
+          echo "ASSIST_BUILD_NAME=$NOMBRE" >> "$CM_ENV"
+          echo "ASSIST_BUILD_NUMBER=$NUMERO" >> "$CM_ENV"
+          echo "pubspec: $VERSION · último en TestFlight: $ULTIMO · se publica $NOMBRE+$NUMERO"
+
       - name: Build IPA
         script: |
           # La versión y el build se pasan a Flutter, no con agvtool: «flutter
@@ -159,8 +186,8 @@ workflows:
           # se escribe con la variable y no a mano: si el usuario del builder
           # cambiara, esto sigue funcionando.
           flutter build ipa --release \
-            --build-name="$IOS_VERSION" \
-            --build-number="$BUILD_NUMBER" \
+            --build-name="$ASSIST_BUILD_NAME" \
+            --build-number="$ASSIST_BUILD_NUMBER" \
             --export-options-plist="$HOME/export_options.plist"
 
           # ── Y ahora se comprueba que el .ipa EXISTE de verdad ────────────
@@ -292,9 +319,10 @@ workflows:
     # el paso que calcula el número de build.
     integrations:
       app_store_connect: Mobilink TyreControl
-    # Se lanza (además del botón de la UI) empujando una etiqueta
-    # tyrecontrol-ios-<n> o creando una rama tyrecontrol-ios/<n> sobre el
-    # commit que se quiera subir a TestFlight:
+    # Se lanza solo: el workflow de la APK (build-tyrecontrol-apk.yml) empuja
+    # una etiqueta tyrecontrol-ios-<versión>-<build> sobre el commit con la
+    # versión nueva en cada merge a main que toca tyrecontrol_app (desde el
+    # 14/11/2026). A mano, además del botón de la UI:
     #   git tag tyrecontrol-ios-1 && git push origin tyrecontrol-ios-1
     #   git push origin main:tyrecontrol-ios/1
     triggering:
@@ -453,6 +481,17 @@ workflows:
     integrations:
       app_store_connect: Mobilink Assist
 
+
+    # Se lanza solo: el workflow de la APK (build-lite-apk.yml) empuja una
+    # etiqueta lite-ios-<versión>-<build> sobre el commit con la versión nueva
+    # en cada merge a main que toca lite_app. El botón de la UI sigue igual.
+    triggering:
+      events:
+        - tag
+      tag_patterns:
+        - pattern: 'lite-ios-*'
+          include: true
+      cancel_previous_builds: false
     environment:
       # Versión EXACTA, nunca «stable». Es la avería que se llevó por delante
       # el build de Mobilink Assist: «stable» pasó de 3.35.4 a 3.47.2 sin un
@@ -479,11 +518,7 @@ workflows:
         bundle_identifier: com.mobilink.assistlite
       vars:
         BUNDLE_ID: com.mobilink.assistlite
-        # Versión de tienda de iOS. El pubspec lleva la numeración de la APK
-        # —con decenas de entregas a los talleres— y NO se toca: bajarla para
-        # estrenar en iOS convertiría la siguiente APK en una actualización
-        # «hacia atrás» que Android no instalaría. Se pasa por flag.
-        LITE_BUILD_NAME: "1.0"
+        # La versión de iOS sale del pubspec, la misma que la APK.
         # APP_STORE_APPLE_ID (el id numérico de la app en App Store Connect) NO
         # se declara aquí: Codemagic no admite una variable vacía en vars. El
         # paso del número de build lo lee del entorno si alguien lo define en la
@@ -522,26 +557,36 @@ workflows:
           fi
           echo "export_options.plist generado en $HOME/export_options.plist"
 
-      - name: Número de build desde App Store Connect
+      - name: Versión, la misma que la APK
         script: |
+          # ── Una sola numeración (desde el 14/11/2026) ─────────────────────
+          #
+          # El nombre de versión y el número de build salen del pubspec, el
+          # mismo que lleva la APK, como en TyreControl. Antes el nombre de iOS
+          # estaba fijo aquí («1.0») y en el iPhone no se sabía qué entrega era.
+          #
+          # El build sigue pasando por App Store Connect porque TestFlight
+          # RECHAZA un número repetido: se coge el MAYOR entre el del pubspec y
+          # el siguiente al último subido. Nunca baja.
           set -e
+          VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}')
+          NOMBRE=${VERSION%%+*}
+          DEL_PUBSPEC=${VERSION##*+}
           APPLE_ID="${APP_STORE_APPLE_ID:-}"
           if [ -z "$APPLE_ID" ]; then
             APPLE_ID=$(app-store-connect apps list --bundle-id "$BUNDLE_ID" --json | jq -r '.[0].id // empty')
           fi
           if [ -z "$APPLE_ID" ]; then
             echo "No encuentro la app $BUNDLE_ID en App Store Connect." >&2
-            echo "Antes del primer build hay que crear su ficha (App Store" >&2
-            echo "Connect → Apps → +) con ese bundle id exacto." >&2
             exit 1
           fi
-          # Último build subido a TestFlight + 1: nunca se repite un número,
-          # que es lo único que TestFlight rechaza sin apelación. En la primera
-          # subida no hay ninguno todavía y sale el 1.
           ULTIMO=$(app-store-connect get-latest-testflight-build-number "$APPLE_ID" 2>/dev/null || true)
           ULTIMO=${ULTIMO:-0}
-          echo "LITE_BUILD_NUMBER=$((ULTIMO + 1))" >> "$CM_ENV"
-          echo "Último build en TestFlight: $ULTIMO → este será el $((ULTIMO + 1))"
+          SIGUIENTE=$((ULTIMO + 1))
+          if [ "$DEL_PUBSPEC" -ge "$SIGUIENTE" ]; then NUMERO=$DEL_PUBSPEC; else NUMERO=$SIGUIENTE; fi
+          echo "LITE_BUILD_NAME=$NOMBRE" >> "$CM_ENV"
+          echo "LITE_BUILD_NUMBER=$NUMERO" >> "$CM_ENV"
+          echo "pubspec: $VERSION · último en TestFlight: $ULTIMO · se publica $NOMBRE+$NUMERO"
 
       - name: Build IPA
         script: |
@@ -642,10 +687,9 @@ workflows:
     integrations:
       app_store_connect: Mobilink Assist
 
-    # No se compila en cada empujón a main: los minutos de Mac se pagan y la
-    # entrega de Android ya va sola en cada merge. Una subida a TestFlight es
-    # una decisión, así que se pide con una etiqueta sobre el commit que se
-    # quiera subir:
+    # Desde el 14/11/2026 la etiqueta la pone sola el workflow de la APK
+    # (build-taller-apk.yml) en cada merge a main que toca taller_app:
+    # taller-ios-<versión>-<build>. A mano sigue valiendo:
     #
     #   git tag taller-ios-1 && git push origin taller-ios-1
     #
@@ -687,16 +731,7 @@ workflows:
         # bundle id que lleva dentro el .ipa, que sale del proyecto de Xcode.
         # Por eso los tres valores tienen que decir lo mismo.
         BUNDLE_ID: com.mobilink.workplanner
-        # Versión de tienda de iOS. El pubspec lleva la numeración de la APK
-        # —0.20.9+273 a día de hoy, con 273 entregas a las tablets— y NO se
-        # toca: bajarla para estrenar en iOS convertiría la siguiente APK en
-        # una actualización «hacia atrás» que Android no instalaría encima.
-        # Se pasa por flag.
-        #
-        # (TyreControl sí saca ya la versión del pubspec desde #335. Aquí se
-        # mantiene el 1.0 a propósito: es la primera subida y así estrena con
-        # un número de tienda limpio.)
-        TALLER_BUILD_NAME: "1.0"
+        # La versión de iOS sale del pubspec, la misma que la APK.
 
     working_directory: taller_app
     scripts:
@@ -726,27 +761,36 @@ workflows:
           fi
           echo "export_options.plist generado en $HOME/export_options.plist"
 
-      - name: Número de build desde App Store Connect
+      - name: Versión, la misma que la APK
         script: |
+          # ── Una sola numeración (desde el 14/11/2026) ─────────────────────
+          #
+          # El nombre de versión y el número de build salen del pubspec, el
+          # mismo que lleva la APK, como en TyreControl. Antes el nombre de iOS
+          # estaba fijo aquí («1.0») y en el iPhone no se sabía qué entrega era.
+          #
+          # El build sigue pasando por App Store Connect porque TestFlight
+          # RECHAZA un número repetido: se coge el MAYOR entre el del pubspec y
+          # el siguiente al último subido. Nunca baja.
           set -e
+          VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}')
+          NOMBRE=${VERSION%%+*}
+          DEL_PUBSPEC=${VERSION##*+}
           APPLE_ID="${APP_STORE_APPLE_ID:-}"
           if [ -z "$APPLE_ID" ]; then
             APPLE_ID=$(app-store-connect apps list --bundle-id "$BUNDLE_ID" --json | jq -r '.[0].id // empty')
           fi
           if [ -z "$APPLE_ID" ]; then
             echo "No encuentro la app $BUNDLE_ID en App Store Connect." >&2
-            echo "Antes del primer build hay que crear su ficha (App Store" >&2
-            echo "Connect → Apps → +) con ese bundle id exacto, y dar de alta" >&2
-            echo "el App ID en el portal de Apple Developer." >&2
             exit 1
           fi
-          # Último build subido a TestFlight + 1: nunca se repite un número,
-          # que es lo único que TestFlight rechaza sin apelación. En la primera
-          # subida no hay ninguno todavía y sale el 1.
           ULTIMO=$(app-store-connect get-latest-testflight-build-number "$APPLE_ID" 2>/dev/null || true)
           ULTIMO=${ULTIMO:-0}
-          echo "TALLER_BUILD_NUMBER=$((ULTIMO + 1))" >> "$CM_ENV"
-          echo "Último build en TestFlight: $ULTIMO → este será el $((ULTIMO + 1))"
+          SIGUIENTE=$((ULTIMO + 1))
+          if [ "$DEL_PUBSPEC" -ge "$SIGUIENTE" ]; then NUMERO=$DEL_PUBSPEC; else NUMERO=$SIGUIENTE; fi
+          echo "TALLER_BUILD_NAME=$NOMBRE" >> "$CM_ENV"
+          echo "TALLER_BUILD_NUMBER=$NUMERO" >> "$CM_ENV"
+          echo "pubspec: $VERSION · último en TestFlight: $ULTIMO · se publica $NOMBRE+$NUMERO"
 
       - name: Build IPA
         script: |

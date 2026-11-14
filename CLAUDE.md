@@ -51,7 +51,7 @@ de la casa.
 Antes de mergear, dos comprobaciones que no se saltan:
 
 1. **La CI verde sobre el commit de CÓDIGO.** El bump de versión que mete la
-   CI lleva `[skip ci]`, así que la punta del PR sale con CERO checks. Hay que
+   CI lleva `[skip actions]` (antes `[skip ci]`), así que la punta del PR sale con CERO checks. Hay que
    mirar la ejecución del commit anterior y confirmar que lo único que ha
    cambiado desde entonces es la línea `version:` del pubspec.
 
@@ -61,3 +61,12 @@ Antes de mergear, dos comprobaciones que no se saltan:
 
 Si algo sale rojo o el diff trae algo que no debería, se para y se avisa: la
 norma es mergear lo que está bien, no mergear pase lo que pase.
+
+## 5. iOS: se compila solo en cada merge
+
+Desde el 14/11/2026, cada merge a `main` que toca una app con iOS (Assist,
+Assist Lite, Taller, TyreControl) sube también su versión de iOS a
+TestFlight: el workflow de la APK etiqueta el commit con la versión nueva
+(`<app>-ios-<versión>-<build>`) y Codemagic compila al verla. No hay que
+lanzarlo a mano. El bump lleva `[skip actions]` y no `[skip ci]` porque
+Codemagic también obedece a `[skip ci]` y no compilaría.

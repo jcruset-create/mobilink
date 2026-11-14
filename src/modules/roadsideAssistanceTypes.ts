@@ -245,8 +245,20 @@ export type RoadsideTrackingResponse = {
     lng: number;
     speedKmh?: number | null;
     moving?: boolean | null;
+    /** «furgoneta» = GPS de Webfleet; «tablet» = la del operario, de respaldo. */
+    fuente?: "furgoneta" | "tablet";
+    /** Ninguna de las dos tenía una posición de los últimos minutos. */
+    antigua?: boolean;
+    atMs?: number;
   } | null;
   etaWarning?: string | null;
+  /**
+   * Antes de salir («Asignada»): cuánto tardaría aproximadamente desde donde
+   * está ahora la furgoneta. No es el ETA del trayecto (eso es etaMinutos).
+   */
+  etaEstimada?: { minutos: number; kilometros: string; calculadaAtMs: number } | null;
+  /** Km desde la salida del taller, ida y vuelta (Webfleet o la tablet). */
+  kmRecorridos?: { km: number; fuente: "furgoneta" | "tablet" } | null;
   expired: boolean;
 };
 

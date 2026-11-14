@@ -106,16 +106,29 @@ async function componentsFor(workshopId: number, since: number): Promise<ScoreCo
   };
 }
 
+/**
+ * Cada cuánto se guarda una fila aunque el score no haya cambiado.
+ *
+ * No es necesaria para nadie: quien lee el histórico busca la última fila, o la
+ * última anterior a hace catorce días, y un score que no cambia se describe
+ * igual de bien con una fila que con dos mil. Se deja un latido diario para que
+ * la tabla siga diciendo «esto se calculó», y no haya que adivinar si el
+ * cálculo lleva meses parado o es que el número no se mueve.
+ */
+const LATIDO_MS = 24 * 3600_000;
+
 /** Recalcula el score de todos los talleres activos y persiste el histórico. */
 export async function computeWorkshopScores(): Promise<number> {
   const since = Date.now() - WINDOW_MS;
-  const ws = await db.query(`SELECT id FROM connect_workshops WHERE "connectStatus" <> 'excluded'`);
+  const ws = await db.query(
+    `SELECT id, "currentScore" FROM connect_workshops WHERE "connectStatus" <> 'excluded'`,
+  );
   if (ws.rows.length === 0) return 0;
 
-  const results: Array<{ id: number; raw: number; n: number; comp: ScoreComponents }> = [];
+  const results: Array<{ id: number; raw: number; n: number; comp: ScoreComponents; actual: unknown }> = [];
   for (const w of ws.rows) {
     const comp = await componentsFor(w.id, since);
-    results.push({ id: w.id, raw: rawScore(comp), n: comp.volume90d, comp });
+    results.push({ id: w.id, raw: rawScore(comp), n: comp.volume90d, comp, actual: w.currentScore });
   }
 
   // Media de la red para el suavizado (ponderada por muestra, con suelo neutral 70)
@@ -125,16 +138,72 @@ export async function computeWorkshopScores(): Promise<number> {
     : 70;
 
   const now = Date.now();
+
+  /*
+   * Lo último que se guardó de cada taller, en UNA consulta.
+   *
+   * Antes no se miraba: se escribía una fila nueva cada vuelta pasara lo que
+   * pasara. En producción eso dejó 704.714 filas, 206 MB —el 47 % de la base—
+   * con UN SOLO valor de score distinto en todas ellas, porque sin volumen el
+   * suavizado devuelve siempre la media neutra de la red. Esto es lo que
+   * convierte el histórico en una serie de verdad: una fila por cambio.
+   */
+  const ultimos = await db.query(
+    `SELECT DISTINCT ON ("workshopId")
+            "workshopId", score, tier, components, confidence, "sampleSize", "computedAtMs"
+       FROM connect_workshop_scores
+      ORDER BY "workshopId", id DESC`,
+  );
+  interface UltimoScore {
+    workshopId: number;
+    score: number;
+    tier: string;
+    components: string;
+    confidence: number;
+    sampleSize: number;
+    /** BIGINT: el driver lo devuelve como texto. */
+    computedAtMs: string;
+  }
+  const ultimoDe = new Map<number, UltimoScore>(
+    (ultimos.rows as UltimoScore[]).map((x) => [Number(x.workshopId), x]),
+  );
+
   for (const r of results) {
     const w = r.n / (r.n + BAYES_K);
     const score = Math.round((w * r.raw + (1 - w) * networkMean) * 10) / 10;
     const tier = tierFor(score);
-    await db.query(`UPDATE connect_workshops SET "currentScore" = $1, "updatedAtMs" = $2 WHERE id = $3`, [score, now, r.id]);
-    await db.query(
-      `INSERT INTO connect_workshop_scores ("workshopId", "computedAtMs", score, tier, components, confidence, "sampleSize")
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [r.id, now, score, tier, JSON.stringify({ ...r.comp, raw: Math.round(r.raw * 10) / 10, networkMean: Math.round(networkMean * 10) / 10 }), Math.round(w * 100) / 100, r.n],
-    );
+    const components = JSON.stringify({
+      ...r.comp,
+      raw: Math.round(r.raw * 10) / 10,
+      networkMean: Math.round(networkMean * 10) / 10,
+    });
+    const confidence = Math.round(w * 100) / 100;
+
+    // La ficha del taller solo se toca si el número que enseña cambia.
+    if (r.actual == null || Number(r.actual) !== score) {
+      await db.query(
+        `UPDATE connect_workshops SET "currentScore" = $1, "updatedAtMs" = $2 WHERE id = $3`,
+        [score, now, r.id],
+      );
+    }
+
+    const ult = ultimoDe.get(r.id);
+    const cambia =
+      !ult ||
+      Number(ult.score) !== score ||
+      String(ult.tier) !== tier ||
+      String(ult.components) !== components ||
+      Number(ult.confidence) !== confidence ||
+      Number(ult.sampleSize) !== r.n;
+    const toca = !ult || now - Number(ult.computedAtMs) >= LATIDO_MS;
+
+    if (cambia || toca) {
+      await db.query(
+        `INSERT INTO connect_workshop_scores ("workshopId", "computedAtMs", score, tier, components, confidence, "sampleSize")
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [r.id, now, score, tier, components, confidence, r.n],
+      );
+    }
   }
   return results.length;
 }

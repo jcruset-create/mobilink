@@ -18,6 +18,9 @@ import { Router, json, type Request, type Response } from "express";
 import { supabase } from "../../supabase.ts";
 import { empresaDe, resolverSolicitante, type Solicitante } from "../conciliacion/router.ts";
 import { barrerBases } from "./barrido.ts";
+import { empresaParaLeer } from "./empresaPedida.ts";
+import { refrescarAntiguedad } from "./frescura.ts";
+import { filtrarPresencia, type PresenciaFiltrada } from "./seguimiento.ts";
 
 type Peticion = Request & { solicitante: Solicitante };
 
@@ -34,18 +37,35 @@ const CAMPOS =
   // La matrícula viaja con la fila: la pantalla la necesita para cada vehículo,
   // y sin esto habría que leer la flota entera aparte solo para poner un
   // nombre a cada línea.
-  "vehiculo:tc_vehiculos(id, matricula, numero_unidad), " +
+  // La matrícula viaja con la fila; `activo` y `en_seguimiento` deciden si la
+  // fila cuenta. Van aquí y no en una consulta aparte porque se necesitan para
+  // cada una de las 717 filas.
+  "vehiculo:tc_vehiculos(id, matricula, numero_unidad, activo, en_seguimiento), " +
   "delegacion:tc_delegaciones(id, nombre)";
 
 /**
- * La presencia de una empresa, en páginas.
+ * La presencia de una empresa, en páginas y ya filtrada.
  *
  * Supabase devuelve como mucho mil filas por consulta, y esta flota ya va por
  * 751. Sin paginar, el día que pase de mil la pantalla enseñaría menos
  * vehículos de los que hay sin un solo error a la vista, que es la peor forma
  * de equivocarse.
+ *
+ * Devuelve SOLO los que cuentan: ni dados de baja ni fuera del mantenimiento
+ * integral. El porqué está en `seguimiento.ts`; el resumen es que la tabla se
+ * escribe con UPSERT y nunca borra, así que saltárselos en el barrido no basta.
+ * Se filtra aquí, en la lectura, porque es lo que comparten las TRES pantallas
+ * que lo enseñan: el panel, la tablet y la hoja del patio en PDF. Filtrar en
+ * cada una sería el principio de que tres sitios dijeran tres números.
  */
-async function leerPresencia(empresaId: string): Promise<any[]> {
+export async function leerPresencia(empresaId: string): Promise<any[]> {
+  return (await leerPresenciaConDescartes(empresaId)).filas;
+}
+
+/** Lo mismo, diciendo además a cuántos ha dejado fuera y por qué. */
+export async function leerPresenciaConDescartes(
+  empresaId: string,
+): Promise<PresenciaFiltrada<any>> {
   const out: any[] = [];
   const TAMANO = 1000;
   for (let desde = 0; ; desde += TAMANO) {
@@ -59,7 +79,42 @@ async function leerPresencia(empresaId: string): Promise<any[]> {
     out.push(...pagina);
     if (pagina.length < TAMANO) break;
   }
-  return out;
+  /*
+   * `antiguedad_min` se recalcula aquí y no se lee de la fila.
+   *
+   * Es lo que permite que el barrido deje de reescribir las filas que no
+   * cambian: ese número crece solo aunque no llegue ninguna posición nueva, y
+   * era la única razón por la que un vehículo parado necesitaba que se le
+   * reescribiera la fila cada diez minutos. Además el dato sale mejor: lo
+   * guardado era «cuánto hacía en el último barrido» y esto es «cuánto hace
+   * ahora mismo».
+   *
+   * Va antes de filtrar para que las TRES pantallas que leen por aquí —el
+   * panel, la tablet y la hoja del patio en PDF— reciban exactamente lo mismo.
+   */
+  return filtrarPresencia(refrescarAntiguedad(out));
+}
+
+/**
+ * Cuándo corrió el último barrido de esta empresa.
+ *
+ * Va en su propio try y devuelve `null` si algo falla: es el dato que explica
+ * la pantalla, no la pantalla. Que no se pueda leer la hora no puede dejar sin
+ * ver los 717 vehículos.
+ */
+async function leerHoraDelBarrido(empresaId: string): Promise<string | null> {
+  try {
+    const { data, error } = await supabase
+      .from("tc_presencia_barrido")
+      .select("calculado_at")
+      .eq("empresa_id", empresaId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return data?.calculado_at ? String(data.calculado_at) : null;
+  } catch (e) {
+    console.warn("[presencia-bases] no se pudo leer la hora del barrido:", (e as any)?.message ?? e);
+    return null;
+  }
 }
 
 /**
@@ -128,18 +183,32 @@ export function createPresenciaRouter(): Router {
   router.get("/", async (req, res) => {
     try {
       const { solicitante } = req as Peticion;
-      const empresaId = empresaDe(solicitante, req.query?.empresaId);
-      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      /*
+       * Aquí NO vale `empresaDe()`, y es el motivo de `empresaPedida.ts`: a
+       * quien no es super-admin le da la empresa de su perfil y le ignora la
+       * que pida. El técnico de la tablet trabaja para varios clientes y su
+       * perfil apunta a la empresa de servicio, que no tiene flota: con
+       * `empresaDe()` la pantalla le saldría vacía, sin un solo error.
+       */
+      const pedida = await empresaParaLeer(solicitante, req.query?.empresaId);
+      if ("prohibida" in pedida) {
+        return res.status(403).json({ error: "Sin acceso a esa empresa" });
+      }
+      if ("sinEmpresa" in pedida) return res.status(400).json({ error: "Sin empresa" });
+      const { empresaId } = pedida;
 
-      const [filas, { data: bases }, cuentas] = await Promise.all([
-        leerPresencia(empresaId),
+      const [presencia, { data: bases }, cuentas, barrido] = await Promise.all([
+        leerPresenciaConDescartes(empresaId),
         supabase
           .from("tc_delegaciones")
           .select("id, nombre, base_lat, base_lng, base_radio_m")
           .eq("empresa_id", empresaId)
           .not("base_lat", "is", null),
         cuentasDeTelematica(empresaId),
+        leerHoraDelBarrido(empresaId),
       ]);
+
+      const { filas, sinSeguimiento } = presencia;
 
       const porEstado: Record<string, number> = {};
       for (const f of filas) {
@@ -153,6 +222,15 @@ export function createPresenciaRouter(): Router {
         // Para que la pantalla pueda explicar un barrido vacío en vez de
         // enseñar ceros sin motivo.
         cuentas,
+        /*
+         * Cuántos se han dejado fuera por estar fuera del mantenimiento
+         * integral. No es un detalle: esos vehículos siguen saliendo en la
+         * lista de vehículos y en la telemática, así que sin decirlo aquí el
+         * «N dentro» de una base no cuadra con lo que se ve en otra pantalla y
+         * nadie sabe por qué. Los dados de baja no se cuentan: que un vehículo
+         * de baja no salga no sorprende a nadie.
+         */
+        sinSeguimiento,
         bases: (bases ?? []).map((b: any) => ({
           id: b.id,
           nombre: b.nombre,
@@ -161,12 +239,25 @@ export function createPresenciaRouter(): Router {
           radioM: b.base_radio_m == null ? null : Number(b.base_radio_m),
         })),
         porEstado,
-        // El barrido más reciente de los que se ven. Sin filas, null.
+        /*
+         * Cuándo pasó el barrido.
+         *
+         * Sale de `tc_presencia_barrido`, que lo guarda una vez por vuelta.
+         * Antes salía de `max(calculado_at)` de las filas, y eso dependía de
+         * que el barrido las reescribiera TODAS cada vez; desde que se salta
+         * las que no cambian, de madrugada podrían pasar horas sin tocar
+         * ninguna y esto diría que el barrido lleva parado toda la noche.
+         *
+         * El `max` de las filas se queda de respaldo, para las empresas que
+         * todavía no hayan tenido un barrido desde el despliegue.
+         */
         calculadoAt:
+          barrido ??
           filas.reduce<string | null>((max, f: any) => {
             const c = f.calculado_at ? String(f.calculado_at) : null;
             return c && (!max || c > max) ? c : max;
-          }, null) ?? null,
+          }, null) ??
+          null,
       });
     } catch (e) {
       fallo(res, e);

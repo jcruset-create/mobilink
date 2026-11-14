@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import '../models/models.dart';
+import '../models/tipo_llanta.dart';
 import '../models/umbrales.dart';
+import '../services/protocolo_profundidad.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/banda_avisos_presion.dart';
 import '../widgets/vehicle_layout_image.dart';
 import 'cambio_neumatico_screen.dart';
 import 'historial_operaciones_screen.dart';
@@ -194,23 +197,114 @@ class _VehiculoFichaScreenState extends State<VehiculoFichaScreen> {
     return (prof: prof, pres: pres, estado: estado);
   }
 
+  /// Las ruedas con una lectura baja que nadie ha respaldado todavía.
+  ///
+  /// Es la misma lista «para medir con sonda» del informe de alertas del
+  /// panel, con su mismo mínimo por llanta, vista desde el vehículo: quien
+  /// tiene la tablet es quien tiene la sonda. Lo que mida manda, y la saca de
+  /// aquí en un sentido o en otro.
+  List<({String posicion, double valor, double? pendiente, DateTime? pendienteEn, double minimo})>
+      _ruedasPorConfirmar() {
+    final out = <({String posicion, double valor, double? pendiente, DateTime? pendienteEn, double minimo})>[];
+    for (final p in _posiciones) {
+      final m = _montajePorPosicion[p.id];
+      final n = m?.neumatico;
+      if (m == null || n == null) continue;
+      final med = _medPorNeumatico[m.neumaticoId];
+      final prof = med?.profundidadMm;
+      final minimo = profundidadMinimaPorLlanta(n.medida);
+      if (med == null || prof == null || minimo == null) continue;
+      // Si manda la profundidad tecleada en el propio neumático (un
+      // reesculturado, un usado con su medida), no hay nada que confirmar.
+      if (profundidadVigente(med, n) != prof) continue;
+      final v = veredicto(mm: prof, confirmada: med.confirmada, pendienteMm: med.pendienteMm, minimo: minimo);
+      if (v != Veredicto.porConfirmar) continue;
+      out.add((
+        posicion: p.codigoPosicion,
+        valor: prof,
+        pendiente: med.pendienteMm,
+        pendienteEn: med.pendienteEn,
+        minimo: minimo,
+      ));
+    }
+    return out;
+  }
+
+  static String _mm(double v) => v.toStringAsFixed(1).replaceAll('.', ',');
+
+  static String _dia(DateTime d) =>
+      '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
+
+  /// Sin nada por confirmar no pinta nada, ni un hueco.
+  Widget _bandaPorConfirmar() {
+    final ruedas = _ruedasPorConfirmar();
+    if (ruedas.isEmpty) return const SizedBox.shrink();
+    const violeta = Color(0xFF8B5CF6);
+    const violetaClaro = Color(0xFFDDD6FE);
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: violeta.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: violeta.withValues(alpha: 0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            const Icon(Icons.straighten, size: 16, color: violetaClaro),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                ruedas.length == 1
+                    ? 'DESGASTE POR CONFIRMAR: MEDIR CON SONDA'
+                    : '${ruedas.length} DESGASTES POR CONFIRMAR: MEDIR CON SONDA',
+                style: const TextStyle(
+                    color: violetaClaro, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.4),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 8),
+          for (final r in ruedas)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text.rich(TextSpan(
+                style: const TextStyle(color: AppColors.textPrimary, fontSize: 13),
+                children: [
+                  TextSpan(text: '${r.posicion}  ', style: const TextStyle(fontWeight: FontWeight.w800, color: violetaClaro)),
+                  TextSpan(
+                    text: r.pendiente != null
+                        ? 'el arco ha leído ${_mm(r.pendiente!)} mm'
+                            '${r.pendienteEn != null ? ' el ${_dia(r.pendienteEn!)}' : ''}'
+                            ' y las anteriores decían ${_mm(r.valor)} mm'
+                        : '${_mm(r.valor)} mm con una sola lectura',
+                  ),
+                  TextSpan(
+                    text: ' · mínimo ${_mm(r.minimo)} mm',
+                    style: const TextStyle(color: AppColors.textSecondary),
+                  ),
+                ],
+              )),
+            ),
+          const SizedBox(height: 4),
+          const Text(
+            'Una lectura suelta del arco no basta para dar una goma por gastada. '
+            'Mídela en una revisión: lo que mide el técnico manda.',
+            style: TextStyle(color: AppColors.textSecondary, fontSize: 11),
+          ),
+        ],
+      ),
+    );
+  }
+
   String _medidaLabel(String? id) => id == null ? '—' : (_medidas[id] ?? '—');
 
   String _llantaLabel(String? id) {
     if (id == null) return '—';
     final l = _llantas.where((x) => x['id'] == id).firstOrNull;
-    if (l == null) return '—';
-    final material = (l['material'] as String?) ?? '';
-    final partes = <String>[
-      if (material.isNotEmpty)
-        material[0].toUpperCase() + material.substring(1),
-      if ((l['medida'] as String?)?.isNotEmpty == true) l['medida'] as String,
-      if (l['agujeros'] != null) '${l['agujeros']} aguj.',
-      if ((l['centrado'] as String?)?.isNotEmpty == true)
-        l['centrado'] as String,
-      (l['tapacubo'] as bool?) == true ? 'c/tapacubo' : 's/tapacubo',
-    ];
-    return partes.isEmpty ? '—' : partes.join(' · ');
+    return l == null ? '—' : nombreTipoLlanta(l);
   }
 
   @override
@@ -246,6 +340,15 @@ class _VehiculoFichaScreenState extends State<VehiculoFichaScreen> {
                   child: ListView(
                     padding: const EdgeInsets.all(12),
                     children: [
+                      // Arriba del todo: es lo que cambia lo que se va a
+                      // hacer con el vehículo. Sin avisos no pinta nada.
+                      // Aquí SÍ se puede cerrar: esta pantalla es para mirar
+                      // el vehículo, no para empezar una revisión.
+                      BandaAvisosPresion(
+                        vehiculoId: widget.vehiculoId,
+                        permitirResolver: true,
+                      ),
+                      _bandaPorConfirmar(),
                       _datosGenerales(),
                       const SizedBox(height: 12),
                       _kilometraje(),

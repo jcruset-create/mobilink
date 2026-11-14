@@ -9,6 +9,8 @@ import '../services/biometria.dart';
 import '../services/sesion_segura.dart';
 import '../services/api_service.dart';
 import '../services/offline_store.dart';
+import '../services/seguimiento_ubicacion.dart';
+import '../services/mensajes_oficina.dart';
 import '../theme/app_theme.dart';
 import '../widgets/plate_badge.dart';
 import 'assistance_detail_screen.dart';
@@ -91,6 +93,38 @@ class _AssistancesScreenState extends State<AssistancesScreen>
       _biometriaActivada = activada;
       _esFaceId = face;
     });
+    // Quien ya tenía la sesión abierta nunca vio la oferta (sólo salía al
+    // entrar con el PIN). Como en Lite: se ofrece una vez y no se insiste.
+    if (!activada && !await SesionSegura.biometriaOfrecida()) {
+      await SesionSegura.marcarBiometriaOfrecida();
+      if (!mounted) return;
+      final nombre = face ? 'Face ID' : 'la huella';
+      final quiere = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          backgroundColor: AppColors.surface,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          title: Text(face ? 'Entrar con Face ID' : 'Entrar con la huella',
+              style: const TextStyle(color: AppColors.textPrimary)),
+          content: Text(
+            'Podrás abrir Mobilink Assist con $nombre en lugar de escribir tu PIN. '
+            'Se activa o desactiva cuando quieras con el botón de la cara de la barra de arriba.',
+            style: const TextStyle(color: AppColors.textSecondary),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Ahora no', style: TextStyle(color: AppColors.textSecondary)),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Activar', style: TextStyle(color: AppColors.primary)),
+            ),
+          ],
+        ),
+      );
+      if (quiere == true && mounted) await _gestionarBiometria();
+    }
   }
 
   Future<void> _loadVersion() async {
@@ -103,6 +137,11 @@ class _AssistancesScreenState extends State<AssistancesScreen>
     try {
       final data = await widget.api.getAssistances();
       setState(() => _assistances = data);
+      // El envío de la ubicación se retoma solo: a la asistencia en camino si
+      // la hay, o al Mapa flota si no (p. ej. tras reiniciar la tablet).
+      unawaited(SeguimientoUbicacion.instancia.sincronizar(widget.api, data));
+      // Los mensajes de la oficina: se empiezan a escuchar con la sesión abierta.
+      unawaited(MensajesOficina.instancia.iniciar(widget.api));
     } catch (e) {
       setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
     } finally {
@@ -125,6 +164,10 @@ class _AssistancesScreenState extends State<AssistancesScreen>
       ),
     );
     if (confirmed != true) return;
+    // Sin sesión no se manda la ubicación, y la tablet sale del Mapa flota.
+    await SeguimientoUbicacion.instancia.detener();
+    await widget.api.clearTabletLocation();
+    await MensajesOficina.instancia.detener();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('techName');
     await prefs.remove('code');
@@ -352,7 +395,22 @@ class _AssistancesScreenState extends State<AssistancesScreen>
                     dividerColor: Colors.transparent,
                     tabs: [
                       Tab(icon: Icon(Icons.assignment_outlined,  size: isExterior ? 28 : 24), text: 'Activas'),
-                      Tab(icon: Icon(Icons.local_shipping_outlined, size: isExterior ? 28 : 24), text: 'OTF'),
+                      // Con contador rojo mientras haya OTF asignadas sin abrir.
+                      Tab(
+                        icon: AnimatedBuilder(
+                          animation: MensajesOficina.instancia,
+                          builder: (_, __) {
+                            final nuevas = MensajesOficina.instancia.otfNuevas.length;
+                            return Badge(
+                              isLabelVisible: nuevas > 0,
+                              label: Text('$nuevas'),
+                              backgroundColor: AppColors.danger,
+                              child: Icon(Icons.local_shipping_outlined, size: isExterior ? 28 : 24),
+                            );
+                          },
+                        ),
+                        text: 'OTF',
+                      ),
                       Tab(icon: Icon(Icons.history,              size: isExterior ? 28 : 24), text: 'Historial'),
                       Tab(icon: Icon(Icons.receipt_long_outlined,size: isExterior ? 28 : 24), text: 'Cobros'),
                       Tab(icon: Icon(Icons.add_card_outlined,    size: isExterior ? 28 : 24), text: 'Pagos'),

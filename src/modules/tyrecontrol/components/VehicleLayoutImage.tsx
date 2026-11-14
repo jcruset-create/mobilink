@@ -1,4 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import { AlertTriangle } from "lucide-react";
+import { profundidadMinimaPorLlanta } from "../services/umbralProfundidad";
+import { veredictoEnLaFicha } from "../services/protocoloProfundidad";
+import type { Medicion } from "../services/ultimaMedicion";
 import { profundidadVigente } from "../utils/profundidad";
 import type { MontajeActual, Neumatico, PosicionVehiculo, TipoVehiculo } from "../types";
 import { presionTxt } from "../types";
@@ -7,12 +11,13 @@ import {
   cambiarPosicion, intercambiarPosiciones, aplicarPlanTrabajo, listarMarcasRecauchutadas,
   actualizarImagenChasis, guardarCoordenadasPosicion, guardarOrdenRevisionPosicion, listarUltimasMedicionesVehiculo, listarPresionesCatalogoPorModelo,
   listarFotosCatalogoPorModelo, claveModeloCatalogo, listarProfundidadesCatalogoPorModelo,
-  buscarNeumaticosParaCorregir, corregirMontado,
+  buscarNeumaticosParaCorregir, corregirMontado, listarAlertasPresionVehiculo,
 } from "../services/data";
 import { inputCls, Modal } from "./ui";
 import { mismaMedida } from "../services/medidas";
 import ModalMontarDesdeFicha from "./ModalMontarDesdeFicha";
 import ModalMontarFueraAlmacen from "./ModalMontarFueraAlmacen";
+import ModalNeumaticosMontados from "./ModalNeumaticosMontados";
 import ModalCopiarNeumatico from "./ModalCopiarNeumatico";
 import { supabase } from "../services/supabase";
 import { MARGEN_PLANO_X, MARGEN_PLANO_Y, aspectoPlano, coordAVista, vistaACoord } from "../../../../shared/planoMargen";
@@ -72,6 +77,8 @@ interface Props {
   puedeCalibrar: boolean;    // superadmin: puede editar imagen y coordenadas
   imagenConfig?: string | null; // imagen de la configuración de ejes: manda sobre la del tipo
   medidaPorPosicionId?: Record<string, string>; // medida configurada del vehículo por posición (para montar en vacío)
+  matricula?: string | null;   // solo para el título de los modales
+  kmActual?: number | null;    // sugerencia al cerrar el inventario inicial
   onFicha?: (neumaticoId: string) => void;
   onChanged?: () => void;
   onTipoChanged?: () => void;
@@ -95,7 +102,7 @@ function esDireccional(modelo?: string | null): boolean {
 }
 
 export default function VehicleLayoutImage({
-  tipo, posiciones, vehiculoId, empresaId, montajes, editable, puedeCalibrar, imagenConfig, medidaPorPosicionId, onFicha, onChanged, onTipoChanged, onOperaciones,
+  tipo, posiciones, vehiculoId, empresaId, montajes, editable, puedeCalibrar, imagenConfig, medidaPorPosicionId, matricula, kmActual, onFicha, onChanged, onTipoChanged, onOperaciones,
 }: Props) {
   // Imagen efectiva del plano: manda la de la CONFIGURACIÓN DE EJES (un 2x4
   // se dibuja igual sea tractora o camión); la del tipo solo si la
@@ -113,12 +120,25 @@ export default function VehicleLayoutImage({
   // se ve completo, sin franjas negras, y las ruedas caen donde se
   // calibraron (las coordenadas van en % de este recuadro).
   const [aspecto, setAspecto] = useState(16 / 9);
-  const [medicionesActuales, setMedicionesActuales] = useState<Record<string, { profundidad_mm: number | null; presion_bar: number | null }>>({});
+  const [medicionesActuales, setMedicionesActuales] = useState<Record<string, Medicion>>({});
   const [presionesCatalogo, setPresionesCatalogo] = useState<Record<string, number>>({});
+
+  /*
+   * Las ruedas con un aviso de presión ABIERTO, por posición.
+   *
+   * Se piden aquí y no se reciben por prop porque el plano ya pide por su
+   * cuenta las mediciones y los catálogos: es como funciona este componente.
+   * Y nunca lanza: un plano que no se dibuja porque no se han podido leer los
+   * avisos sería peor que un plano sin marcar.
+   */
+  const [posicionesConAviso, setPosicionesConAviso] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!vehiculoId) return;
     listarUltimasMedicionesVehiculo(vehiculoId).then(setMedicionesActuales).catch(() => setMedicionesActuales({}));
+    listarAlertasPresionVehiculo(vehiculoId)
+      .then((as) => setPosicionesConAviso(new Set(as.map((a) => a.posicion_id).filter(Boolean))))
+      .catch(() => setPosicionesConAviso(new Set()));
   }, [vehiculoId, montajes]);
 
   const [profundidadesCatalogo, setProfundidadesCatalogo] = useState<Record<string, number>>({});
@@ -176,6 +196,11 @@ export default function VehicleLayoutImage({
   const [correccionMsg, setCorreccionMsg] = useState("");
   const [modalFicha, setModalFicha] = useState<null | { sustitucion: boolean }>(null);
   const [modalBulk, setModalBulk] = useState(false);
+  // Las gomas que el vehículo YA LLEVA. No es un montaje: ni descuenta stock
+  // ni factura. Dos entradas porque son dos trabajos distintos —informar una
+  // posición vacía y corregir una que no coincide— y escriben cosas
+  // distintas en el histórico.
+  const [modalMontados, setModalMontados] = useState<null | "informar" | "actualizar">(null);
   const [modalFueraAlmacen, setModalFueraAlmacen] = useState(false);
   const [arrastrando, setArrastrando] = useState<string | null>(null);
   const [zonaSobrevolada, setZonaSobrevolada] = useState<string | null>(null);
@@ -677,6 +702,40 @@ export default function VehicleLayoutImage({
             const esCopiaOrigen = copiando && copiaOrigen === p.codigo_posicion;
             const nCopia = copiando ? copiaDestinos.indexOf(p.codigo_posicion) + 1 : 0;
             const esCopiaDestino = nCopia > 0;
+            /*
+             * Un aviso de presión abierto en esta rueda. Pinta el recuadro en
+             * rojo y cuelga un triángulo debajo: en un plano de ocho ruedas
+             * todas verdes, la que está a media presión tiene que saltar a la
+             * vista sin leer los números.
+             */
+            const conAviso = posicionesConAviso.has(p.id);
+
+            /*
+             * Y si la goma está para cambiar por profundidad. Se calcula aquí
+             * arriba, y no dentro del recuadro donde ya se calculaba para
+             * pintarla, porque el borde se decide antes de llegar ahí.
+             *
+             * La profundidad se saca igual que abajo: manda la medición y, si
+             * no hay, la de fábrica del catálogo. Una rueda recién montada no
+             * está «sin datos», está nueva.
+             */
+            const neuDe = m?.neumatico ?? null;
+            const claveCat = neuDe?.marca && neuDe?.modelo && neuDe?.medida
+              ? `${neuDe.marca}|${neuDe.modelo}|${neuDe.medida}`.toLowerCase().replace(/\s+/g, "")
+              : "";
+            const profDe = neuDe
+              ? profundidadVigente(medicionesActuales[neuDe.id], neuDe) ?? profundidadesCatalogo[claveCat] ?? null
+              : null;
+            /*
+             * Rojo solo con el desgaste CONFIRMADO. Una lectura baja suelta del
+             * arco no lo enciende: queda «por confirmar», en violeta, hasta que
+             * otra lectura o la sonda de un técnico digan lo mismo. La regla
+             * es la de `services/protocoloProfundidad.ts`, la misma del informe.
+             */
+            const medDe = neuDe ? medicionesActuales[neuDe.id] : undefined;
+            const juicio = veredictoEnLaFicha(profDe, medDe, profundidadMinimaPorLlanta(neuDe?.medida));
+            const paraCambiar = juicio === "cambiar";
+            const porConfirmar = juicio === "por_confirmar";
             return (
               <div
                 key={p.id}
@@ -687,7 +746,11 @@ export default function VehicleLayoutImage({
                   // después, crezca o no el recuadro por su contenido.
                   left: `${c.x + c.w / 2}%`, top: `${c.y + c.h / 2}%`, transform: "translate(-50%, -50%)",
                   width: `${c.w}%`, height: `${c.h}%`, minHeight: MIN_H_PX,
-                  borderColor: (esCopiaOrigen || esCopiaDestino) ? "#a855f7" : esOrigenPermuta ? "#38bdf8" : esDestino ? "#38bdf8" : calibrando ? "#f59e0b" : (planAbierto && (vieneDe || marcasDe.length)) ? "#38bdf8" : ocupado ? "#22c55e" : "#64748b",
+                  // El rojo del aviso va por delante del verde de «ocupado» pero
+                  // por DETRÁS de los estados de interacción (copiar, permutar,
+                  // calibrar): ésos son modos pasajeros y mientras duran mandan
+                  // ellos, que es lo que el usuario está haciendo ahora mismo.
+                  borderColor: (esCopiaOrigen || esCopiaDestino) ? "#a855f7" : esOrigenPermuta ? "#38bdf8" : esDestino ? "#38bdf8" : calibrando ? "#f59e0b" : (planAbierto && (vieneDe || marcasDe.length)) ? "#38bdf8" : (conAviso || paraCambiar) ? "#ef4444" : porConfirmar ? "#8b5cf6" : ocupado ? "#22c55e" : "#64748b",
                   borderWidth: esCopiaOrigen || esOrigenPermuta ? 3 : 2,
                   borderStyle: ocupado || calibrando || esCopiaDestino ? "solid" : "dashed",
                   background: esCopiaDestino ? "rgba(168,85,247,0.25)" : esDestino ? "rgba(56,189,248,0.25)" : ocupado ? "rgba(15,23,42,0.8)" : "rgba(15,23,42,0.25)",
@@ -708,6 +771,38 @@ export default function VehicleLayoutImage({
                   setMenuContextual({ codigo: p.codigo_posicion, x: e.clientX, y: e.clientY });
                 }}
               >
+                {/*
+                  El triángulo del aviso de presión, colgando DEBAJO del
+                  recuadro. Debajo y no dentro porque dentro compite con la
+                  marca, el modelo, la medida y los dos números, que es lo que
+                  ya va apretado ahí; y en ámbar sobre el borde rojo, que son
+                  dos señales distintas: el rojo dice cuál, el triángulo dice
+                  de qué.
+
+                  `pointer-events-none` para no robarle el clic al recuadro,
+                  que es lo que abre la ficha de la goma.
+                */}
+                {(conAviso || paraCambiar || porConfirmar) && (
+                  <span
+                    className={`pointer-events-none absolute -bottom-5 left-1/2 -translate-x-1/2 flex items-center gap-0.5 whitespace-nowrap rounded bg-slate-900/90 px-1 py-0.5 text-[10px] font-bold ${
+                      conAviso || paraCambiar ? "text-amber-300" : "text-violet-300"}`}
+                    title={[
+                      conAviso ? "Aviso de presión abierto en esta rueda" : null,
+                      paraCambiar ? `Para cambiar: ${profDe} mm` : null,
+                      porConfirmar
+                        ? (medDe?.pendiente_mm != null
+                          ? `Por confirmar: el arco ha leído ${medDe.pendiente_mm} mm y las anteriores decían ${profDe}. Medir con sonda`
+                          : `Por confirmar: ${profDe} mm con una sola lectura. Medir con sonda`)
+                        : null,
+                    ].filter(Boolean).join(" · ")}
+                  >
+                    <AlertTriangle className="h-3 w-3" />
+                    {/* Qué pasa, no solo que pasa algo: en un plano de ocho
+                        ruedas el triángulo solo dice «mira aquí». */}
+                    <span className="text-[9px]">{conAviso && paraCambiar ? "P+C" : conAviso && porConfirmar ? "P+?" : conAviso ? "P" : paraCambiar ? "C" : "?"}</span>
+                  </span>
+                )}
+
                 {/* Encima de cada recuadro, siempre, de qué rueda se trata. */}
                 <span className={`pointer-events-none absolute -top-5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded px-1 py-0.5 text-[10px] font-bold ${
                   esCopiaOrigen ? "bg-violet-600 text-white" : calibrando ? "bg-slate-900/90 text-amber-300" : "bg-slate-900/90 text-slate-300"}`}>
@@ -806,6 +901,33 @@ export default function VehicleLayoutImage({
               <button onClick={() => setModalBulk(true)} className="mt-3 w-full rounded bg-emerald-600 px-2 py-1.5 text-[12px] font-bold text-white">
                 Montar el mismo en todas las libres ({posicionesLibres.length})
               </button>
+            )}
+
+            {/* Lo de arriba es un MONTAJE: sale del catálogo o del almacén y
+                es trabajo de taller. Lo de abajo no: son las gomas que el
+                vehículo ya traía puestas, que se apuntan sin operación, sin
+                stock y sin coste. Separados a posta: confundirlos mete en el
+                histórico montajes que nunca ocurrieron. */}
+            {editable && posicionesLibres.length > 0 && (
+              <button
+                onClick={() => setModalMontados("informar")}
+                className="mt-3 w-full rounded border border-sky-500 px-2 py-1.5 text-[12px] font-bold text-sky-300 hover:bg-sky-500/10"
+              >
+                Informar los que ya lleva montados ({posicionesLibres.length} sin informar)
+              </button>
+            )}
+            {editable && montajes.length > 0 && (
+              <button
+                onClick={() => setModalMontados("actualizar")}
+                className="mt-2 w-full rounded border border-amber-500 px-2 py-1.5 text-[12px] font-bold text-amber-300 hover:bg-amber-500/10"
+              >
+                Actualizar los que no coinciden ({montajes.length} informadas)
+              </button>
+            )}
+            {editable && (posicionesLibres.length > 0 || montajes.length > 0) && (
+              <div className="mt-2 text-[11px] leading-snug text-slate-500">
+                Las dos de abajo no son trabajo de taller: no descuentan stock, no generan coste y no facturan.
+              </div>
             )}
           </div>
         ) : montajeSeleccionado?.neumatico ? (
@@ -948,6 +1070,20 @@ export default function VehicleLayoutImage({
           medidaActual={medidaPorPosicionId?.[posicionesLibres[0].id]}
           onClose={() => setModalBulk(false)}
           onDone={() => { setModalBulk(false); setSeleccion(null); onChanged?.(); }}
+        />
+      )}
+      {modalMontados && (
+        <ModalNeumaticosMontados
+          modo={modalMontados}
+          vehiculoId={vehiculoId}
+          empresaId={empresaId}
+          matricula={matricula}
+          posiciones={posiciones}
+          montajes={montajes}
+          medidaVehiculo={medidaPorPosicionId?.[posiciones[0]?.id ?? ""] ?? null}
+          kmActual={kmActual}
+          onClose={() => setModalMontados(null)}
+          onChanged={() => { setSeleccion(null); onChanged?.(); }}
         />
       )}
       {modalFueraAlmacen && posSeleccionada && (

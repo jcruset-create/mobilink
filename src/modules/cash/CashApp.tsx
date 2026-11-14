@@ -7,7 +7,7 @@
  * aquí se explica en lugar de dejar la pantalla en blanco.
  */
 
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, useSearchParams } from "react-router-dom";
 import { CashProvider, useCash } from "./contexts/CashContext";
 import CashLayout from "./layouts/CashLayout";
 import JornadaActual from "./pages/JornadaActual";
@@ -64,7 +64,7 @@ function Contenido() {
         <Route path="posicion" element={<PosicionGlobal />} />
         <Route path="jornada" element={<JornadaActual />} />
         <Route path="cobros" element={<Cobros />} />
-        <Route path="pagos" element={<Pagos />} />
+        <Route path="pagos" element={<PagosPorModo />} />
         <Route path="movimientos" element={<Movimientos />} />
         <Route path="dar-cambio" element={<DarCambio />} />
         <Route path="stock" element={<StockCaja />} />
@@ -94,4 +94,15 @@ export default function CashApp() {
       <Contenido />
     </CashProvider>
   );
+}
+
+/**
+ * Pagos y abonos comparten pantalla, pero son formularios distintos: el abono
+ * se devuelve por una forma de COBRO (CLEARONE, BBVA…) que no vale para pagar
+ * proveedores. Pasar de uno a otro sin desmontar arrastraba la forma elegida;
+ * con la clave por modo, cada uno empieza limpio.
+ */
+function PagosPorModo() {
+  const [params] = useSearchParams();
+  return <Pagos key={params.get("modo") === "abono" ? "abono" : "pago"} />;
 }

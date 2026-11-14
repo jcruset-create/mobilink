@@ -81,7 +81,7 @@ export default function OtfHistorialPage() {
 
   return (
     <div className="flex min-h-screen bg-slate-900 text-slate-100">
-      <AssistSidebar active="otf" />
+      <AssistSidebar otf="historial" />
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-slate-900/95 px-4 py-2.5 pl-14 backdrop-blur md:pl-4">

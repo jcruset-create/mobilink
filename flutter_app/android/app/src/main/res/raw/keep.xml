@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- El sonido de los mensajes de la oficina solo se nombra desde Dart
+     (lib/services/avisador_mensajes.dart): sin esto, la compilación de
+     release lo quita por «no usado» y el aviso sale mudo. -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@raw/aviso_mensaje" />

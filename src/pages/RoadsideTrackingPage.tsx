@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import {
   CheckCircle2,
   Clock3,
+  Gauge,
   Home,
   ImageIcon,
   MapPin,
@@ -337,7 +338,7 @@ export default function RoadsideTrackingPage() {
               <div className={`inline-flex rounded-full border px-3 py-1 text-xs font-black ${STATUS_STYLES[assistance.status]}`}>
                 {ROADSIDE_ASSISTANCE_STATUS_LABELS[assistance.status]}
               </div>
-              <h1 className="mt-4 text-2xl font-black">Seguimiento asistencia</h1>
+              <h1 className="mt-4 text-2xl font-black">Seguimiento asistencia nº {assistance.id}</h1>
               <div className="mt-2 text-sm font-semibold text-slate-500">
                 {(assistance.esRemolque || !assistance.plate) && assistance.plateRemolque
                   ? `Remolque ${assistance.plateRemolque}${assistance.plate ? ` · Tractora ${assistance.plate}` : ""}`
@@ -350,6 +351,28 @@ export default function RoadsideTrackingPage() {
             </div>
           </div>
         </section>
+
+        {/* Antes de salir: tiempo aproximado desde donde está ahora la furgoneta */}
+        {assistance.status === "asignada" && data?.etaEstimada && (
+          <section className="rounded-lg border border-indigo-200 bg-indigo-600 p-5 shadow-sm">
+            <div className="flex items-center gap-3">
+              <img src="/van-icon.png" style={{height:48,width:"auto",flexShrink:0}} alt="furgoneta" />
+              <div className="text-white flex-1">
+                <div className="text-lg font-black">Técnico asignado</div>
+                <div className="mt-1 text-sm font-semibold text-indigo-100">
+                  Tiempo aproximado de llegada:{" "}
+                  <span className="font-black text-white">
+                    ~{data.etaEstimada.minutos} min · {data.etaEstimada.kilometros} km
+                  </span>
+                </div>
+                <div className="mt-1 text-xs text-indigo-200">
+                  Desde donde está ahora la furgoneta. Se ajustará cuando el técnico salga.
+                  {" "}Calculado: {formatTimeWithSeconds(data.etaEstimada.calculadaAtMs)}
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
 
         {/* ETA banner */}
         {(assistance.status === "en_camino" || assistance.status === "en_camino_base") && (
@@ -429,6 +452,10 @@ export default function RoadsideTrackingPage() {
               <div className="px-4 py-2 text-xs font-semibold text-slate-400">
                 Última actualización: {formatTimeWithSeconds(assistance.etaActualizadoAt)}
                 {data?.etaWarning ? " · usando último ETA guardado" : ""}
+                {data?.vehiclePosition?.fuente === "tablet" ? " · posición por la tablet del técnico" : ""}
+                {data?.vehiclePosition?.antigua && data.vehiclePosition.atMs != null
+                  ? ` · última posición de las ${formatTimeWithSeconds(data.vehiclePosition.atMs)}`
+                  : ""}
               </div>
             )}
           </section>
@@ -519,18 +546,22 @@ export default function RoadsideTrackingPage() {
             <div className="space-y-2 text-sm font-semibold text-slate-700">
               <div className="flex flex-wrap items-center gap-2">
                 <span>Operario: {assistance.assignedTechName || "Sin asignar"}</span>
+                {/* El número a la vista y pulsable: en el móvil, llama. */}
                 {data?.techPhone && (
                   <a
                     href={`tel:${data.techPhone}`}
+                    aria-label={`Llamar al técnico: ${data.techPhone}`}
                     className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-black text-white hover:bg-emerald-500"
                   >
                     <Phone className="h-3.5 w-3.5" />
-                    Llamar al técnico
+                    {data.techPhone}
                   </a>
                 )}
               </div>
               <div>Furgoneta: {vanLabel}</div>
-              <div>Salida: {formatTime(assistance.departedAtMs)}</div>
+              {/* Inicio = cuando se asignó la asistencia a un técnico. */}
+              <div>Inicio asistencia: {formatTime(assistance.assignedAtMs)}</div>
+              <div>Salida taller: {formatTime(assistance.departedAtMs)}</div>
               <div>Llegada al punto: {formatTime(assistance.arrivedAtPointMs)}</div>
               {isFinished && (
                 <div>Finalización: {formatTime(assistance.finishedAtMs)}</div>
@@ -546,6 +577,20 @@ export default function RoadsideTrackingPage() {
             <div className="text-sm font-semibold text-slate-700">
               {assistance.address || "Ubicacion recibida"}
             </div>
+            {data?.kmRecorridos && (
+              <div className="mt-4 flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                <Gauge className="h-6 w-6 shrink-0 text-slate-500" aria-hidden="true" />
+                <div>
+                  <div className="text-xs font-black uppercase tracking-wide text-slate-500">Kilómetros recorridos</div>
+                  <div className="text-2xl font-black tabular-nums text-slate-900">
+                    {data.kmRecorridos.km.toLocaleString("es-ES", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} km
+                  </div>
+                  <div className="text-xs font-semibold text-slate-500">
+                    {isFinished ? "desde la salida del taller hasta la vuelta" : "desde la salida del taller · se actualiza solo"}
+                  </div>
+                </div>
+              </div>
+            )}
             <div className="mt-4 flex flex-wrap gap-2">
               {mapUrl && (
                 <a

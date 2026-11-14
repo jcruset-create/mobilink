@@ -21,6 +21,98 @@ import {
   type FilaCheckpoint, type VehiculoCheckpoint,
 } from "../../src/modules/tyrecontrol/services/checkpoint.ts";
 
+/** Vehículos por lote al comprobar qué revisiones ya existen. */
+const LOTE_VEHICULOS = 200;
+/** Filas por página. Por debajo de cualquier tope razonable de PostgREST. */
+const PAGINA_REVISIONES = 500;
+/**
+ * Tope por lote. Si se supera, se LANZA: una comprobación de duplicados
+ * incompleta es peor que una importación que falla, porque la primera
+ * duplica en silencio y la segunda se repite.
+ */
+const MAX_REVISIONES_LOTE = 10_000;
+
+/** Una fila de `revisiones_vehiculo` de las que esto necesita. */
+export interface RevisionExistente {
+  id: string;
+  vehiculo_id: string;
+  fecha_revision: string;
+  medido_at: string | null;
+}
+
+/**
+ * De dónde salen las páginas. Se inyecta para poder probar la paginación
+ * sin base de datos: el fallo que esto arregla era de paginación, no de SQL.
+ */
+export type ConsultarExistentes = (
+  vehIds: string[], fechaMin: string, fechaMax: string, desde: number, hasta: number,
+) => Promise<RevisionExistente[]>;
+
+export interface Existentes {
+  /** `vehiculo|fecha` → id de la revisión que ya hay. La primera gana. */
+  mapRev: Map<string, string>;
+  /** Claves cuya revisión quedó con la hora a medianoche y hay que corregir. */
+  aMedianoche: string[];
+}
+
+/**
+ * Qué revisiones YA EXISTEN para esos vehículos en ese rango de fechas.
+ *
+ * ── El fallo que esto arregla ──────────────────────────────────────────────
+ *
+ * Antes se pedían TODAS las revisiones de cada lote de 200 vehículos, sin
+ * paginar y sin acotar por fecha. Plana tiene casi 17.000: un lote
+ * arrastraba miles de filas y PostgREST cortaba la respuesta en su tope.
+ *
+ * El mapa llegaba incompleto, así que el importador creía que esas
+ * revisiones eran nuevas y las volvía a crear. Cada importación del mismo
+ * fichero dejaba otra copia: en producción se acumularon 8.180 revisiones
+ * sobrantes, con un vehículo repetido 51 veces el mismo día.
+ *
+ * No avisaba de nada. Una consulta que devuelve de menos y sigue adelante es
+ * la peor clase de fallo: el resultado parece correcto.
+ *
+ * ── Lo que se hace ahora ───────────────────────────────────────────────────
+ *
+ *   · Se acota por FECHA al rango del fichero: no hacen falta las revisiones
+ *     de hace dos años para saber si la de ayer ya está.
+ *   · Se PAGINA.
+ *   · Y si aun así se llegara al tope, se LANZA en vez de seguir. Mejor una
+ *     importación que falla y se repite que una que duplica en silencio.
+ */
+export async function leerExistentes(
+  vehIds: string[], fechaMin: string, fechaMax: string, consultar: ConsultarExistentes,
+): Promise<Existentes> {
+  const mapRev = new Map<string, string>();
+  const aMedianoche: string[] = [];
+  for (let i = 0; i < vehIds.length; i += LOTE_VEHICULOS) {
+    const lote = vehIds.slice(i, i + LOTE_VEHICULOS);
+    for (let desde = 0; ; desde += PAGINA_REVISIONES) {
+      if (desde >= MAX_REVISIONES_LOTE) {
+        throw new Error(
+          "Demasiadas revisiones existentes para comprobar los duplicados "
+          + `(más de ${MAX_REVISIONES_LOTE} entre ${fechaMin} y ${fechaMax}). `
+          + "Importa un fichero con menos días: si siguiera, crearía copias.",
+        );
+      }
+      const pagina = await consultar(lote, fechaMin, fechaMax, desde, desde + PAGINA_REVISIONES - 1);
+      for (const r of pagina) {
+        const k = `${r.vehiculo_id}|${String(r.fecha_revision).slice(0, 10)}`;
+        // La primera gana: si ya hay duplicados de antes, se reutiliza una y
+        // no se añade otra más.
+        if (!mapRev.has(k)) mapRev.set(k, r.id);
+        // Las importadas antes de arreglar la lectura de la hora quedaron a
+        // las 00:00:00Z: el histórico las pinta todas a la misma hora. Se
+        // corrigen al reimportar, pero SOLO esas — una hora real distinta, la
+        // de un técnico o la de otra pasada, no se toca.
+        if (r.medido_at && String(r.medido_at).match(/T00:00:00(\.0+)?(Z|\+00:00)$/)) aMedianoche.push(k);
+      }
+      if (pagina.length < PAGINA_REVISIONES) break;
+    }
+  }
+  return { mapRev, aMedianoche };
+}
+
 export interface ResultadoCheckpoint {
   mediciones: number;
   revisiones: number;
@@ -193,23 +285,24 @@ async function cargar(
   }
   if (!grupos.size) return { ...CARGA_VACIA, avisos: [...avisos] };
 
-  // Las revisiones que ya existen para esos vehículos y fechas.
+  // Qué revisiones ya existen, paginado y acotado por fecha. Ver
+  // `leerExistentes`: hacerlo mal fue lo que duplicó 8.180 revisiones.
   const vehIds = [...new Set([...grupos.values()].map((g) => g.veh.id))];
-  const mapRev = new Map<string, string>();
-  const aMedianoche: string[] = [];
-  for (let i = 0; i < vehIds.length; i += 200) {
-    const { data } = await supabase.from("revisiones_vehiculo")
-      .select("id, vehiculo_id, fecha_revision, medido_at").in("vehiculo_id", vehIds.slice(i, i + 200));
-    for (const r of (data ?? []) as any[]) {
-      const k = `${r.vehiculo_id}|${String(r.fecha_revision).slice(0, 10)}`;
-      mapRev.set(k, r.id);
-      // Las importadas antes de arreglar la lectura de la hora quedaron a las
-      // 00:00:00Z: el histórico las pinta todas a la misma hora. Se corrigen
-      // al reimportar, pero SOLO esas — una hora real distinta, la de un
-      // técnico o la de otra pasada, no se toca.
-      if (r.medido_at && String(r.medido_at).match(/T00:00:00(\.0+)?(Z|\+00:00)$/)) aMedianoche.push(k);
-    }
-  }
+  const fechas = [...grupos.values()].map((g) => g.fecha).sort();
+  const { mapRev, aMedianoche } = await leerExistentes(
+    vehIds, fechas[0], fechas[fechas.length - 1],
+    async (lote, fechaMin, fechaMax, desde, hasta) => {
+      const { data, error } = await supabase.from("revisiones_vehiculo")
+        .select("id, vehiculo_id, fecha_revision, medido_at")
+        .in("vehiculo_id", lote)
+        .gte("fecha_revision", fechaMin)
+        .lte("fecha_revision", fechaMax)
+        .order("fecha_revision", { ascending: true })
+        .order("id", { ascending: true })   // desempate estable: sin esto una
+        .range(desde, hasta);               // página puede repetir o saltarse filas
+      if (error) throw new Error("Revisiones existentes: " + error.message);
+      return (data ?? []) as RevisionExistente[];
+    });
 
   for (const k of aMedianoche) {
     const g = grupos.get(k);
