@@ -16,6 +16,8 @@ dependencies:
   shared_preferences: ^2.2.3
   url_launcher: ^6.3.0
   geolocator: ^13.0.2
+  # Avisos con sonido de los mensajes de la oficina (lib/services/avisador_mensajes.dart).
+  flutter_local_notifications: ^19.5.0
   image_picker: ^1.1.2
   # La camara del sistema solo hace la foto en nombre de la app si esta tiene
   # el permiso concedido, y image_picker no lo pide: ver services/camara.dart

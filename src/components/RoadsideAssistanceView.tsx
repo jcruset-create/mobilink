@@ -37,6 +37,7 @@ import RoadsideBackofficeModal, { type BackofficeData } from "./RoadsideBackoffi
 import KnownPlaceMapModal from "./KnownPlaceMapModal";
 import LocationPickerModal from "./LocationPickerModal";
 import WhatsAppCaptureSection from "./WhatsAppCaptureSection";
+import MensajesOperario from "./MensajesOperario";
 import type { RoadsideAssistanceFile } from "../modules/roadsideAssistanceTypes";
 import RoadsideMap from "./RoadsideMap";
 import {
@@ -2879,6 +2880,11 @@ export default function RoadsideAssistanceView({
 
                     {assistance.status === "asignada" && (
                       <EtaAproximada assistanceId={assistance.id} />
+                    )}
+
+                    {/* Solo con operario y la asistencia abierta: es para quien está en la calle. */}
+                    {assistance.assignedTechName && !isClosed(assistance.status) && (
+                      <MensajesOperario assistanceId={assistance.id} techName={assistance.assignedTechName} />
                     )}
 
                     {assistance.status === "en_camino" && (

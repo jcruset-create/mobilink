@@ -24,6 +24,16 @@ import {
   ultimaPosicionTablet,
 } from "./tablets/posicionTablet.ts";
 import { analizarRecorrido, unirPuntos, type PuntoRecorrido } from "./tablets/recorrido.ts";
+import {
+  enviarDesdeOficina,
+  ErrorMensaje,
+  listarDeAsistencia,
+  marcarLeido,
+  pendientesDeOperario,
+  responderDesdeTablet,
+  RESPUESTAS_RAPIDAS,
+  TEXTOS_RAPIDOS_OFICINA,
+} from "./mensajes/mensajesAsistencia.ts";
 import { guardarCodigoErp, SISTEMAS_NO_ERP } from "./clientes/codigoErp.ts";
 import { OTF_EN_ESPERA_SQL } from "./otf/espera.ts";
 import {
@@ -8690,6 +8700,98 @@ app.get("/api/roadside-assistances/:id", exigirCredencial(authenticate), async (
   } catch (error) {
     console.error("GET /api/roadside-assistances/:id error:", error);
     res.status(500).json({ error: "Error obteniendo asistencia" });
+  }
+});
+
+/* =========================================================
+   MENSAJES OFICINA ⇄ TABLET (server/mensajes/mensajesAsistencia.ts)
+========================================================= */
+
+function responderErrorMensaje(res: express.Response, error: any, donde: string) {
+  if (error instanceof ErrorMensaje) return res.status(error.status).json({ error: error.message });
+  console.error(`${donde} error:`, error);
+  return res.status(500).json({ error: "Error con los mensajes" });
+}
+
+app.get("/api/roadside-assistances/:id/mensajes", exigirCredencial(authenticate), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    res.json({ mensajes: await listarDeAsistencia(id), textosRapidos: TEXTOS_RAPIDOS_OFICINA });
+  } catch (error) {
+    responderErrorMensaje(res, error, "GET mensajes");
+  }
+});
+
+app.post("/api/roadside-assistances/:id/mensajes", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    const autor =
+      (req as any).authCtx?.nombre ?? (req as any).assistPanelUser?.nombre ?? "Oficina";
+    const mensaje = await enviarDesdeOficina({
+      assistanceId: id,
+      texto: req.body?.texto,
+      urgente: req.body?.urgente === true,
+      autor,
+    });
+    res.status(201).json(mensaje);
+  } catch (error) {
+    responderErrorMensaje(res, error, "POST mensajes");
+  }
+});
+
+// La tablet pregunta cada 15 s. Recoger los pendientes los marca «recibidos».
+app.get("/api/roadside-operator/mensajes/pendientes", requireRoadsideOperator, async (req, res) => {
+  try {
+    const operator = (req as any).roadsideOperator as { techName: string };
+    res.json({
+      mensajes: await pendientesDeOperario(operator.techName),
+      respuestasRapidas: RESPUESTAS_RAPIDAS,
+    });
+  } catch (error) {
+    responderErrorMensaje(res, error, "GET mensajes pendientes");
+  }
+});
+
+app.post("/api/roadside-operator/mensajes/:id/leido", requireRoadsideOperator, async (req, res) => {
+  try {
+    const operator = (req as any).roadsideOperator as { techName: string };
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    const ok = await marcarLeido(id, operator.techName);
+    if (!ok) return res.status(404).json({ error: "Mensaje no encontrado" });
+    res.json({ ok: true });
+  } catch (error) {
+    responderErrorMensaje(res, error, "POST mensaje leído");
+  }
+});
+
+app.get("/api/roadside-operator/assistances/:id/mensajes", requireRoadsideOperator, async (req, res) => {
+  try {
+    const operator = (req as any).roadsideOperator as { techName: string };
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    const mensajes = (await listarDeAsistencia(id)).filter((m) => m.techName === operator.techName);
+    res.json({ mensajes, respuestasRapidas: RESPUESTAS_RAPIDAS });
+  } catch (error) {
+    responderErrorMensaje(res, error, "GET mensajes (operario)");
+  }
+});
+
+app.post("/api/roadside-operator/assistances/:id/mensajes", requireRoadsideOperator, async (req, res) => {
+  try {
+    const operator = (req as any).roadsideOperator as { techName: string };
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    const mensaje = await responderDesdeTablet({
+      assistanceId: id,
+      techName: operator.techName,
+      texto: req.body?.texto,
+    });
+    res.status(201).json(mensaje);
+  } catch (error) {
+    responderErrorMensaje(res, error, "POST mensaje (operario)");
   }
 });
 

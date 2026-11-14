@@ -7,6 +7,7 @@ import '../services/api_service.dart';
 import '../services/offline_store.dart';
 import '../services/seguimiento_ubicacion.dart';
 import '../theme/app_theme.dart';
+import '../widgets/conversacion_oficina.dart';
 import '../widgets/plate_badge.dart';
 import 'arrival_photos_screen.dart';
 import 'cobros_screen.dart';
@@ -493,6 +494,11 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
                   ] else if (_whatsappCapture != null) ...[
                     const SizedBox(height: 16),
                     _WhatsAppCaptureCard(capture: _whatsappCapture!),
+                  ],
+                  // Mensajes con la oficina, mientras la asistencia sigue abierta.
+                  if (!const {'llegada_taller', 'cancelada', 'redirigida'}.contains(_status)) ...[
+                    const SizedBox(height: 16),
+                    ConversacionOficina(api: widget.api, assistanceId: _a['id'] as int),
                   ],
                   const SizedBox(height: 24),
                   _section('Acciones rápidas'),
