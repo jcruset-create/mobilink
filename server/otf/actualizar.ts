@@ -60,3 +60,31 @@ export function sqlActualizarOtf(
   sets.push(`"updatedAtMs" = $${params.length}`);
   return { sql: `UPDATE otf SET ${sets.join(", ")} WHERE id = $1`, params };
 }
+
+/**
+ * Cambiar el estado de un trabajo de OTF desde la tablet, con su tiempo:
+ * «Empezar» fija el inicio (la primera vez), «Finalizar» y «No realizado» el
+ * final, y volver a «pendiente» borra los dos. El motivo solo se guarda con
+ * «No realizado».
+ */
+export const ESTADOS_TRABAJO = ["pendiente", "en_proceso", "finalizado", "no_realizado"] as const;
+
+export function sqlEstadoTrabajo(
+  tid: number,
+  status: string,
+  motivo: unknown,
+  ahoraMs: number
+): { sql: string; params: unknown[] } {
+  const m = status === "no_realizado" ? String(motivo ?? "").trim() || null : null;
+  return {
+    sql: `UPDATE otf_trabajos SET status = $2::text, "updatedAtMs" = $3::bigint,
+         "iniciadoAtMs" = CASE
+           WHEN $2::text = 'pendiente' THEN NULL
+           WHEN $2::text = 'en_proceso' THEN COALESCE("iniciadoAtMs", $3::bigint)
+           ELSE "iniciadoAtMs" END,
+         "finalizadoAtMs" = CASE WHEN $2::text IN ('finalizado', 'no_realizado') THEN $3::bigint ELSE NULL END,
+         "motivoNoRealizado" = $4::text
+       WHERE id = $1 RETURNING *`,
+    params: [tid, status, ahoraMs, m],
+  };
+}

@@ -16,7 +16,7 @@ import { fallaAlFirmar, firmarEnFilas, firmarUrls } from "./core/fotosFirmadas.t
 import { descargarMedioTwilio, rescatarMedioDeTwilio } from "./core/medioTwilio.ts";
 import { elegirPosicion, horaWebfleet, type PosicionElegida } from "./core/posicionDoble.ts";
 import { crearCacheEta, ESTADOS_ETA_ESTIMADA, type EtaEstimada } from "./core/etaEstimada.ts";
-import { sqlActualizarOtf } from "./otf/actualizar.ts";
+import { sqlActualizarOtf, sqlEstadoTrabajo } from "./otf/actualizar.ts";
 import {
   borrarPosicionTablet,
   guardarPosicionTablet,
@@ -29,6 +29,7 @@ import {
   enviarDesdeOficina,
   ErrorMensaje,
   listarDeAsistencia,
+  listarDeOtf,
   marcarLeido,
   pendientesDeOperario,
   responderDesdeTablet,
@@ -8817,13 +8818,74 @@ app.post("/api/roadside-assistances/:id/mensajes", requireSupervisorRole, async 
   }
 });
 
+// Los mismos mensajes, en una OTF (panel).
+app.get("/api/otf/:id/mensajes", exigirCredencial(authenticate), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    res.json({ mensajes: await listarDeOtf(id), textosRapidos: TEXTOS_RAPIDOS_OFICINA });
+  } catch (error) {
+    responderErrorMensaje(res, error, "GET mensajes OTF");
+  }
+});
+
+app.post("/api/otf/:id/mensajes", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    const autor =
+      (req as any).authCtx?.nombre ?? (req as any).assistPanelUser?.nombre ?? "Oficina";
+    res.status(201).json(
+      await enviarDesdeOficina({ otfId: id, texto: req.body?.texto, urgente: req.body?.urgente === true, autor })
+    );
+  } catch (error) {
+    responderErrorMensaje(res, error, "POST mensajes OTF");
+  }
+});
+
+app.get("/api/roadside-operator/otf/:id/mensajes", requireRoadsideOperator, async (req, res) => {
+  try {
+    const operator = (req as any).roadsideOperator as { techName: string };
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    const mensajes = (await listarDeOtf(id)).filter((m) => m.techName === operator.techName);
+    res.json({ mensajes, respuestasRapidas: RESPUESTAS_RAPIDAS });
+  } catch (error) {
+    responderErrorMensaje(res, error, "GET mensajes OTF (operario)");
+  }
+});
+
+app.post("/api/roadside-operator/otf/:id/mensajes", requireRoadsideOperator, async (req, res) => {
+  try {
+    const operator = (req as any).roadsideOperator as { techName: string };
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    res.status(201).json(
+      await responderDesdeTablet({ otfId: id, techName: operator.techName, texto: req.body?.texto })
+    );
+  } catch (error) {
+    responderErrorMensaje(res, error, "POST mensaje OTF (operario)");
+  }
+});
+
 // La tablet pregunta cada 15 s. Recoger los pendientes los marca «recibidos».
+// También van las OTF que el operario aún no ha abierto, para avisarle.
 app.get("/api/roadside-operator/mensajes/pendientes", requireRoadsideOperator, async (req, res) => {
   try {
     const operator = (req as any).roadsideOperator as { techName: string };
+    const nuevas = await db.query(
+      `SELECT o.*, ${OTF_EN_ESPERA_SQL} AS "enEspera",
+              (SELECT COUNT(*) FROM otf_trabajos t WHERE t."otfId" = o.id) AS "numTrabajos"
+         FROM otf o
+        WHERE o."assignedTechName" = $1 AND o."vistaAtMs" IS NULL
+          AND o.status NOT IN ('finalizada', 'cancelada')
+        ORDER BY o."createdAtMs"`,
+      [operator.techName]
+    );
     res.json({
       mensajes: await pendientesDeOperario(operator.techName),
       respuestasRapidas: RESPUESTAS_RAPIDAS,
+      otfNuevas: nuevas.rows.map((x: any) => ({ ...normalizeOtf(x), numTrabajos: Number(x.numTrabajos) })),
     });
   } catch (error) {
     responderErrorMensaje(res, error, "GET mensajes pendientes");
@@ -16419,16 +16481,20 @@ async function reconcileTechRoadsideOccupation() {
 async function checkOtfBaseArrival() {
   try {
     const r = await db.query(`
-      SELECT o.id, o."webfleetVehicleId", o.lat, o.lng FROM otf o
+      SELECT o.id, o."webfleetVehicleId", o."assignedTechName", o.lat, o.lng FROM otf o
       WHERE o.status = 'planificada' AND o."arrivedAtBaseMs" IS NULL
-        AND o."webfleetVehicleId" IS NOT NULL AND o.lat IS NOT NULL AND o.lng IS NOT NULL
+        AND (o."webfleetVehicleId" IS NOT NULL OR o."assignedTechName" IS NOT NULL)
+        AND o.lat IS NOT NULL AND o.lng IS NOT NULL
         -- La furgoneta puede pasar por la base de la OTF pendiente mientras
         -- sigue con la asistencia: eso no es empezar la OTF.
         AND NOT ${OTF_EN_ESPERA_SQL}
     `);
     for (const o of r.rows) {
       try {
-        const pos = await getWebfleetVehiclePosition(o.webfleetVehicleId);
+        // Webfleet o, si falla o no hay furgoneta, la tablet del operario. Con
+        // una posición antigua no se marca nada: no dice dónde está ahora.
+        const pos = await posicionDeAsistencia(o);
+        if (!pos || pos.antigua) continue;
         const dist = haversineDistanceM(pos.lat, pos.lng, Number(o.lat), Number(o.lng));
         if (dist <= KNOWN_PLACE_RADIUS_M) {
           await db.query(
@@ -16436,7 +16502,7 @@ async function checkOtfBaseArrival() {
              WHERE id = $1 AND status = 'planificada' AND "arrivedAtBaseMs" IS NULL`,
             [o.id, Date.now()]
           );
-          console.log(`✓ OTF #${o.id} → en_curso (check-in automático en base, ${Math.round(dist)}m)`);
+          console.log(`✓ OTF #${o.id} → en_curso (check-in automático en base, ${pos.fuente}, ${Math.round(dist)}m)`);
         }
       } catch (err) {
         console.warn(`OTF check-in error #${o.id}:`, err);
@@ -18822,6 +18888,9 @@ function normalizeOtf(row: any) {
     // viene calculado en las consultas que lo piden con OTF_EN_ESPERA_SQL).
     esperaAsistenciaId: row.esperaAsistenciaId != null ? Number(row.esperaAsistenciaId) : null,
     enEspera: row.enEspera === true,
+    // null = el operario aún no la ha abierto en la tablet: se le avisa.
+    vistaAtMs: row.vistaAtMs != null ? Number(row.vistaAtMs) : null,
+    sinResponsable: row.sinResponsable === true,
     updatedAtMs: Number(row.updatedAtMs ?? Date.now()),
   };
 }
@@ -18843,6 +18912,12 @@ function normalizeOtfTrabajo(row: any) {
     fechaAltaCampoMs: row.fechaAltaCampoMs != null ? Number(row.fechaAltaCampoMs) : null,
     observaciones: row.observaciones ?? null,
     requiereAprobacion: row.requiereAprobacion === true,
+    // Tiempo del trabajo, por qué no se hizo y la matrícula leída de la foto.
+    iniciadoAtMs: row.iniciadoAtMs != null ? Number(row.iniciadoAtMs) : null,
+    finalizadoAtMs: row.finalizadoAtMs != null ? Number(row.finalizadoAtMs) : null,
+    motivoNoRealizado: row.motivoNoRealizado ?? null,
+    matriculaLeida: row.matriculaLeida ?? null,
+    matriculaNoCoincide: row.matriculaNoCoincide === true,
     createdAtMs: Number(row.createdAtMs ?? Date.now()),
   };
 }
@@ -19285,7 +19360,7 @@ app.put("/api/otf/:id", requireSupervisorRole, async (req, res) => {
   try {
     const id = Number(req.params.id);
     const b = req.body ?? {};
-    const actual = await db.query(`SELECT "knownPlaceId" FROM otf WHERE id = $1`, [id]);
+    const actual = await db.query(`SELECT "knownPlaceId", "assignedTechName" FROM otf WHERE id = $1`, [id]);
     if (actual.rows.length === 0) return res.status(404).json({ error: "OTF no encontrada" });
 
     // Solo si cambia el operario: comprobar que puede y recalcular detrás de
@@ -19313,6 +19388,13 @@ app.put("/api/otf/:id", requireSupervisorRole, async (req, res) => {
     // Solo los campos que llegan: ver otf/actualizar.ts.
     const update = sqlActualizarOtf(id, b, Date.now());
     if (update) await db.query(update.sql, update.params);
+    // Otro operario: para él es una OTF nueva, y su tablet tiene que avisarle.
+    if (
+      Object.prototype.hasOwnProperty.call(b, "assignedTechName") &&
+      (b.assignedTechName || null) !== (actual.rows[0].assignedTechName ?? null)
+    ) {
+      await db.query(`UPDATE otf SET "vistaAtMs" = NULL WHERE id = $1`, [id]);
+    }
     res.json(await otfWithDetails(id));
   } catch (e) {
     console.error("PUT /api/otf/:id error:", e);
@@ -19412,6 +19494,21 @@ app.get("/api/roadside-operator/otf/:id", requireRoadsideOperator, async (req, r
   }
 });
 
+// El operario ha abierto la OTF en la tablet: deja de avisarse como nueva.
+app.post("/api/roadside-operator/otf/:id/vista", requireRoadsideOperator, async (req, res) => {
+  try {
+    const operator = (req as any).roadsideOperator as { techName: string };
+    await db.query(
+      `UPDATE otf SET "vistaAtMs" = COALESCE("vistaAtMs", $3) WHERE id = $1 AND "assignedTechName" = $2`,
+      [Number(req.params.id), operator.techName, Date.now()]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("POST otf vista error:", e);
+    res.status(500).json({ error: "Error marcando la OTF como vista" });
+  }
+});
+
 // Check-in manual a la base (si el GPS automático falla)
 app.post("/api/roadside-operator/otf/:id/checkin", requireRoadsideOperator, async (req, res) => {
   try {
@@ -19496,10 +19593,9 @@ app.put("/api/roadside-operator/otf/trabajos/:tid/status", requireRoadsideOperat
       const cur = await db.query(`SELECT * FROM otf_trabajos WHERE id = $1`, [tid]);
       return res.json(cur.rows[0] ? normalizeOtfTrabajo(cur.rows[0]) : { ok: true });
     }
-    const r = await db.query(
-      `UPDATE otf_trabajos SET status = $2, "updatedAtMs" = $3 WHERE id = $1 RETURNING *`,
-      [tid, status, Date.now()]
-    );
+    // Con su tiempo y, si no se hizo, el motivo: otf/actualizar.ts.
+    const cambio = sqlEstadoTrabajo(tid, status, req.body?.motivo, Date.now());
+    const r = await db.query(cambio.sql, cambio.params);
     if (!r.rows[0]) return res.status(404).json({ error: "Trabajo no encontrado" });
     res.json(normalizeOtfTrabajo(r.rows[0]));
   } catch (e) {
@@ -19536,7 +19632,36 @@ app.post(
         `INSERT INTO otf_trabajo_files ("trabajoId","otfId",kind,url,"createdAtMs") VALUES ($1,$2,$3,$4,$5) RETURNING *`,
         [tid, otfId, kind, pub.publicUrl, Date.now()]
       );
-      res.json({ ok: true, file: { id: Number(r.rows[0].id), kind, url: pub.publicUrl } });
+
+      /*
+       * La foto de la matrícula se lee y se compara con la del trabajo: en una
+       * base con cuarenta remolques iguales, cambiar ruedas al equivocado es
+       * fácil. Si no se lee, no se dice nada (no bloquea: la luz, el barro…).
+       */
+      let matricula: { leida: string | null; esperada: string | null; coincide: boolean | null } | null = null;
+      if (kind === "matricula") {
+        try {
+          const t = (await db.query(
+            `SELECT plate, "plateRemolque", "tipoVehiculo" FROM otf_trabajos WHERE id = $1`, [tid]
+          )).rows[0];
+          const esRemolque = /remolque/i.test(String(t?.tipoVehiculo ?? ""));
+          const leida = normalizePlateText(
+            await detectPlateFromImage(pub.publicUrl, { preferColor: esRemolque ? "red" : "white" })
+          ) || null;
+          const esperadas = [t?.plate, t?.plateRemolque].map(normalizePlateText).filter(Boolean);
+          const coincide = leida && esperadas.length ? esperadas.includes(leida) : null;
+          matricula = { leida, esperada: esperadas[0] ?? null, coincide };
+          if (leida) {
+            await db.query(
+              `UPDATE otf_trabajos SET "matriculaLeida" = $2, "matriculaNoCoincide" = $3 WHERE id = $1`,
+              [tid, leida, coincide === false]
+            );
+          }
+        } catch (err: any) {
+          console.warn(`OTF trabajo #${tid}: no se pudo leer la matrícula: ${err?.message ?? err}`);
+        }
+      }
+      res.json({ ok: true, file: { id: Number(r.rows[0].id), kind, url: pub.publicUrl }, matricula });
     } catch (e: any) {
       console.error("POST otf trabajo files error:", e);
       res.status(500).json({ error: e?.message || "Error subiendo foto" });
@@ -19552,9 +19677,14 @@ app.post(
   async (req, res) => {
     try {
       const id = Number(req.params.id);
-      const firmanteNombre = String(req.body?.firmanteNombre || "").trim() || null;
-      const firmanteDni = String(req.body?.firmanteDni || "").trim() || null;
+      // Sin nadie de la base para firmar: se cierra igual y queda dicho.
+      const sinResponsable = String(req.body?.sinResponsable ?? "") === "true";
+      const firmanteNombre = sinResponsable ? null : String(req.body?.firmanteNombre || "").trim() || null;
+      const firmanteDni = sinResponsable ? null : String(req.body?.firmanteDni || "").trim() || null;
       let firmaUrl: string | null = null;
+      if (!sinResponsable && !req.file) {
+        return res.status(400).json({ error: "Falta la firma (o marca «Sin responsable en la base»)" });
+      }
 
       if (req.file) {
         const storagePath = `otf/${id}/firma_${Date.now()}.png`;
@@ -19572,9 +19702,10 @@ app.post(
            "firmaUrl" = COALESCE($3, "firmaUrl"),
            "firmanteNombre" = COALESCE($4, "firmanteNombre"),
            "firmanteDni" = COALESCE($5, "firmanteDni"),
+           "sinResponsable" = $6,
            "updatedAtMs" = $2
          WHERE id = $1`,
-        [id, now, firmaUrl, firmanteNombre, firmanteDni]
+        [id, now, firmaUrl, firmanteNombre, firmanteDni, sinResponsable]
       );
       res.json(await otfWithDetails(id));
     } catch (e: any) {
@@ -19628,6 +19759,17 @@ app.get("/api/otf/:id/report.pdf", requireAdminRole, async (req, res) => {
       doc.fontSize(9).font("Helvetica").text(`   ${t.trabajo || ""}`);
       if (t.observaciones) doc.fontSize(8).font("Helvetica").text(`   Observaciones: ${t.observaciones}`);
       if (t.motivoAltaCampo) doc.fontSize(8).font("Helvetica-Oblique").text(`   Motivo alta en campo: ${t.motivoAltaCampo}`);
+      // Tiempo del trabajo y, si no se hizo, por qué.
+      if (t.iniciadoAtMs && t.finalizadoAtMs) {
+        doc.fontSize(8).font("Helvetica").text(
+          `   Tiempo: ${fmtDuration(Math.max(0, Math.round((t.finalizadoAtMs - t.iniciadoAtMs) / 1000)))}` +
+          ` (${formatDateEs(t.iniciadoAtMs)} → ${formatDateEs(t.finalizadoAtMs)})`
+        );
+      }
+      if (t.motivoNoRealizado) doc.fontSize(8).font("Helvetica-Bold").text(`   No realizado: ${t.motivoNoRealizado}`);
+      if (t.matriculaNoCoincide && t.matriculaLeida) {
+        doc.fontSize(8).font("Helvetica-Oblique").text(`   Aviso: en la foto se leyó ${t.matriculaLeida}, no la matrícula del trabajo`);
+      }
       // Fotos del trabajo (matrícula, avería…): fila de miniaturas etiquetadas
       const fotos = (t.fotos ?? []).slice(0, 4);
       if (fotos.length > 0) {
@@ -19663,6 +19805,13 @@ app.get("/api/otf/:id/report.pdf", requireAdminRole, async (req, res) => {
     if (enCampo.length === 0) doc.fontSize(9).font("Helvetica").text("  (ninguno)");
     for (const t of enCampo) await printT(t);
 
+    // Cerrada sin nadie de la base que firmara.
+    if (data.sinResponsable) {
+      doc.moveDown(0.6);
+      doc.fontSize(13).font("Helvetica-Bold").text("Conformidad del responsable");
+      doc.moveDown(0.3);
+      doc.fontSize(10).font("Helvetica").text("Sin responsable en la base: la visita se cerró sin firma.");
+    }
     // Firma única
     if (data.firmaUrl || data.firmanteNombre) {
       doc.moveDown(1);

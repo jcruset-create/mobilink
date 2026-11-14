@@ -651,6 +651,10 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS asistencia_mensajes_asist_idx ON asistencia_mensajes("assistanceId");
     CREATE INDEX IF NOT EXISTS asistencia_mensajes_pend_idx
       ON asistencia_mensajes("techName") WHERE "leidoAtMs" IS NULL;
+    -- También en una OTF: el mensaje es de una asistencia o de una OTF.
+    ALTER TABLE asistencia_mensajes ADD COLUMN IF NOT EXISTS "otfId" INTEGER;
+    ALTER TABLE asistencia_mensajes ALTER COLUMN "assistanceId" DROP NOT NULL;
+    CREATE INDEX IF NOT EXISTS asistencia_mensajes_otf_idx ON asistencia_mensajes("otfId");
 
     CREATE TABLE IF NOT EXISTS tablet_rastro (
       id BIGSERIAL PRIMARY KEY,
@@ -893,6 +897,21 @@ export async function initDb() {
     ALTER TABLE otf ADD COLUMN IF NOT EXISTS "arrivedAtWorkshopMs" BIGINT;
     ALTER TABLE otf ADD COLUMN IF NOT EXISTS "salidaArmada" BOOLEAN NOT NULL DEFAULT false;
 
+    -- Cuándo vio el operario la OTF en la tablet. Mientras es null, la tablet
+    -- la avisa como nueva (con sonido) y la marca en la pestaña. Al crear la
+    -- columna, las OTF que ya existían se dan por vistas: si no, cada operario
+    -- recibiría de golpe un aviso por cada OTF abierta que ya conoce.
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_name = 'otf' AND column_name = 'vistaAtMs'
+      ) THEN
+        ALTER TABLE otf ADD COLUMN "vistaAtMs" BIGINT;
+        UPDATE otf SET "vistaAtMs" = "updatedAtMs";
+      END IF;
+    END $$;
+
     CREATE TABLE IF NOT EXISTS otf_trabajos (
       id SERIAL PRIMARY KEY,
       "otfId" INTEGER NOT NULL REFERENCES otf(id) ON DELETE CASCADE,
@@ -915,6 +934,15 @@ export async function initDb() {
       "updatedAtMs" BIGINT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS otf_trabajos_otf_idx ON otf_trabajos("otfId");
+    -- Tiempo de cada trabajo, por qué no se hizo, y la matrícula leída de la
+    -- foto (para avisar si no es el vehículo del trabajo).
+    -- Visita cerrada sin nadie de la base para firmar (botón en la tablet).
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "sinResponsable" BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS "iniciadoAtMs" BIGINT;
+    ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS "finalizadoAtMs" BIGINT;
+    ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS "motivoNoRealizado" TEXT;
+    ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS "matriculaLeida" TEXT;
+    ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS "matriculaNoCoincide" BOOLEAN NOT NULL DEFAULT false;
 
     -- Catálogo de plantillas de trabajos OTF ("Revisar presiones", etc.).
     -- Sustituye el texto libre de trabajoPlantilla por opciones consistentes

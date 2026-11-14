@@ -11,10 +11,13 @@ import '../services/mensajes_oficina.dart';
 /// Se refresca cuando llega un mensaje nuevo (`MensajesOficina`) y cada 30 s,
 /// para ver también lo que se contestó desde el aviso a pantalla completa.
 class ConversacionOficina extends StatefulWidget {
-  const ConversacionOficina({super.key, required this.api, required this.assistanceId});
+  const ConversacionOficina({super.key, required this.api, this.assistanceId, this.otfId})
+      : assert(assistanceId != null || otfId != null);
 
   final ApiService api;
-  final int assistanceId;
+  /// Una de las dos: la conversación de una asistencia o la de una OTF.
+  final int? assistanceId;
+  final int? otfId;
 
   @override
   State<ConversacionOficina> createState() => _ConversacionOficinaState();
@@ -44,7 +47,9 @@ class _ConversacionOficinaState extends State<ConversacionOficina> {
   }
 
   Future<void> _cargar() async {
-    final lista = await widget.api.getMensajesAsistencia(widget.assistanceId);
+    final lista = widget.otfId != null
+        ? await widget.api.getMensajesOtf(widget.otfId!)
+        : await widget.api.getMensajesAsistencia(widget.assistanceId!);
     if (mounted) setState(() => _mensajes = lista);
   }
 
@@ -54,7 +59,11 @@ class _ConversacionOficinaState extends State<ConversacionOficina> {
       _enviando = true;
       _error = null;
     });
-    final ok = await MensajesOficina.instancia.responder(widget.assistanceId, texto.trim());
+    final ok = await MensajesOficina.instancia.responder(
+      assistanceId: widget.assistanceId,
+      otfId: widget.otfId,
+      texto: texto.trim(),
+    );
     if (!mounted) return;
     setState(() {
       _enviando = false;
