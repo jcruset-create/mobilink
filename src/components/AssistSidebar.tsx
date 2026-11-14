@@ -8,6 +8,7 @@
  */
 
 import { useState } from "react";
+import MenuOtf, { type PestanaOtf } from "./MenuOtf";
 import {
   AlertTriangle,
   Plus,
@@ -20,7 +21,6 @@ import {
   Building2,
   Contact,
   MapPin,
-  Truck,
   List,
   Home,
   X,
@@ -32,6 +32,8 @@ import {
 type Props = {
   /** Clave de la entrada activa (p. ej. "otf"). */
   active?: "flota" | "central" | "talleres" | "proveedores" | "clientes" | "lugares" | "otf" | "vehiculo" | "panel" | "bandeja" | "calidad" | "satisfaccion";
+  /** La pestaña de la sección OTF que está abierta, si es una pantalla de OTF. */
+  otf?: PestanaOtf | null;
 };
 
 const itemCls = (activo: boolean) =>
@@ -39,7 +41,7 @@ const itemCls = (activo: boolean) =>
     activo ? "bg-orange-600 text-white" : "text-slate-300 hover:bg-slate-800"
   }`;
 
-export default function AssistSidebar({ active }: Props) {
+export default function AssistSidebar({ active, otf }: Props) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -89,6 +91,8 @@ export default function AssistSidebar({ active }: Props) {
             <FileText className="h-4 w-4 shrink-0" /> Historial
           </a>
 
+          <MenuOtf activa={otf} />
+
           <div className="my-2 border-t border-slate-800" />
           <div className="px-3 pb-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">
             Herramientas
@@ -122,9 +126,6 @@ export default function AssistSidebar({ active }: Props) {
           </a>
           <a href="/asistencias/lugares" className={itemCls(active === "lugares")}>
             <MapPin className="h-4 w-4 shrink-0" /> Lugares
-          </a>
-          <a href="/otf" className={itemCls(active === "otf")}>
-            <Truck className="h-4 w-4 shrink-0" /> OTF
           </a>
           <a href="/vehiculo" className={itemCls(active === "vehiculo")}>
             <List className="h-4 w-4 shrink-0" /> Historial vehículo
