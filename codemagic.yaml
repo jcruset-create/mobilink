@@ -40,9 +40,11 @@ workflows:
     #   git tag assist-ios-1 && git push origin assist-ios-1
     #   git push origin main:assist-ios/1
     #
-    # Y con etiqueta a propósito, no en cada push a main: cada build gasta un
-    # número de build de TestFlight y cuarenta minutos de Mac, así que subir
-    # a TestFlight es una decisión, no un efecto secundario de mergear.
+    # Desde el 14/11/2026 la etiqueta la pone sola el workflow de la APK
+    # (build-assist-apk.yml) en cada merge a main que toca flutter_app, sobre
+    # el commit con la versión nueva: assist-ios-<versión>-<build>. Cada merge
+    # gasta un build de TestFlight y unos cuarenta minutos de Mac; se decidió
+    # así para que el iOS no se quede atrás de la APK.
     #
     # El número que va detrás no es la versión de la app —ésa la pone
     # IOS_VERSION más abajo— sino sólo para no repetir etiqueta.
@@ -292,9 +294,10 @@ workflows:
     # el paso que calcula el número de build.
     integrations:
       app_store_connect: Mobilink TyreControl
-    # Se lanza (además del botón de la UI) empujando una etiqueta
-    # tyrecontrol-ios-<n> o creando una rama tyrecontrol-ios/<n> sobre el
-    # commit que se quiera subir a TestFlight:
+    # Se lanza solo: el workflow de la APK (build-tyrecontrol-apk.yml) empuja
+    # una etiqueta tyrecontrol-ios-<versión>-<build> sobre el commit con la
+    # versión nueva en cada merge a main que toca tyrecontrol_app (desde el
+    # 14/11/2026). A mano, además del botón de la UI:
     #   git tag tyrecontrol-ios-1 && git push origin tyrecontrol-ios-1
     #   git push origin main:tyrecontrol-ios/1
     triggering:
@@ -453,6 +456,17 @@ workflows:
     integrations:
       app_store_connect: Mobilink Assist
 
+
+    # Se lanza solo: el workflow de la APK (build-lite-apk.yml) empuja una
+    # etiqueta lite-ios-<versión>-<build> sobre el commit con la versión nueva
+    # en cada merge a main que toca lite_app. El botón de la UI sigue igual.
+    triggering:
+      events:
+        - tag
+      tag_patterns:
+        - pattern: 'lite-ios-*'
+          include: true
+      cancel_previous_builds: false
     environment:
       # Versión EXACTA, nunca «stable». Es la avería que se llevó por delante
       # el build de Mobilink Assist: «stable» pasó de 3.35.4 a 3.47.2 sin un
@@ -642,10 +656,9 @@ workflows:
     integrations:
       app_store_connect: Mobilink Assist
 
-    # No se compila en cada empujón a main: los minutos de Mac se pagan y la
-    # entrega de Android ya va sola en cada merge. Una subida a TestFlight es
-    # una decisión, así que se pide con una etiqueta sobre el commit que se
-    # quiera subir:
+    # Desde el 14/11/2026 la etiqueta la pone sola el workflow de la APK
+    # (build-taller-apk.yml) en cada merge a main que toca taller_app:
+    # taller-ios-<versión>-<build>. A mano sigue valiendo:
     #
     #   git tag taller-ios-1 && git push origin taller-ios-1
     #
