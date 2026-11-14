@@ -207,6 +207,11 @@ class Api {
       (await _post('/assistances/$id/messages', {'body': body, 'clientActionId': actionId}) as Map)
           .cast<String, dynamic>();
 
+  /// Acuse de lectura: el operario ha abierto el hilo. Central lo ve y así
+  /// distingue "no ha contestado" de "no se ha enterado".
+  Future<void> markMessagesRead(int id) =>
+      _post('/assistances/$id/messages/read', const {});
+
   Future<Map<String, dynamic>> files(int id) async =>
       (await _get('/assistances/$id/files') as Map).cast<String, dynamic>();
 
