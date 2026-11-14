@@ -439,6 +439,76 @@ class ApiService {
     }
   }
 
+  // ── Mensajes de la oficina (server/mensajes/mensajesAsistencia.ts) ──
+
+  /// Los mensajes sin leer. null = sin red o error: quien llama mantiene lo
+  /// que tenía, para que un corte no haga desaparecer un aviso de la pantalla.
+  Future<({List<Map<String, dynamic>> mensajes, List<String> respuestasRapidas})?>
+      getMensajesPendientes() async {
+    try {
+      final res = await http
+          .get(
+            Uri.parse('$kBackendUrl/api/roadside-operator/mensajes/pendientes'),
+            headers: await _authHeaders(),
+          )
+          .timeout(const Duration(seconds: 10));
+      if (res.statusCode != 200) return null;
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      return (
+        mensajes: (data['mensajes'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>(),
+        respuestasRapidas: (data['respuestasRapidas'] as List<dynamic>? ?? []).cast<String>(),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<bool> marcarMensajeLeido(int id) async {
+    try {
+      final res = await http
+          .post(
+            Uri.parse('$kBackendUrl/api/roadside-operator/mensajes/$id/leido'),
+            headers: await _authHeaders(),
+          )
+          .timeout(const Duration(seconds: 10));
+      return res.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// La conversación de una asistencia con la oficina.
+  Future<List<Map<String, dynamic>>> getMensajesAsistencia(int assistanceId) async {
+    try {
+      final res = await http
+          .get(
+            Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$assistanceId/mensajes'),
+            headers: await _authHeaders(),
+          )
+          .timeout(const Duration(seconds: 10));
+      if (res.statusCode != 200) return [];
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      return (data['mensajes'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<bool> enviarMensajeOperario(int assistanceId, String texto) async {
+    try {
+      final res = await http
+          .post(
+            Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$assistanceId/mensajes'),
+            headers: await _authHeaders(),
+            body: jsonEncode({'texto': texto}),
+          )
+          .timeout(const Duration(seconds: 10));
+      return res.statusCode == 201;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Al cerrar sesión: la tablet deja de salir en el Mapa flota.
   Future<void> clearTabletLocation() async {
     try {

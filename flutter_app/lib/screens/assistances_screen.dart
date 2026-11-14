@@ -10,6 +10,7 @@ import '../services/sesion_segura.dart';
 import '../services/api_service.dart';
 import '../services/offline_store.dart';
 import '../services/seguimiento_ubicacion.dart';
+import '../services/mensajes_oficina.dart';
 import '../theme/app_theme.dart';
 import '../widgets/plate_badge.dart';
 import 'assistance_detail_screen.dart';
@@ -107,6 +108,8 @@ class _AssistancesScreenState extends State<AssistancesScreen>
       // El envío de la ubicación se retoma solo: a la asistencia en camino si
       // la hay, o al Mapa flota si no (p. ej. tras reiniciar la tablet).
       unawaited(SeguimientoUbicacion.instancia.sincronizar(widget.api, data));
+      // Los mensajes de la oficina: se empiezan a escuchar con la sesión abierta.
+      unawaited(MensajesOficina.instancia.iniciar(widget.api));
     } catch (e) {
       setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
     } finally {
@@ -132,6 +135,7 @@ class _AssistancesScreenState extends State<AssistancesScreen>
     // Sin sesión no se manda la ubicación, y la tablet sale del Mapa flota.
     await SeguimientoUbicacion.instancia.detener();
     await widget.api.clearTabletLocation();
+    await MensajesOficina.instancia.detener();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('techName');
     await prefs.remove('code');

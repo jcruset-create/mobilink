@@ -632,6 +632,26 @@ export async function initDb() {
      * informe de recorrido del día (server/tablets/recorrido.ts). Se guarda
      * 90 días y luego se borra solo.
      */
+    /*
+     * Mensajes entre la oficina y la tablet del operario de una asistencia
+     * (server/mensajes/mensajesAsistencia.ts).
+     */
+    CREATE TABLE IF NOT EXISTS asistencia_mensajes (
+      id BIGSERIAL PRIMARY KEY,
+      "assistanceId" INTEGER NOT NULL,
+      "techName" TEXT NOT NULL,
+      de TEXT NOT NULL,
+      texto TEXT NOT NULL,
+      urgente BOOLEAN NOT NULL DEFAULT false,
+      autor TEXT,
+      "creadoAtMs" BIGINT NOT NULL,
+      "recibidoAtMs" BIGINT,
+      "leidoAtMs" BIGINT
+    );
+    CREATE INDEX IF NOT EXISTS asistencia_mensajes_asist_idx ON asistencia_mensajes("assistanceId");
+    CREATE INDEX IF NOT EXISTS asistencia_mensajes_pend_idx
+      ON asistencia_mensajes("techName") WHERE "leidoAtMs" IS NULL;
+
     CREATE TABLE IF NOT EXISTS tablet_rastro (
       id BIGSERIAL PRIMARY KEY,
       "techName" TEXT NOT NULL,
