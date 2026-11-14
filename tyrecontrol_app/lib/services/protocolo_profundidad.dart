@@ -27,6 +27,10 @@
 ///
 /// Una lectura baja sin confirmar no pinta la rueda de rojo, pero sale como
 /// «por confirmar»: hay que medirla con la sonda.
+///
+/// El protocolo solo entra cuando la última lectura dispara la alerta —en el
+/// mínimo o por debajo—. Si la última es buena, sea la única o venga después
+/// de una alerta, vale ella tal cual: es `valorDeLaGoma`.
 library;
 
 /// Cuánto pueden diferir dos lecturas para darse la razón, en mm.
@@ -110,6 +114,18 @@ ValorDeLaGoma? valorDeLaSerie(List<LecturaDeSerie> lecturas) {
     pendienteMm: discrepa ? ultima.mm : null,
     pendienteEn: discrepa ? ultima.fecha : null,
   );
+}
+
+/// El valor de una goma: su última lectura, salvo que esa lectura deje la
+/// goma en el mínimo o por debajo, que es cuando decide el protocolo. Sin
+/// mínimo conocido no hay alerta posible y vale la última.
+ValorDeLaGoma? valorDeLaGoma(List<LecturaDeSerie> lecturas, double? minimo) {
+  if (lecturas.isEmpty) return null;
+  final ultima = lecturas.first;
+  if (minimo == null || ultima.mm > minimo) {
+    return ValorDeLaGoma(mm: ultima.mm, fecha: ultima.fecha, confirmada: true);
+  }
+  return valorDeLaSerie(lecturas);
 }
 
 /// Lo que hay que decir de una goma frente a su mínimo.

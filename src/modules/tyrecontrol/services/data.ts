@@ -3,6 +3,7 @@ import { codigoDeUso } from "../catalogo/usos";
 import { hasRealValue, normalizarValor, type TipoDatoItv } from "./itvValores";
 import { medidaCanonica } from "./medidas";
 import { recorrerPaginas } from "./paginacion";
+import { profundidadMinimaPorLlanta } from "./umbralProfundidad";
 import { mapaUltimasMediciones, type Medicion } from "./ultimaMedicion";
 import type { PosicionOperario } from "./ubicacionOperario";
 import type { LecturaParteProveedor } from "./parteProveedor";
@@ -611,7 +612,7 @@ export async function listarUltimasMedicionesVehiculo(vehiculoId: string): Promi
   // posición posteriores a su montaje son suyas, estén a nombre de la goma
   // anterior o de ninguna.
   const { data: mons } = await supabase.from("tc_montajes_actuales")
-    .select("posicion_id, neumatico_id, fecha_montaje").eq("vehiculo_id", vehiculoId);
+    .select("posicion_id, neumatico_id, fecha_montaje, neumatico:tc_neumaticos(medida)").eq("vehiculo_id", vehiculoId);
   const montajePorPosicion = new Map((mons ?? []).map((m) => [
     m.posicion_id as string,
     { neumatico_id: m.neumatico_id as string, fecha_montaje: (m.fecha_montaje ?? null) as string | null },
@@ -620,7 +621,15 @@ export async function listarUltimasMedicionesVehiculo(vehiculoId: string): Promi
   // El reparto vive en services/ultimaMedicion.ts, con pruebas: la profundidad
   // solo de revisiones que midieron todas sus ruedas, y las lecturas siguiendo
   // a la posición desde el montaje.
-  return mapaUltimasMediciones(revs ?? [], dets ?? [], montajePorPosicion);
+  // El mínimo de cada goma montada, por su llanta: el protocolo solo entra si
+  // su última lectura lo toca. Una goma que ya no está montada no sale en la
+  // ficha, así que se queda sin mínimo y vale su última lectura.
+  const minimos = new Map((mons ?? []).map((m) => {
+    const neu = m.neumatico as unknown as { medida?: string | null } | { medida?: string | null }[] | null;
+    const medida = Array.isArray(neu) ? neu[0]?.medida : neu?.medida;
+    return [m.neumatico_id as string, profundidadMinimaPorLlanta(medida ?? null)];
+  }));
+  return mapaUltimasMediciones(revs ?? [], dets ?? [], montajePorPosicion, (id) => minimos.get(id) ?? null);
 }
 
 // Presión recomendada del catálogo por marca+modelo+medida, para neumáticos

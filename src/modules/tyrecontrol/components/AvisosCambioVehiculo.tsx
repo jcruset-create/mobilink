@@ -30,7 +30,8 @@ import type { MontajeActual } from "../types";
  *
  * El arco suelta de vez en cuando una lectura imposible (una goma de 8,5 mm
  * que un día «mide» 1,8). La profundidad que llega aquí ya es la del protocolo
- * —la mediana de las tres últimas lecturas, `services/protocoloProfundidad.ts`—
+ * —su última lectura, y solo si esa da alerta la mediana de las tres últimas,
+ * `services/protocoloProfundidad.ts`—
  * y el rojo solo sale si está confirmada. Una lectura baja sin respaldo va en
  * una banda aparte, violeta, que no dice «cámbiala» sino «mídela con la
  * sonda»: lo que mida el técnico manda y la resuelve en un sentido o en otro.

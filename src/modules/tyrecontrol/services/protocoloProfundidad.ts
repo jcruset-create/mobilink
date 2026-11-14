@@ -41,6 +41,13 @@
  * Salen del ruido medido: el 95 % de las lecturas consecutivas difiere menos
  * de 1,2 mm. Dos milímetros dejan pasar el ruido y paran los disparates.
  *
+ * ── Solo cuando la última lectura da alerta ─────────────────────────────────
+ *
+ * El protocolo no se aplica a todas las gomas: solo a la que su última lectura
+ * deja en el mínimo o por debajo, que es cuando hay una alerta que confirmar.
+ * Si la última lectura es buena —sea la única o venga después de una alerta—,
+ * vale ella tal cual, y es la que se ve en la ficha. Es `valorDeLaGoma`.
+ *
  * ── La «E»: lo pendiente se mide a mano ─────────────────────────────────────
  *
  * Una lectura baja que no está confirmada no enciende el rojo, pero tampoco se
@@ -115,6 +122,22 @@ export function valorDeLaSerie(lecturas: LecturaDeSerie[]): ValorDeLaGoma | null
     confirmada: true,
     pendiente: Math.abs(ultima.mm - mediana.mm) > TOLERANCIA_MM ? { mm: ultima.mm, fecha: ultima.fecha } : null,
   };
+}
+
+/**
+ * El valor de una goma: su última lectura, salvo que esa lectura dispare la
+ * alerta —en el mínimo o por debajo—, que es cuando decide el protocolo.
+ *
+ * Sin mínimo conocido no hay alerta posible, así que vale la última. Las
+ * lecturas, de la MÁS RECIENTE a la más antigua, como en `valorDeLaSerie`.
+ */
+export function valorDeLaGoma(lecturas: LecturaDeSerie[], minimo: number | null | undefined): ValorDeLaGoma | null {
+  const ultima = lecturas[0];
+  if (!ultima) return null;
+  if (minimo == null || ultima.mm > minimo) {
+    return { mm: ultima.mm, fecha: ultima.fecha, confirmada: true, pendiente: null };
+  }
+  return valorDeLaSerie(lecturas);
 }
 
 /** Lo que hay que decir de una goma frente a su mínimo. */

@@ -169,4 +169,27 @@ void main() {
       expect(profundidadMinimaPorLlanta('0'), isNull);
     });
   });
+
+  group('valorDeLaGoma: el protocolo solo cuando la última lectura da alerta', () {
+    test('última buena: vale ella, confirmada, aunque antes hubiera alerta', () {
+      final v = valorDeLaGoma(arco([10.7, 3.0, 3.1]), 4)!;
+      expect((v.mm, v.confirmada, v.pendienteMm, v.fecha), (10.7, true, null, _base));
+    });
+
+    test('última en el mínimo o por debajo: decide el protocolo', () {
+      final v = valorDeLaGoma(arco([1.8, 8.5, 8.7]), 4)!;
+      expect((v.mm, v.pendienteMm), (8.5, 1.8));
+      expect(valorDeLaGoma(arco([4.0, 8.5, 8.7]), 4)!.pendienteMm, 4.0);
+      expect(juicio(valorDeLaGoma(arco([3.0]), 4), 4), Veredicto.porConfirmar);
+      expect(juicio(valorDeLaGoma(arco([3.0, 3.2, 9]), 4), 4), Veredicto.cambiar);
+    });
+
+    test('sin mínimo no hay alerta: vale la última', () {
+      expect(valorDeLaGoma(arco([1.8, 8.5, 8.7]), null)!.mm, 1.8);
+    });
+
+    test('sin lecturas, nada', () {
+      expect(valorDeLaGoma([], 4), isNull);
+    });
+  });
 }
