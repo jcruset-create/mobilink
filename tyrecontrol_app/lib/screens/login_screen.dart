@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../services/seguimiento_ubicacion.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/oferta_biometria.dart';
 import 'cliente_screen.dart';
 
 /// Login unificado: el tecnico usa el MISMO nombre + PIN de 4 digitos
@@ -46,6 +47,8 @@ class _LoginScreenState extends State<LoginScreen> {
        * dejar al operario mirando la pantalla de login.
        */
       unawaited(SeguimientoUbicacion.instancia.iniciar());
+      await ofrecerBiometria(context);
+      if (!mounted) return;
       Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const ClienteScreen()));
     } catch (e) {
       setState(() => _error = e.toString().replaceFirst('Exception: ', ''));

@@ -61,5 +61,11 @@
 	<string>Mobilink TyreControl envía la ubicación de la tablet mientras tienes la sesión abierta, también con la pantalla apagada, y la guarda con cada revisión para dejar constancia de dónde se hizo.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Mobilink TyreControl guarda dónde se abre y dónde se cierra cada revisión, para dejar constancia de dónde se hizo.</string>
+	<!-- lib/services/biometria.dart (local_auth): el técnico puede activar
+	     Face ID para abrir la sesión ya guardada en vez de escribir nombre y
+	     PIN. Sin este texto, iOS mata la app en el momento de pedir Face ID.
+	     Touch ID no necesita clave propia. -->
+	<key>NSFaceIDUsageDescription</key>
+	<string>Mobilink TyreControl usa Face ID para que entres en tu sesión sin escribir tu nombre y el PIN cada vez.</string>
 </dict>
 </plist>
