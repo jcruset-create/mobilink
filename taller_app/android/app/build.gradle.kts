@@ -34,7 +34,8 @@ android {
 
     defaultConfig {
         applicationId = "com.mobilink.taller"
-        minSdk = flutter.minSdkVersion
+        // 24 es lo que exige local_auth_android (huella / cara); flutter_secure_storage pide 23.
+        minSdk = 24
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
