@@ -22,8 +22,12 @@ import type { RuedaAlerta } from "../types/informes";
  * `por_confirmar` es del protocolo contra los falsos desgastes: hay una lectura
  * en el mínimo o por debajo que nadie ha respaldado todavía. No es rojo, pero
  * hay que ir a medirla con la sonda.
+ *
+ * `dato` no es un estado de la goma: es un número que se enseña sin juzgarlo.
+ * Solo sale en la vista de presión (ver `ruedasEnPresion`), para las ruedas
+ * que no tienen aviso abierto.
  */
-export type EstadoRueda = "cambiar" | "presion" | "por_confirmar" | "sin_medir" | "ok" | "vacia";
+export type EstadoRueda = "cambiar" | "presion" | "por_confirmar" | "sin_medir" | "ok" | "vacia" | "dato";
 
 export interface RuedaMarcada {
   codigo: string;
@@ -38,6 +42,12 @@ export interface RuedaMarcada {
   /** La última lectura, cuando no es la que se ha dado por buena. */
   pendiente: number | null;
   fechaPendiente: string | null;
+  /** La goma montada, para pedir su última presión medida. */
+  neumaticoId: string | null;
+  /** Si tiene un aviso de presión abierto, y lo que leyó el sensor al darlo. */
+  conAviso: boolean;
+  presionAviso: number | null;
+  presionRecomendada: number | null;
   marca: MarcaDelPlano | null;
 }
 
@@ -159,6 +169,10 @@ export function agruparPorVehiculo(filas: RuedaAlerta[], hoy: string = hoyISO())
           fecha: r.fecha_revision,
           pendiente: r.pendiente_mm ?? null,
           fechaPendiente: r.pendiente_fecha ?? null,
+          neumaticoId: r.neumatico_id,
+          conAviso: !!r.presion_aviso_at,
+          presionAviso: r.presion_bar,
+          presionRecomendada: r.presion_recomendada_bar,
           marca: porCodigo.get(r.codigo_posicion as string) ?? null,
         };
       });
@@ -290,4 +304,54 @@ export function ruedasParaMedirConSonda(vehiculos: VehiculoConAlertas[]): RuedaP
     }
   }
   return filas.sort((a, b) => (a.enDuda ?? 99) - (b.enDuda ?? 99) || a.matricula.localeCompare(b.matricula, "es"));
+}
+
+/**
+ * Las mismas ruedas con la PRESIÓN dentro del recuadro en vez de los milímetros.
+ *
+ * Es lo que enseña la tarjeta al pulsar «bar» en un vehículo con aviso de
+ * presión: quien va a hinchar una rueda quiere ver los bares de las cuatro, no
+ * la profundidad.
+ *
+ * De dónde sale cada número:
+ *
+ *   · la rueda CON aviso abierto, lo que leyó el sensor al darlo —es el motivo
+ *     del aviso, y el aviso se cierra solo cuando una lectura posterior da
+ *     bien, así que mientras siga abierto no hay otra mejor—;
+ *   · las demás, su última presión medida en una revisión (`ultimas`, por
+ *     neumático). Sin dato, raya.
+ *
+ * Solo se pinta de ámbar la que tiene aviso. Las demás van en un color neutro:
+ * aquí no se sabe su presión recomendada, y pintar de verde un número que no
+ * se ha comparado con nada sería afirmar que está bien.
+ *
+ * `ultimas` es `null` mientras se están pidiendo: las ruedas con aviso ya
+ * tienen su número y las otras esperan con puntos suspensivos.
+ */
+export function ruedasEnPresion(
+  ruedas: RuedaMarcada[],
+  ultimas: Record<string, number | null | undefined> | null,
+): RuedaMarcada[] {
+  return ruedas.map((r) => {
+    if (r.estado === "vacia") return r;
+
+    if (r.conAviso) {
+      const de = r.presionRecomendada != null ? ` de ${mm(r.presionRecomendada)}` : "";
+      return {
+        ...r,
+        estado: "presion" as const,
+        texto: r.presionAviso != null ? mm(r.presionAviso) : "—",
+        titulo: `${r.codigo} · ${r.presionAviso != null ? `${mm(r.presionAviso)} bar${de}` : "sin lectura"} · aviso de presión abierto`,
+      };
+    }
+
+    if (ultimas === null) {
+      return { ...r, estado: "sin_medir" as const, texto: "…", titulo: `${r.codigo} · leyendo la presión` };
+    }
+    const bar = r.neumaticoId ? ultimas[r.neumaticoId] ?? null : null;
+    if (bar == null) {
+      return { ...r, estado: "sin_medir" as const, texto: "—", titulo: `${r.codigo} · sin presión medida` };
+    }
+    return { ...r, estado: "dato" as const, texto: mm(bar), titulo: `${r.codigo} · ${mm(bar)} bar · última presión medida` };
+  });
 }

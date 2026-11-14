@@ -15,6 +15,8 @@ const RELLENO: Record<EstadoRueda, string> = {
   // Por confirmar: ni verde ni rojo. Violeta, que no significa nada más aquí.
   por_confirmar: "bg-violet-700 text-white ring-[1.5px] ring-violet-200",
   sin_medir: "bg-slate-600 text-slate-100",
+  // Un número que se enseña sin juzgarlo (la presión de una rueda sin aviso).
+  dato: "bg-sky-800 text-white",
   // Un hueco sin neumático no es un estado de la goma: va sin relleno.
   vacia: "border border-dashed border-slate-500 bg-slate-900/40 text-transparent",
 };
