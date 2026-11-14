@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../navegacion.dart';
+import '../screens/otf_screen.dart';
 import '../services/mensajes_oficina.dart';
 
 /// El aviso a pantalla completa de un mensaje de la oficina, encima de
@@ -23,9 +25,20 @@ class AvisoMensajes extends StatelessWidget {
       animation: servicio,
       builder: (context, _) {
         final pendientes = servicio.pendientes;
+        // Los mensajes primero; si no hay, las OTF nuevas.
+        final otfs = pendientes.isEmpty ? servicio.otfParaAvisar : const <Map<String, dynamic>>[];
         return Stack(
           children: [
             child,
+            if (otfs.isNotEmpty)
+              Positioned.fill(
+                child: _AvisoOtf(
+                  key: ValueKey('otf-${otfs.first['id']}'),
+                  otf: otfs.first,
+                  quedan: otfs.length - 1,
+                  servicio: servicio,
+                ),
+              ),
             if (pendientes.isNotEmpty)
               Positioned.fill(
                 // El aviso lleva un campo de texto, que necesita un Overlay
@@ -76,13 +89,18 @@ class _AvisoState extends State<_Aviso> {
   }
 
   Future<void> _responder(String texto) async {
-    final id = widget.mensaje['assistanceId'];
-    if (id is! int || texto.trim().isEmpty) return;
+    final asistencia = widget.mensaje['assistanceId'];
+    final otf = widget.mensaje['otfId'];
+    if ((asistencia is! int && otf is! int) || texto.trim().isEmpty) return;
     setState(() {
       _enviando = true;
       _error = null;
     });
-    final ok = await widget.servicio.responder(id, texto.trim());
+    final ok = await widget.servicio.responder(
+      assistanceId: asistencia is int ? asistencia : null,
+      otfId: otf is int ? otf : null,
+      texto: texto.trim(),
+    );
     if (!mounted) return;
     setState(() {
       _enviando = false;
@@ -147,7 +165,8 @@ class _AvisoState extends State<_Aviso> {
                   ),
                   const SizedBox(height: 12),
                   Text(
-                    'De ${m['autor'] ?? 'la oficina'} · ${_hora(m['creadoAtMs'])} · Asistencia #${m['assistanceId']}',
+                    'De ${m['autor'] ?? 'la oficina'} · ${_hora(m['creadoAtMs'])} · '
+                    '${m['otfId'] != null ? 'OTF ${m['otfCliente'] ?? '#${m['otfId']}'}' : 'Asistencia #${m['assistanceId']}'}',
                     style: const TextStyle(color: Color(0xFFCBD5E1), fontSize: 14),
                   ),
                   const SizedBox(height: 14),
@@ -262,6 +281,137 @@ class _AvisoState extends State<_Aviso> {
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                       ),
                       child: const Text('Entendido', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+
+/// Aviso a pantalla completa de una OTF nueva asignada al operario.
+class _AvisoOtf extends StatelessWidget {
+  const _AvisoOtf({super.key, required this.otf, required this.quedan, required this.servicio});
+
+  final Map<String, dynamic> otf;
+  final int quedan;
+  final MensajesOficina servicio;
+
+  String? _fecha() {
+    final ms = otf['fechaProgramadaMs'];
+    if (ms is! int) return null;
+    final d = DateTime.fromMillisecondsSinceEpoch(ms);
+    const dias = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo'];
+    const meses = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+    return '${dias[d.weekday - 1]} ${d.day} ${meses[d.month - 1]}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final id = otf['id'] as int;
+    final base = otf['baseName'] ?? otf['direccion'];
+    final fecha = _fecha();
+    final num = otf['numTrabajos'];
+    const amarillo = Color(0xFFFBBF24);
+    return Material(
+      color: const Color(0xB8020617),
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFF172554),
+              border: Border.all(color: amarillo, width: 3),
+              borderRadius: BorderRadius.circular(22),
+            ),
+            padding: const EdgeInsets.all(22),
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 30,
+                        backgroundColor: amarillo,
+                        child: Icon(Icons.local_shipping, color: Color(0xFF0E1B2E), size: 32),
+                      ),
+                      SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('ORDEN DE TRABAJO DE FLOTA',
+                                style: TextStyle(color: amarillo, fontWeight: FontWeight.w700, letterSpacing: 1, fontSize: 13)),
+                            Text('Tienes una OTF nueva',
+                                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 26, height: 1.1)),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.all(18),
+                    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('${otf['clientName'] ?? 'OTF'}',
+                            style: const TextStyle(color: Color(0xFF0F172A), fontSize: 24, fontWeight: FontWeight.w900)),
+                        const SizedBox(height: 6),
+                        if (base != null) Text('Base: $base', style: const TextStyle(color: Color(0xFF334155), fontSize: 16)),
+                        if (fecha != null) Text('Programada: $fecha', style: const TextStyle(color: Color(0xFF334155), fontSize: 16)),
+                        if (num is int) Text('$num trabajo${num == 1 ? '' : 's'}', style: const TextStyle(color: Color(0xFF334155), fontSize: 16)),
+                        if ((otf['notas'] ?? '').toString().trim().isNotEmpty) ...[
+                          const Divider(),
+                          Text('Notas: ${otf['notas']}', style: const TextStyle(color: Color(0xFF475569), fontSize: 14)),
+                        ],
+                      ],
+                    ),
+                  ),
+                  if (quedan > 0) ...[
+                    const SizedBox(height: 10),
+                    Text('Y $quedan OTF nueva${quedan == 1 ? '' : 's'} más',
+                        style: const TextStyle(color: amarillo, fontSize: 14, fontWeight: FontWeight.w700)),
+                  ],
+                  const SizedBox(height: 18),
+                  SizedBox(
+                    height: 64,
+                    child: FilledButton(
+                      onPressed: () {
+                        final api = servicio.api;
+                        servicio.otfVista(id);
+                        if (api != null) {
+                          navegadorApp.currentState?.push(MaterialPageRoute(
+                            builder: (_) => OtfDetailScreen(api: api, otfId: id),
+                          ));
+                        }
+                      },
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFF22C55E),
+                        foregroundColor: const Color(0xFF052E16),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      ),
+                      child: const Text('Ver la OTF', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    height: 52,
+                    child: OutlinedButton(
+                      onPressed: () => servicio.otfPosponer(id),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white,
+                        side: const BorderSide(color: Color(0xFF475569)),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      ),
+                      child: const Text('Más tarde', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
                     ),
                   ),
                 ],

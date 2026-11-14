@@ -443,8 +443,12 @@ class ApiService {
 
   /// Los mensajes sin leer. null = sin red o error: quien llama mantiene lo
   /// que tenía, para que un corte no haga desaparecer un aviso de la pantalla.
-  Future<({List<Map<String, dynamic>> mensajes, List<String> respuestasRapidas})?>
-      getMensajesPendientes() async {
+  Future<
+      ({
+        List<Map<String, dynamic>> mensajes,
+        List<String> respuestasRapidas,
+        List<Map<String, dynamic>> otfNuevas,
+      })?> getMensajesPendientes() async {
     try {
       final res = await http
           .get(
@@ -457,6 +461,8 @@ class ApiService {
       return (
         mensajes: (data['mensajes'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>(),
         respuestasRapidas: (data['respuestasRapidas'] as List<dynamic>? ?? []).cast<String>(),
+        // Las OTF que el operario aún no ha abierto: se le avisan.
+        otfNuevas: (data['otfNuevas'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>(),
       );
     } catch (_) {
       return null;
@@ -570,11 +576,12 @@ class ApiService {
     return data;
   }
 
-  Future<void> updateOtfTrabajoStatus(int trabajoId, String status) async {
+  /// `motivo`: solo con «no_realizado» (no estaba el vehículo, falta material…).
+  Future<void> updateOtfTrabajoStatus(int trabajoId, String status, {String? motivo}) async {
     final res = await http.put(
       Uri.parse('$kBackendUrl/api/roadside-operator/otf/trabajos/$trabajoId/status'),
       headers: await _authHeaders(),
-      body: jsonEncode({'status': status}),
+      body: jsonEncode({'status': status, if (motivo != null) 'motivo': motivo}),
     );
     if (res.statusCode != 200) throw Exception('Error actualizando estado');
   }
@@ -608,7 +615,10 @@ class ApiService {
   }
 
   // Finaliza la OTF con firma única (PNG) del responsable
-  Future<void> finalizarOtf(int otfId, File firmaPng, String? firmanteNombre, String? firmanteDni) async {
+  /// Sin firma (`firmaPng` null) solo con `sinResponsable`: no había nadie de
+  /// la base para firmar.
+  Future<void> finalizarOtf(int otfId, File? firmaPng, String? firmanteNombre, String? firmanteDni,
+      {bool sinResponsable = false}) async {
     final req = http.MultipartRequest(
       'POST',
       Uri.parse('$kBackendUrl/api/roadside-operator/otf/$otfId/finalizar'),
@@ -619,13 +629,16 @@ class ApiService {
     });
     if (firmanteNombre != null) req.fields['firmanteNombre'] = firmanteNombre;
     if (firmanteDni != null) req.fields['firmanteDni'] = firmanteDni;
-    req.files.add(await http.MultipartFile.fromPath('firma', firmaPng.path));
+    if (sinResponsable) req.fields['sinResponsable'] = 'true';
+    if (firmaPng != null) req.files.add(await http.MultipartFile.fromPath('firma', firmaPng.path));
     final streamed = await req.send().timeout(const Duration(seconds: 30));
     await streamed.stream.drain();
     if (streamed.statusCode != 200) throw Exception('Error finalizando OTF');
   }
 
-  Future<void> uploadOtfTrabajoFile(int trabajoId, File file, String kind,
+  /// Con la foto de la matrícula, el servidor la lee y dice si coincide:
+  /// `{matricula: {leida, esperada, coincide}}` (coincide null = no se leyó).
+  Future<Map<String, dynamic>> uploadOtfTrabajoFile(int trabajoId, File file, String kind,
       {String? actionId}) async {
     final req = http.MultipartRequest(
       'POST',
@@ -638,9 +651,60 @@ class ApiService {
     req.fields['kind'] = kind;
     if (actionId != null) req.fields['clientActionId'] = actionId;
     req.files.add(await http.MultipartFile.fromPath('file', file.path));
-    final streamed = await req.send().timeout(const Duration(seconds: 40));
-    await streamed.stream.drain();
+    // Más margen: con la matrícula, el servidor además la lee.
+    final streamed = await req.send().timeout(const Duration(seconds: 60));
+    final body = await streamed.stream.bytesToString();
     if (streamed.statusCode != 200) throw Exception('Error subiendo foto');
+    try {
+      final data = jsonDecode(body);
+      return data is Map<String, dynamic> ? data : <String, dynamic>{};
+    } catch (_) {
+      return <String, dynamic>{};
+    }
+  }
+
+  /// La OTF ya se ha abierto en la tablet: deja de avisarse como nueva.
+  Future<void> marcarOtfVista(int otfId) async {
+    try {
+      await http
+          .post(
+            Uri.parse('$kBackendUrl/api/roadside-operator/otf/$otfId/vista'),
+            headers: await _authHeaders(),
+          )
+          .timeout(const Duration(seconds: 10));
+    } catch (_) {}
+  }
+
+  /// La conversación de una OTF con la oficina.
+  Future<List<Map<String, dynamic>>> getMensajesOtf(int otfId) async {
+    try {
+      final res = await http
+          .get(
+            Uri.parse('$kBackendUrl/api/roadside-operator/otf/$otfId/mensajes'),
+            headers: await _authHeaders(),
+          )
+          .timeout(const Duration(seconds: 10));
+      if (res.statusCode != 200) return [];
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      return (data['mensajes'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<bool> enviarMensajeOtf(int otfId, String texto) async {
+    try {
+      final res = await http
+          .post(
+            Uri.parse('$kBackendUrl/api/roadside-operator/otf/$otfId/mensajes'),
+            headers: await _authHeaders(),
+            body: jsonEncode({'texto': texto}),
+          )
+          .timeout(const Duration(seconds: 10));
+      return res.statusCode == 201;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<Map<String, dynamic>> saveConductor(

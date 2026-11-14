@@ -20,6 +20,7 @@ import type { KnownPlace } from "../modules/roadsideAssistanceTypes";
 import KnownPlaceMapModal from "../components/KnownPlaceMapModal";
 import TyreControlVehiculo from "../components/TyreControlVehiculo";
 import AssistSidebar from "../components/AssistSidebar";
+import MensajesOperario from "../components/MensajesOperario";
 import { leerPestana, otfDeLaPestana, TITULO_PESTANA } from "../modules/otfPestanas";
 import { apiFetch } from "../modules/apiFetch";
 import { abrirPdfConSesion } from "../modules/pdfConSesion";
@@ -619,6 +620,20 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
 
       {presupuestando && <PresupuestarModal otf={otf} onClose={() => setPresupuestando(false)} />}
 
+      {otf.sinResponsable && otf.status === "finalizada" && (
+        <div className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm font-bold text-amber-300">
+          Cerrada sin responsable en la base: no hay firma.
+        </div>
+      )}
+      {otf.assignedTechName && otf.vistaAtMs == null && otf.status !== "finalizada" && otf.status !== "cancelada" && (
+        <div className="mt-3 text-xs font-bold text-slate-400">{otf.assignedTechName} aún no la ha abierto en la tablet.</div>
+      )}
+
+      {/* Mensajes con el operario, como en las asistencias. */}
+      {otf.assignedTechName && otf.status !== "finalizada" && otf.status !== "cancelada" && (
+        <MensajesOperario otfId={otf.id} techName={otf.assignedTechName} />
+      )}
+
       {/* Lista de trabajos */}
       <div className="mt-4 space-y-2">
         {(otf.trabajos ?? []).map((t: any) => (
@@ -636,6 +651,18 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
               <div className="text-sm text-slate-200">{t.trabajo}</div>
               {t.observaciones && <div className="text-xs font-semibold text-amber-300">📌 {t.observaciones}</div>}
               {t.motivoAltaCampo && <div className="text-xs italic text-slate-500">Motivo: {t.motivoAltaCampo}</div>}
+              {/* Lo que dice la tablet: tiempo, por qué no se hizo y la matrícula leída. */}
+              {t.iniciadoAtMs && (
+                <div className="text-xs text-slate-400">
+                  ⏱ {t.finalizadoAtMs
+                    ? `${Math.max(1, Math.round((t.finalizadoAtMs - t.iniciadoAtMs) / 60000))} min`
+                    : `en curso desde las ${new Date(t.iniciadoAtMs).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}`}
+                </div>
+              )}
+              {t.motivoNoRealizado && <div className="text-xs font-bold text-red-300">No realizado: {t.motivoNoRealizado}</div>}
+              {t.matriculaNoCoincide && t.matriculaLeida && (
+                <div className="text-xs font-bold text-amber-300">⚠ En la foto se leyó {t.matriculaLeida}, no {t.plate}</div>
+              )}
               {(t.fotos ?? []).length > 0 && (
                 <div className="mt-1 flex gap-1">
                   {t.fotos.map((f: any) => (

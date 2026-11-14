@@ -363,7 +363,22 @@ class _AssistancesScreenState extends State<AssistancesScreen>
                     dividerColor: Colors.transparent,
                     tabs: [
                       Tab(icon: Icon(Icons.assignment_outlined,  size: isExterior ? 28 : 24), text: 'Activas'),
-                      Tab(icon: Icon(Icons.local_shipping_outlined, size: isExterior ? 28 : 24), text: 'OTF'),
+                      // Con contador rojo mientras haya OTF asignadas sin abrir.
+                      Tab(
+                        icon: AnimatedBuilder(
+                          animation: MensajesOficina.instancia,
+                          builder: (_, __) {
+                            final nuevas = MensajesOficina.instancia.otfNuevas.length;
+                            return Badge(
+                              isLabelVisible: nuevas > 0,
+                              label: Text('$nuevas'),
+                              backgroundColor: AppColors.danger,
+                              child: Icon(Icons.local_shipping_outlined, size: isExterior ? 28 : 24),
+                            );
+                          },
+                        ),
+                        text: 'OTF',
+                      ),
                       Tab(icon: Icon(Icons.history,              size: isExterior ? 28 : 24), text: 'Historial'),
                       Tab(icon: Icon(Icons.receipt_long_outlined,size: isExterior ? 28 : 24), text: 'Cobros'),
                       Tab(icon: Icon(Icons.add_card_outlined,    size: isExterior ? 28 : 24), text: 'Pagos'),

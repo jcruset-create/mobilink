@@ -10,6 +10,9 @@ abstract class Avisador {
   Future<void> sonar(Map<String, dynamic> mensaje);
   Future<void> quitar(int id);
   Future<void> quitarTodos();
+  /// Una OTF nueva asignada al operario.
+  Future<void> sonarOtf(Map<String, dynamic> otf);
+  Future<void> quitarOtf(int otfId);
 }
 
 /// Notificación del sistema con sonido: suena con la app delante, detrás o con
@@ -21,11 +24,15 @@ class AvisadorNotificaciones implements Avisador {
   // Los avisos puestos, para quitar solo esos: un cancelAll se llevaría por
   // delante la notificación del servicio de ubicación.
   final Set<int> _puestos = {};
+  final Set<int> _puestosOtf = {};
 
   // El id de la notificación no es el del mensaje tal cual: el servicio de
   // ubicación usa un id fijo propio, y un mensaje con ese mismo número le
   // pisaría la notificación.
   static int _idNotificacion(int idMensaje) => 100000000 + (idMensaje % 100000000);
+  // Las OTF nuevas, en su propio tramo: un mensaje y una OTF con el mismo
+  // número no se pisan.
+  static int _idNotificacionOtf(int otfId) => 200000000 + (otfId % 100000000);
 
   // Un canal propio, con el sonido de aviso y máxima importancia (sale encima
   // de lo que esté haciendo el operario). El sonido de un canal no se puede
@@ -89,6 +96,37 @@ class AvisadorNotificaciones implements Avisador {
   }
 
   @override
+  Future<void> sonarOtf(Map<String, dynamic> otf) async {
+    if (!_preparado) return;
+    final id = otf['id'];
+    if (id is! int) return;
+    final base = otf['baseName'] ?? otf['direccion'];
+    try {
+      await _plugin.show(
+        _idNotificacionOtf(id),
+        'Tienes una OTF nueva',
+        '${otf['clientName'] ?? 'OTF'}${base != null ? ' · $base' : ''}',
+        const NotificationDetails(
+          android: _canal,
+          iOS: DarwinNotificationDetails(presentAlert: true, presentSound: true, presentBanner: true),
+        ),
+      );
+      _puestosOtf.add(id);
+    } catch (e) {
+      debugPrint('Aviso de OTF: $e');
+    }
+  }
+
+  @override
+  Future<void> quitarOtf(int otfId) async {
+    if (!_preparado) return;
+    _puestosOtf.remove(otfId);
+    try {
+      await _plugin.cancel(_idNotificacionOtf(otfId));
+    } catch (_) {}
+  }
+
+  @override
   Future<void> quitar(int id) async {
     if (!_preparado) return;
     _puestos.remove(id);
@@ -102,6 +140,9 @@ class AvisadorNotificaciones implements Avisador {
     if (!_preparado) return;
     for (final id in _puestos.toList()) {
       await quitar(id);
+    }
+    for (final id in _puestosOtf.toList()) {
+      await quitarOtf(id);
     }
   }
 }

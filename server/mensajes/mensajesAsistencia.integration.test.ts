@@ -86,4 +86,44 @@ describeSiHayBase("mensajes entre la oficina y la tablet de la asistencia", () =
       m.enviarDesdeOficina({ assistanceId: asistencia, texto: "Hola", urgente: false, autor: null })
     ).rejects.toMatchObject({ status: 409 });
   });
+
+  describe("en una OTF", () => {
+    let otf = 0;
+
+    beforeAll(async () => {
+      otf = Number(
+        (
+          await db.query(
+            `INSERT INTO otf ("clientName", status, "assignedTechName", "createdAtMs", "updatedAtMs")
+             VALUES ('Conti 360','planificada',$1,$2,$2) RETURNING id`,
+            [tecnico, ahora]
+          )
+        ).rows[0].id
+      );
+    });
+
+    afterAll(async () => {
+      await db.query(`DELETE FROM asistencia_mensajes WHERE "otfId" = $1`, [otf]);
+      await db.query(`DELETE FROM otf WHERE id = $1`, [otf]);
+    });
+
+    it("la tablet lo recoge con el cliente de la OTF, y contestar lo deja leído", async () => {
+      const enviado = await m.enviarDesdeOficina({ otfId: otf, texto: "El 0348LJD no está", urgente: true, autor: "Oficina", ahoraMs: ahora });
+      expect(enviado).toMatchObject({ otfId: otf, assistanceId: null, techName: tecnico });
+
+      const pendientes = await m.pendientesDeOperario(tecnico, ahora + 1);
+      expect(pendientes.find((p) => p.id === enviado.id)).toMatchObject({ otfCliente: "Conti 360", repetirSonido: true });
+
+      await m.responderDesdeTablet({ otfId: otf, techName: tecnico, texto: "Lo dejo", ahoraMs: ahora + 2 });
+      expect((await m.pendientesDeOperario(tecnico, ahora + 3)).some((p) => p.otfId === otf)).toBe(false);
+      expect((await m.listarDeOtf(otf, ahora + 3)).map((x) => x.estado)).toEqual(["leido", "respuesta"]);
+    });
+
+    it("con la OTF finalizada ya no se manda nada", async () => {
+      await db.query(`UPDATE otf SET status = 'finalizada' WHERE id = $1`, [otf]);
+      await expect(
+        m.enviarDesdeOficina({ otfId: otf, texto: "Hola", urgente: false, autor: null })
+      ).rejects.toMatchObject({ status: 409 });
+    });
+  });
 });
