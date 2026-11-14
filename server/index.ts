@@ -16,6 +16,7 @@ import { fallaAlFirmar, firmarEnFilas, firmarUrls } from "./core/fotosFirmadas.t
 import { descargarMedioTwilio, rescatarMedioDeTwilio } from "./core/medioTwilio.ts";
 import { elegirPosicion, horaWebfleet, type PosicionElegida } from "./core/posicionDoble.ts";
 import { crearCacheEta, ESTADOS_ETA_ESTIMADA, type EtaEstimada } from "./core/etaEstimada.ts";
+import { sqlActualizarOtf } from "./otf/actualizar.ts";
 import {
   borrarPosicionTablet,
   guardarPosicionTablet,
@@ -19284,34 +19285,34 @@ app.put("/api/otf/:id", requireSupervisorRole, async (req, res) => {
   try {
     const id = Number(req.params.id);
     const b = req.body ?? {};
+    const actual = await db.query(`SELECT "knownPlaceId" FROM otf WHERE id = $1`, [id]);
+    if (actual.rows.length === 0) return res.status(404).json({ error: "OTF no encontrada" });
 
-    if (b.assignedTechName) {
-      const disp = await checkTechDisponibleParaOtf(
-        b.assignedTechName,
-        b.knownPlaceId != null ? Number(b.knownPlaceId) : null,
-        id
-      );
-      if (!disp.ok) return res.status(409).json({ error: disp.error, code: "TECH_OCUPADO" });
-      // Cambiar de operario cambia detrás de qué espera: se recalcula.
-      await db.query(`UPDATE otf SET "esperaAsistenciaId" = $2 WHERE id = $1`, [
-        id,
-        disp.esperaAsistenciaId ?? null,
-      ]);
+    // Solo si cambia el operario: comprobar que puede y recalcular detrás de
+    // qué asistencia espera. Sin operario, no espera a nadie.
+    if (Object.prototype.hasOwnProperty.call(b, "assignedTechName")) {
+      if (b.assignedTechName) {
+        const base = Object.prototype.hasOwnProperty.call(b, "knownPlaceId")
+          ? b.knownPlaceId
+          : actual.rows[0].knownPlaceId;
+        const disp = await checkTechDisponibleParaOtf(
+          b.assignedTechName,
+          base != null ? Number(base) : null,
+          id
+        );
+        if (!disp.ok) return res.status(409).json({ error: disp.error, code: "TECH_OCUPADO" });
+        await db.query(`UPDATE otf SET "esperaAsistenciaId" = $2 WHERE id = $1`, [
+          id,
+          disp.esperaAsistenciaId ?? null,
+        ]);
+      } else {
+        await db.query(`UPDATE otf SET "esperaAsistenciaId" = NULL WHERE id = $1`, [id]);
+      }
     }
 
-    await db.query(
-      `UPDATE otf SET
-         "clientName" = COALESCE($2,"clientName"),
-         "knownPlaceId" = $3, "baseName" = $4, direccion = $5, lat = $6, lng = $7,
-         "fechaProgramadaMs" = $8, status = COALESCE($9,status),
-         "assignedTechName" = $10, "assignedVehicleName" = $11, "webfleetVehicleId" = $12,
-         notas = $13, "updatedAtMs" = $14
-       WHERE id = $1`,
-      [id, b.clientName ?? null, b.knownPlaceId ?? null, b.baseName ?? null, b.direccion ?? null,
-       b.lat != null ? Number(b.lat) : null, b.lng != null ? Number(b.lng) : null,
-       b.fechaProgramadaMs ?? null, b.status ?? null, b.assignedTechName ?? null,
-       b.assignedVehicleName ?? null, b.webfleetVehicleId ?? null, b.notas ?? null, Date.now()]
-    );
+    // Solo los campos que llegan: ver otf/actualizar.ts.
+    const update = sqlActualizarOtf(id, b, Date.now());
+    if (update) await db.query(update.sql, update.params);
     res.json(await otfWithDetails(id));
   } catch (e) {
     console.error("PUT /api/otf/:id error:", e);
