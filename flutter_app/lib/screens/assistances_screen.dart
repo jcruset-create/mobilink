@@ -93,6 +93,38 @@ class _AssistancesScreenState extends State<AssistancesScreen>
       _biometriaActivada = activada;
       _esFaceId = face;
     });
+    // Quien ya tenía la sesión abierta nunca vio la oferta (sólo salía al
+    // entrar con el PIN). Como en Lite: se ofrece una vez y no se insiste.
+    if (!activada && !await SesionSegura.biometriaOfrecida()) {
+      await SesionSegura.marcarBiometriaOfrecida();
+      if (!mounted) return;
+      final nombre = face ? 'Face ID' : 'la huella';
+      final quiere = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          backgroundColor: AppColors.surface,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          title: Text(face ? 'Entrar con Face ID' : 'Entrar con la huella',
+              style: const TextStyle(color: AppColors.textPrimary)),
+          content: Text(
+            'Podrás abrir Mobilink Assist con $nombre en lugar de escribir tu PIN. '
+            'Se activa o desactiva cuando quieras con el botón de la cara de la barra de arriba.',
+            style: const TextStyle(color: AppColors.textSecondary),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Ahora no', style: TextStyle(color: AppColors.textSecondary)),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Activar', style: TextStyle(color: AppColors.primary)),
+            ),
+          ],
+        ),
+      );
+      if (quiere == true && mounted) await _gestionarBiometria();
+    }
   }
 
   Future<void> _loadVersion() async {

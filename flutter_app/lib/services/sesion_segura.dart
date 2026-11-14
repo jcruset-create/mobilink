@@ -72,6 +72,21 @@ class SesionSegura {
     await prefs.remove(_kBiometria);
   }
 
+  /// ¿Ya se le ha ofrecido Face ID / huella a este operario? Como en Lite: se
+  /// ofrece UNA vez, también a quien ya tenía la sesión abierta y nunca pasó
+  /// por la pantalla de acceso (que era el único sitio donde se ofrecía).
+  static const _kBiometriaOfrecida = 'biometriaOfrecida';
+
+  static Future<bool> biometriaOfrecida() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_kBiometriaOfrecida) ?? false;
+  }
+
+  static Future<void> marcarBiometriaOfrecida() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kBiometriaOfrecida, true);
+  }
+
   // ── Migración desde el almacenamiento en claro ──────────────────────
 
   /// Mueve el PIN que estaba en SharedPreferences al almacén seguro y lo
