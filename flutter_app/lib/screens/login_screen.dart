@@ -113,6 +113,7 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _ofrecerActivarBiometria() async {
     if (await SesionSegura.biometriaActivada()) return;
     if (!await Biometria.disponible()) return;
+    await SesionSegura.marcarBiometriaOfrecida();
     final face = await Biometria.esFaceId();
     final nombre = face ? 'Face ID' : 'la huella';
     if (!mounted) return;
