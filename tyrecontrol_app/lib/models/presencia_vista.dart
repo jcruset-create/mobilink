@@ -61,6 +61,11 @@ class VehiculoPresencia {
   final String? entradaBaseAt;
   final String? calculadoAt;
 
+  /// Dónde estaba el vehículo en su última posición. Es lo que lleva el botón
+  /// de «cómo llegar»: Google Maps traza la ruta hasta aquí.
+  final double? lat;
+  final double? lng;
+
   /// `sin_enlace` = falta vincularlo con la telemática;
   /// `proveedor_sin_dato` = está vinculado pero el proveedor calla.
   final String? motivo;
@@ -79,6 +84,8 @@ class VehiculoPresencia {
     this.velocidadKmh,
     this.entradaBaseAt,
     this.calculadoAt,
+    this.lat,
+    this.lng,
     this.motivo,
     this.matricula = '—',
     this.numeroUnidad,
@@ -98,6 +105,8 @@ class VehiculoPresencia {
       velocidadKmh: _decimal(j['velocidad_kmh']),
       entradaBaseAt: j['entrada_base_at'] as String?,
       calculadoAt: j['calculado_at'] as String?,
+      lat: _decimal(j['lat']),
+      lng: _decimal(j['lng']),
       motivo: j['motivo'] as String?,
       matricula: v is Map ? ('${v['matricula'] ?? '—'}') : '—',
       numeroUnidad: v is Map ? v['numero_unidad'] as String? : null,
@@ -485,6 +494,35 @@ String quienReviso(RevisionEstado? rev) {
 List<Map<String, dynamic>> _lista(dynamic v) => v is List
     ? v.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList()
     : const <Map<String, dynamic>>[];
+
+/// Cómo se llega hasta el vehículo: andando o en la unidad móvil.
+enum ModoDeIr { andando, enUnidadMovil }
+
+/// Si la posición sirve para ir a buscarlo: dentro del rango y no el (0, 0)
+/// que mandan algunos equipos cuando no tienen señal, que está en el golfo de
+/// Guinea.
+bool posicionUtil(double? lat, double? lng) {
+  if (lat == null || lng == null || !lat.isFinite || !lng.isFinite) return false;
+  if (lat.abs() > 90 || lng.abs() > 180) return false;
+  return !(lat == 0 && lng == 0);
+}
+
+/// La posición tiene más de una hora: el autobús puede haberse movido.
+bool posicionVieja(int? antiguedadMin) => antiguedadMin != null && antiguedadMin > 60;
+
+/// La ruta en Google Maps hasta la última posición del vehículo, o `null` si
+/// no hay una posición que valga.
+///
+/// Es la dirección «universal» de Google Maps: en el móvil abre la app si está
+/// instalada y, si no, el navegador; no hace falta clave.
+Uri? rutaHastaVehiculo(VehiculoPresencia v, ModoDeIr modo) {
+  if (!posicionUtil(v.lat, v.lng)) return null;
+  return Uri.https('www.google.com', '/maps/dir/', {
+    'api': '1',
+    'destination': '${v.lat!.toStringAsFixed(6)},${v.lng!.toStringAsFixed(6)}',
+    'travelmode': modo == ModoDeIr.andando ? 'walking' : 'driving',
+  });
+}
 
 int? _entero(dynamic v) {
   if (v == null) return null;

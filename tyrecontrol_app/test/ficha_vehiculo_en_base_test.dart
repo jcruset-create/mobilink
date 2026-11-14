@@ -173,4 +173,67 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(find.textContaining('Últ. '), findsNothing);
   });
+
+  group('cómo llegar al vehículo', () {
+    final conPosicion = VehiculoPresencia(
+      vehiculoId: 'v9',
+      estado: enBase,
+      delegacionNombre: 'Reus',
+      esSuBase: false,
+      distanciaM: 90,
+      antiguedadMin: 8,
+      entradaBaseAt: '2026-11-08T06:00:00Z',
+      lat: 41.156123,
+      lng: 1.106912,
+      matricula: '7524NNB',
+    );
+
+    IconButton boton(WidgetTester tester) => tester.widget<IconButton>(find.byKey(const Key('como-llegar')));
+
+    testWidgets('con posición, el botón del mapa va al lado de «Iniciar revisión» y cabe a 360 px', (tester) async {
+      await montar(tester, conPosicion);
+      expect(tester.takeException(), isNull);
+      expect(find.byKey(const Key('como-llegar')), findsOneWidget);
+      expect(boton(tester).onPressed, isNotNull);
+      // El botón verde sigue siendo uno solo.
+      expect(botonRelleno, findsOneWidget);
+    });
+
+    testWidgets('sin posición, el botón sale apagado', (tester) async {
+      await montar(tester, enBaseVencido);
+      expect(boton(tester).onPressed, isNull);
+      expect(find.byTooltip('Sin posición'), findsOneWidget);
+    });
+
+    testWidgets('al pulsarlo sale la hoja con de cuándo es la posición y las dos maneras de ir', (tester) async {
+      await montar(tester, conPosicion);
+      await tester.tap(find.byKey(const Key('como-llegar')));
+      await tester.pumpAndSettle();
+      expect(find.text('Ir hasta el 7524NNB'), findsOneWidget);
+      expect(find.text('Posición de hace 8 min · a 90 m del centro de la base de Reus'), findsOneWidget);
+      expect(find.byKey(const Key('ir-andando')), findsOneWidget);
+      expect(find.byKey(const Key('ir-enUnidadMovil')), findsOneWidget);
+      expect(find.textContaining('puede haberse movido'), findsNothing);
+      await tester.tap(find.text('Cancelar'));
+      await tester.pumpAndSettle();
+      expect(find.text('Ir hasta el 7524NNB'), findsNothing);
+    });
+
+    testWidgets('con la posición de hace más de una hora avisa de que puede haberse movido', (tester) async {
+      final vieja = VehiculoPresencia(
+        vehiculoId: 'v10',
+        estado: posicionAntigua,
+        antiguedadMin: 130,
+        lat: 41.15,
+        lng: 1.10,
+        matricula: '1761LWP',
+      );
+      await montar(tester, vieja);
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.byKey(const Key('como-llegar')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('puede haberse movido'), findsOneWidget);
+    });
+  });
 }
+

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../models/presencia_vista.dart';
 import '../theme/app_theme.dart';
@@ -142,35 +143,182 @@ class FichaVehiculoEnBase extends StatelessWidget {
            * destacada: un botón verde y grande en un autobús que va por la
            * autopista invita a bajar al patio a buscarlo.
            */
-          SizedBox(
-            width: double.infinity,
-            height: 46,
-            child: dentro
-                ? FilledButton.icon(
-                    onPressed: abriendo ? null : onRevisar,
-                    style: FilledButton.styleFrom(backgroundColor: AppColors.success),
-                    icon: abriendo
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.play_arrow),
-                    label: const Text('Iniciar revisión'),
-                  )
-                : OutlinedButton.icon(
-                    onPressed: abriendo ? null : onRevisar,
-                    icon: abriendo
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.play_arrow),
-                    label: const Text('Iniciar revisión'),
-                  ),
+          // «Iniciar revisión» y, a su lado, el botón para ir hasta el
+          // vehículo: abre una hoja para elegir andando o en la unidad móvil.
+          Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: 46,
+                  child:       dentro
+                      ? FilledButton.icon(
+                          onPressed: abriendo ? null : onRevisar,
+                          style: FilledButton.styleFrom(backgroundColor: AppColors.success),
+                          icon: abriendo
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Icon(Icons.play_arrow),
+                          label: const Text('Iniciar revisión'),
+                        )
+                      : OutlinedButton.icon(
+                          onPressed: abriendo ? null : onRevisar,
+                          icon: abriendo
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Icon(Icons.play_arrow),
+                          label: const Text('Iniciar revisión'),
+                        ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              _botonComoLlegar(context),
+            ],
           ),
         ],
+      ),
+    );
+  }
+
+  /// El botón redondo del mapa. Apagado si no hay una posición que valga; en
+  /// ámbar si la posición tiene más de una hora.
+  Widget _botonComoLlegar(BuildContext context) {
+    final hay = posicionUtil(v.lat, v.lng);
+    final vieja = posicionVieja(v.antiguedadMin);
+    final color = !hay ? AppColors.textDisabled : (vieja ? AppColors.warning : AppColors.info);
+    return Tooltip(
+      message: hay ? 'Cómo llegar al vehículo' : 'Sin posición',
+      child: SizedBox(
+        width: 46,
+        height: 46,
+        child: IconButton(
+          key: const Key('como-llegar'),
+          onPressed: hay ? () => _abrirHoja(context) : null,
+          style: IconButton.styleFrom(
+            backgroundColor: color.withValues(alpha: 0.12),
+            disabledBackgroundColor: AppColors.disabledBtn.withValues(alpha: 0.4),
+            side: BorderSide(color: color.withValues(alpha: 0.7)),
+            shape: const CircleBorder(),
+          ),
+          icon: Icon(Icons.location_on_outlined, color: color),
+        ),
+      ),
+    );
+  }
+
+  /// La hoja de abajo: de cuándo es la posición y las dos maneras de ir.
+  void _abrirHoja(BuildContext context) {
+    final dentro = v.estado == enBase;
+    final base = v.delegacionNombre ?? nombreDeBase[v.delegacionId ?? ''];
+    final vieja = posicionVieja(v.antiguedadMin);
+    final donde = v.distanciaM == null
+        ? ''
+        : dentro
+            ? ' · a ${distanciaCorta(v.distanciaM)} del centro de la base${base != null ? ' de $base' : ''}'
+            : ' · a ${distanciaCorta(v.distanciaM)} de la base más cercana';
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+      builder: (hoja) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(color: AppColors.cardBorder, borderRadius: BorderRadius.circular(4)),
+                ),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                'Ir hasta el ${v.matricula}',
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppColors.textPrimary),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'Posición de hace ${minutosEnPalabras(v.antiguedadMin)}$donde',
+                style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+              ),
+              if (vieja) ...[
+                const SizedBox(height: 6),
+                const Text(
+                  'La posición tiene más de una hora: puede haberse movido.',
+                  style: TextStyle(fontSize: 12, color: AppColors.warning),
+                ),
+              ],
+              const SizedBox(height: 14),
+              _opcion(hoja, ModoDeIr.andando, Icons.directions_walk, 'Andando', 'Ruta a pie en Google Maps'),
+              const SizedBox(height: 10),
+              _opcion(hoja, ModoDeIr.enUnidadMovil, Icons.local_shipping_outlined, 'En la unidad móvil',
+                  'Ruta en coche en Google Maps'),
+              const SizedBox(height: 6),
+              TextButton(
+                onPressed: () => Navigator.of(hoja).pop(),
+                child: const Text('Cancelar', style: TextStyle(color: AppColors.textSecondary, fontSize: 15)),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _opcion(BuildContext hoja, ModoDeIr modo, IconData icono, String titulo, String detalle) {
+    return Material(
+      color: AppColors.background.withValues(alpha: 0.6),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: const BorderSide(color: AppColors.cardBorder),
+      ),
+      child: InkWell(
+        key: Key('ir-${modo.name}'),
+        borderRadius: BorderRadius.circular(14),
+        onTap: () async {
+          final ruta = rutaHastaVehiculo(v, modo);
+          final avisos = ScaffoldMessenger.maybeOf(hoja);
+          Navigator.of(hoja).pop();
+          if (ruta == null) return;
+          // Fuera de la app: Google Maps si está instalado, si no el navegador.
+          final abierta = await launchUrl(ruta, mode: LaunchMode.externalApplication);
+          if (!abierta) {
+            avisos?.showSnackBar(const SnackBar(content: Text('No se ha podido abrir Google Maps')));
+          }
+        },
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 56),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              children: [
+                Icon(icono, color: AppColors.info),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        titulo,
+                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+                      ),
+                      Text(detalle, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
