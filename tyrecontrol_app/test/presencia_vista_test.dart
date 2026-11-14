@@ -385,4 +385,36 @@ void main() {
       expect(fechaCorta(r.ultimaRevision), '07/03/2026');
     });
   });
+
+  group('rutaHastaVehiculo', () {
+    VehiculoPresencia en(double? lat, double? lng) =>
+        VehiculoPresencia(vehiculoId: 'v', estado: enBase, lat: lat, lng: lng);
+
+    test('andando y en la unidad móvil: la misma posición, distinto modo', () {
+      final a = rutaHastaVehiculo(en(41.1561234, 1.1069), ModoDeIr.andando)!;
+      expect(a.host, 'www.google.com');
+      expect(a.path, '/maps/dir/');
+      expect(a.queryParameters, {'api': '1', 'destination': '41.156123,1.106900', 'travelmode': 'walking'});
+      expect(rutaHastaVehiculo(en(41.1561234, 1.1069), ModoDeIr.enUnidadMovil)!.queryParameters['travelmode'], 'driving');
+    });
+
+    test('sin posición, o con una que no vale, no hay ruta', () {
+      expect(rutaHastaVehiculo(en(null, 1.1), ModoDeIr.andando), isNull);
+      expect(rutaHastaVehiculo(en(0, 0), ModoDeIr.andando), isNull);
+      expect(rutaHastaVehiculo(en(95, 1.1), ModoDeIr.andando), isNull);
+      expect(rutaHastaVehiculo(en(41.1, 190), ModoDeIr.andando), isNull);
+    });
+
+    test('la posición se lee de lo que manda el servidor', () {
+      final v = VehiculoPresencia.desdeJson({'vehiculo_id': 'v', 'estado': enBase, 'lat': '41.15', 'lng': 1.1});
+      expect((v.lat, v.lng), (41.15, 1.1));
+    });
+
+    test('vieja a partir de la hora', () {
+      expect(posicionVieja(60), isFalse);
+      expect(posicionVieja(61), isTrue);
+      expect(posicionVieja(null), isFalse);
+    });
+  });
 }
+
