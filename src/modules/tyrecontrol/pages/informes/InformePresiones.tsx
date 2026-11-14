@@ -3,9 +3,10 @@ import { Link } from "react-router-dom";
 import { useInformesFiltros } from "./InformesLayout";
 import { presiones } from "../../services/informes";
 import type { PresionNeumatico } from "../../types/informes";
-import { KpiCard } from "../../components/informes/KpiCard";
+import { FiltroActivo, KpiCard } from "../../components/informes/KpiCard";
 import { TableWrap, tdCls, thCls } from "../../components/ui";
 import { descargarCSV } from "../../utils/exportar";
+import { presionesDeEstado, NOMBRE_PRESION, type EstadoPresion } from "../../services/cuadrosInformes";
 
 const ESTADO: Record<string, { label: string; cls: string }> = {
   baja: { label: "Baja", cls: "text-rose-300" },
@@ -21,6 +22,7 @@ export default function InformePresiones() {
   const [items, setItems] = useState<PresionNeumatico[]>([]);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
+  const [soloEstado, setSoloEstado] = useState<EstadoPresion | null>(null);
 
   useEffect(() => {
     let vivo = true;
@@ -35,23 +37,32 @@ export default function InformePresiones() {
   if (cargando && items.length === 0) return <div className="text-slate-400">Cargando…</div>;
   if (error) return <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">{error}</div>;
 
-  const n = (e: string) => items.filter((i) => i.estado === e).length;
+  const n = (e: EstadoPresion) => presionesDeEstado(items, e).length;
+  const visibles = presionesDeEstado(items, soloEstado);
+  // Cada cuadro deja solo las de su estado; pulsar el marcado las devuelve todas.
+  const alternar = (e: EstadoPresion) => setSoloEstado((actual) => (actual === e ? null : e));
 
   return (
     <div>
       <div className="mb-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-        <KpiCard title="Presión baja" value={n("baja")} tono={n("baja") > 0 ? "danger" : "ok"} />
-        <KpiCard title="Sobrepresión" value={n("alta")} tono={n("alta") > 0 ? "warn" : "ok"} />
-        <KpiCard title="Correctas" value={n("ok")} tono="ok" />
-        <KpiCard title="Sin referencia" value={n("sin_referencia")} hint="Falta presión de catálogo" />
+        <KpiCard title="Presión baja" value={n("baja")} tono={n("baja") > 0 ? "danger" : "ok"}
+                 activo={soloEstado === "baja"} onClick={() => alternar("baja")} />
+        <KpiCard title="Sobrepresión" value={n("alta")} tono={n("alta") > 0 ? "warn" : "ok"}
+                 activo={soloEstado === "alta"} onClick={() => alternar("alta")} />
+        <KpiCard title="Correctas" value={n("ok")} tono="ok"
+                 activo={soloEstado === "ok"} onClick={() => alternar("ok")} />
+        <KpiCard title="Sin referencia" value={n("sin_referencia")} hint="Falta presión de catálogo"
+                 activo={soloEstado === "sin_referencia"} onClick={() => alternar("sin_referencia")} />
       </div>
 
       <div className="rounded-lg bg-slate-800 p-3">
-        <div className="mb-2 flex items-center justify-between">
-          <div className="text-[11px] font-bold uppercase text-slate-400">Presiones de neumáticos montados ({items.length})</div>
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <div className="text-[11px] font-bold uppercase text-slate-400">Presiones de neumáticos montados ({visibles.length})</div>
+          {soloEstado && <FiltroActivo texto={NOMBRE_PRESION[soloEstado]} onQuitar={() => setSoloEstado(null)} />}
+          <span className="flex-1" />
           <button
-            onClick={() => descargarCSV("presiones", ["Neumático", "Matrícula", "Posición", "Medida (bar)", "Recomendada (bar)", "Diferencia", "Estado"],
-              items.map((i) => [i.codigo, i.matricula, i.posicion, i.presion_medida ?? "", i.presion_recomendada ?? "", i.diferencia ?? "", i.estado]))}
+            onClick={() => descargarCSV(soloEstado ? `presiones-${soloEstado}` : "presiones", ["Neumático", "Matrícula", "Posición", "Medida (bar)", "Recomendada (bar)", "Diferencia", "Estado"],
+              visibles.map((i) => [i.codigo, i.matricula, i.posicion, i.presion_medida ?? "", i.presion_recomendada ?? "", i.diferencia ?? "", i.estado]))}
             className="rounded border border-slate-600 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-700"
           >Exportar CSV</button>
         </div>
@@ -62,7 +73,8 @@ export default function InformePresiones() {
           </tr></thead>
           <tbody>
             {items.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={7}>Sin presiones registradas.</td></tr>
-            : items.map((i) => {
+            : visibles.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={7}>Ninguna goma en «{soloEstado ? NOMBRE_PRESION[soloEstado] : ""}».</td></tr>
+            : visibles.map((i) => {
               const est = ESTADO[i.estado] ?? { label: i.estado, cls: "text-slate-300" };
               return (
                 <tr key={i.neumatico_id} className="border-t border-slate-700/60">

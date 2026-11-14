@@ -45,3 +45,21 @@ export function KpiCard({
     </button>
   );
 }
+
+/**
+ * La etiqueta que dice qué filtro hay puesto sobre una lista, con su ✕.
+ *
+ * Va junto al título de la lista y no solo en el cuadro: en un informe largo
+ * el cuadro marcado queda fuera de la vista al bajar, y una lista corta sin
+ * explicación parece un informe roto.
+ */
+export function FiltroActivo({ texto, onQuitar }: { texto: string; onQuitar: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onQuitar}
+      className="rounded-full border border-sky-500/50 bg-sky-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-sky-200 hover:bg-sky-500/20"
+      title="Quitar el filtro y verlo todo"
+    >{texto} ✕</button>
+  );
+}

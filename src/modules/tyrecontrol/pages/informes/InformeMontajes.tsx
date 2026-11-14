@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { useInformesFiltros } from "./InformesLayout";
 import { montajesInforme } from "../../services/informes";
 import type { MontajesInforme, OrigenMontajes } from "../../types/informes";
-import { KpiCard } from "../../components/informes/KpiCard";
+import { FiltroActivo, KpiCard } from "../../components/informes/KpiCard";
+import { montajesDeCondicion, NOMBRE_CONDICION, type CondicionMontaje } from "../../services/cuadrosInformes";
 import { BarList, ColumnChart } from "../../components/informes/charts";
 import { descargarCSV } from "../../utils/exportar";
 import { TableWrap, tdCls, thCls } from "../../components/ui";
@@ -35,6 +36,7 @@ export default function InformeMontajes() {
   const [data, setData] = useState<MontajesInforme | null>(null);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
+  const [condicion, setCondicion] = useState<CondicionMontaje | null>(null);
 
   useEffect(() => {
     let vivo = true;
@@ -55,6 +57,10 @@ export default function InformeMontajes() {
   const exc = data.excluidas;
   const hayExcluidas = exc.anuladas + exc.correcciones + exc.declaradas + exc.no_completadas > 0;
   const cob = data.recorridos_estimados ?? null;
+  // Con una condición pulsada, las dos listas de abajo se quedan con ella: las
+  // referencias de esa condición y, por vehículo, cuántas de ESAS lleva.
+  const { referencias, vehiculos } = montajesDeCondicion(data, condicion);
+  const alternar = (c: CondicionMontaje) => setCondicion((actual) => (actual === c ? null : c));
 
   return (
     <div>
@@ -71,12 +77,20 @@ export default function InformeMontajes() {
         </span>
       </div>
 
-      <div className="mb-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-        <KpiCard title="Unidades montadas" value={data.total} />
+      {/*
+        Nuevos, usados y recauchutados iban en un solo cuadro con los tres
+        números. Son tres preguntas, así que son tres cuadros, y cada uno
+        filtra las listas de abajo. «Unidades montadas» las devuelve todas.
+        Desmontadas y registros no filtran: no tienen filas detrás.
+      */}
+      <div className="mb-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+        <KpiCard title="Unidades montadas" value={data.total} onClick={() => setCondicion(null)} />
+        {(["nueva", "usada", "recauchutada"] as const).map((c) => (
+          <KpiCard key={c} title={NOMBRE_CONDICION[c]} value={cond(c)}
+                   activo={condicion === c} onClick={() => alternar(c)} />
+        ))}
         <KpiCard title="Unidades desmontadas" value={data.desmontajes} />
         <KpiCard title="Registros de operación" value={data.registros} />
-        <KpiCard title="Nuevos · usados · recauchutados"
-          value={`${cond("nueva")} · ${cond("usada")} · ${cond("recauchutada")}`} />
       </div>
 
       {origen === "ambos" && (
@@ -115,22 +129,24 @@ export default function InformeMontajes() {
       </div>
 
       <div className="mt-3 rounded-lg bg-slate-800 p-4">
-        <div className="mb-2 flex items-center justify-between">
-          <div className="text-[11px] font-bold uppercase text-slate-400">Por marca, modelo y medida</div>
-          <button onClick={() => descargarCSV("montajes_por_referencia",
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <div className="text-[11px] font-bold uppercase text-slate-400">Por marca, modelo y medida ({referencias.length})</div>
+          {condicion && <FiltroActivo texto={NOMBRE_CONDICION[condicion]} onQuitar={() => setCondicion(null)} />}
+          <span className="flex-1" />
+          <button onClick={() => descargarCSV(condicion ? `montajes_por_referencia_${condicion}` : "montajes_por_referencia",
             ["Marca", "Modelo", "Medida", "Condición", "Nº", "Histórico", "Normal"],
-            data.por_referencia.map((r) => [r.marca, r.modelo, r.medida, CONDICION_LABEL[r.condicion] ?? r.condicion, r.n, r.historico, r.normal]))}
+            referencias.map((r) => [r.marca, r.modelo, r.medida, CONDICION_LABEL[r.condicion] ?? r.condicion, r.n, r.historico, r.normal]))}
             className="rounded border border-slate-600 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-700">CSV</button>
         </div>
         <TableWrap>
-          <table className="min-w-full text-sm">
-            <thead><tr>
+          {/* TableWrap ya pone el <table>: aquí había otro dentro. */}
+            <thead className="bg-slate-900"><tr>
               <th className={thCls}>Marca</th><th className={thCls}>Modelo</th><th className={thCls}>Medida</th>
               <th className={thCls}>Condición</th><th className={thCls}>Nº</th>
               <th className={thCls}>Histórico</th><th className={thCls}>Normal</th>
             </tr></thead>
             <tbody>
-              {data.por_referencia.map((r, i) => (
+              {referencias.map((r, i) => (
                 <tr key={i} className="border-t border-slate-700">
                   <td className={tdCls}>{r.marca}</td><td className={tdCls}>{r.modelo}</td><td className={tdCls}>{r.medida}</td>
                   <td className={tdCls}>{CONDICION_LABEL[r.condicion] ?? r.condicion}</td>
@@ -139,20 +155,24 @@ export default function InformeMontajes() {
                   <td className={tdCls + " text-slate-400"}>{r.normal}</td>
                 </tr>
               ))}
-              {data.por_referencia.length === 0 && <tr><td className={tdCls} colSpan={7}>Sin montajes en el periodo.</td></tr>}
+              {referencias.length === 0 && <tr><td className={tdCls} colSpan={7}>
+                {condicion ? `Ningún montaje de «${NOMBRE_CONDICION[condicion]}» en el periodo.` : "Sin montajes en el periodo."}
+              </td></tr>}
             </tbody>
-          </table>
         </TableWrap>
       </div>
 
       <div className="mt-3 rounded-lg bg-slate-800 p-4">
-        <div className="mb-2 flex items-center justify-between">
-          <div className="text-[11px] font-bold uppercase text-slate-400">Por vehículo</div>
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="text-[11px] font-bold uppercase text-slate-400">Por vehículo</div>
+            {condicion && <FiltroActivo texto={NOMBRE_CONDICION[condicion]} onQuitar={() => setCondicion(null)} />}
+          </div>
           <button onClick={() => descargarCSV("montajes_por_vehiculo", ["Matrícula", "Nº", "Nuevos", "Usados", "Recauchutados"],
             data.por_vehiculo.map((v) => [v.matricula, v.n, v.nuevas, v.usadas, v.recauchutadas]))}
             className="rounded border border-slate-600 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-700">CSV</button>
         </div>
-        <BarList color="#6366f1" items={data.por_vehiculo.slice(0, 20).map((v) => ({ etiqueta: v.matricula, valor: v.n }))} />
+        <BarList color="#6366f1" items={vehiculos.slice(0, 20).map((v) => ({ etiqueta: v.matricula, valor: v.n }))} />
       </div>
 
       {hayExcluidas && (

@@ -98,3 +98,37 @@ export function nombreDeTramo(dias: number): string {
   if (dias % 30 === 0 && dias >= 180) return `${dias / 30} meses`;
   return `${dias} días`;
 }
+
+/** Los cuadros de la previsión de compra. */
+export type FiltroPrevision = "todo" | "vencidas" | "en30" | "hasta90" | "fuera";
+
+export const NOMBRE_FILTRO_PREVISION: Record<FiltroPrevision, string> = {
+  todo: "Todas las medidas",
+  vencidas: "Ya vencidas",
+  en30: "En 30 días",
+  hasta90: "Hasta 90 días",
+  fuera: "Fuera de la previsión",
+};
+
+/** Cuántas gomas de esa medida cuenta el cuadro: es el mismo número que suma arriba. */
+export function gomasDelCuadro(f: FilaPrevision, filtro: FiltroPrevision): number {
+  switch (filtro) {
+    case "vencidas": return f.vencidos;
+    case "en30": return f.enElTramo[30] ?? 0;
+    case "hasta90": return f.acumulado[90] ?? 0;
+    case "fuera": return f.sinDatos + f.sinFecha;
+    default: return f.montados;
+  }
+}
+
+/**
+ * Las medidas que tienen alguna goma en ese cuadro, de la que más a la que
+ * menos: al pulsar «Ya vencidas» se quiere saber de QUÉ medidas son, y cuál
+ * pesa más. Con «todo», la lista tal cual.
+ */
+export function medidasDelCuadro(filas: FilaPrevision[], filtro: FiltroPrevision): FilaPrevision[] {
+  if (filtro === "todo") return filas;
+  return filas
+    .filter((f) => gomasDelCuadro(f, filtro) > 0)
+    .sort((a, b) => gomasDelCuadro(b, filtro) - gomasDelCuadro(a, filtro) || a.medida.localeCompare(b.medida, "es"));
+}
