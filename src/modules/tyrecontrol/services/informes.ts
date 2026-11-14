@@ -4,6 +4,7 @@
 import { supabase } from "./supabase";
 import { authHeaders } from "./data";
 import type {
+  CeldaInventario,
   FiltrosInformes, KpisInformes, EstadoFlota, DimensionTotal, MarcaMedidaTotal, ProfundidadDistribucion, Alerta,
   EconomicoInformes, RankingVehiculo, RankingMarca, CosteKmNeumatico, DesgasteNeumatico,
   PresionNeumatico, ProductividadTecnico, OperacionesInforme, InformeEjecutivo,
@@ -46,6 +47,24 @@ export async function inventarioMarcaMedida(f: FiltrosInformes): Promise<MarcaMe
   const { data, error } = await supabase.rpc("tc_informes_inventario_marca_medida", { p_empresa: f.empresaId ?? null });
   if (error) throw new Error(error.message);
   return (data ?? []) as MarcaMedidaTotal[];
+}
+
+/**
+ * El inventario en celdas (estado × marca × modelo × medida × profundidad), de
+ * donde la pantalla saca todas sus tablas, enteras o de un solo estado.
+ *
+ * Devuelve `null` si no se puede leer —lo normal: la función todavía no está
+ * en la base—. No lanza a propósito: la pantalla tiene entonces el camino de
+ * siempre, con las funciones de siempre, y lo único que pierde es el filtro.
+ */
+export async function inventarioCubo(f: FiltrosInformes): Promise<CeldaInventario[] | null> {
+  try {
+    const { data, error } = await supabase.rpc("tc_informes_inventario_cubo", { p_empresa: f.empresaId ?? null });
+    if (error || !Array.isArray(data)) return null;
+    return data as CeldaInventario[];
+  } catch {
+    return null;
+  }
 }
 
 export async function distribucionProfundidad(f: FiltrosInformes): Promise<ProfundidadDistribucion[]> {

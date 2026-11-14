@@ -34,6 +34,40 @@ export interface EstadoFlota {
   urgente: number;
   pendiente: number;
   evolucion: { mes: string; revisiones: number }[];
+  /**
+   * Los vehículos uno a uno, con la misma clasificación de los recuentos.
+   * Opcional: lo añade tyrecontrol_cuadros_que_filtran.sql; sin él los
+   * semáforos siguen saliendo pero no pueden enseñar cuáles son.
+   */
+  vehiculos?: VehiculoFlota[];
+}
+
+export type EstadoDeFlota = "correcto" | "revisar" | "urgente" | "pendiente";
+
+export interface VehiculoFlota {
+  vehiculo_id: string;
+  matricula: string | null;
+  numero_unidad: string | null;
+  estado: EstadoDeFlota;
+  /** La profundidad más baja de su última revisión: la que decide el estado. */
+  prof_min: number | null;
+  fecha_revision: string | null;
+}
+
+/**
+ * Una celda del inventario: cuántos neumáticos hay con ese estado, marca,
+ * modelo, medida y rango de profundidad (tc_informes_inventario_cubo).
+ */
+export interface CeldaInventario {
+  estado: string;
+  marca: string;
+  modelo: string;
+  medida: string;
+  /** Ficha creada por la importación del histórico: no cuenta en las tablas. */
+  de_lote: boolean;
+  /** `null` si el neumático no tiene ninguna profundidad medida. */
+  rango: "r0_2" | "r2_4" | "r4_6" | "r6_8" | "r8_10" | "r10" | null;
+  n: number;
 }
 
 export interface DimensionTotal {
@@ -134,6 +168,9 @@ export interface OperacionesInforme {
   por_tipo: { tipo: string; n: number }[];
   por_motivo: { motivo: string; n: number }[];
   evolucion: { mes: string; n: number }[];
+  /** Lo mismo partido por tipo. Opcionales: sin ellos los cuadros no filtran. */
+  por_tipo_motivo?: { tipo: string; motivo: string; n: number }[];
+  evolucion_tipo?: { mes: string; tipo: string; n: number }[];
 }
 
 /** Informe «Montajes de neumáticos»: cuenta UNIDADES QUE ENTRAN. Las salidas
