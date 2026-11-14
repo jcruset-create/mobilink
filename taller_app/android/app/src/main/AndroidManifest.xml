@@ -37,6 +37,8 @@
          Android 13+ no muestra ninguna notificación. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Huella / cara para abrir la sesión guardada (local_auth). -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- La app es para tablets de taller, y muchas no tienen cámara trasera ni

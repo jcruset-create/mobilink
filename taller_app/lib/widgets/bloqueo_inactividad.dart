@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
+import '../services/biometria.dart';
+import '../services/preferencias.dart';
 import '../theme.dart';
 
 /// Bloqueo por inactividad para la tablet del puesto de trabajo.
@@ -91,6 +93,35 @@ class _PantallaBloqueoState extends State<_PantallaBloqueo> {
   String? _error;
   bool _comprobando = false;
 
+  /// Si el operario activó Face ID / huella, el candado se abre con eso y el
+  /// PIN queda de salida. La petición sale sola una vez al bloquearse.
+  bool _bio = false;
+  String _bioNombre = 'Face ID';
+
+  @override
+  void initState() {
+    super.initState();
+    _prepararBiometria();
+  }
+
+  Future<void> _prepararBiometria() async {
+    if (!await Preferencias.biometriaActivada()) return;
+    if (!await Biometria.disponible()) return;
+    final nombre = await Biometria.nombre();
+    if (!mounted) return;
+    setState(() {
+      _bio = true;
+      _bioNombre = nombre;
+    });
+    await _conBiometria();
+  }
+
+  Future<void> _conBiometria() async {
+    if (await Biometria.autenticar('Desbloquea WorkPlanner Taller')) {
+      if (mounted) widget.onDesbloquear();
+    }
+  }
+
   @override
   void dispose() {
     _pinCtrl.dispose();
@@ -146,9 +177,20 @@ class _PantallaBloqueoState extends State<_PantallaBloqueo> {
                     style: const TextStyle(fontSize: 18, color: AppColors.textMuted),
                   ),
                   const SizedBox(height: 24),
+                  if (_bio) ...[
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        onPressed: _conBiometria,
+                        icon: const Icon(Icons.fingerprint),
+                        label: Text('Desbloquear con $_bioNombre'),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
                   TextField(
                     controller: _pinCtrl,
-                    autofocus: true,
+                    autofocus: !_bio,
                     keyboardType: TextInputType.number,
                     obscureText: true,
                     maxLength: 6,

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
+import '../services/biometria.dart';
+import '../services/preferencias.dart';
 import '../theme.dart';
 import 'home_screen.dart';
 
@@ -64,9 +65,9 @@ class _LoginScreenState extends State<LoginScreen> {
       await ApiService.login(name, code);
       final api = ApiService(techName: name, code: code);
       final esSup = await api.esSupervisor();
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('techName', name);
-      await prefs.setString('code', code);
+      await Preferencias.guardarSesion(name, code);
+      if (!mounted) return;
+      await _ofrecerBiometria();
       if (!mounted) return;
       Navigator.of(context).pushReplacement(MaterialPageRoute(
         builder: (_) => HomeScreen(api: api, esSupervisor: esSup),
@@ -77,6 +78,37 @@ class _LoginScreenState extends State<LoginScreen> {
         _loading = false;
         _error = e.toString().replaceFirst('Exception: ', '');
       });
+    }
+  }
+
+  /// Tras el primer login con éxito en un móvil con Face ID / huella se
+  /// ofrece activarlo, una sola vez. Si dice que no, se activa cuando quiera
+  /// desde el botón de la huella de la cabecera. Igual que en Assist lite.
+  Future<void> _ofrecerBiometria() async {
+    if (await Preferencias.biometriaActivada()) return;
+    if (await Preferencias.biometriaOfrecida()) return;
+    if (!await Biometria.disponible()) return;
+    await Preferencias.marcarBiometriaOfrecida();
+    final nombre = await Biometria.nombre();
+    if (!mounted) return;
+    final activar = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.fingerprint, color: AppColors.primary),
+        title: Text('¿Entrar con $nombre?'),
+        content: Text('La próxima vez que abras la app entrarás con $nombre, '
+            'sin elegir el nombre ni escribir el PIN.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Ahora no')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Activar')),
+        ],
+      ),
+    );
+    if (activar != true) return;
+    // Se comprueba en el momento: activar algo que luego no funciona deja al
+    // operario en el candado sin poder pasar.
+    if (await Biometria.autenticar('Activa el acceso con $nombre')) {
+      await Preferencias.activarBiometria(true);
     }
   }
 

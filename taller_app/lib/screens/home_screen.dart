@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../models/job.dart';
 import '../nombres.dart';
 import '../services/api_service.dart';
+import '../services/biometria.dart';
 import '../services/offline_store.dart';
+import '../services/preferencias.dart';
 import '../theme.dart';
 import '../widgets/bloqueo_inactividad.dart';
 import '../widgets/boton_pausa.dart';
@@ -33,6 +34,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _load();
+    _cargarBiometria();
   }
 
   Future<void> _load() async {
@@ -56,10 +58,52 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  /// Face ID / huella: si hay sensor, si está activado y cómo se llama.
+  bool _bioDisponible = false;
+  bool _bioActivada = false;
+  String _bioNombre = 'Face ID';
+
+  Future<void> _cargarBiometria() async {
+    final disponible = await Biometria.disponible();
+    final activada = await Preferencias.biometriaActivada();
+    final nombre = await Biometria.nombre();
+    if (!mounted) return;
+    setState(() {
+      _bioDisponible = disponible;
+      _bioActivada = activada;
+      _bioNombre = nombre;
+    });
+  }
+
+  /// Activar exige identificarse en el momento; desactivar no pide nada.
+  Future<void> _cambiarBiometria() async {
+    final activar = !_bioActivada;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.fingerprint, color: AppColors.primary),
+        title: Text(activar ? '¿Entrar con $_bioNombre?' : '¿Dejar de usar $_bioNombre?'),
+        content: Text(activar
+            ? 'Al abrir la app y al desbloquearla se pedirá $_bioNombre en vez del PIN.'
+            : 'Volverás a entrar eligiendo el nombre y escribiendo el PIN.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(activar ? 'Activar' : 'Desactivar')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    if (activar && !await Biometria.autenticar('Activa el acceso con $_bioNombre')) return;
+    await Preferencias.activarBiometria(activar);
+    if (!mounted) return;
+    setState(() => _bioActivada = activar);
+  }
+
   Future<void> _logout() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('techName');
-    await prefs.remove('code');
+    await Preferencias.borrarSesion();
+    await Preferencias.olvidarBiometria();
     if (!mounted) return;
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(builder: (_) => const LoginScreen()),
@@ -108,6 +152,15 @@ class _HomeScreenState extends State<HomeScreen> {
             errorBuilder: (_, __, ___) => const Text('WorkPlanner Taller'),
           ),
           actions: [
+            if (_bioDisponible)
+              IconButton(
+                icon: Icon(Icons.fingerprint,
+                    color: _bioActivada ? Colors.greenAccent : null),
+                tooltip: _bioActivada
+                    ? 'Entrando con $_bioNombre (pulsa para desactivar)'
+                    : 'Entrar con $_bioNombre',
+                onPressed: _cambiarBiometria,
+              ),
             BotonPausa(api: widget.api),
             IconButton(icon: const Icon(Icons.refresh), onPressed: _load),
             IconButton(icon: const Icon(Icons.logout), onPressed: _logout),

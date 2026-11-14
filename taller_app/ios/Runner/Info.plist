@@ -68,6 +68,8 @@
 	     La app no lleva criptografía propia —solo HTTPS del sistema contra la
 	     API—, así que la respuesta es «no». Las otras tres apps de la casa la
 	     llevan igual. -->
+	<key>NSFaceIDUsageDescription</key>
+	<string>WorkPlanner Taller usa Face ID para que entres en tu sesión sin elegir el nombre ni escribir el PIN cada vez.</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
