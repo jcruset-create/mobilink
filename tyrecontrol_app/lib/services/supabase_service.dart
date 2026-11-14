@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 import 'fotos.dart';
+import 'protocolo_profundidad.dart';
 import 'ultima_medicion.dart';
 import '../config.dart';
 import '../models/models.dart';
@@ -2465,8 +2466,16 @@ class TyreControlApi {
       // de ninguna (ver ultima_medicion.dart).
       final montajes = await _db
           .from('tc_montajes_actuales')
-          .select('posicion_id, neumatico_id, fecha_montaje')
+          .select('posicion_id, neumatico_id, fecha_montaje, neumatico:tc_neumaticos(medida)')
           .eq('vehiculo_id', vehiculoId);
+      // El mínimo de cada goma montada, por su llanta: el protocolo solo entra
+      // si su última lectura lo toca (ver protocolo_profundidad.dart).
+      final minimos = <String, double?>{
+        for (final m in (montajes as List))
+          if (m['neumatico_id'] != null)
+            m['neumatico_id'] as String: profundidadMinimaPorLlanta(
+                (m['neumatico'] is Map ? m['neumatico']['medida'] : null) as String?),
+      };
       final montado = <String, ({String neumatico, DateTime? desde})>{
         for (final m in (montajes as List))
           if (m['posicion_id'] != null && m['neumatico_id'] != null)
@@ -2504,7 +2513,7 @@ class TyreControlApi {
       // La profundidad, solo de revisiones que midieron todas sus ruedas y
       // pasada por el protocolo (mediana de tres, ver
       // protocolo_profundidad.dart); la presión, de la última que la traiga.
-      final reparto = repartirUltimasMediciones(filas, limite: limite, protocolo: true);
+      final reparto = repartirUltimasMediciones(filas, limite: limite, protocolo: true, minimos: minimos);
       return {
         for (final e in reparto.entries)
           // La fecha es la que decide si esta medición sigue valiendo o si la

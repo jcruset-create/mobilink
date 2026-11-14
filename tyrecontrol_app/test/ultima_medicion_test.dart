@@ -201,9 +201,12 @@ void protocoloEnElReparto() {
         manual: manual,
       );
 
+  // El mínimo de una llanta 22.5 para las dos gomas de las pruebas.
+  const min22 = {'n1': 4.0, 'nueva': 4.0};
+
   group('repartirUltimasMediciones · protocolo', () {
     test('el 4310JYJ: la última lectura imposible no mueve el valor y queda pendiente', () {
-      final m = repartirUltimasMediciones([f('r12', 1.8), f('r11', 8.5), f('r10', 8.7), f('r9', 9.2)], protocolo: true)['n1']!;
+      final m = repartirUltimasMediciones([f('r12', 1.8), f('r11', 8.5), f('r10', 8.7), f('r9', 9.2)], protocolo: true, minimos: min22)['n1']!;
       expect(m.profundidadMm, 8.5);
       expect(m.medidoEn, DateTime.parse('2026-11-11'));
       expect(m.confirmada, isTrue);
@@ -219,13 +222,13 @@ void protocoloEnElReparto() {
     });
 
     test('una sola lectura: vale, pero sin confirmar', () {
-      final m = repartirUltimasMediciones([f('r12', 3.0)], protocolo: true)['n1']!;
+      final m = repartirUltimasMediciones([f('r12', 3.0)], protocolo: true, minimos: min22)['n1']!;
       expect(m.profundidadMm, 3.0);
       expect(m.confirmada, isFalse);
     });
 
     test('la medición del técnico manda sobre lo anterior', () {
-      final m = repartirUltimasMediciones([f('r12', 3.0, manual: true), f('r11', 8.5), f('r10', 8.7)], protocolo: true)['n1']!;
+      final m = repartirUltimasMediciones([f('r12', 3.0, manual: true), f('r11', 8.5), f('r10', 8.7)], protocolo: true, minimos: min22)['n1']!;
       expect(m.profundidadMm, 3.0);
       expect(m.confirmada, isTrue);
       expect(m.pendienteMm, isNull);
@@ -236,7 +239,7 @@ void protocoloEnElReparto() {
         f('r12', 1.8, clave: 'vieja', heredada: 'nueva'),
         f('r11', 8.5, clave: 'vieja', heredada: 'nueva'),
         f('r10', 8.7, clave: 'vieja', heredada: 'nueva'),
-      ], protocolo: true);
+      ], protocolo: true, minimos: min22);
       expect(m['nueva']!.profundidadMm, 8.5);
       expect(m['nueva']!.pendienteMm, 1.8);
     });
@@ -247,9 +250,35 @@ void protocoloEnElReparto() {
         f('r12', 1.8), const FilaMedicion(revisionId: 'r12', clave: 'n2', presionBar: 8),
         f('r11', 8.5), f('r10', 8.7), f('r9', 8.6),
       ];
-      final m = repartirUltimasMediciones(filas, protocolo: true)['n1']!;
-      expect(m.profundidadMm, 8.6);
+      final m = repartirUltimasMediciones(filas, protocolo: true, minimos: min22)['n1']!;
+      // Sin la 1,8 de la incompleta, la última válida es 8,5: buena, vale ella.
+      expect(m.profundidadMm, 8.5);
       expect(m.pendienteMm, isNull);
+    });
+  });
+
+  group('repartirUltimasMediciones · el protocolo solo cuando la última da alerta', () {
+    test('última buena tras una alerta: vale la buena, confirmada', () {
+      final m = repartirUltimasMediciones([f('r12', 10.7), f('r11', 3.0), f('r10', 3.1)], protocolo: true, minimos: min22)['n1']!;
+      expect(m.profundidadMm, 10.7);
+      expect(m.confirmada, isTrue);
+      expect(m.pendienteMm, isNull);
+      expect(m.medidoEn, DateTime.parse('2026-11-12'));
+    });
+
+    test('una sola lectura buena no espera confirmación', () {
+      final m = repartirUltimasMediciones([f('r12', 8.6)], protocolo: true, minimos: min22)['n1']!;
+      expect((m.profundidadMm, m.confirmada), (8.6, true));
+    });
+
+    test('el ruido por encima del mínimo no se suaviza', () {
+      final m = repartirUltimasMediciones([f('r12', 8.5), f('r11', 9.2), f('r10', 8.7)], protocolo: true, minimos: min22)['n1']!;
+      expect(m.profundidadMm, 8.5);
+    });
+
+    test('sin mínimo conocido vale la última', () {
+      final m = repartirUltimasMediciones([f('r12', 1.8), f('r11', 8.5), f('r10', 8.7)], protocolo: true)['n1']!;
+      expect((m.profundidadMm, m.confirmada, m.pendienteMm), (1.8, true, null));
     });
   });
 }

@@ -145,12 +145,14 @@ Set<String> revisionesConTodasLasRuedas(Iterable<FilaMedicion> filas, {String? c
 /// llevaba `limit` y lo ha agotado, se pasa [limite] para no fiarse de la
 /// revisión del final, que puede venir cortada.
 ///
-/// Con [protocolo], la profundidad de cada clave es la que da por buena
-/// `valorDeLaSerie` sobre sus tres últimas lecturas válidas, no la última.
+/// Con [protocolo], la profundidad de cada clave es su última lectura válida,
+/// salvo que esa lectura la deje en su mínimo ([minimos], por clave): entonces
+/// decide `valorDeLaSerie` sobre las tres últimas. Sin mínimo, la última.
 Map<String, MedicionVigente> repartirUltimasMediciones(
   List<FilaMedicion> filas, {
   int? limite,
   bool protocolo = false,
+  Map<String, double?> minimos = const {},
 }) {
   final cortada = (limite != null && filas.length >= limite && filas.isNotEmpty) ? filas.last.revisionId : null;
   final completas = revisionesConTodasLasRuedas(filas, cortada: cortada);
@@ -187,7 +189,7 @@ Map<String, MedicionVigente> repartirUltimasMediciones(
   }
 
   for (final e in series.entries) {
-    final valor = valorDeLaSerie(e.value);
+    final valor = valorDeLaGoma(e.value, minimos[e.key]);
     if (valor == null) continue;
     final m = out.putIfAbsent(e.key, MedicionVigente.new);
     m.profundidadMm = valor.mm;

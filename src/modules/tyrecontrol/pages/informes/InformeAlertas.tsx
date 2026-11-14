@@ -252,7 +252,7 @@ export default function InformeAlertas() {
         <span className="text-[11px] text-slate-400">lectura baja por confirmar</span>
         <Muestra clase="bg-slate-600 text-slate-100">—</Muestra>
         <span className="text-[11px] text-slate-400">sin medir</span>
-        <span className="text-[11px] text-slate-500">· los milímetros son la mediana de las tres últimas lecturas de cada rueda</span>
+        <span className="text-[11px] text-slate-500">· los milímetros son la última lectura de cada rueda; si esa da alerta, decide la mediana de las tres últimas</span>
       </div>
 
       {visibles.length === 0 ? (
@@ -346,10 +346,11 @@ export default function InformeAlertas() {
         del vehículo, con la foto de su configuración de ejes y un recuadro por rueda; pasando el ratón por encima sale la
         posición, los milímetros y el día en que se midió ESA rueda, que dentro de un mismo vehículo pueden ser días
         distintos. La fecha del pie es la más reciente de las ruedas que avisan.
-        {" "}La profundidad de cada rueda es la <b>mediana de sus tres últimas lecturas</b>, no la última: el arco suelta de
-        vez en cuando una lectura imposible y una sola no puede mover el valor. Con dos lecturas vale la última si coinciden
-        (hasta 2 mm); lo que mide un técnico a mano vale siempre. Una lectura baja que todavía no tiene otra que la respalde
-        sale en violeta, <b>por confirmar</b>, y va a la lista para medir con sonda.
+        {" "}La profundidad de cada rueda es su <b>última lectura</b>. Solo cuando esa lectura la deja en el mínimo o por
+        debajo —cuando daría la alerta— se mira más atrás: vale la <b>mediana de las tres últimas</b>, porque el arco suelta
+        de vez en cuando una lectura imposible y una sola no puede encender el rojo. Lo que mide un técnico a mano vale
+        siempre. Una lectura baja que todavía no tiene otra que la respalde sale en violeta, <b>por confirmar</b>, y va a la
+        lista para medir con sonda; si la siguiente pasada la lee bien, se coge la buena.
         {" "}Las de <b>presión</b> no salen de una revisión: las manda el sensor de Goodyear por correo y se cierran solas
         cuando el vehículo vuelve a pasar por el arco y da bien.
         {" "}Los vehículos <b>dados de baja</b> no salen: a un autobús que ya no circula no se le cambian las gomas.

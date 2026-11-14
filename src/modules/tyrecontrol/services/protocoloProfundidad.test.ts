@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { valorDeLaSerie, veredicto, TOLERANCIA_MM, type LecturaDeSerie, veredictoEnLaFicha } from "./protocoloProfundidad";
+import { valorDeLaGoma, valorDeLaSerie, veredicto, TOLERANCIA_MM, type LecturaDeSerie, veredictoEnLaFicha } from "./protocoloProfundidad";
 
 /** Lecturas del arco, de la más reciente a la más antigua. */
 const arco = (...mm: number[]): LecturaDeSerie[] => mm.map((v, i) => ({ mm: v, manual: false, fecha: `d${i}` }));
@@ -164,5 +164,30 @@ describe("veredictoEnLaFicha", () => {
   it("sin profundidad o sin mínimo no se acusa a nadie", () => {
     expect(veredictoEnLaFicha(null, null, 4)).toBe("ok");
     expect(veredictoEnLaFicha(1, med({ profundidad_mm: 1, confirmada: true }), null)).toBe("ok");
+  });
+});
+
+describe("valorDeLaGoma: el protocolo solo cuando la última lectura da alerta", () => {
+  it("última buena: vale ella, confirmada, aunque antes hubiera alerta", () => {
+    expect(valorDeLaGoma(arco(10.7, 3.0, 3.1), 4)).toEqual({ mm: 10.7, fecha: "d0", confirmada: true, pendiente: null });
+  });
+
+  it("una sola lectura buena no espera confirmación", () => {
+    expect(valorDeLaGoma(arco(8.6), 4)).toMatchObject({ mm: 8.6, confirmada: true });
+  });
+
+  it("última en el mínimo o por debajo: decide el protocolo", () => {
+    expect(valorDeLaGoma(arco(1.8, 8.5, 8.7), 4)).toEqual(valorDeLaSerie(arco(1.8, 8.5, 8.7)));
+    expect(valorDeLaGoma(arco(4.0, 8.5, 8.7), 4)?.pendiente?.mm).toBe(4.0);
+    expect(veredicto(valorDeLaGoma(arco(3.0), 4), 4)).toBe("por_confirmar");
+    expect(veredicto(valorDeLaGoma(arco(3.0, 3.2, 9), 4), 4)).toBe("cambiar");
+  });
+
+  it("sin mínimo no hay alerta: vale la última", () => {
+    expect(valorDeLaGoma(arco(1.8, 8.5, 8.7), null)?.mm).toBe(1.8);
+  });
+
+  it("sin lecturas, nada", () => {
+    expect(valorDeLaGoma([], 4)).toBeNull();
   });
 });

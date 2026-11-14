@@ -15,6 +15,9 @@ function det(revision: string, neumatico: string, prof: number | null, presion: 
   return { revision_id: revision, neumatico_id: neumatico, posicion_id: `p-${neumatico}`, profundidad_mm: prof, presion_bar: presion };
 }
 
+/** El mínimo de una llanta 22.5: con él, una lectura de 4 o menos dispara la alerta. */
+const MIN_22_5 = () => 4;
+
 describe("revisionesConTodasLasRuedas", () => {
   it("la que mide todas sus ruedas cuenta", () => {
     const completas = revisionesConTodasLasRuedas([det("r1", "a", 9), det("r1", "b", 8)]);
@@ -191,7 +194,7 @@ describe("mapaUltimasMediciones · las lecturas siguen a la posición", () => {
       { revision_id: "r1", neumatico_id: "nueva", posicion_id: "pos-1", profundidad_mm: 5.9, presion_bar: 8 },
       delArco("r2", 2.6, 7.5, null),
     ];
-    const m = mapaUltimasMediciones(REVS.slice(1), detalles, montajes("2026-08-10"))["nueva"];
+    const m = mapaUltimasMediciones(REVS.slice(1), detalles, montajes("2026-08-10"), MIN_22_5)["nueva"];
     expect(m.profundidad_mm).toBe(5.9);
     expect(m.pendiente_mm).toBe(2.6);
     expect(m.confirmada).toBe(false);
@@ -203,7 +206,7 @@ describe("mapaUltimasMediciones · las lecturas siguen a la posición", () => {
       delArco("r2", 2.6, 7.5, null),
       { revision_id: "r1", neumatico_id: "nueva", posicion_id: "pos-1", profundidad_mm: 5.9, presion_bar: 8 },
     ];
-    const m = mapaUltimasMediciones(REVS, detalles, montajes("2026-08-10"))["nueva"];
+    const m = mapaUltimasMediciones(REVS, detalles, montajes("2026-08-10"), MIN_22_5)["nueva"];
     expect(m.profundidad_mm).toBe(2.6);
     expect(m.confirmada).toBe(true);
     expect(m.pendiente_mm).toBeNull();
@@ -243,7 +246,7 @@ describe("mapaUltimasMediciones · el protocolo", () => {
   ];
 
   it("el 4310JYJ: 8,7 · 8,5 · 1,8 → enseña 8,5 y deja el 1,8 pendiente", () => {
-    const m = mapaUltimasMediciones(REVS, tresPasadas([1.8, 8.5, 8.7]), new Map())["n-int"];
+    const m = mapaUltimasMediciones(REVS, tresPasadas([1.8, 8.5, 8.7]), new Map(), MIN_22_5)["n-int"];
     expect(m.profundidad_mm).toBe(8.5);
     expect(m.confirmada).toBe(true);
     expect(m.pendiente_mm).toBe(1.8);
@@ -253,12 +256,12 @@ describe("mapaUltimasMediciones · el protocolo", () => {
   });
 
   it("un desgaste de verdad se confirma a la segunda pasada", () => {
-    const m = mapaUltimasMediciones(REVS, tresPasadas([3.0, 3.2, 9]), new Map())["n-int"];
+    const m = mapaUltimasMediciones(REVS, tresPasadas([3.0, 3.2, 9]), new Map(), MIN_22_5)["n-int"];
     expect(m).toMatchObject({ profundidad_mm: 3.2, confirmada: true, pendiente_mm: null });
   });
 
   it("una sola lectura no está confirmada", () => {
-    const m = mapaUltimasMediciones(REVS, [det("r2", "n", 3.0)], new Map())["n"];
+    const m = mapaUltimasMediciones(REVS, [det("r2", "n", 3.0)], new Map(), MIN_22_5)["n"];
     expect(m).toMatchObject({ profundidad_mm: 3.0, confirmada: false, pendiente_mm: null });
   });
 
@@ -268,12 +271,47 @@ describe("mapaUltimasMediciones · el protocolo", () => {
       ...REVS.slice(1),
     ];
     const detalles = [det("m1", "n", 3.0), det("r2", "n", 8.5), det("r1", "n", 8.6)];
-    const m = mapaUltimasMediciones(revs, detalles, new Map())["n"];
+    const m = mapaUltimasMediciones(revs, detalles, new Map(), MIN_22_5)["n"];
     expect(m).toMatchObject({ profundidad_mm: 3.0, confirmada: true, pendiente_mm: null });
   });
 
   it("una goma con presión y sin profundidad válida sale sin valor y sin confirmar", () => {
-    const m = mapaUltimasMediciones(REVS, [det("r3", "n", null, 7.9), det("r3", "m", 5, 8)], new Map())["n"];
+    const m = mapaUltimasMediciones(REVS, [det("r3", "n", null, 7.9), det("r3", "m", 5, 8)], new Map(), MIN_22_5)["n"];
     expect(m).toMatchObject({ profundidad_mm: null, presion_bar: 7.9, confirmada: false, pendiente_mm: null });
+  });
+});
+
+describe("mapaUltimasMediciones · el protocolo solo cuando la última lectura da alerta", () => {
+  const tresPasadas = (int: [number, number, number]): DetalleParaMedicion[] => [
+    det("r3", "n", int[0]), det("r3", "m", 11),
+    det("r2", "n", int[1]), det("r2", "m", 11.1),
+    det("r1", "n", int[2]), det("r1", "m", 11.2),
+  ];
+
+  it("una última lectura buena vale tal cual, aunque las anteriores fueran malas", () => {
+    // Había alerta (3,1 · 3,0) y la última pasada la da buena: se coge la buena.
+    const m = mapaUltimasMediciones(REVS, tresPasadas([10.7, 3.0, 3.1]), new Map(), MIN_22_5)["n"];
+    expect(m).toMatchObject({ profundidad_mm: 10.7, confirmada: true, pendiente_mm: null });
+    expect(m.medido_en).toBe("2026-11-05T13:37:00Z");
+  });
+
+  it("y una sola lectura buena, también: no hay nada que confirmar", () => {
+    const m = mapaUltimasMediciones(REVS, [det("r2", "n", 8.6)], new Map(), MIN_22_5)["n"];
+    expect(m).toMatchObject({ profundidad_mm: 8.6, confirmada: true, pendiente_mm: null });
+  });
+
+  it("el ruido por encima del mínimo no se suaviza: vale la última, no la mediana", () => {
+    const m = mapaUltimasMediciones(REVS, tresPasadas([8.5, 9.2, 8.7]), new Map(), MIN_22_5)["n"];
+    expect(m.profundidad_mm).toBe(8.5);
+  });
+
+  it("justo en el mínimo SÍ es alerta: entra el protocolo", () => {
+    const m = mapaUltimasMediciones(REVS, tresPasadas([4.0, 8.5, 8.7]), new Map(), MIN_22_5)["n"];
+    expect(m).toMatchObject({ profundidad_mm: 8.5, pendiente_mm: 4.0 });
+  });
+
+  it("sin mínimo conocido no hay alerta posible: vale la última", () => {
+    const m = mapaUltimasMediciones(REVS, tresPasadas([1.8, 8.5, 8.7]), new Map())["n"];
+    expect(m).toMatchObject({ profundidad_mm: 1.8, confirmada: true, pendiente_mm: null });
   });
 });

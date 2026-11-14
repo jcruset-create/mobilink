@@ -52,7 +52,7 @@
  * llanta.
  */
 
-import { valorDeLaSerie, type LecturaDeSerie } from "./protocoloProfundidad";
+import { valorDeLaGoma, type LecturaDeSerie } from "./protocoloProfundidad";
 
 export interface RevisionParaMedicion {
   id: string;
@@ -139,6 +139,11 @@ export function mapaUltimasMediciones(
   revisiones: RevisionParaMedicion[],
   detalles: DetalleParaMedicion[],
   montajePorPosicion: Map<string, MontajeEnPosicion>,
+  /**
+   * El mínimo de cada goma (por su llanta). El protocolo solo entra cuando la
+   * última lectura lo toca; sin mínimo conocido vale la última, tal cual.
+   */
+  minimoDe: (neumaticoId: string) => number | null = () => null,
 ): Record<string, Medicion> {
   const completas = revisionesConTodasLasRuedas(detalles);
 
@@ -189,9 +194,9 @@ export function mapaUltimasMediciones(
 
   const mapa: Record<string, Medicion> = {};
   for (const nid of new Set([...series.keys(), ...presiones.keys()])) {
-    // La profundidad no es la última lectura: es la que da por buena el
-    // protocolo, con la última como pendiente si no está confirmada.
-    const valor = valorDeLaSerie(series.get(nid) ?? []);
+    // La última lectura, salvo que deje la goma en el mínimo: entonces decide
+    // el protocolo, con la última como pendiente si no está confirmada.
+    const valor = valorDeLaGoma(series.get(nid) ?? [], minimoDe(nid));
     mapa[nid] = {
       profundidad_mm: valor?.mm ?? null,
       presion_bar: presiones.get(nid) ?? null,
