@@ -6,6 +6,9 @@ import type { DesgasteNeumatico } from "../../types/informes";
 import { KpiCard } from "../../components/informes/KpiCard";
 import { TableWrap, tdCls, thCls } from "../../components/ui";
 import { descargarCSV } from "../../utils/exportar";
+import {
+  filtrarDesgaste, plazoDe, recuentosDesgaste, DIAS_PROXIMA, NOMBRE_FILTRO, type FiltroDesgaste,
+} from "../../services/desgasteFiltro";
 
 function fmtFecha(f: string | null): string {
   if (!f) return "—";
@@ -19,6 +22,7 @@ export default function InformeDesgaste() {
   const [items, setItems] = useState<DesgasteNeumatico[]>([]);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
+  const [filtro, setFiltro] = useState<FiltroDesgaste>("todo");
 
   useEffect(() => {
     let vivo = true;
@@ -34,32 +38,42 @@ export default function InformeDesgaste() {
   if (error) return <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">{error}</div>;
 
   const hoy = new Date();
-  const en60 = new Date(); en60.setDate(hoy.getDate() + 60);
-  const vencidos = items.filter((i) => i.fecha_prevista && new Date(i.fecha_prevista) <= hoy).length;
-  const proximos = items.filter((i) => i.fecha_prevista && new Date(i.fecha_prevista) > hoy && new Date(i.fecha_prevista) <= en60).length;
-  const prestados = items.filter((i) => i.origen_ritmo === "modelo").length;
+  // Los números de los cuadros y las filas que deja cada uno salen de la misma
+  // regla (services/desgasteFiltro.ts): no pueden decir cosas distintas.
+  const { vencida: vencidos, proxima: proximos, modelo: prestados } = recuentosDesgaste(items, hoy);
+  const visibles = filtrarDesgaste(items, filtro, hoy);
+  // Pulsar el cuadro que ya manda lo quita: es la forma natural de volver.
+  const alternar = (f: FiltroDesgaste) => setFiltro((actual) => (actual === f ? "todo" : f));
   // La API corta en 1.000 filas. Como la lista viene ordenada por fecha
   // prevista, las urgentes SÍ están todas; lo que no se puede es leer este
   // recuento como el total de la flota, y por eso no se enseña como tal.
   const recortada = items.length >= 1000;
 
   const filaColor = (i: DesgasteNeumatico) => {
-    if (i.fecha_prevista && new Date(i.fecha_prevista) <= hoy) return "text-rose-300";
-    if (i.fecha_prevista && new Date(i.fecha_prevista) <= en60) return "text-amber-300";
-    return "text-slate-200";
+    const plazo = plazoDe(i, hoy);
+    return plazo === "vencida" ? "text-rose-300" : plazo === "proxima" ? "text-amber-300" : "text-slate-200";
   };
 
   return (
     <div>
+      {/*
+        Cada cuadro filtra la tabla: el de vencidas deja las vencidas, y así
+        con todos. El primero las devuelve todas, y volver a pulsar el que
+        está marcado también.
+      */}
       <div className="mb-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
         <KpiCard
           title="En la lista"
           value={recortada ? `${items.length.toLocaleString("es-ES")}+` : items.length}
           hint={recortada ? "Las más urgentes primero; la API corta en 1.000" : "Neumáticos montados con mediciones"}
+          onClick={() => setFiltro("todo")}
         />
-        <KpiCard title="Sustitución vencida" value={vencidos} tono={vencidos > 0 ? "danger" : "ok"} />
-        <KpiCard title="Sustituir en 60 días" value={proximos} tono={proximos > 0 ? "warn" : "ok"} />
-        <KpiCard title="Con ritmo del modelo" value={prestados} tono="info" hint="Aún no llevan rodado lo bastante para medirles el suyo" />
+        <KpiCard title="Sustitución vencida" value={vencidos} tono={vencidos > 0 ? "danger" : "ok"}
+                 activo={filtro === "vencida"} onClick={() => alternar("vencida")} />
+        <KpiCard title={`Sustituir en ${DIAS_PROXIMA} días`} value={proximos} tono={proximos > 0 ? "warn" : "ok"}
+                 activo={filtro === "proxima"} onClick={() => alternar("proxima")} />
+        <KpiCard title="Con ritmo del modelo" value={prestados} tono="info" hint="Aún no llevan rodado lo bastante para medirles el suyo"
+                 activo={filtro === "modelo"} onClick={() => alternar("modelo")} />
       </div>
 
       <details className="mb-3 rounded-lg border border-slate-700 bg-slate-800/60 p-3 text-[12px] text-slate-300">
@@ -94,11 +108,20 @@ export default function InformeDesgaste() {
       </details>
 
       <div className="rounded-lg bg-slate-800 p-3">
-        <div className="mb-2 flex items-center justify-between">
-          <div className="text-[11px] font-bold uppercase text-slate-400">Predicción de sustitución ({items.length})</div>
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <div className="text-[11px] font-bold uppercase text-slate-400">Predicción de sustitución ({visibles.length})</div>
+          {filtro !== "todo" && (
+            <button
+              type="button"
+              onClick={() => setFiltro("todo")}
+              className="rounded-full border border-sky-500/50 bg-sky-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-sky-200 hover:bg-sky-500/20"
+              title="Quitar el filtro y ver todas"
+            >{NOMBRE_FILTRO[filtro]} ✕</button>
+          )}
+          <span className="flex-1" />
           <button
-            onClick={() => descargarCSV("desgaste", ["Neumático", "Matrícula", "Marca", "Modelo", "Medida", "Última prof (mm)", "Última medición", "Desgaste (mm/1000km)", "Origen del ritmo", "Km restantes", "Fecha prevista", "Nº medidas"],
-              items.map((i) => [i.codigo, i.matricula, i.marca, i.modelo, i.medida, i.ultima_prof ?? "", i.ultima_fecha ?? "", i.mm_por_1000km ?? "", i.origen_ritmo ?? "", i.km_restantes ?? "", i.fecha_prevista ?? "", i.n_medidas]))}
+            onClick={() => descargarCSV(filtro === "todo" ? "desgaste" : `desgaste-${filtro}`, ["Neumático", "Matrícula", "Marca", "Modelo", "Medida", "Última prof (mm)", "Última medición", "Desgaste (mm/1000km)", "Origen del ritmo", "Km restantes", "Fecha prevista", "Nº medidas"],
+              visibles.map((i) => [i.codigo, i.matricula, i.marca, i.modelo, i.medida, i.ultima_prof ?? "", i.ultima_fecha ?? "", i.mm_por_1000km ?? "", i.origen_ritmo ?? "", i.km_restantes ?? "", i.fecha_prevista ?? "", i.n_medidas]))}
             className="rounded border border-slate-600 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-700"
           >Exportar CSV</button>
         </div>
@@ -110,7 +133,8 @@ export default function InformeDesgaste() {
           </tr></thead>
           <tbody>
             {items.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={8}>Sin datos: hacen falta neumáticos montados con revisiones y kilometraje.</td></tr>
-            : items.map((i) => (
+            : visibles.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={8}>Ninguna goma en «{NOMBRE_FILTRO[filtro]}».</td></tr>
+            : visibles.map((i) => (
               <tr key={i.neumatico_id} className="border-t border-slate-700/60">
                 <td className={tdCls + " font-semibold"}><Link to={`/tyrecontrol/neumaticos/${i.neumatico_id}`} className="text-sky-300 hover:underline">{i.codigo ?? "—"}</Link></td>
                 <td className={tdCls + " text-slate-300"}>{i.matricula ?? "—"}</td>

@@ -11,8 +11,12 @@ const TONO_VALOR: Record<Tono, string> = {
 };
 
 // Tarjeta KPI del dashboard. Clicable si se pasa onClick (abre su informe).
+//
+// `activo` marca el cuadro cuyo filtro se está viendo: cuando un cuadro filtra
+// la lista de debajo, tiene que verse cuál manda sin mirar la lista. El que
+// las enseña todas no se marca: sin filtro no hay nada que señalar.
 export function KpiCard({
-  title, value, hint, tono = "neutral", icon, onClick,
+  title, value, hint, tono = "neutral", icon, onClick, activo = false,
 }: {
   title: string;
   value: ReactNode;
@@ -20,6 +24,7 @@ export function KpiCard({
   tono?: Tono;
   icon?: ReactNode;
   onClick?: () => void;
+  activo?: boolean;
 }) {
   const clicable = !!onClick;
   return (
@@ -27,7 +32,9 @@ export function KpiCard({
       type="button"
       onClick={onClick}
       disabled={!clicable}
-      className={`rounded-lg bg-slate-800 p-4 text-left transition ${clicable ? "cursor-pointer hover:bg-slate-700/70" : "cursor-default"}`}
+      aria-pressed={clicable ? activo : undefined}
+      className={`rounded-lg bg-slate-800 p-4 text-left transition ${clicable ? "cursor-pointer hover:bg-slate-700/70" : "cursor-default"} ${
+        activo ? "ring-2 ring-sky-400" : ""}`}
     >
       <div className="flex items-center justify-between">
         <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">{title}</div>
