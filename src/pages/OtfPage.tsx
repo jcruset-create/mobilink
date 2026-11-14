@@ -20,6 +20,7 @@ import type { KnownPlace } from "../modules/roadsideAssistanceTypes";
 import KnownPlaceMapModal from "../components/KnownPlaceMapModal";
 import TyreControlVehiculo from "../components/TyreControlVehiculo";
 import AssistSidebar from "../components/AssistSidebar";
+import { leerPestana, otfDeLaPestana, TITULO_PESTANA } from "../modules/otfPestanas";
 import { apiFetch } from "../modules/apiFetch";
 import { abrirPdfConSesion } from "../modules/pdfConSesion";
 
@@ -39,12 +40,26 @@ const STATUS_TRABAJO: Record<string, string> = {
 
 const TIPOS_VEHICULO = ["Tractora", "Remolque", "Camión rígido", "Furgoneta", "Turismo", "Maquinaria", "Otros"];
 
+// «2026-11-20» ↔ milisegundos, en hora local: es un día, no un instante.
+function fechaAInput(ms: number | null | undefined) {
+  if (ms == null) return "";
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function inputAFecha(v: string): number | null {
+  if (!v) return null;
+  const [a, m, d] = v.split("-").map(Number);
+  return new Date(a, m - 1, d).getTime();
+}
+
 export default function OtfPage() {
+  // La pestaña del menú lateral (Programadas, Activas, Últimas cerradas…).
+  const pestana = leerPestana(new URLSearchParams(window.location.search).get("tab"));
   const [list, setList] = useState<any[]>([]);
   const [places, setPlaces] = useState<KnownPlace[]>([]);
   const [sel, setSel] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
-  const [showNew, setShowNew] = useState(false);
+  const [showNew, setShowNew] = useState(pestana === "nueva");
   // La OTF que se está editando (misma ventana que «Nueva OTF», ya rellena).
   const [editing, setEditing] = useState<any | null>(null);
   const [techs, setTechs] = useState<any[]>([]);
@@ -60,6 +75,8 @@ export default function OtfPage() {
       setLoading(false);
     }
   }
+
+  const visibles = otfDeLaPestana(list, pestana);
 
   useEffect(() => {
     loadList();
@@ -78,7 +95,7 @@ export default function OtfPage() {
 
   return (
     <div className="flex min-h-screen bg-slate-900 text-slate-100">
-      <AssistSidebar active="otf" />
+      <AssistSidebar otf={pestana ?? null} />
 
       <div className="flex min-w-0 flex-1 flex-col">
       <header className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-slate-900/95 px-4 py-2.5 pl-14 backdrop-blur md:pl-4">
@@ -86,7 +103,10 @@ export default function OtfPage() {
           <img src="/logo_horizontal.png" alt="Mobilink Assist" className="h-9 md:h-12" />
           <div>
             <h1 className="text-sm font-bold md:text-base">Órdenes de Trabajo de Flota (OTF)</h1>
-            <div className="text-xs text-slate-400">{list.length} órdenes</div>
+            <div className="text-xs text-slate-400">
+              {pestana && pestana !== "nueva" ? `${TITULO_PESTANA[pestana]} · ` : ""}
+              {visibles.length} órdenes
+            </div>
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -104,10 +124,12 @@ export default function OtfPage() {
           <div className="space-y-2">
             {loading ? (
               <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-6 text-center text-sm text-slate-500">Cargando…</div>
-            ) : list.length === 0 ? (
-              <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-6 text-center text-sm text-slate-500">Sin OTF. Crea una nueva.</div>
+            ) : visibles.length === 0 ? (
+              <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-6 text-center text-sm text-slate-500">
+                {pestana && pestana !== "nueva" ? `Sin OTF en «${TITULO_PESTANA[pestana]}».` : "Sin OTF. Crea una nueva."}
+              </div>
             ) : (
-              list.map((o) => (
+              visibles.map((o) => (
                 <button
                   key={o.id}
                   onClick={() => openOtf(o.id)}
@@ -125,7 +147,10 @@ export default function OtfPage() {
                       <span className={`rounded-full border px-2 py-0.5 text-[11px] font-bold ${STATUS_OTF[o.status] ?? ""}`}>{o.status}</span>
                     )}
                   </div>
-                  <div className="mt-1 text-xs text-slate-400">{o.baseName || o.direccion || "—"}</div>
+                  <div className="mt-1 text-xs text-slate-400">
+                    {o.baseName || o.direccion || "—"}
+                    {o.fechaProgramadaMs ? ` · ${new Date(o.fechaProgramadaMs).toLocaleDateString("es-ES", { weekday: "short", day: "numeric", month: "short" })}` : ""}
+                  </div>
                   <div className="mt-1 text-xs font-bold text-slate-300">
                     Progreso: {o.progreso?.hechos ?? 0} / {o.progreso?.total ?? 0}
                     {o.assignedTechName ? ` · ${o.assignedTechName}` : ""}
@@ -192,6 +217,9 @@ function NewOtfModal({ otf, places, techs, vehicles, onPlaceCreated, onClose, on
   const [placeId, setPlaceId] = useState(placeInicial);
   const [tech, setTech] = useState<string>(otf?.assignedTechName ?? "");
   const [vehicleName, setVehicleName] = useState<string>(otf?.assignedVehicleName ?? "");
+  const fechaInicial = fechaAInput(otf?.fechaProgramadaMs);
+  const [fecha, setFecha] = useState(fechaInicial);
+  const [notas, setNotas] = useState<string>(otf?.notas ?? "");
   const [saving, setSaving] = useState(false);
   const [showPlaceMap, setShowPlaceMap] = useState(false);
   const [error, setError] = useState("");
@@ -218,6 +246,8 @@ function NewOtfModal({ otf, places, techs, vehicles, onPlaceCreated, onClose, on
           cambios.assignedVehicleName = vehicleName || null;
           cambios.webfleetVehicleId = veh?.webfleetVehicleId ?? null;
         }
+        if (fecha !== fechaInicial) cambios.fechaProgramadaMs = inputAFecha(fecha);
+        if (notas.trim() !== (otf.notas ?? "").trim()) cambios.notas = notas.trim() || null;
         if (Object.keys(cambios).length === 0) { onClose(); return; }
         onCreated(await updateOtf(otf.id, cambios));
         return;
@@ -232,6 +262,8 @@ function NewOtfModal({ otf, places, techs, vehicles, onPlaceCreated, onClose, on
         assignedTechName: tech || null,
         assignedVehicleName: vehicleName || null,
         webfleetVehicleId: veh?.webfleetVehicleId ?? null,
+        fechaProgramadaMs: inputAFecha(fecha),
+        notas: notas.trim() || null,
       });
       onCreated(o);
     } catch (e) {
@@ -277,6 +309,12 @@ function NewOtfModal({ otf, places, techs, vehicles, onPlaceCreated, onClose, on
               </select>
             </Field>
           </div>
+          <Field label="Fecha programada">
+            <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} className={inputCls} />
+          </Field>
+          <Field label="Notas">
+            <textarea value={notas} onChange={(e) => setNotas(e.target.value)} rows={3} className={`${inputCls} resize-none`} placeholder="Para el operario o la oficina" />
+          </Field>
         </div>
         {error && (
           <div className="mt-3 rounded-lg border border-red-500/40 bg-red-500/15 px-3 py-2 text-sm font-bold text-red-300">

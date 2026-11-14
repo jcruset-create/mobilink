@@ -28,7 +28,6 @@ import {
   List,
   Menu,
   Wifi,
-  Truck,
   Store,
   Building2,
   Contact,
@@ -38,6 +37,7 @@ import KnownPlaceMapModal from "./KnownPlaceMapModal";
 import LocationPickerModal from "./LocationPickerModal";
 import WhatsAppCaptureSection from "./WhatsAppCaptureSection";
 import MensajesOperario from "./MensajesOperario";
+import MenuOtf from "./MenuOtf";
 import type { RoadsideAssistanceFile } from "../modules/roadsideAssistanceTypes";
 import RoadsideMap from "./RoadsideMap";
 import {
@@ -1626,6 +1626,8 @@ export default function RoadsideAssistanceView({
             </button>
           ))}
 
+          <MenuOtf />
+
           <div className="my-2 border-t border-slate-800" />
           <div className="px-3 pb-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">
             Herramientas
@@ -1667,14 +1669,6 @@ export default function RoadsideAssistanceView({
             className="flex items-center gap-2.5 rounded-lg px-3 py-2 font-medium text-slate-300 hover:bg-slate-800"
           >
             <MapPin className="h-4 w-4 shrink-0" /> Lugares
-          </a>
-          <a
-            href="/otf"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-2.5 rounded-lg px-3 py-2 font-medium text-slate-300 hover:bg-slate-800"
-          >
-            <Truck className="h-4 w-4 shrink-0" /> OTF
           </a>
           <a
             href="/vehiculo"
