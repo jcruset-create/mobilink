@@ -51,9 +51,14 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # Flutter FIJADO, como en build-tyrecontrol-apk.yml. Con solo «stable», el
+      # 14/11 la CI pasó sola a Flutter 3.50, que exige Gradle 9.3.1, y la APK
+      # dejó de compilar (la app usa Gradle 8.14.3) sin que nadie hubiera
+      # tocado nada de Android. Subir de versión, a propósito y con su PR.
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: "3.35.4"
 
       # Misma numeración que TyreControl: sube un tramo por build y desborda al
       # de al lado (1.8.1 → 1.8.2 → … → 1.8.9 → 1.9.0). El pubspec se reescribe
