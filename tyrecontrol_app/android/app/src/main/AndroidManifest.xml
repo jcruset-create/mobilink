@@ -31,6 +31,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <!-- Acceso con huella o cara, opcional, para no escribir el PIN en cada
+         acceso (lib/services/biometria.dart). Es un permiso "normal": no
+         genera diálogo ni da acceso a los datos biométricos. -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
 
     <application
         android:label="Mobilink TyreControl"
