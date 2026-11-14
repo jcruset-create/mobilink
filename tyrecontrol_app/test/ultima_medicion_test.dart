@@ -11,6 +11,7 @@ FilaMedicion fila(String rev, String clave, double? prof, {double? pres, String?
     );
 
 void main() {
+  protocoloEnElReparto();
   group('revisionesConTodasLasRuedas', () {
     test('la que mide todas sus ruedas cuenta', () {
       expect(revisionesConTodasLasRuedas([fila('r1', 'a', 9), fila('r1', 'b', 8)]), {'r1'});
@@ -184,6 +185,71 @@ void main() {
     test('si hereda de sí misma no se apunta dos veces', () {
       final mapa = repartirUltimasMediciones([delArco('r2', 7, clave: 'nueva', hereda: 'nueva')]);
       expect(mapa.keys, ['nueva']);
+    });
+  });
+}
+
+/// El reparto con el protocolo, que es como se reparte POR NEUMÁTICO.
+void protocoloEnElReparto() {
+  FilaMedicion f(String rev, double prof, {bool manual = false, String? heredada, String clave = 'n1'}) =>
+      FilaMedicion(
+        revisionId: rev,
+        clave: clave,
+        claveHeredada: heredada,
+        profundidadMm: prof,
+        momento: DateTime.parse('2026-11-${rev.substring(1).padLeft(2, '0')}'),
+        manual: manual,
+      );
+
+  group('repartirUltimasMediciones · protocolo', () {
+    test('el 4310JYJ: la última lectura imposible no mueve el valor y queda pendiente', () {
+      final m = repartirUltimasMediciones([f('r12', 1.8), f('r11', 8.5), f('r10', 8.7), f('r9', 9.2)], protocolo: true)['n1']!;
+      expect(m.profundidadMm, 8.5);
+      expect(m.medidoEn, DateTime.parse('2026-11-11'));
+      expect(m.confirmada, isTrue);
+      expect(m.pendienteMm, 1.8);
+      expect(m.pendienteEn, DateTime.parse('2026-11-12'));
+    });
+
+    test('sin protocolo sigue siendo la última, y confirmada: es como era', () {
+      final m = repartirUltimasMediciones([f('r12', 1.8), f('r11', 8.5), f('r10', 8.7)])['n1']!;
+      expect(m.profundidadMm, 1.8);
+      expect(m.confirmada, isTrue);
+      expect(m.pendienteMm, isNull);
+    });
+
+    test('una sola lectura: vale, pero sin confirmar', () {
+      final m = repartirUltimasMediciones([f('r12', 3.0)], protocolo: true)['n1']!;
+      expect(m.profundidadMm, 3.0);
+      expect(m.confirmada, isFalse);
+    });
+
+    test('la medición del técnico manda sobre lo anterior', () {
+      final m = repartirUltimasMediciones([f('r12', 3.0, manual: true), f('r11', 8.5), f('r10', 8.7)], protocolo: true)['n1']!;
+      expect(m.profundidadMm, 3.0);
+      expect(m.confirmada, isTrue);
+      expect(m.pendienteMm, isNull);
+    });
+
+    test('las lecturas heredadas de la posición entran en la serie de la goma montada', () {
+      final m = repartirUltimasMediciones([
+        f('r12', 1.8, clave: 'vieja', heredada: 'nueva'),
+        f('r11', 8.5, clave: 'vieja', heredada: 'nueva'),
+        f('r10', 8.7, clave: 'vieja', heredada: 'nueva'),
+      ], protocolo: true);
+      expect(m['nueva']!.profundidadMm, 8.5);
+      expect(m['nueva']!.pendienteMm, 1.8);
+    });
+
+    test('las de una revisión incompleta no entran en la serie', () {
+      final filas = [
+        // r12 midió una rueda de dos: no vale para la profundidad.
+        f('r12', 1.8), const FilaMedicion(revisionId: 'r12', clave: 'n2', presionBar: 8),
+        f('r11', 8.5), f('r10', 8.7), f('r9', 8.6),
+      ];
+      final m = repartirUltimasMediciones(filas, protocolo: true)['n1']!;
+      expect(m.profundidadMm, 8.6);
+      expect(m.pendienteMm, isNull);
     });
   });
 }

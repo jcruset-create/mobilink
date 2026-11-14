@@ -52,10 +52,14 @@
  * llanta.
  */
 
+import { valorDeLaSerie, type LecturaDeSerie } from "./protocoloProfundidad";
+
 export interface RevisionParaMedicion {
   id: string;
   created_at?: string | null;
   fecha_revision?: string | null;
+  /** Con técnico, la revisión es A MANO; las del arco no lo tienen. */
+  tecnico_id?: string | null;
 }
 
 export interface DetalleParaMedicion {
@@ -87,10 +91,16 @@ export function esPosteriorAlMontaje(fechaLectura: string | null | undefined, fe
 }
 
 export interface Medicion {
+  /** La profundidad que se da por buena: la del protocolo, no la última. */
   profundidad_mm: number | null;
   presion_bar: number | null;
   /** La fecha de la revisión de la que sale la PROFUNDIDAD. */
   medido_en: string | null;
+  /** Si otra lectura, o un técnico, respalda esa profundidad. */
+  confirmada: boolean;
+  /** La última lectura, cuando NO es la que se ha dado por buena. */
+  pendiente_mm: number | null;
+  pendiente_en: string | null;
 }
 
 /**
@@ -145,8 +155,16 @@ export function mapaUltimasMediciones(
     (a, b) => (orden.get(a.revision_id) ?? Number.MAX_SAFE_INTEGER) - (orden.get(b.revision_id) ?? Number.MAX_SAFE_INTEGER),
   );
 
-  const mapa: Record<string, Medicion> = {};
+  const esManual = new Map(revisiones.map((r) => [r.id, !!r.tecnico_id]));
+
+  // De cada goma, sus lecturas de profundidad válidas de la más reciente a la
+  // más antigua —hacen falta tres para el protocolo— y su última presión.
+  const series = new Map<string, LecturaDeSerie[]>();
+  const presiones = new Map<string, number>();
   for (const d of enOrden) {
+    // Una fila de una revisión que no está en la lista —una anulada, por
+    // ejemplo— no se puede fechar ni ordenar: no entra en la serie.
+    if (!orden.has(d.revision_id)) continue;
     // A quién se le apunta la fila: a su neumático, y a la goma que hoy ocupa
     // esa posición si la lectura es posterior a su montaje.
     const destinatarios: string[] = [];
@@ -158,14 +176,30 @@ export function mapaUltimasMediciones(
     }
 
     for (const nid of destinatarios) {
-      const actual = mapa[nid] ?? { profundidad_mm: null, presion_bar: null, medido_en: null };
-      if (actual.profundidad_mm == null && d.profundidad_mm != null && completas.has(d.revision_id)) {
-        actual.profundidad_mm = d.profundidad_mm;
-        actual.medido_en = sello.get(d.revision_id) ?? null;
+      if (d.profundidad_mm != null && completas.has(d.revision_id)) {
+        const serie = series.get(nid) ?? [];
+        if (serie.length < 3) {
+          serie.push({ mm: d.profundidad_mm, manual: esManual.get(d.revision_id) ?? false, fecha: sello.get(d.revision_id) ?? null });
+          series.set(nid, serie);
+        }
       }
-      if (actual.presion_bar == null && d.presion_bar != null) actual.presion_bar = d.presion_bar;
-      mapa[nid] = actual;
+      if (d.presion_bar != null && !presiones.has(nid)) presiones.set(nid, d.presion_bar);
     }
+  }
+
+  const mapa: Record<string, Medicion> = {};
+  for (const nid of new Set([...series.keys(), ...presiones.keys()])) {
+    // La profundidad no es la última lectura: es la que da por buena el
+    // protocolo, con la última como pendiente si no está confirmada.
+    const valor = valorDeLaSerie(series.get(nid) ?? []);
+    mapa[nid] = {
+      profundidad_mm: valor?.mm ?? null,
+      presion_bar: presiones.get(nid) ?? null,
+      medido_en: valor?.fecha ?? null,
+      confirmada: valor?.confirmada ?? false,
+      pendiente_mm: valor?.pendiente?.mm ?? null,
+      pendiente_en: valor?.pendiente?.fecha ?? null,
+    };
   }
   return mapa;
 }

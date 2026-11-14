@@ -12,6 +12,8 @@ const RELLENO: Record<EstadoRueda, string> = {
   ok: "bg-green-800 text-white",
   cambiar: "bg-red-600 text-white ring-[1.5px] ring-red-200",
   presion: "bg-amber-700 text-white ring-[1.5px] ring-amber-200",
+  // Por confirmar: ni verde ni rojo. Violeta, que no significa nada más aquí.
+  por_confirmar: "bg-violet-700 text-white ring-[1.5px] ring-violet-200",
   sin_medir: "bg-slate-600 text-slate-100",
   // Un hueco sin neumático no es un estado de la goma: va sin relleno.
   vacia: "border border-dashed border-slate-500 bg-slate-900/40 text-transparent",

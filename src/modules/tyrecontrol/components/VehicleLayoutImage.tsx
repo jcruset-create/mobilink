@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle } from "lucide-react";
-import { hayQueCambiar } from "../services/umbralProfundidad";
+import { profundidadMinimaPorLlanta } from "../services/umbralProfundidad";
+import { veredictoEnLaFicha } from "../services/protocoloProfundidad";
+import type { Medicion } from "../services/ultimaMedicion";
 import { profundidadVigente } from "../utils/profundidad";
 import type { MontajeActual, Neumatico, PosicionVehiculo, TipoVehiculo } from "../types";
 import { presionTxt } from "../types";
@@ -118,7 +120,7 @@ export default function VehicleLayoutImage({
   // se ve completo, sin franjas negras, y las ruedas caen donde se
   // calibraron (las coordenadas van en % de este recuadro).
   const [aspecto, setAspecto] = useState(16 / 9);
-  const [medicionesActuales, setMedicionesActuales] = useState<Record<string, { profundidad_mm: number | null; presion_bar: number | null }>>({});
+  const [medicionesActuales, setMedicionesActuales] = useState<Record<string, Medicion>>({});
   const [presionesCatalogo, setPresionesCatalogo] = useState<Record<string, number>>({});
 
   /*
@@ -724,7 +726,16 @@ export default function VehicleLayoutImage({
             const profDe = neuDe
               ? profundidadVigente(medicionesActuales[neuDe.id], neuDe) ?? profundidadesCatalogo[claveCat] ?? null
               : null;
-            const paraCambiar = hayQueCambiar(profDe, neuDe?.medida);
+            /*
+             * Rojo solo con el desgaste CONFIRMADO. Una lectura baja suelta del
+             * arco no lo enciende: queda «por confirmar», en violeta, hasta que
+             * otra lectura o la sonda de un técnico digan lo mismo. La regla
+             * es la de `services/protocoloProfundidad.ts`, la misma del informe.
+             */
+            const medDe = neuDe ? medicionesActuales[neuDe.id] : undefined;
+            const juicio = veredictoEnLaFicha(profDe, medDe, profundidadMinimaPorLlanta(neuDe?.medida));
+            const paraCambiar = juicio === "cambiar";
+            const porConfirmar = juicio === "por_confirmar";
             return (
               <div
                 key={p.id}
@@ -739,7 +750,7 @@ export default function VehicleLayoutImage({
                   // por DETRÁS de los estados de interacción (copiar, permutar,
                   // calibrar): ésos son modos pasajeros y mientras duran mandan
                   // ellos, que es lo que el usuario está haciendo ahora mismo.
-                  borderColor: (esCopiaOrigen || esCopiaDestino) ? "#a855f7" : esOrigenPermuta ? "#38bdf8" : esDestino ? "#38bdf8" : calibrando ? "#f59e0b" : (planAbierto && (vieneDe || marcasDe.length)) ? "#38bdf8" : (conAviso || paraCambiar) ? "#ef4444" : ocupado ? "#22c55e" : "#64748b",
+                  borderColor: (esCopiaOrigen || esCopiaDestino) ? "#a855f7" : esOrigenPermuta ? "#38bdf8" : esDestino ? "#38bdf8" : calibrando ? "#f59e0b" : (planAbierto && (vieneDe || marcasDe.length)) ? "#38bdf8" : (conAviso || paraCambiar) ? "#ef4444" : porConfirmar ? "#8b5cf6" : ocupado ? "#22c55e" : "#64748b",
                   borderWidth: esCopiaOrigen || esOrigenPermuta ? 3 : 2,
                   borderStyle: ocupado || calibrando || esCopiaDestino ? "solid" : "dashed",
                   background: esCopiaDestino ? "rgba(168,85,247,0.25)" : esDestino ? "rgba(56,189,248,0.25)" : ocupado ? "rgba(15,23,42,0.8)" : "rgba(15,23,42,0.25)",
@@ -771,18 +782,24 @@ export default function VehicleLayoutImage({
                   `pointer-events-none` para no robarle el clic al recuadro,
                   que es lo que abre la ficha de la goma.
                 */}
-                {(conAviso || paraCambiar) && (
+                {(conAviso || paraCambiar || porConfirmar) && (
                   <span
-                    className="pointer-events-none absolute -bottom-5 left-1/2 -translate-x-1/2 flex items-center gap-0.5 whitespace-nowrap rounded bg-slate-900/90 px-1 py-0.5 text-[10px] font-bold text-amber-300"
+                    className={`pointer-events-none absolute -bottom-5 left-1/2 -translate-x-1/2 flex items-center gap-0.5 whitespace-nowrap rounded bg-slate-900/90 px-1 py-0.5 text-[10px] font-bold ${
+                      conAviso || paraCambiar ? "text-amber-300" : "text-violet-300"}`}
                     title={[
                       conAviso ? "Aviso de presión abierto en esta rueda" : null,
                       paraCambiar ? `Para cambiar: ${profDe} mm` : null,
+                      porConfirmar
+                        ? (medDe?.pendiente_mm != null
+                          ? `Por confirmar: el arco ha leído ${medDe.pendiente_mm} mm y las anteriores decían ${profDe}. Medir con sonda`
+                          : `Por confirmar: ${profDe} mm con una sola lectura. Medir con sonda`)
+                        : null,
                     ].filter(Boolean).join(" · ")}
                   >
                     <AlertTriangle className="h-3 w-3" />
                     {/* Qué pasa, no solo que pasa algo: en un plano de ocho
                         ruedas el triángulo solo dice «mira aquí». */}
-                    <span className="text-[9px]">{conAviso && paraCambiar ? "P+C" : conAviso ? "P" : "C"}</span>
+                    <span className="text-[9px]">{conAviso && paraCambiar ? "P+C" : conAviso && porConfirmar ? "P+?" : conAviso ? "P" : paraCambiar ? "C" : "?"}</span>
                   </span>
                 )}
 

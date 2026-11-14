@@ -97,9 +97,13 @@ describe("mapaUltimasMediciones", () => {
     expect(Object.keys(mapa)).toEqual([]);
   });
 
-  it("una fila de una revisión que no está en la lista no se cuela la primera", () => {
+  it("una fila de una revisión que no está en la lista no cuenta", () => {
+    // Una anulada no viene en la lista: ni se cuela la primera ni entra en la
+    // serie a llevarle la contraria a las buenas.
     const detalles = [det("rX", "n", 1.0), det("r2", "n", 12.7)];
-    expect(mapaUltimasMediciones(REVS, detalles, new Map())["n"].profundidad_mm).toBe(12.7);
+    const m = mapaUltimasMediciones(REVS, detalles, new Map())["n"];
+    expect(m.profundidad_mm).toBe(12.7);
+    expect(m.pendiente_mm).toBeNull();
   });
 
   it("el cero es una medición: una goma lisa se dice", () => {
@@ -179,14 +183,30 @@ describe("mapaUltimasMediciones · las lecturas siguen a la posición", () => {
     expect(mapaUltimasMediciones(REVS.slice(1), [sinNombre("r2", 2.6)], montajes("2026-10-30"))["nueva"]).toBeUndefined();
   });
 
-  it("manda la más reciente, sea propia o heredada", () => {
-    // La goma tiene una lectura suya del 29/10 y la posición una más nueva,
-    // del 30/10, sin nombre: gana la del 30.
+  it("propias y heredadas entran en la MISMA serie, por fecha", () => {
+    // La goma tiene una lectura suya del 29/10 (5,9) y la posición una más
+    // nueva, del 30/10, sin nombre (2,6). No coinciden y son solo dos: se
+    // queda la anterior y la nueva queda pendiente, como manda el protocolo.
     const detalles: DetalleParaMedicion[] = [
       { revision_id: "r1", neumatico_id: "nueva", posicion_id: "pos-1", profundidad_mm: 5.9, presion_bar: 8 },
       delArco("r2", 2.6, 7.5, null),
     ];
-    expect(mapaUltimasMediciones(REVS.slice(1), detalles, montajes("2026-08-10"))["nueva"].profundidad_mm).toBe(2.6);
+    const m = mapaUltimasMediciones(REVS.slice(1), detalles, montajes("2026-08-10"))["nueva"];
+    expect(m.profundidad_mm).toBe(5.9);
+    expect(m.pendiente_mm).toBe(2.6);
+    expect(m.confirmada).toBe(false);
+  });
+
+  it("y cuando la heredada se repite, pasa a ser el valor", () => {
+    const detalles: DetalleParaMedicion[] = [
+      delArco("r3", 2.4, 7.5, null),
+      delArco("r2", 2.6, 7.5, null),
+      { revision_id: "r1", neumatico_id: "nueva", posicion_id: "pos-1", profundidad_mm: 5.9, presion_bar: 8 },
+    ];
+    const m = mapaUltimasMediciones(REVS, detalles, montajes("2026-08-10"))["nueva"];
+    expect(m.profundidad_mm).toBe(2.6);
+    expect(m.confirmada).toBe(true);
+    expect(m.pendiente_mm).toBeNull();
   });
 
   it("una revisión parcial tampoco vale heredada", () => {
@@ -211,5 +231,49 @@ describe("mapaUltimasMediciones · las lecturas siguen a la posición", () => {
     // el montaje el mismo 30/10 no se hereda, aunque el sello diga 31.
     const revs: RevisionParaMedicion[] = [{ id: "r2", fecha_revision: "2026-10-30", created_at: "2026-10-31T07:00:00Z" }];
     expect(mapaUltimasMediciones(revs, [delArco("r2", 3.9)], montajes("2026-10-30"))["nueva"]).toBeUndefined();
+  });
+});
+
+describe("mapaUltimasMediciones · el protocolo", () => {
+  /** Tres pasadas del arco con las dos ruedas medidas cada vez. */
+  const tresPasadas = (int: [number, number, number]): DetalleParaMedicion[] => [
+    det("r3", "n-int", int[0]), det("r3", "n-ext", 11),
+    det("r2", "n-int", int[1]), det("r2", "n-ext", 11.1),
+    det("r1", "n-int", int[2]), det("r1", "n-ext", 11.2),
+  ];
+
+  it("el 4310JYJ: 8,7 · 8,5 · 1,8 → enseña 8,5 y deja el 1,8 pendiente", () => {
+    const m = mapaUltimasMediciones(REVS, tresPasadas([1.8, 8.5, 8.7]), new Map())["n-int"];
+    expect(m.profundidad_mm).toBe(8.5);
+    expect(m.confirmada).toBe(true);
+    expect(m.pendiente_mm).toBe(1.8);
+    // Fechas: el valor, de la pasada del 30/10; lo pendiente, de la del 05/11.
+    expect(m.medido_en).toBe("2026-10-31T07:00:00Z");
+    expect(m.pendiente_en).toBe("2026-11-05T13:37:00Z");
+  });
+
+  it("un desgaste de verdad se confirma a la segunda pasada", () => {
+    const m = mapaUltimasMediciones(REVS, tresPasadas([3.0, 3.2, 9]), new Map())["n-int"];
+    expect(m).toMatchObject({ profundidad_mm: 3.2, confirmada: true, pendiente_mm: null });
+  });
+
+  it("una sola lectura no está confirmada", () => {
+    const m = mapaUltimasMediciones(REVS, [det("r2", "n", 3.0)], new Map())["n"];
+    expect(m).toMatchObject({ profundidad_mm: 3.0, confirmada: false, pendiente_mm: null });
+  });
+
+  it("la medición a mano manda: con técnico vale sola", () => {
+    const revs: RevisionParaMedicion[] = [
+      { id: "m1", fecha_revision: "2026-11-10", created_at: "2026-11-10T10:00:00Z", tecnico_id: "tec-1" },
+      ...REVS.slice(1),
+    ];
+    const detalles = [det("m1", "n", 3.0), det("r2", "n", 8.5), det("r1", "n", 8.6)];
+    const m = mapaUltimasMediciones(revs, detalles, new Map())["n"];
+    expect(m).toMatchObject({ profundidad_mm: 3.0, confirmada: true, pendiente_mm: null });
+  });
+
+  it("una goma con presión y sin profundidad válida sale sin valor y sin confirmar", () => {
+    const m = mapaUltimasMediciones(REVS, [det("r3", "n", null, 7.9), det("r3", "m", 5, 8)], new Map())["n"];
+    expect(m).toMatchObject({ profundidad_mm: null, presion_bar: 7.9, confirmada: false, pendiente_mm: null });
   });
 });
