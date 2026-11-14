@@ -120,3 +120,46 @@ export function telefonoValido(v: unknown): string | null {
   const t = String(v ?? "").trim();
   return t.replace(/\D/g, "").length >= 9 ? t : null;
 }
+
+// ── Tiempo de cada trabajo en el informe ────────────────────────────────────
+
+/**
+ * Inicio, fin y duración de un trabajo. Si no se pulsó «Empezar», el inicio
+ * es la primera foto; si se cerró sin hora de fin, la última actualización.
+ */
+export function tiemposTrabajo(t: {
+  status?: string | null;
+  iniciadoAtMs?: number | null;
+  finalizadoAtMs?: number | null;
+  updatedAtMs?: number | null;
+  fotos?: { createdAtMs?: number | null }[];
+}): { inicioMs: number | null; finMs: number | null; segundos: number | null } {
+  const fotos = (t.fotos ?? []).map((f) => Number(f.createdAtMs)).filter((x) => Number.isFinite(x) && x > 0);
+  const inicioMs = t.iniciadoAtMs ?? (fotos.length ? Math.min(...fotos) : null);
+  const cerrado = t.status === "finalizado" || t.status === "no_realizado";
+  const finMs = t.finalizadoAtMs ?? (cerrado ? t.updatedAtMs ?? null : null);
+  const segundos = inicioMs != null && finMs != null && finMs >= inicioMs ? Math.round((finMs - inicioMs) / 1000) : null;
+  return { inicioMs, finMs, segundos };
+}
+
+/** «10:29», hora de Madrid. */
+export function horaEs(ms: number | null | undefined): string {
+  if (!ms) return "—";
+  return new Date(ms).toLocaleTimeString("es-ES", { timeZone: "Europe/Madrid", hour: "2-digit", minute: "2-digit" });
+}
+
+/** «30 min», «1 h 05 min». */
+export function duracionCorta(seg: number | null | undefined): string {
+  if (seg == null) return "—";
+  const m = Math.max(0, Math.round(seg / 60));
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")} min`;
+}
+
+/** Cómo se llama cada tipo de foto en el informe y en el panel. */
+export const ETIQUETA_FOTO: Record<string, string> = {
+  matricula: "Matrícula",
+  averia: "Avería",
+  inicial: "Antes",
+  final: "Trabajo hecho",
+  no_realizado: "No realizado",
+};

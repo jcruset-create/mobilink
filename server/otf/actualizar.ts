@@ -67,8 +67,12 @@ export function sqlActualizarOtf(
 /**
  * Cambiar el estado de un trabajo de OTF desde la tablet, con su tiempo:
  * «Empezar» fija el inicio (la primera vez), «Finalizar» y «No realizado» el
- * final, y volver a «pendiente» borra los dos. El motivo solo se guarda con
- * «No realizado».
+ * final, y volver a «pendiente» borra los dos. El motivo y la explicación
+ * del técnico solo se guardan con «No realizado».
+ *
+ * Si se finaliza sin haber pulsado «Empezar» (versiones viejas de la tablet,
+ * o directo desde la lista), el inicio es la primera foto del trabajo: así
+ * el informe tiene tiempo igualmente.
  */
 export const ESTADOS_TRABAJO = ["pendiente", "en_proceso", "finalizado", "no_realizado"] as const;
 
@@ -76,18 +80,23 @@ export function sqlEstadoTrabajo(
   tid: number,
   status: string,
   motivo: unknown,
-  ahoraMs: number
+  ahoraMs: number,
+  explicacion?: unknown
 ): { sql: string; params: unknown[] } {
   const m = status === "no_realizado" ? String(motivo ?? "").trim() || null : null;
+  const e = status === "no_realizado" ? String(explicacion ?? "").trim().slice(0, 500) || null : null;
   return {
     sql: `UPDATE otf_trabajos SET status = $2::text, "updatedAtMs" = $3::bigint,
          "iniciadoAtMs" = CASE
            WHEN $2::text = 'pendiente' THEN NULL
            WHEN $2::text = 'en_proceso' THEN COALESCE("iniciadoAtMs", $3::bigint)
+           WHEN $2::text = 'finalizado' THEN COALESCE("iniciadoAtMs",
+             (SELECT MIN(f."createdAtMs") FROM otf_trabajo_files f WHERE f."trabajoId" = $1))
            ELSE "iniciadoAtMs" END,
          "finalizadoAtMs" = CASE WHEN $2::text IN ('finalizado', 'no_realizado') THEN $3::bigint ELSE NULL END,
-         "motivoNoRealizado" = $4::text
+         "motivoNoRealizado" = $4::text,
+         "explicacionNoRealizado" = $5::text
        WHERE id = $1 RETURNING *`,
-    params: [tid, status, ahoraMs, m],
+    params: [tid, status, ahoraMs, m, e],
   };
 }

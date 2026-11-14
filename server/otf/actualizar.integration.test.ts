@@ -64,4 +64,25 @@ describeSiHayBase("editar una OTF", () => {
     expect(await aplicar("no_realizado", "  No estaba en la base ", 9500)).toMatchObject({ motivoNoRealizado: "No estaba en la base" });
     expect(await aplicar("pendiente", null, 9900)).toMatchObject({ iniciadoAtMs: null, finalizadoAtMs: null, motivoNoRealizado: null });
   });
+
+  it("no realizado con la explicación del técnico, y finalizar sin Empezar toma la primera foto", async () => {
+    const tid = Number((await db.query(
+      `INSERT INTO otf_trabajos ("otfId", plate, trabajo, "createdAtMs", "updatedAtMs") VALUES ($1,'0348LJD','Montar 4',$2,$2) RETURNING id`,
+      [otf, ahora]
+    )).rows[0].id);
+    const c = sqlEstadoTrabajo(tid, "no_realizado", "Falta material", 5000, "  Solo llevo 2 neumáticos ");
+    expect((await db.query(c.sql, c.params)).rows[0]).toMatchObject({
+      motivoNoRealizado: "Falta material", explicacionNoRealizado: "Solo llevo 2 neumáticos",
+    });
+    await db.query(
+      `INSERT INTO otf_trabajo_files ("trabajoId","otfId",kind,url,"createdAtMs") VALUES ($1,$2,'matricula','u',3000)`,
+      [tid, otf]
+    );
+    const p = sqlEstadoTrabajo(tid, "pendiente", null, 6000);
+    await db.query(p.sql, p.params);
+    const f = sqlEstadoTrabajo(tid, "finalizado", null, 9000);
+    expect((await db.query(f.sql, f.params)).rows[0]).toMatchObject({
+      iniciadoAtMs: "3000", finalizadoAtMs: "9000", explicacionNoRealizado: null,
+    });
+  });
 });

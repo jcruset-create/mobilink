@@ -252,6 +252,7 @@ class ApiService {
               body: jsonEncode({
                 'status': item['status'],
                 if (item['motivo'] != null) 'motivo': item['motivo'],
+                if (item['explicacion'] != null) 'explicacion': item['explicacion'],
                 if (item['checklist'] != null) 'checklist': item['checklist'],
                 'clientActionId': actionId,
               }))
@@ -656,10 +657,11 @@ class ApiService {
   /// `checklist`: al finalizar, lo marcado de la lista de su plantilla.
   /// Sin cobertura se encola y se aplica a la copia local (`otfId`).
   Future<void> updateOtfTrabajoStatus(int trabajoId, String status,
-      {String? motivo, List<Map<String, dynamic>>? checklist, int? otfId}) async {
+      {String? motivo, String? explicacion, List<Map<String, dynamic>>? checklist, int? otfId}) async {
     final body = {
       'status': status,
       if (motivo != null) 'motivo': motivo,
+      if (explicacion != null) 'explicacion': explicacion,
       if (checklist != null) 'checklist': checklist,
     };
     final http.Response res;
@@ -674,7 +676,9 @@ class ApiService {
     } catch (e) {
       if (!_isNetworkError(e)) rethrow;
       await OfflineStore.enqueueOtf('otf_status', {'trabajoId': trabajoId, ...body});
-      if (otfId != null) await OfflineStore.applyLocalOtfTrabajo(otfId, trabajoId, status, motivo: motivo);
+      if (otfId != null) {
+        await OfflineStore.applyLocalOtfTrabajo(otfId, trabajoId, status, motivo: motivo, explicacion: explicacion);
+      }
       OfflineStore.offline.value = true;
       return;
     }
