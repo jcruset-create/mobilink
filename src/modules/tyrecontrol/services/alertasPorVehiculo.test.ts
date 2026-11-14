@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   agruparPorVehiculo, estadoDeRueda, edadEnTexto, fechaCorta, filtrarVehiculos,
-  mm, ordenarVehiculos, resumenDeTarjeta, ruedasParaMedirConSonda, type VehiculoConAlertas,
+  mm, ordenarVehiculos, resumenDeTarjeta, ruedasEnPresion, ruedasParaMedirConSonda, type VehiculoConAlertas,
 } from "./alertasPorVehiculo";
 import type { RuedaAlerta } from "../types/informes";
 
@@ -316,5 +316,66 @@ describe("el protocolo en las alertas: por confirmar", () => {
     expect(filtrarVehiculos(vehiculos, "confirmar").map((v) => v.matricula)).toEqual(["4310JYJ"]);
     expect(filtrarVehiculos(vehiculos, "cambiar").map((v) => v.matricula)).toEqual(["2222CCC"]);
     expect(ordenarVehiculos(vehiculos, "peor").map((v) => v.matricula)).toEqual(["3333DDD", "2222CCC", "4310JYJ"]);
+  });
+});
+
+describe("ruedasEnPresion: los bares en vez de los milímetros", () => {
+  // El 2321HZT de la pantalla: una con aviso, otra medida, otra sin dato y un hueco.
+  const [v] = agruparPorVehiculo([
+    fila({ posicion_id: "p1", codigo_posicion: "E1_IZQ", neumatico_id: "n1", profundidad_mm: 4.5,
+      presion_aviso_at: "2026-11-12T08:00:00Z", presion_bar: 3.1, presion_recomendada_bar: 4.5 }),
+    fila({ posicion_id: "p2", codigo_posicion: "E1_DER", lado: "der", neumatico_id: "n2", profundidad_mm: 8.4 }),
+    fila({ posicion_id: "p3", codigo_posicion: "E2_IZQ_EXT", eje: 2, interior_exterior: "ext", neumatico_id: "n3", profundidad_mm: 7.6 }),
+    fila({ posicion_id: "p4", codigo_posicion: "E2_DER_EXT", eje: 2, lado: "der", interior_exterior: "ext", neumatico_id: null, profundidad_mm: null }),
+  ], HOY);
+  const rueda = (rs: ReturnType<typeof ruedasEnPresion>, c: string) => rs.find((r) => r.codigo === c)!;
+
+  it("la rueda con aviso enseña lo que leyó el sensor, en ámbar", () => {
+    const r = rueda(ruedasEnPresion(v.ruedas, { n2: 4.4 }), "E1_IZQ");
+    expect(r.texto).toBe("3,1");
+    expect(r.estado).toBe("presion");
+    expect(r.titulo).toBe("E1_IZQ · 3,1 bar de 4,5 · aviso de presión abierto");
+  });
+
+  it("las demás, su última presión medida, sin juzgarla", () => {
+    const r = rueda(ruedasEnPresion(v.ruedas, { n2: 4.4 }), "E1_DER");
+    expect(r.texto).toBe("4,4");
+    expect(r.estado).toBe("dato");
+    expect(r.titulo).toContain("última presión medida");
+  });
+
+  it("sin presión medida, raya: no se inventa", () => {
+    const r = rueda(ruedasEnPresion(v.ruedas, { n2: 4.4, n3: null }), "E2_IZQ_EXT");
+    expect(r.texto).toBe("—");
+    expect(r.estado).toBe("sin_medir");
+  });
+
+  it("mientras se piden, la del aviso ya tiene su número y las otras esperan", () => {
+    const rs = ruedasEnPresion(v.ruedas, null);
+    expect(rueda(rs, "E1_IZQ").texto).toBe("3,1");
+    expect(rueda(rs, "E1_DER").texto).toBe("…");
+  });
+
+  it("si no se han podido leer, las del aviso siguen saliendo", () => {
+    const rs = ruedasEnPresion(v.ruedas, {});
+    expect(rueda(rs, "E1_IZQ").texto).toBe("3,1");
+    expect(rueda(rs, "E1_DER").texto).toBe("—");
+  });
+
+  it("el hueco sin neumático sigue siendo un hueco", () => {
+    expect(rueda(ruedasEnPresion(v.ruedas, { n2: 4.4 }), "E2_DER_EXT").estado).toBe("vacia");
+  });
+
+  it("un aviso sin lectura no enseña un cero", () => {
+    const [w] = agruparPorVehiculo([fila({ presion_aviso_at: "2026-11-12T08:00:00Z", presion_bar: null })], HOY);
+    const r = ruedasEnPresion(w.ruedas, {})[0];
+    expect(r.texto).toBe("—");
+    expect(r.titulo).toContain("sin lectura");
+  });
+
+  it("no toca las ruedas que le pasan: al volver a «mm» están como estaban", () => {
+    const antes = JSON.stringify(v.ruedas);
+    ruedasEnPresion(v.ruedas, { n2: 4.4 });
+    expect(JSON.stringify(v.ruedas)).toBe(antes);
   });
 });

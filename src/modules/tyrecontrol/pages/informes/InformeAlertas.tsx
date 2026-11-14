@@ -2,13 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useInformesFiltros } from "./InformesLayout";
 import { listarAlertas, listarAlertasPorVehiculo } from "../../services/informes";
+import { listarUltimasMedicionesVehiculo } from "../../services/data";
 import type { Alerta, RuedaAlerta } from "../../types/informes";
 import { KpiCard } from "../../components/informes/KpiCard";
 import PlanoMiniVehiculo from "../../components/informes/PlanoMiniVehiculo";
 import { descargarCSV } from "../../utils/exportar";
 import {
   agruparPorVehiculo, edadEnTexto, fechaCorta, filtrarVehiculos, mm, ordenarVehiculos,
-  resumenDeTarjeta, ruedasParaMedirConSonda, DIAS_MEDICION_VIEJA,
+  resumenDeTarjeta, ruedasEnPresion, ruedasParaMedirConSonda, DIAS_MEDICION_VIEJA,
   type FiltroVehiculos, type OrdenVehiculos, type VehiculoConAlertas,
 } from "../../services/alertasPorVehiculo";
 
@@ -33,6 +34,29 @@ function TarjetaVehiculo({ v }: { v: VehiculoConAlertas }) {
   const soloPresion = v.paraCambiar === 0 && v.conPresion > 0;
   // Nada confirmado: ni rojo ni ámbar, el violeta de «por confirmar».
   const soloPorConfirmar = v.paraCambiar === 0 && v.conPresion === 0;
+
+  /*
+   * En un vehículo con aviso de presión, el plano puede enseñar los bares en
+   * vez de los milímetros. Las ruedas con aviso ya traen su lectura; la última
+   * presión de las demás se pide al pulsar —una vez por tarjeta—, que es la
+   * misma consulta de la ficha del vehículo. Si falla, se enseña lo que hay.
+   */
+  const [verPresion, setVerPresion] = useState(false);
+  const [presiones, setPresiones] = useState<Record<string, number | null> | null>(null);
+  const [sinPresiones, setSinPresiones] = useState(false);
+
+  const pasarAPresion = () => {
+    setVerPresion(true);
+    if (presiones !== null) return;
+    listarUltimasMedicionesVehiculo(v.vehiculoId)
+      .then((m) => setPresiones(Object.fromEntries(Object.entries(m).map(([id, x]) => [id, x.presion_bar]))))
+      .catch(() => { setPresiones({}); setSinPresiones(true); });
+  };
+
+  const ruedas = verPresion ? ruedasEnPresion(v.ruedas, presiones) : v.ruedas;
+  const boton = (activo: boolean) => `px-2 py-[3px] text-[11px] font-extrabold ${
+    activo ? "bg-amber-400 text-slate-900" : "bg-slate-900 text-slate-300 hover:bg-slate-700"}`;
+
   return (
     <article className={`flex flex-col gap-3 rounded-xl border bg-slate-800 p-4 ${vieja ? "border-amber-700" : "border-slate-700"}`}>
       <div className="flex flex-wrap items-center gap-2">
@@ -40,6 +64,14 @@ function TarjetaVehiculo({ v }: { v: VehiculoConAlertas }) {
           {v.matricula || "sin matrícula"}
         </Link>
         <span className="flex-1" />
+        {v.conPresion > 0 && (
+          <span className="inline-flex overflow-hidden rounded-full border border-amber-500/60" role="group" aria-label="Qué enseña el plano">
+            <button type="button" aria-pressed={!verPresion} onClick={() => setVerPresion(false)}
+                    title="Ver la profundidad de cada rueda, en milímetros" className={boton(!verPresion)}>mm</button>
+            <button type="button" aria-pressed={verPresion} onClick={pasarAPresion}
+                    title="Ver la presión de cada rueda, en bar" className={boton(verPresion)}>bar</button>
+          </span>
+        )}
         <span className={`whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-extrabold ${
           soloPorConfirmar ? "bg-violet-500/20 text-violet-200"
             : soloPresion ? "bg-amber-500/20 text-amber-200" : "bg-red-500/20 text-red-200"}`}>
@@ -57,9 +89,17 @@ function TarjetaVehiculo({ v }: { v: VehiculoConAlertas }) {
 
       <PlanoMiniVehiculo
         foto={v.foto}
-        ruedas={v.ruedas}
-        alt={`Plano de ${v.matricula} con la profundidad de cada rueda`}
+        ruedas={ruedas}
+        alt={`Plano de ${v.matricula} con la ${verPresion ? "presión" : "profundidad"} de cada rueda`}
       />
+
+      {verPresion && (
+        <div className="text-[11px] text-slate-400">
+          Presión en <b className="text-slate-300">bar</b>. En ámbar, la rueda con aviso abierto y lo que leyó el sensor;
+          en azul, la última presión medida de las demás.
+          {sinPresiones && <span className="text-amber-300"> No se han podido leer las de las demás ruedas.</span>}
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center gap-2 border-t border-slate-700 pt-2.5">
         {v.medidoEl ? (
