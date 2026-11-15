@@ -113,7 +113,7 @@ Estado:
   sin albaranes con precio, precios por medida ni pausas; sin escribir
   presiones objetivo, ficha técnica, autorizaciones ni resolver incidencias;
   sin tablet ni empresas asignadas.
-- [ ] 1.2 Servidor y panel: `login-operario` rechaza el rol cliente, tacógrafo
+- [x] 1.2 Servidor y panel: `login-operario` rechaza el rol cliente, tacógrafo
   con comprobación de rol, «Hacer revisión» fuera del rol cliente, columna de
   coste y Excel de «Trabajos realizados», ficha de usuario.
 - [ ] Pendiente de diseño: los campos de coste de `operaciones_neumaticos` y

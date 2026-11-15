@@ -28,7 +28,7 @@
 
 import type { Request } from "express";
 
-import { puedeVerEmpresaDeRequest } from "../empresaAcceso.ts";
+import { puedeOperarEnEmpresa, puedeVerEmpresaDeRequest } from "../empresaAcceso.ts";
 
 /**
  * El resultado, en una sola forma y no en una unión con discriminante: el
@@ -67,6 +67,22 @@ export async function empresaDelInforme(req: Request, pedida: unknown): Promise<
   return (await puedeVerEmpresaDeRequest(req, p))
     ? { empresa: p }
     : { empresa: null, estado: 403, error: "Sin acceso a esa empresa" };
+}
+
+/**
+ * La empresa sobre la que se va a ESCRIBIR, ya comprobada.
+ *
+ * Lo mismo que `empresaDelInforme` y, además, que quien pide pueda cambiar
+ * cosas en esa empresa: un usuario de rol `cliente` ve la suya pero no
+ * importa, deshace ni decide nada en ella. Sin esto, cualquier ruta que
+ * escribe y solo llamaba a `empresaDelInforme` le dejaba hacerlo.
+ */
+export async function empresaParaOperar(req: Request, pedida: unknown): Promise<Alcance> {
+  const alcance = await empresaDelInforme(req, pedida);
+  if (!alcance.empresa) return alcance;
+  return (await puedeOperarEnEmpresa(req.authCtx, alcance.empresa))
+    ? alcance
+    : { empresa: null, estado: 403, error: "Tu usuario es de consulta: no puede hacer cambios" };
 }
 
 /** Si quien pide es administrador (o el super-admin de Mobilink). */

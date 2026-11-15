@@ -42,7 +42,7 @@ import * as XLSX from "xlsx";
 
 import { createHash } from "node:crypto";
 
-import { empresaDelInforme } from "../informes/alcance.ts";
+import { empresaDelInforme, empresaParaOperar } from "../informes/alcance.ts";
 import { normalizarMatricula } from "../matricula.ts";
 import {
   SISTEMA_ORIGEN, contarInformesDeLote, leerBases, leerBloqueadasDeLote, leerCatalogoMedidas,
@@ -210,7 +210,7 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
   app.post("/api/tyrecontrol/tacografo/simular", ...guards, subida.single("archivo"),
     async (req, res) => {
       try {
-        const alcance = await empresaDelInforme(req, req.query.empresa ?? req.body?.empresa);
+        const alcance = await empresaParaOperar(req, req.query.empresa ?? req.body?.empresa);
         if (!alcance.empresa) return res.status(alcance.estado!).json({ error: alcance.error });
         const empresa = alcance.empresa;
 
@@ -259,7 +259,7 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
   app.post("/api/tyrecontrol/tacografo/importar", ...guards, subida.single("archivo"),
     async (req, res) => {
       try {
-        const alcance = await empresaDelInforme(req, req.query.empresa ?? (req as any).body?.empresa);
+        const alcance = await empresaParaOperar(req, req.query.empresa ?? (req as any).body?.empresa);
         if (!alcance.empresa) return res.status(alcance.estado!).json({ error: alcance.error });
         const empresa = alcance.empresa;
 
@@ -462,7 +462,7 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
   app.post("/api/tyrecontrol/tacografo/informe-pdf", ...guards, subida.single("archivo"),
     async (req, res) => {
       try {
-        const alcance = await empresaDelInforme(req, req.query.empresa ?? (req as any).body?.empresa);
+        const alcance = await empresaParaOperar(req, req.query.empresa ?? (req as any).body?.empresa);
         if (!alcance.empresa) return res.status(alcance.estado!).json({ error: alcance.error });
         const empresa = alcance.empresa;
         const vehiculoId = String(req.query.vehiculo ?? (req as any).body?.vehiculo ?? "");
@@ -569,7 +569,7 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
   app.post("/api/tyrecontrol/tacografo/informes-pdf", ...guards, subidaPdfs.array("archivos", 20),
     async (req, res) => {
       try {
-        const alcance = await empresaDelInforme(req, req.query.empresa ?? (req as any).body?.empresa);
+        const alcance = await empresaParaOperar(req, req.query.empresa ?? (req as any).body?.empresa);
         if (!alcance.empresa) return res.status(alcance.estado!).json({ error: alcance.error });
         const empresa = alcance.empresa;
         const usuarioId = usuarioDe(req);
@@ -820,7 +820,7 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
    */
   app.post("/api/tyrecontrol/tacografo/lotes/:id/deshacer", ...guards, async (req, res) => {
     try {
-      const alcance = await empresaDelInforme(req, req.query.empresa ?? (req as any).body?.empresa);
+      const alcance = await empresaParaOperar(req, req.query.empresa ?? (req as any).body?.empresa);
       if (!alcance.empresa) return res.status(alcance.estado!).json({ error: alcance.error });
       const empresa = alcance.empresa;
       const loteId = String(req.params.id);
@@ -919,7 +919,7 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
    */
   app.post("/api/tyrecontrol/tacografo/propuestas/:id", ...guards, async (req, res) => {
     try {
-      const alcance = await empresaDelInforme(req, req.query.empresa ?? (req as any).body?.empresa);
+      const alcance = await empresaParaOperar(req, req.query.empresa ?? (req as any).body?.empresa);
       if (!alcance.empresa) return res.status(alcance.estado!).json({ error: alcance.error });
       const empresa = alcance.empresa;
 
@@ -979,7 +979,7 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
    */
   app.post("/api/tyrecontrol/tacografo/propuestas-bloque", ...guards, async (req, res) => {
     try {
-      const alcance = await empresaDelInforme(req, req.query.empresa ?? (req as any).body?.empresa);
+      const alcance = await empresaParaOperar(req, req.query.empresa ?? (req as any).body?.empresa);
       if (!alcance.empresa) return res.status(alcance.estado!).json({ error: alcance.error });
       const empresa = alcance.empresa;
 
