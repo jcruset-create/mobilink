@@ -68,8 +68,9 @@ empresas.
 Estado:
 - [x] 0.1 Funciones — `supabase/migrations/tyrecontrol_seguridad_fase0_funciones.sql`
 - [x] 0.2 Servidor: empresa por defecto, endpoints de ficha técnica y cierre de partes
-- [ ] 0.3 Fotos (buckets públicos)
-- [ ] 0.4 Tablas del almacén abiertas sin sesión
+- [x] 0.3 Fotos, paso 1: listar, subir y sobrescribir solo con sesión y sin rol cliente (`tyrecontrol_seguridad_fase0_fotos.sql`). Paso 2, buckets privados con enlaces firmados: después del piloto
+- [x] 0.4 Tablas del almacén abiertas sin sesión (`almacen_seguridad_fase0_cerrar_anon.sql`). NO aplicar `saas_fase1c_almacen_cerrar_anon.sql`: aflojaría las reglas por cliente y ubicación
+- [ ] Aparte, fuera de esta fase: Safety, Presencia y ToolControl siguen legibles sin sesión; cerrarlas exige darles login
 
 Verificado en producción el 15/11/2026. Afecta ya, sin usuarios de cliente:
 
