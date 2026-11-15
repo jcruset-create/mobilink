@@ -76,7 +76,7 @@ export default function Usuarios() {
       await crearUsuario({
         nombre: form.nombre, email: form.email,
         password: form.acceso_apk ? form.password : undefined,
-        rol: form.rol, acceso_apk: form.acceso_apk, acceso_panel: form.acceso_panel,
+        rol: form.rol, acceso_apk: form.rol === "cliente" ? false : form.acceso_apk, acceso_panel: form.acceso_panel,
         empresa_id: esSuper ? form.empresa_id : undefined,
       });
       setForm({ ...EMPTY });
@@ -134,7 +134,7 @@ export default function Usuarios() {
           )}
           <div className="flex items-center gap-3 text-sm text-slate-300">
             <label className="flex items-center gap-1"><input type="checkbox" checked={form.acceso_panel} onChange={(e) => setForm({ ...form, acceso_panel: e.target.checked })} /> Panel</label>
-            <label className="flex items-center gap-1"><input type="checkbox" checked={form.acceso_apk} onChange={(e) => setForm({ ...form, acceso_apk: e.target.checked })} /> APK</label>
+            {form.rol !== "cliente" && <label className="flex items-center gap-1"><input type="checkbox" checked={form.acceso_apk} onChange={(e) => setForm({ ...form, acceso_apk: e.target.checked })} /> APK</label>}
           </div>
         </div>
         <button onClick={crear} className="mt-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-500">Crear usuario</button>
@@ -362,9 +362,11 @@ function FichaUsuario({ usuario, empresas, esSuper, onClose, onDone }: {
     setSaving(true); setMsg("");
     try {
       await actualizarUsuario(usuario.id, {
-        nombre: nombre.trim(), rol, acceso_panel: accesoPanel, acceso_apk: accesoApk,
+        nombre: nombre.trim(), rol, acceso_panel: accesoPanel, acceso_apk: rol === "cliente" ? false : accesoApk,
       });
-      if (esSuper) {
+      // A un usuario de cliente no se le asignan empresas: eso da permiso
+      // para trabajar en ellas, y él solo consulta la suya.
+      if (esSuper && rol !== "cliente") {
         await guardarEmpresasUsuario(usuario.id, modo === "todas" ? null : [...seleccion]);
       }
       onDone(`✔ Usuario "${nombre.trim()}" actualizado`);
@@ -398,7 +400,7 @@ function FichaUsuario({ usuario, empresas, esSuper, onClose, onDone }: {
         <div className="text-[12px] text-slate-400">Email: <span className="text-slate-300">{usuario.email}</span></div>
         <div className="flex items-center gap-4 text-sm text-slate-300">
           <label className="flex items-center gap-1"><input type="checkbox" checked={accesoPanel} onChange={(e) => setAccesoPanel(e.target.checked)} /> Panel</label>
-          <label className="flex items-center gap-1"><input type="checkbox" checked={accesoApk} onChange={(e) => setAccesoApk(e.target.checked)} /> APK</label>
+          {rol !== "cliente" && <label className="flex items-center gap-1"><input type="checkbox" checked={accesoApk} onChange={(e) => setAccesoApk(e.target.checked)} /> APK</label>}
         </div>
 
         {/* Invitación al panel: enlace de un solo uso */}

@@ -147,7 +147,9 @@ export default function Operaciones() {
       if (truncado) {
         setMsg(`El filtro devuelve ${n} operaciones y se han exportado ${todas.length}. Acota el rango de fechas o la empresa para llevártelas todas.`);
       }
-      const filas = todas.map((o) => ({
+      // Coste, proveedor y observaciones son internos: el cliente se lleva su
+      // Excel sin ellos.
+      const filasCompletas = todas.map((o) => ({
         Nº: o.numero_operacion ?? "", Fecha: o.fecha_operacion ?? "", Empresa: o.empresa?.nombre ?? "",
         Vehículo: o.vehiculo?.matricula ?? "", Tipo: TIPO_OPERACION_LABELS[o.tipo_operacion] ?? o.tipo_operacion,
         Estado: o.status ? ESTADO_OPERACION_LABELS[o.status] : "", Prioridad: o.prioridad ? PRIORIDAD_OPERACION_LABELS[o.prioridad] : "",
@@ -156,6 +158,10 @@ export default function Operaciones() {
         Proveedor: o.proveedor ?? "", Coste: (o.coste ?? ((o.coste_material ?? 0) + (o.coste_mano_obra ?? 0))) || "",
         Anulada: o.is_anulada ? "Sí" : "", Observaciones: o.observaciones ?? "",
       }));
+      const INTERNAS = ["Proveedor", "Coste", "Observaciones"];
+      const filas = esCliente
+        ? filasCompletas.map((f) => Object.fromEntries(Object.entries(f).filter(([k]) => !INTERNAS.includes(k))))
+        : filasCompletas;
       const ws = XLSX.utils.json_to_sheet(filas);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Operaciones");
@@ -318,7 +324,7 @@ export default function Operaciones() {
           <th className={thCls} title="Número de operación. No es el número de intervención.">Nº operación</th>
           <th className={thCls}>Fecha</th><th className={thCls}>Empresa</th><th className={thCls}>Vehículo</th>
           <th className={thCls}>Tipo</th><th className={thCls}>Estado</th><th className={thCls}>Neumático</th><th className={thCls}>Posición</th>
-          <th className={thCls}>Km</th><th className={thCls}>Motivo</th><th className={thCls}>Destino</th><th className={thCls}>Coste</th><th className={thCls}>Acciones</th>
+          <th className={thCls}>Km</th><th className={thCls}>Motivo</th><th className={thCls}>Destino</th>{!esCliente && <th className={thCls}>Coste</th>}<th className={thCls}>Acciones</th>
         </tr></thead>
         <tbody>
           {loading ? <tr><td className={tdCls + " text-slate-500"} colSpan={13}>Cargando…</td></tr>
@@ -349,7 +355,7 @@ export default function Operaciones() {
               <td className={tdCls + " text-slate-400"}>{o.km_vehiculo ?? "—"}</td>
               <td className={tdCls + " text-slate-400"}>{o.motivo ? MOTIVO_OPERACION_LABELS[o.motivo] : "—"}</td>
               <td className={tdCls + " text-slate-400"}>{o.destino ?? "—"}</td>
-              <td className={tdCls}>
+              {!esCliente && <td className={tdCls}>
                 {(() => {
                   const total = (o.coste_material ?? 0) + (o.coste_mano_obra ?? 0);
                   const tiene = o.coste_material != null || o.coste_mano_obra != null;
@@ -365,7 +371,7 @@ export default function Operaciones() {
                     </div>
                   );
                 })()}
-              </td>
+              </td>}
               <td className={tdCls}>
                 <div className="flex flex-wrap gap-1">
                   <button onClick={() => abrirDetalle(o)} className="rounded border border-slate-600 px-1.5 py-0.5 text-[11px] font-semibold text-slate-200 hover:bg-slate-700">Detalle</button>

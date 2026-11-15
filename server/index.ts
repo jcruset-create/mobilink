@@ -20285,6 +20285,10 @@ app.post("/api/tyrecontrol/login-operario", async (req, res) => {
       .ilike("nombre", techName)
       .eq("acceso_apk", true)
       .eq("activo", true)
+      // La tablet es para trabajar. Un usuario de cliente solo consulta, y un
+      // login aquí le asignaba además todas las empresas. La base ya no deja
+      // que tenga `acceso_apk`; esto es el segundo cerrojo.
+      .in("rol", ["administrador", "operador"])
       .limit(1);
     const user = (usuarios || [])[0];
     if (!user || !user.email) {

@@ -10,18 +10,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  */
 
 const puedeVer = vi.fn();
+const puedeOperar = vi.fn();
 vi.mock("../empresaAcceso.ts", () => ({
   puedeVerEmpresaDeRequest: (...a: unknown[]) => puedeVer(...a),
+  puedeOperarEnEmpresa: (...a: unknown[]) => puedeOperar(...a),
 }));
 
-const { empresaDelInforme, esAdministrador } = await import("./alcance.ts");
+const { empresaDelInforme, empresaParaOperar, esAdministrador } = await import("./alcance.ts");
 
 const req = (authCtx: Record<string, unknown> | undefined) => ({ authCtx }) as any;
 
 const PROPIA = "11111111-1111-4111-8111-111111111111";
 const AJENA = "22222222-2222-4222-8222-222222222222";
 
-beforeEach(() => puedeVer.mockReset());
+beforeEach(() => { puedeVer.mockReset(); puedeOperar.mockReset(); });
 
 describe("empresaDelInforme", () => {
   it("sin sesión no hay informe", async () => {
@@ -80,5 +82,34 @@ describe("esAdministrador", () => {
 
   it("sin sesión, no", () => {
     expect(esAdministrador(req(undefined))).toBe(false);
+  });
+});
+
+describe("empresaParaOperar", () => {
+  it("quien puede escribir en su empresa, pasa", async () => {
+    puedeOperar.mockResolvedValue(true);
+    expect(await empresaParaOperar(req({ userId: "u1", empresaId: PROPIA }), PROPIA))
+      .toEqual({ empresa: PROPIA });
+    expect(puedeOperar).toHaveBeenCalledWith({ userId: "u1", empresaId: PROPIA }, PROPIA);
+  });
+
+  it("un usuario de consulta ve su empresa pero no escribe en ella", async () => {
+    puedeOperar.mockResolvedValue(false);
+    const r = await empresaParaOperar(req({ userId: "u1", empresaId: PROPIA }), PROPIA);
+    expect(r.empresa).toBeNull();
+    expect(r.estado).toBe(403);
+  });
+
+  it("si ni siquiera puede verla, se queda en el rechazo de siempre", async () => {
+    puedeVer.mockResolvedValue(false);
+    const r = await empresaParaOperar(req({ userId: "u1", empresaId: PROPIA }), AJENA);
+    expect(r).toEqual({ empresa: null, estado: 403, error: "Sin acceso a esa empresa" });
+    expect(puedeOperar).not.toHaveBeenCalled();
+  });
+
+  it("sin sesión no se llega a preguntar", async () => {
+    const r = await empresaParaOperar(req(undefined), PROPIA);
+    expect(r.estado).toBe(401);
+    expect(puedeOperar).not.toHaveBeenCalled();
   });
 });
