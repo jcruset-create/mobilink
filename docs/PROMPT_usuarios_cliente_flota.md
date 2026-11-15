@@ -67,7 +67,7 @@ empresas.
 
 Estado:
 - [x] 0.1 Funciones — `supabase/migrations/tyrecontrol_seguridad_fase0_funciones.sql`
-- [ ] 0.2 Servidor: empresa por defecto y endpoints de ficha técnica
+- [x] 0.2 Servidor: empresa por defecto, endpoints de ficha técnica y cierre de partes
 - [ ] 0.3 Fotos (buckets públicos)
 - [ ] 0.4 Tablas del almacén abiertas sin sesión
 
