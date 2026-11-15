@@ -123,6 +123,7 @@ import {
 } from "./documentos/servicio.ts";
 import { tipoDesdeKindAssist as tipoDocumentoDesdeKind } from "./documentos/tipos.ts";
 import { normalizarMatricula as normalizarMatriculaTc } from "./tyrecontrol/matricula.ts";
+import { decidirCambioDeDatos, mensajeDeCorreo } from "./tyrecontrol/usuarioDatos.ts";
 import { puedeVerEmpresaDeRequest as puedeVerEmpresaTc, puedeVerEmpresa as puedeVerEmpresaTcCtx, puedeOperarEnEmpresa } from "./tyrecontrol/empresaAcceso.ts";
 import {
   buildWebfleetRequest,
@@ -20523,7 +20524,7 @@ app.post("/api/tyrecontrol/usuarios", async (req, res) => {
     const password = passwordPedida || crypto.randomBytes(24).toString("base64url");
 
     const { data: created, error: createErr } = await supabase.auth.admin.createUser({ email, password, email_confirm: true });
-    if (createErr || !created.user) return res.status(400).json({ error: createErr?.message ?? "No se pudo crear el usuario" });
+    if (createErr || !created.user) return res.status(400).json({ error: mensajeDeCorreo(createErr?.message ?? "No se pudo crear el usuario") });
 
     const { error: insErr } = await supabase.from("tc_usuarios").insert({
       id: created.user.id,
@@ -20678,6 +20679,80 @@ app.post(
 // Elimina un usuario del todo (perfil + asignaciones + usuario de auth).
 // Si el usuario tiene historial (revisiones, etc., por FK) se bloquea con
 // un 409 y se recomienda desactivarlo en su lugar: no se pierde histórico.
+/*
+ * Cambia el correo y/o la empresa de un usuario desde su ficha.
+ *
+ * El correo vive en dos sitios —`auth.users`, que es con lo que se entra, y
+ * `tc_usuarios`, que es lo que enseña el panel— y solo el servidor llega al
+ * primero. Qué se puede cambiar y quién lo decide `decidirCambioDeDatos`.
+ */
+app.post(
+  "/api/tyrecontrol/usuarios/:id/datos",
+  authenticate,
+  requireModule("tyrecontrol"),
+  requireTyreControlAdmin,
+  async (req, res) => {
+    try {
+      const id = String(req.params.id);
+      const admin = (req as any).tcAdmin as { id: string; es_superadmin: boolean };
+
+      const [{ data: yo }, { data: objetivo }] = await Promise.all([
+        supabase.from("tc_usuarios").select("empresa_id").eq("id", admin.id).maybeSingle(),
+        supabase.from("tc_usuarios").select("id, email, empresa_id, es_superadmin").eq("id", id).maybeSingle(),
+      ]);
+      if (!objetivo) return res.status(404).json({ error: "Usuario no encontrado" });
+
+      const unificado = (await db.query(`SELECT 1 FROM app_usuarios WHERE id = $1`, [id])).rows.length > 0;
+      const d = decidirCambioDeDatos(
+        { id: admin.id, es_superadmin: Boolean(admin.es_superadmin), empresa_id: (yo as any)?.empresa_id ?? null },
+        objetivo as any, unificado, req.body ?? {},
+      );
+      if (d.ok === false) return res.status(d.estado).json({ error: d.error });
+      if (!d.email && !d.empresaId) return res.json({ ok: true, cambiado: [] });
+
+      if (d.empresaId) {
+        const { data: emp } = await supabase.from("tc_empresas").select("id").eq("id", d.empresaId).maybeSingle();
+        if (!emp) return res.status(400).json({ error: "Esa empresa no existe" });
+      }
+
+      // Primero el correo de acceso: es lo que puede fallar (que ya sea de
+      // otro). Si luego fallara la ficha, se vuelve a poner el de antes.
+      if (d.email) {
+        const { error: eAuth } = await supabase.auth.admin.updateUserById(id, { email: d.email, email_confirm: true });
+        if (eAuth) return res.status(400).json({ error: mensajeDeCorreo(eAuth.message) });
+      }
+      const cambios: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      if (d.email) cambios.email = d.email;
+      if (d.empresaId) cambios.empresa_id = d.empresaId;
+      const { error: eFicha } = await supabase.from("tc_usuarios").update(cambios).eq("id", id);
+      if (eFicha) {
+        if (d.email && (objetivo as any).email) {
+          await supabase.auth.admin.updateUserById(id, { email: (objetivo as any).email, email_confirm: true });
+        }
+        return res.status(400).json({ error: eFicha.message });
+      }
+
+      void registrarAuditoria({
+        empresaId: req.authCtx?.empresaId || process.env.DEFAULT_EMPRESA_ID || "00000000-0000-4000-a000-000000000001",
+        userId: admin.id,
+        accion: "tyrecontrol.usuario.datos",
+        entidad: "tc_usuarios",
+        entidadId: id,
+        detalle: {
+          correo: d.email ? { de: (objetivo as any).email, a: d.email } : undefined,
+          empresa: d.empresaId ? { de: (objetivo as any).empresa_id, a: d.empresaId } : undefined,
+        },
+        ip: req.ip,
+      });
+
+      res.json({ ok: true, cambiado: [d.email ? "correo" : null, d.empresaId ? "empresa" : null].filter(Boolean) });
+    } catch (error: any) {
+      console.error("POST /api/tyrecontrol/usuarios/:id/datos error:", error);
+      res.status(500).json({ error: error?.message || "Error guardando los datos del usuario" });
+    }
+  }
+);
+
 app.delete("/api/tyrecontrol/usuarios/:id", authenticate, requireModule("tyrecontrol"), requireTyreControlAdmin, async (req, res) => {
   try {
     const id = String(req.params.id);

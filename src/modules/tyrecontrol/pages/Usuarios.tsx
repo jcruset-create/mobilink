@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   listarUsuarios, crearUsuario, actualizarUsuario, listarEmpresas,
-  listarEmpresasDeUsuario, guardarEmpresasUsuario, eliminarUsuario, cambiarPasswordUsuario,
+  listarEmpresasDeUsuario, guardarEmpresasUsuario, eliminarUsuario, cambiarPasswordUsuario, cambiarDatosUsuario,
   generarEnlaceAcceso, ultimosAccesos, obtenerPantallasUsuario, guardarPantallasUsuario,
   ultimasPosicionesTablet,
 } from "../services/data";
@@ -279,6 +279,8 @@ function FichaUsuario({ usuario, empresas, esSuper, onClose, onDone }: {
   const [rol, setRol] = useState<Rol>(usuario.rol);
   const [accesoPanel, setAccesoPanel] = useState(usuario.acceso_panel);
   const [accesoApk, setAccesoApk] = useState(usuario.acceso_apk);
+  const [email, setEmail] = useState(usuario.email ?? "");
+  const [empresaId, setEmpresaId] = useState(usuario.empresa_id ?? "");
   const [modo, setModo] = useState<"todas" | "manual">(usuario.empresas_manual ? "manual" : "todas");
   const [seleccion, setSeleccion] = useState<Set<string>>(new Set());
   const [cargandoEmpresas, setCargandoEmpresas] = useState(true);
@@ -359,8 +361,20 @@ function FichaUsuario({ usuario, empresas, esSuper, onClose, onDone }: {
   async function guardar() {
     if (!nombre.trim()) { setMsg("El nombre es obligatorio"); return; }
     if (modo === "manual" && seleccion.size === 0) { setMsg("Selecciona al menos una empresa (o marca «Todas»)"); return; }
+    if (!email.trim()) { setMsg("El correo es obligatorio"); return; }
     setSaving(true); setMsg("");
     try {
+      // Primero el correo y la empresa: es lo que el servidor puede rechazar
+      // (correo ya usado, usuario del acceso común). Si falla, no se ha
+      // guardado nada todavía y la ficha sigue abierta con el aviso.
+      const cambiaEmail = email.trim().toLowerCase() !== String(usuario.email ?? "").toLowerCase();
+      const cambiaEmpresa = esSuper && !!empresaId && empresaId !== usuario.empresa_id;
+      if (cambiaEmail || cambiaEmpresa) {
+        await cambiarDatosUsuario(usuario.id, {
+          ...(cambiaEmail ? { email: email.trim() } : {}),
+          ...(cambiaEmpresa ? { empresa_id: empresaId } : {}),
+        });
+      }
       await actualizarUsuario(usuario.id, {
         nombre: nombre.trim(), rol, acceso_panel: accesoPanel, acceso_apk: rol === "cliente" ? false : accesoApk,
       });
@@ -397,7 +411,24 @@ function FichaUsuario({ usuario, empresas, esSuper, onClose, onDone }: {
             </select>
           </label>
         </div>
-        <div className="text-[12px] text-slate-400">Email: <span className="text-slate-300">{usuario.email}</span></div>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <label className="text-[12px] text-slate-400">Correo
+            <input id="ficha-usuario-correo" type="email" className={`${inputCls} mt-1`} value={email} onChange={(e) => setEmail(e.target.value)} />
+          </label>
+          {/* Mover a alguien de empresa cambia todo lo que ve: solo el
+              superadministrador, y nunca a otro superadministrador. */}
+          {esSuper && (
+            <label className="text-[12px] text-slate-400">Empresa
+              <select id="ficha-usuario-empresa" className={`${inputCls} mt-1`} value={empresaId} onChange={(e) => setEmpresaId(e.target.value)} disabled={usuario.es_superadmin}>
+                {empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}
+              </select>
+            </label>
+          )}
+        </div>
+        <p className="text-[11px] text-slate-500">
+          El correo es con el que entra al panel: si lo cambias, el enlace de acceso se envía al nuevo.
+          {esSuper ? " Al cambiar la empresa, pasa a ver los datos de la nueva." : ""}
+        </p>
         <div className="flex items-center gap-4 text-sm text-slate-300">
           <label className="flex items-center gap-1"><input type="checkbox" checked={accesoPanel} onChange={(e) => setAccesoPanel(e.target.checked)} /> Panel</label>
           {rol !== "cliente" && <label className="flex items-center gap-1"><input type="checkbox" checked={accesoApk} onChange={(e) => setAccesoApk(e.target.checked)} /> APK</label>}
