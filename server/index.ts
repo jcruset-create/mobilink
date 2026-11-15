@@ -123,7 +123,7 @@ import {
 } from "./documentos/servicio.ts";
 import { tipoDesdeKindAssist as tipoDocumentoDesdeKind } from "./documentos/tipos.ts";
 import { normalizarMatricula as normalizarMatriculaTc } from "./tyrecontrol/matricula.ts";
-import { puedeVerEmpresaDeRequest as puedeVerEmpresaTc } from "./tyrecontrol/empresaAcceso.ts";
+import { puedeVerEmpresaDeRequest as puedeVerEmpresaTc, puedeVerEmpresa as puedeVerEmpresaTcCtx, puedeOperarEnEmpresa } from "./tyrecontrol/empresaAcceso.ts";
 import {
   buildWebfleetRequest,
   resolveWebfleetCreds,
@@ -2262,6 +2262,23 @@ app.post("/api/tyrecontrol/intervencion/cerrar", exigirCredencial(authenticate, 
     const { vehiculoId, desde, intervencionId, montajeAntes, incidencias, imagenChasis,
       inicioAt, finAt, pausaSeg, nPausas } = req.body ?? {};
     if (!vehiculoId || !desde) return res.status(400).json({ error: "vehiculoId y desde requeridos" });
+
+    /*
+     * Quién cierra, y si puede escribir en la flota de ese vehículo. Fuera de
+     * AUTH_MODE=strict `exigirCredencial` solo comprueba que haya ALGUNA
+     * credencial válida y no deja `authCtx`, así que aquí se resuelve la
+     * sesión a mano. La tablet y el panel mandan siempre el Bearer.
+     */
+    const bearerCierre = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+    const ctxCierre = req.authCtx ?? (bearerCierre ? await resolveAuthContext(bearerCierre) : null);
+    if (!ctxCierre) return res.status(401).json({ error: "Sesión requerida para cerrar el parte" });
+    const { data: vehCierre } = await supabase
+      .from("tc_vehiculos").select("empresa_id").eq("id", String(vehiculoId)).maybeSingle();
+    if (!vehCierre) return res.status(404).json({ error: "Vehículo no encontrado" });
+    if (!(await puedeOperarEnEmpresa(ctxCierre, String((vehCierre as any).empresa_id)))) {
+      console.warn(`[intervencion/cerrar] RECHAZADA: usuario ${ctxCierre.userId} sin permiso de escritura en la empresa del vehículo ${vehiculoId}`);
+      return res.status(403).json({ error: "No tienes permiso para cerrar partes de esta flota" });
+    }
 
     // La sesión abierta, si la APK la manda. Si no existe o ya está cerrada,
     // se degrada al modo clásico en vez de fallar: cerrar nunca debe dejar
@@ -20204,7 +20221,7 @@ function requireTyreControlPanelUser(
 
     const { data: perfil } = await supabase
       .from("tc_usuarios")
-      .select("id, acceso_panel, es_superadmin, activo")
+      .select("id, acceso_panel, es_superadmin, activo, rol")
       .eq("id", data.user.id)
       .maybeSingle();
     if (!perfil || !perfil.activo || (!perfil.acceso_panel && !perfil.es_superadmin)) {
@@ -20212,6 +20229,8 @@ function requireTyreControlPanelUser(
     }
 
     (req as any).tyreControlUserId = data.user.id;
+    // Un usuario de cliente entra al panel, pero solo a consultar.
+    (req as any).tyreControlSoloConsulta = perfil.rol === "cliente" && !perfil.es_superadmin;
     next();
   })().catch((error) => {
     console.error("requireTyreControlPanelUser error:", error);
@@ -20738,7 +20757,9 @@ async function urlFirmadaDoc(storagePath: string, segundos = 3600): Promise<stri
   return data?.signedUrl ?? null;
 }
 
-/// Comprueba que el usuario puede tocar este vehículo y devuelve su empresa.
+/// Carga el vehículo con su empresa. OJO: no comprueba nada sobre el usuario;
+/// eso lo hace quien llama, con `puedeOperarEnEmpresa` (escribir) o
+/// `puedeVerEmpresaTcCtx` (leer) sobre el `empresa_id` que devuelve.
 async function vehiculoDeUsuario(vehiculoId: string): Promise<{ id: string; empresa_id: string; matricula: string; bastidor: string | null; tipo_vehiculo_id: string | null } | null> {
   const { data } = await supabase
     .from("tc_vehiculos")
@@ -20763,6 +20784,9 @@ app.post(
 
       const veh = await vehiculoDeUsuario(vehiculoId);
       if (!veh) return res.status(404).json({ error: "Vehículo no encontrado" });
+      if (!(await puedeOperarEnEmpresa({ userId }, veh.empresa_id))) {
+        return res.status(403).json({ error: "No tienes permiso para cambiar los documentos de esta empresa" });
+      }
 
       // Un mismo archivo subido dos veces no crea documentos duplicados.
       const hash = crypto.createHash("sha256");
@@ -20841,6 +20865,11 @@ app.post(
       const empresaId = String(req.body.empresaId || "");
       if (!empresaId) return res.status(400).json({ error: "Falta la empresa" });
       const userId = (req as any).tyreControlUserId as string;
+      // La empresa llega en el cuerpo: sin esto se subía un documento a la de
+      // cualquiera.
+      if (!(await puedeOperarEnEmpresa({ userId }, empresaId))) {
+        return res.status(403).json({ error: "No tienes permiso para cambiar los documentos de esta empresa" });
+      }
       const files = (req.files as Express.Multer.File[]) ?? [];
       if (!files.length) return res.status(400).json({ error: "No se recibió ningún archivo" });
 
@@ -20895,10 +20924,14 @@ app.post(
     try {
       const { data: doc } = await supabase
         .from("tc_vehiculo_documentos")
-        .select("id, vehiculo_id, storage_path, mime_type, paginas")
+        .select("id, vehiculo_id, empresa_id, storage_path, mime_type, paginas")
         .eq("id", docId)
         .maybeSingle();
       if (!doc) return res.status(404).json({ error: "Documento no encontrado" });
+      // Leerlo con la IA cuesta dinero y escribe el resultado en el documento.
+      if (!(await puedeOperarEnEmpresa({ userId: (req as any).tyreControlUserId }, String((doc as any).empresa_id ?? "")))) {
+        return res.status(403).json({ error: "No tienes permiso para cambiar los documentos de esta empresa" });
+      }
 
       // Documento "huérfano" (subido para crear el vehículo directamente):
       // aún no hay vehículo con el que comparar ni tipo que sugiera la
@@ -21021,6 +21054,9 @@ app.post("/api/tyrecontrol/documentos/:id/aplicar", requireTyreControlPanelUser,
     const { data: doc } = await supabase
       .from("tc_vehiculo_documentos").select("id, vehiculo_id, empresa_id").eq("id", docId).maybeSingle();
     if (!doc) return res.status(404).json({ error: "Documento no encontrado" });
+    if (!(await puedeOperarEnEmpresa({ userId }, String((doc as any).empresa_id ?? "")))) {
+      return res.status(403).json({ error: "No tienes permiso para cambiar los documentos de esta empresa" });
+    }
 
     // Documento huérfano (alta directa desde ficha): el vehículo se acaba de
     // crear y llega en el cuerpo de la petición; aquí se enlaza documento↔vehículo.
@@ -21225,6 +21261,10 @@ app.post("/api/tyrecontrol/documentos/:id/aplicar", requireTyreControlPanelUser,
 // Idempotente: solo añade los códigos que aún no existen, nunca borra.
 app.post("/api/tyrecontrol/tipos/:id/generar-posiciones", requireTyreControlPanelUser, async (req, res) => {
   try {
+    // Los tipos de vehículo son de todas las empresas a la vez.
+    if ((req as any).tyreControlSoloConsulta) {
+      return res.status(403).json({ error: "Tu usuario es de consulta: no puede cambiar los tipos de vehículo" });
+    }
     const tipoId = String(req.params.id);
     const { data: tipo } = await supabase
       .from("tc_tipos_vehiculo").select("id, nombre, configuracion_ejes").eq("id", tipoId).maybeSingle();
@@ -21334,6 +21374,13 @@ app.get("/api/tyrecontrol/tipos/:id/plano", requireTyreControlPanelUser, async (
 
 app.get("/api/tyrecontrol/vehiculos/:id/documentos", requireTyreControlPanelUser, async (req, res) => {
   try {
+    // Devuelve enlaces firmados a fichas con bastidor y titular: solo a quien
+    // puede ver la empresa del vehículo. Un cliente ve las de los suyos.
+    const vehDocs = await vehiculoDeUsuario(String(req.params.id));
+    if (!vehDocs) return res.status(404).json({ error: "Vehículo no encontrado" });
+    if (!(await puedeVerEmpresaTcCtx({ userId: (req as any).tyreControlUserId }, vehDocs.empresa_id))) {
+      return res.status(403).json({ error: "No tienes acceso a los documentos de este vehículo" });
+    }
     const { data, error } = await supabase
       .from("tc_vehiculo_documentos")
       .select("id, tipo, nombre_original, paginas, tamano_bytes, fecha_emision, ocr_estado, ocr_confianza, version, vigente, created_at, storage_path")

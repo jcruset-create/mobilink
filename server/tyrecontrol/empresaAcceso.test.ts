@@ -42,7 +42,7 @@ vi.mock("../supabase.ts", () => {
   return { supabase: { from: consulta } };
 });
 
-const { puedeVerEmpresa, puedeVerEmpresaDeRequest } = await import("./empresaAcceso.ts");
+const { puedeVerEmpresa, puedeVerEmpresaDeRequest, puedeOperarEnEmpresa } = await import("./empresaAcceso.ts");
 
 beforeEach(() => {
   usuario = null;
@@ -135,5 +135,53 @@ describe("La variante que toma el req de Express", () => {
   it("una petición sin authCtx no pasa", async () => {
     expect(await puedeVerEmpresaDeRequest({}, "emp-1")).toBe(false);
     expect(await puedeVerEmpresaDeRequest(undefined, "emp-1")).toBe(false);
+  });
+});
+
+describe("Escribir es más estrecho que ver", () => {
+  it("un cliente ve su empresa pero no escribe en ella", async () => {
+    usuario = { rol: "cliente", empresa_id: "emp-1", es_superadmin: false, activo: true };
+    expect(await puedeVerEmpresa({ userId: "u1" }, "emp-1")).toBe(true);
+    expect(await puedeOperarEnEmpresa({ userId: "u1" }, "emp-1")).toBe(false);
+  });
+
+  it("un cliente con empresas asignadas por error tampoco escribe", async () => {
+    // Es lo que pasa hoy si alguien le marca la APK o guarda su ficha con
+    // «todas las empresas»: le caen filas en tc_operador_empresas.
+    usuario = { rol: "cliente", empresa_id: "emp-1", es_superadmin: false, activo: true };
+    asignadas = ["emp-1", "emp-2"];
+    expect(await puedeOperarEnEmpresa({ userId: "u1" }, "emp-1")).toBe(false);
+    expect(await puedeOperarEnEmpresa({ userId: "u1" }, "emp-2")).toBe(false);
+  });
+
+  it("el administrador escribe en la suya y no en otra", async () => {
+    usuario = { rol: "administrador", empresa_id: "emp-1", es_superadmin: false, activo: true };
+    expect(await puedeOperarEnEmpresa({ userId: "u1" }, "emp-1")).toBe(true);
+    expect(await puedeOperarEnEmpresa({ userId: "u1" }, "emp-2")).toBe(false);
+  });
+
+  it("el técnico escribe en las que tiene asignadas", async () => {
+    usuario = { rol: "operador", empresa_id: "emp-9", es_superadmin: false, activo: true };
+    asignadas = ["emp-1", "emp-2"];
+    expect(await puedeOperarEnEmpresa({ userId: "u1" }, "emp-2")).toBe(true);
+    expect(await puedeOperarEnEmpresa({ userId: "u1" }, "emp-3")).toBe(false);
+  });
+
+  it("el superadmin escribe en todas", async () => {
+    usuario = { rol: "cliente", empresa_id: "emp-1", es_superadmin: true, activo: true };
+    expect(await puedeOperarEnEmpresa({ userId: "u1" }, "emp-5")).toBe(true);
+    expect(await puedeOperarEnEmpresa({ userId: "u1", esSuperadmin: true }, "emp-5")).toBe(true);
+  });
+
+  it("ante la duda, no: sin sesión, desactivado, rol raro o consulta caída", async () => {
+    expect(await puedeOperarEnEmpresa(undefined, "emp-1")).toBe(false);
+    expect(await puedeOperarEnEmpresa({ userId: "u1" }, "")).toBe(false);
+    usuario = { rol: "operador", empresa_id: "emp-1", es_superadmin: false, activo: false };
+    expect(await puedeOperarEnEmpresa({ userId: "u1" }, "emp-1")).toBe(false);
+    usuario = { rol: null, empresa_id: "emp-1", es_superadmin: false, activo: true };
+    expect(await puedeOperarEnEmpresa({ userId: "u1" }, "emp-1")).toBe(false);
+    usuario = { rol: "operador", empresa_id: "emp-1", es_superadmin: false, activo: true };
+    errorUsuarios = { message: "conexión perdida" };
+    expect(await puedeOperarEnEmpresa({ userId: "u1" }, "emp-1")).toBe(false);
   });
 });

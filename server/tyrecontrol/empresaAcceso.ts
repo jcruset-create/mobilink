@@ -70,6 +70,38 @@ export async function puedeVerEmpresa(ctx: ContextoAcceso, empresaId: string): P
 }
 
 /**
+ * ¿El usuario del contexto puede ESCRIBIR en los datos de `empresaId`?
+ *
+ * Lo mismo que `puedeVerEmpresa`, menos el rol `cliente`: un usuario de cliente
+ * ve su empresa pero no cambia nada en ella. Es la regla de las políticas de
+ * escritura de la base (`tc_is_admin() and empresa propia`, o empresa
+ * asignada), que aquí hay que repetir a mano porque `service_role` se las
+ * salta.
+ *
+ * Igual que la otra, ante la duda responde que no.
+ */
+export async function puedeOperarEnEmpresa(ctx: ContextoAcceso, empresaId: string): Promise<boolean> {
+  const userId = ctx?.userId;
+  if (!userId || !empresaId) return false;
+  if (ctx?.esSuperadmin === true) return true;
+
+  const { data: u, error } = await supabase
+    .from("tc_usuarios").select("rol, empresa_id, es_superadmin, activo")
+    .eq("id", userId).maybeSingle();
+  if (error || !u || u.activo === false) return false;
+  if (u.es_superadmin) return true;
+  // Se mira el rol ANTES que la empresa: un cliente con empresas asignadas
+  // por error en tc_operador_empresas tampoco escribe.
+  if (u.rol !== "administrador" && u.rol !== "operador") return false;
+  if (u.empresa_id === empresaId) return true;
+
+  const { data: asignado } = await supabase
+    .from("tc_operador_empresas").select("empresa_id")
+    .eq("usuario_id", userId).eq("empresa_id", empresaId).maybeSingle();
+  return !!asignado;
+}
+
+/**
  * La misma comprobación tomando el `req` de Express, para los sitios que ya
  * trabajan con la petición entera.
  */
