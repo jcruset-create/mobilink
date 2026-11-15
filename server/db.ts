@@ -942,6 +942,10 @@ export async function initDb() {
     ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS "finalizadoAtMs" BIGINT;
     ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS "motivoNoRealizado" TEXT;
     ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS "explicacionNoRealizado" TEXT;
+    -- Cambio de neumáticos: posiciones, neumático del catálogo de TyreControl
+    -- (server/otf/neumaticosTc.ts) y el resultado de registrar el montaje allí.
+    ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS neumaticos JSONB;
+    ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS "tcMontaje" JSONB;
     ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS "matriculaLeida" TEXT;
     ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS "matriculaNoCoincide" BOOLEAN NOT NULL DEFAULT false;
     -- Lo marcado de la lista de comprobación al finalizar ([{texto, hecho, valor}]).

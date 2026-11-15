@@ -139,4 +139,35 @@ void main() {
     // El reloj de la pantalla: se para antes de acabar la prueba.
     await tester.pumpWidget(const SizedBox());
   });
+
+  testWidgets('cambio de neumáticos: el plano con las ruedas a cambiar, antes de empezar', (tester) async {
+    await pantallaAlta(tester);
+    await tester.pumpWidget(MaterialApp(
+      home: OtfInicioTrabajoScreen(
+        api: api,
+        trabajo: {
+          ..._trabajo(),
+          'posicionesTexto': 'Eje 2: izq. ext., izq. int.',
+          'neumaticosTexto': '2 × Continental HD3 315/70R22.5 (nuevo)',
+          'neumaticos': {
+            'imagenUrl': null,
+            'seleccion': ['E2_IZQ_EXT', 'E2_IZQ_INT'],
+            'posiciones': [
+              {'id': 'a', 'codigo': 'E1_IZQ', 'eje': 1, 'lado': 'izq', 'x': 7, 'y': 10, 'w': 14, 'h': 14},
+              {'id': 'b', 'codigo': 'E1_DER', 'eje': 1, 'lado': 'der', 'x': 79, 'y': 10, 'w': 14, 'h': 14},
+              {'id': 'c', 'codigo': 'E2_IZQ_EXT', 'eje': 2, 'lado': 'izq', 'interiorExterior': 'ext', 'x': 0, 'y': 76, 'w': 14, 'h': 14},
+              {'id': 'd', 'codigo': 'E2_IZQ_INT', 'eje': 2, 'lado': 'izq', 'interiorExterior': 'int', 'x': 14, 'y': 76, 'w': 14, 'h': 14},
+            ],
+          },
+        },
+        numero: 1,
+        total: 1,
+      ),
+    ));
+    expect(find.text('Ruedas a cambiar'), findsOneWidget);
+    expect(find.text('E2 IZQ EXT'), findsOneWidget);
+    expect(find.text('E1 DER'), findsOneWidget);
+    expect(find.text('Eje 2: izq. ext., izq. int.'), findsOneWidget);
+    expect(find.text('2 × Continental HD3 315/70R22.5 (nuevo)'), findsOneWidget);
+  });
 }

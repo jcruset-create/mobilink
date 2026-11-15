@@ -19,6 +19,7 @@ import {
 import type { KnownPlace } from "../modules/roadsideAssistanceTypes";
 import KnownPlaceMapModal from "../components/KnownPlaceMapModal";
 import TyreControlVehiculo from "../components/TyreControlVehiculo";
+import OtfNeumaticos, { PlanoRuedas, type NeumaticosTrabajo } from "../components/OtfNeumaticos";
 import AssistSidebar from "../components/AssistSidebar";
 import MensajesOperario from "../components/MensajesOperario";
 import { leerPestana, otfDeLaPestana, TITULO_PESTANA } from "../modules/otfPestanas";
@@ -527,6 +528,15 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
   const [observaciones, setObservaciones] = useState("");
   const [adding, setAdding] = useState(false);
   const [errorAlta, setErrorAlta] = useState<string | null>(null);
+  // Cambio de neumáticos: plano de TyreControl para marcar ruedas y catálogo.
+  // Se activa solo si la plantilla habla de neumáticos, y se puede forzar.
+  const [conNeumaticos, setConNeumaticos] = useState(false);
+  const [neumaticos, setNeumaticos] = useState<NeumaticosTrabajo | null>(null);
+  const [faltaNeumaticos, setFaltaNeumaticos] = useState<string | null>(null);
+  const [registrando, setRegistrando] = useState<number | null>(null);
+  useEffect(() => {
+    if (/neum[aá]tic|rueda|cubierta/i.test(trabajoPlantilla)) setConNeumaticos(true);
+  }, [trabajoPlantilla]);
   // La consulta a TyreControl (y su antirrebote) vive ahora dentro de
   // TyreControlVehiculo: la hacían dos pantallas con dos copias del mismo
   // efecto.
@@ -545,9 +555,11 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
    */
   const faltaParaAnadir = !plate.trim()
     ? "Indica la matrícula."
-    : !trabajoPlantilla.trim() && !detalle.trim()
-      ? "Elige un trabajo de la plantilla o escribe el detalle manual."
-      : null;
+    : conNeumaticos && !neumaticos
+      ? faltaNeumaticos ?? "Marca las ruedas y elige el neumático."
+      : !trabajoPlantilla.trim() && !detalle.trim() && !neumaticos
+        ? "Elige un trabajo de la plantilla o escribe el detalle manual."
+        : null;
 
   async function add() {
     if (adding) return; // evita el doble clic → trabajo duplicado
@@ -558,11 +570,12 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
       await addOtfTrabajo(otf.id, {
         plate,
         tipoVehiculo: tipo,
-        trabajoPlantilla,
+        trabajoPlantilla: trabajoPlantilla || (conNeumaticos ? "Cambio de neumáticos" : ""),
         detalleManual: detalle,
         observaciones: observaciones.trim() || null,
+        neumaticos: conNeumaticos ? neumaticos : null,
       });
-      setPlate(""); setTP(""); setDetalle(""); setObservaciones("");
+      setPlate(""); setTP(""); setDetalle(""); setObservaciones(""); setConNeumaticos(false); setNeumaticos(null);
       onChange();
     } catch (e: any) {
       /*
@@ -675,6 +688,11 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
       <div className="mt-4 space-y-2">
         {(otf.trabajos ?? []).map((t: any) => (
           <div key={t.id} className="flex items-center gap-3 rounded-xl border border-slate-700 bg-slate-900/60 px-3 py-2">
+            {t.neumaticos?.posiciones?.length > 0 && (
+              <div className="w-[72px] shrink-0">
+                <PlanoRuedas plano={{ imagenUrl: t.neumaticos.imagenUrl, posiciones: t.neumaticos.posiciones }} seleccion={t.neumaticos.seleccion ?? []} compacto />
+              </div>
+            )}
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 flex-wrap">
                 {t.plate ? (
@@ -686,6 +704,31 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
                 )}
               </div>
               <div className="text-sm text-slate-200">{t.trabajo}</div>
+              {t.posicionesTexto && <div className="text-xs font-bold text-orange-300">{t.posicionesTexto}</div>}
+              {t.neumaticos && t.status === "finalizado" && (
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className={t.tcMontaje?.estado === "hecho" ? "font-bold text-emerald-300" : t.tcMontaje?.estado === "en_curso" ? "text-slate-400" : "font-bold text-amber-300"}>
+                    TyreControl: {t.tcMontaje?.estado === "hecho"
+                      ? `montaje registrado${t.tcMontaje.vehiculoCreado ? " · vehículo dado de alta" : ""}`
+                      : t.tcMontaje?.estado === "en_curso" ? "registrando…"
+                      : t.tcMontaje?.motivo ?? "montaje sin registrar"}
+                  </span>
+                  {t.tcMontaje?.estado !== "hecho" && t.tcMontaje?.estado !== "en_curso" && (
+                    <button
+                      disabled={registrando === t.id}
+                      onClick={async () => {
+                        setRegistrando(t.id);
+                        try { await apiFetch(`/api/otf/trabajos/${t.id}/tc-montaje`, { method: "POST" }); } catch { /* el motivo queda en el trabajo */ }
+                        setRegistrando(null);
+                        onChange();
+                      }}
+                      className="rounded border border-slate-600 px-2 py-0.5 font-semibold text-slate-200 hover:border-orange-400 disabled:opacity-50"
+                    >
+                      {registrando === t.id ? "Registrando…" : "Reintentar"}
+                    </button>
+                  )}
+                </div>
+              )}
               {t.observaciones && <div className="text-xs font-semibold text-amber-300">📌 {t.observaciones}</div>}
               {t.motivoAltaCampo && <div className="text-xs italic text-slate-500">Motivo: {t.motivoAltaCampo}</div>}
               {/* Lo que dice la tablet: tiempo, por qué no se hizo y la matrícula leída. */}
@@ -763,8 +806,20 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
           * cada una. Sigue siendo SOLO LECTURA — todavía no se planifica nada
           * por posición.
           */}
+        <label className="mt-2 flex items-center gap-2 text-sm font-semibold text-slate-200">
+          <input type="checkbox" checked={conNeumaticos} onChange={(e) => setConNeumaticos(e.target.checked)} className="h-4 w-4" />
+          Cambio de neumáticos: marcar las ruedas en el plano de TyreControl
+        </label>
         <div className="mt-2">
-          <TyreControlVehiculo plate={plate} modo="completo" />
+          {conNeumaticos ? (
+            <OtfNeumaticos
+              otfId={otf.id}
+              plate={plate}
+              onChange={(n, falta) => { setNeumaticos(n); setFaltaNeumaticos(falta); }}
+            />
+          ) : (
+            <TyreControlVehiculo plate={plate} modo="completo" />
+          )}
         </div>
         {/*
           El botón NO se deshabilita a propósito: un botón gris que tampoco
