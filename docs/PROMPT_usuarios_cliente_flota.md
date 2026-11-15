@@ -68,7 +68,7 @@ empresas.
 Estado:
 - [x] 0.1 Funciones — `supabase/migrations/tyrecontrol_seguridad_fase0_funciones.sql`
 - [x] 0.2 Servidor: empresa por defecto, endpoints de ficha técnica y cierre de partes
-- [ ] 0.3 Fotos (buckets públicos)
+- [x] 0.3 Fotos, paso 1: listar, subir y sobrescribir solo con sesión y sin rol cliente (`tyrecontrol_seguridad_fase0_fotos.sql`). Paso 2, buckets privados con enlaces firmados: después del piloto
 - [ ] 0.4 Tablas del almacén abiertas sin sesión
 
 Verificado en producción el 15/11/2026. Afecta ya, sin usuarios de cliente:
