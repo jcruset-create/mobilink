@@ -503,6 +503,23 @@ export async function generarEnlaceAcceso(id: string): Promise<{ enlace: string;
   return { enlace: String((j as any).enlace), email: String((j as any).email ?? "") };
 }
 
+/**
+ * Cambia el correo y/o la empresa de un usuario. Va por el servidor porque el
+ * correo de acceso vive en Auth, donde el panel no llega.
+ */
+export async function cambiarDatosUsuario(id: string, datos: { email?: string; empresa_id?: string }): Promise<void> {
+  const { data: sess } = await supabase.auth.getSession();
+  const token = sess.session?.access_token;
+  if (!token) throw new Error("Sesión no válida");
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/usuarios/${id}/datos`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify(datos),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || (j as any)?.error) throw new Error((j as any)?.error || "Error guardando el correo o la empresa");
+}
+
 export async function cambiarPasswordUsuario(id: string, password: string): Promise<void> {
   const { data: sess } = await supabase.auth.getSession();
   const token = sess.session?.access_token;
