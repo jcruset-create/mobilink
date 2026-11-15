@@ -32,6 +32,10 @@ import {
   textoMaterial,
 } from "./otf/mejoras.ts";
 import {
+  ErrorNeumaticos, limpiarNeumaticos, resumenPosiciones, textoNeumaticos, type NeumaticosTrabajo,
+} from "./otf/neumaticosTc.ts";
+import { catalogoTc, montarTrabajoEnTc, planoTc, vehiculoParaOtf } from "./otf/neumaticosTcServicio.ts";
+import {
   borrarPosicionTablet,
   guardarPosicionTablet,
   listarTabletsEnMapa,
@@ -18961,6 +18965,12 @@ function normalizeOtfTrabajo(row: any) {
     matriculaLeida: row.matriculaLeida ?? null,
     matriculaNoCoincide: row.matriculaNoCoincide === true,
     checklist: Array.isArray(row.checklist) ? row.checklist : null,
+    // Cambio de neumáticos: el plano con las ruedas marcadas, el neumático y
+    // si se registró en TyreControl. Los textos van hechos para la tablet.
+    neumaticos: row.neumaticos ?? null,
+    neumaticosTexto: row.neumaticos ? textoNeumaticos(row.neumaticos as NeumaticosTrabajo) : null,
+    posicionesTexto: row.neumaticos ? resumenPosiciones(row.neumaticos as NeumaticosTrabajo) : null,
+    tcMontaje: row.tcMontaje ?? null,
     createdAtMs: Number(row.createdAtMs ?? Date.now()),
   };
 }
@@ -19479,20 +19489,77 @@ app.put("/api/otf/:id", requireSupervisorRole, async (req, res) => {
   }
 });
 
+// ── Cambio de neumáticos con TyreControl (server/otf/neumaticosTcServicio.ts) ──
+
+// ¿Está la matrícula en TyreControl para el cliente de la OTF? Con su plano.
+app.get("/api/otf/:id/tc-vehiculo", requireSupervisorRole, async (req, res) => {
+  try {
+    res.json(await vehiculoParaOtf(Number(req.params.id), req.query.plate));
+  } catch (e: any) {
+    console.error("GET /api/otf/:id/tc-vehiculo error:", e?.message);
+    res.status(502).json({ error: "No se ha podido consultar TyreControl" });
+  }
+});
+
+// El plano de un tipo de vehículo de TyreControl (para uno que aún no está dado de alta).
+app.get("/api/otf/tc/tipos/:tipoId/plano", requireSupervisorRole, async (req, res) => {
+  try {
+    res.json(await planoTc(String(req.params.tipoId)));
+  } catch (e: any) {
+    res.status(502).json({ error: e?.message ?? "No se ha podido leer el plano" });
+  }
+});
+
+// Catálogo de neumáticos de TyreControl de una medida.
+app.get("/api/otf/tc/catalogo", requireSupervisorRole, async (req, res) => {
+  try {
+    res.json(await catalogoTc(req.query.medida, req.query.q));
+  } catch (e: any) {
+    res.status(502).json({ error: e?.message ?? "No se ha podido leer el catálogo" });
+  }
+});
+
+// Reintentar el registro del montaje en TyreControl.
+app.post("/api/otf/trabajos/:tid/tc-montaje", requireSupervisorRole, async (req, res) => {
+  const r = await montarTrabajoEnTc(Number(req.params.tid));
+  if (!r) return res.status(409).json({ error: "El trabajo no está finalizado, no es de neumáticos o ya se está registrando" });
+  res.json(r);
+});
+
 app.post("/api/otf/:id/trabajos", requireSupervisorRole, async (req, res) => {
   try {
     const otfId = Number(req.params.id);
     const b = req.body ?? {};
-    const trabajo = combineTrabajo(b.trabajoPlantilla, b.detalleManual);
+    // Cambio de neumáticos: ruedas del plano y neumático del catálogo de TC.
+    let neumaticos: NeumaticosTrabajo | null = null;
+    if (b.neumaticos) {
+      try {
+        neumaticos = limpiarNeumaticos(b.neumaticos);
+      } catch (e) {
+        if (e instanceof ErrorNeumaticos) return res.status(400).json({ error: e.message });
+        throw e;
+      }
+    }
+    const detalle = (String(b.detalleManual ?? "").trim() || (neumaticos ? textoNeumaticos(neumaticos) : "")) || null;
+    const trabajo = combineTrabajo(b.trabajoPlantilla, detalle);
     const now = Date.now();
     const r = await db.query(
       `INSERT INTO otf_trabajos ("otfId",plate,"plateRemolque","tipoVehiculo","trabajoPlantilla","detalleManual",trabajo,
-        status,origen,observaciones,"createdAtMs","updatedAtMs")
-       VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE($8,'pendiente'),'oficina',$9,$10,$10) RETURNING *`,
+        status,origen,observaciones,neumaticos,"createdAtMs","updatedAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE($8,'pendiente'),'oficina',$9,$10::jsonb,$11,$11) RETURNING *`,
       [otfId, (b.plate ?? "").toUpperCase().trim() || null, (b.plateRemolque ?? "").toUpperCase().trim() || null,
-       b.tipoVehiculo ?? null, b.trabajoPlantilla ?? null, b.detalleManual ?? null, trabajo,
-       b.status ?? null, b.observaciones ?? null, now]
+       b.tipoVehiculo ?? neumaticos?.tipoNombre ?? null, b.trabajoPlantilla ?? null, detalle, trabajo,
+       b.status ?? null, b.observaciones ?? null, neumaticos ? JSON.stringify(neumaticos) : null, now]
     );
+    // El neumático también es material del trabajo: sale en el informe y en el presupuesto.
+    if (neumaticos) {
+      await db.query(
+        `INSERT INTO otf_trabajo_material ("trabajoId","otfId",tipo,descripcion,marca,estado,cantidad,"creadoPor","createdAtMs")
+         VALUES ($1,$2,'neumatico',$3,$4,$5,$6,'oficina',$7)`,
+        [r.rows[0].id, otfId, neumaticos.medida, [neumaticos.marca, neumaticos.modelo].filter(Boolean).join(" ") || null,
+         neumaticos.condicion, neumaticos.seleccion.length, now],
+      );
+    }
     res.json(normalizeOtfTrabajo(r.rows[0]));
   } catch (e) {
     console.error("POST /api/otf/:id/trabajos error:", e);
@@ -19765,6 +19832,11 @@ app.put("/api/roadside-operator/otf/trabajos/:tid/status", requireRoadsideOperat
     }
     if (!r.rows[0]) return res.status(404).json({ error: "Trabajo no encontrado" });
     res.json(normalizeOtfTrabajo(r.rows[0]));
+    // Cambio de neumáticos terminado: se registra en TyreControl, después de
+    // contestar a la tablet (no espera a TC) y sin poder romper nada.
+    if (status === "finalizado" && r.rows[0].neumaticos) {
+      setImmediate(() => { void montarTrabajoEnTc(tid); });
+    }
   } catch (e) {
     console.error("PUT operator otf trabajo status error:", e);
     res.status(500).json({ error: "Error actualizando estado" });
@@ -20023,6 +20095,34 @@ async function buildOtfReportPdfBuffer(id: number): Promise<Buffer | null> {
         doc.y = yB + 24;
       }
 
+      // Cambio de neumáticos: mini plano con las ruedas marcadas y sus nombres.
+      if (t.neumaticos?.posiciones?.length) {
+        const ps = t.neumaticos.posiciones as any[];
+        const marcadas = new Set<string>(t.neumaticos.seleccion ?? []);
+        const yP = doc.y + 4;
+        const conCoord = ps.every((q) => q.x != null && q.y != null);
+        if (conCoord) {
+          // Las coordenadas son % del plano de TyreControl: se encajan en 56×70.
+          const minX = Math.min(...ps.map((q) => q.x)), maxX = Math.max(...ps.map((q) => q.x + (q.w ?? 14)));
+          const minY = Math.min(...ps.map((q) => q.y)), maxY = Math.max(...ps.map((q) => q.y + (q.h ?? 14)));
+          const ex = 56 / Math.max(1, maxX - minX), ey = 70 / Math.max(1, maxY - minY);
+          doc.save();
+          doc.lineWidth(0.6).rect(L + 22, yP, 12, 70).stroke("#98A2B3");
+          for (const q of ps) {
+            const rx = L + (q.x - minX) * ex, ry = yP + (q.y - minY) * ey;
+            const rw = Math.max(5, (q.w ?? 14) * ex * 0.8), rh = Math.max(9, Math.min(16, (q.h ?? 14) * ey));
+            if (marcadas.has(q.codigo)) doc.roundedRect(rx, ry, rw, rh, 1.5).fill("#EA580C");
+            else doc.lineWidth(0.6).roundedRect(rx, ry, rw, rh, 1.5).stroke("#98A2B3");
+          }
+          doc.restore();
+        }
+        const xT = conCoord ? L + 70 : L;
+        doc.fontSize(9).font("Helvetica-Bold").fillColor("#111111").text("Posiciones:", xT, yP + (conCoord ? 22 : 0), { continued: true, width: W - (xT - L) });
+        doc.font("Helvetica").text(` ${t.posicionesTexto ?? ""}`);
+        doc.fillColor("#000000");
+        doc.x = L;
+        doc.y = Math.max(doc.y, yP + (conCoord ? 74 : 0)) + 2;
+      }
       for (const m of t.material ?? []) doc.fontSize(8).font("Helvetica").text(`Material: ${m.texto}`, L, doc.y, { width: W });
       if (Array.isArray(t.checklist) && t.checklist.length > 0) {
         doc.fontSize(8).font("Helvetica").text(

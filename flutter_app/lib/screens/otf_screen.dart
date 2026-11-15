@@ -467,6 +467,13 @@ class _OtfDetailScreenState extends State<OtfDetailScreen> {
             ),
           )),
         ),
+        if ((t['posicionesTexto'] ?? '').toString().isNotEmpty)
+          Padding(padding: const EdgeInsets.only(top: 6), child: Row(children: [
+            const Icon(Icons.tire_repair, size: 16, color: AppColors.warning),
+            const SizedBox(width: 6),
+            Expanded(child: Text(t['posicionesTexto'].toString(),
+                style: const TextStyle(color: Color(0xFFFFD2B0), fontSize: 13, fontWeight: FontWeight.w800))),
+          ])),
         if (_duracion(t) != null)
           Padding(padding: const EdgeInsets.only(top: 6), child: Text('⏱ ${_duracion(t)}',
               style: const TextStyle(color: AppColors.textSecondary, fontSize: 13))),

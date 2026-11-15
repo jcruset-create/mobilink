@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import '../services/camara.dart';
 import '../theme/app_theme.dart';
+import '../widgets/plano_ruedas.dart';
 import '../widgets/plate_badge.dart';
 
 /// Por qué no se ha hecho un trabajo. Siempre va con la explicación del
@@ -181,6 +182,10 @@ class _OtfInicioTrabajoScreenState extends State<OtfInicioTrabajoScreen> {
                 style: TextStyle(color: AppColors.textPrimary, fontSize: 22, fontWeight: FontWeight.w900)),
             const SizedBox(height: 12),
             _CabeceraTrabajo(trabajo: t),
+            if (t['neumaticos'] is Map) ...[
+              const SizedBox(height: 14),
+              RuedasACambiar(trabajo: t),
+            ],
             const SizedBox(height: 18),
             const Row(children: [
               Expanded(
@@ -478,6 +483,10 @@ class _OtfTrabajoEnCursoScreenState extends State<OtfTrabajoEnCursoScreen> {
                   ),
                 ),
               ),
+            ],
+            if (t['neumaticos'] is Map) ...[
+              const SizedBox(height: 14),
+              RuedasACambiar(trabajo: t),
             ],
             const SizedBox(height: 20),
             const Text('Fotos del trabajo hecho',
