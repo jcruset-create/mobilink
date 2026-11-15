@@ -108,6 +108,19 @@ Verificado en producción el 15/11/2026. Afecta ya, sin usuarios de cliente:
 
 ## Fase 1 — Blindar el rol cliente
 
+Estado:
+- [x] 1.1 Base de datos — `supabase/migrations/tyrecontrol_cliente_solo_consulta.sql`:
+  sin albaranes con precio, precios por medida ni pausas; sin escribir
+  presiones objetivo, ficha técnica, autorizaciones ni resolver incidencias;
+  sin tablet ni empresas asignadas.
+- [ ] 1.2 Servidor y panel: `login-operario` rechaza el rol cliente, tacógrafo
+  con comprobación de rol, «Hacer revisión» fuera del rol cliente, columna de
+  coste y Excel de «Trabajos realizados», ficha de usuario.
+- [ ] Pendiente de diseño: los campos de coste de `operaciones_neumaticos` y
+  `tc_neumaticos.coste_compra` los lee quien ve la fila. Hoy están vacíos en
+  todas las empresas (comprobado el 15/11/2026). Antes de empezar a
+  rellenarlos hay que sacarlos a una tabla aparte.
+
 - **Alta:** el panel y el servidor no asignan empresas ni APK a un `cliente`.
   Hoy, guardar la ficha como superadmin con «todas las empresas», o un login en
   la APK, lo convierten en operador de TODAS las empresas, con escritura. Hacen
