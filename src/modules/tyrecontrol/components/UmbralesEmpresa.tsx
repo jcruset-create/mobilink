@@ -10,7 +10,7 @@ import { inputCls, Field, TableWrap, tdCls, thCls } from "./ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 
 // Umbrales de profundidad de una empresa. Cascada al clasificar cada neumático:
-// override por medida → defecto de la empresa → valores legales (1,6/3,0 mm).
+// override por medida → defecto de la empresa → el mínimo de la llanta (4 mm en 22,5") y, de aviso, 1 mm más.
 // Alimentan el estado de flota, las alertas y (futuro) la app del técnico.
 export default function UmbralesEmpresa({ empresaId }: { empresaId: string }) {
   const { perfil } = useTyreAuth();
@@ -102,7 +102,7 @@ export default function UmbralesEmpresa({ empresaId }: { empresaId: string }) {
     <div className="rounded-lg bg-slate-800 p-3">
       <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Umbrales de profundidad</div>
       <div className="mb-3 text-[11px] text-slate-500">
-        Definen el semáforo del estado de flota y las alertas. Cada neumático resuelve su umbral en cascada: medida → categoría → defecto de la empresa → valores legales (1,6/3,0 mm).
+        Definen el semáforo del estado de flota y las alertas. Cada neumático resuelve su umbral en cascada: medida → categoría → defecto de la empresa → el mínimo de la llanta (4 mm en 22,5") y, de aviso, 1 mm más.
       </div>
 
       {/* Defecto de empresa */}
