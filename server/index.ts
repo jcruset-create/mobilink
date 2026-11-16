@@ -180,6 +180,7 @@ import { mountInformeRevisiones } from "./tyrecontrol/informeRevisiones/index.ts
 import { mountInformePendientes } from "./tyrecontrol/informePendientes/index.ts";
 import { mountInformeMensual } from "./tyrecontrol/informeMensual/index.ts";
 import { mountTcTacografo } from "./tyrecontrol/tacografo/index.ts";
+import { mountTcFleetcheck } from "./tyrecontrol/fleetcheck.ts";
 import { masNuevaPrimero } from "./apkVersion.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
@@ -22958,6 +22959,10 @@ mountInformeMensual(app, authenticate, requireModule("tyrecontrol"));
 // Ojo: `mountTacografos`, en plural, es el módulo de expedientes del anexo II
 // y no tiene nada que ver con esto.
 mountTcTacografo(app, authenticate, requireModule("tyrecontrol"));
+
+// El «Fleetcheck Report» de TIRETASK: el servidor solo abre el PDF y devuelve
+// lo que trae; importar lo hace el panel con la sesión de quien importa.
+mountTcFleetcheck(app, authenticate, requireModule("tyrecontrol"));
 
 /*
  * Lectura de TyreControl desde Assist. Solo lectura: en esta fase el módulo no
