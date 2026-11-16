@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/mapa_base.dart';
 import '../models/presencia_vista.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/ficha_vehiculo_en_base.dart';
 import 'confirm_vehicle_screen.dart';
+import 'mapa_base_screen.dart';
 
 /// Vehículos en bases — réplica de la pantalla del panel web, para el patio.
 ///
@@ -238,9 +240,10 @@ class _VehiculosEnBasesScreenState extends State<VehiculosEnBasesScreen> {
               porBase: porBase,
               dormidos: dormidos,
               pendientesPorBase: pendientesPorBase,
+              vehiculos: vehiculos,
             ),
             const SizedBox(height: 12),
-            _resumenDeLaLista(lista.length, baseReal, pendientesPorBase, datos.bases),
+            _resumenDeLaLista(lista.length, baseReal, pendientesPorBase, datos.bases, vehiculos),
             const SizedBox(height: 8),
             if (lista.isEmpty)
               _tarjetaVacia(_textoListaVacia())
@@ -464,6 +467,7 @@ class _VehiculosEnBasesScreenState extends State<VehiculosEnBasesScreen> {
     required Map<String, List<VehiculoPresencia>> porBase,
     required Map<String, int> dormidos,
     required Map<String, int> pendientesPorBase,
+    required List<VehiculoPresencia> vehiculos,
   }) {
     final cuadros = <Widget>[
       _cuadro(
@@ -511,6 +515,8 @@ class _VehiculosEnBasesScreenState extends State<VehiculosEnBasesScreen> {
               : null,
           color: AppColors.success,
           icono: Icons.place_outlined,
+          // El mapa del patio, sin tener que elegir antes la base.
+          onMapa: posicionUtil(b.lat, b.lng) ? () => _abrirMapa(b, vehiculos, datos.bases) : null,
         ),
     ];
     return SizedBox(
@@ -531,6 +537,7 @@ class _VehiculosEnBasesScreenState extends State<VehiculosEnBasesScreen> {
     required Color color,
     String? destacado,
     IconData? icono,
+    VoidCallback? onMapa,
   }) {
     final activo = _filtro == id;
     return InkWell(
@@ -566,6 +573,19 @@ class _VehiculosEnBasesScreenState extends State<VehiculosEnBasesScreen> {
                     ),
                   ),
                 ),
+                if (onMapa != null)
+                  SizedBox(
+                    width: 34,
+                    height: 26,
+                    child: IconButton(
+                      key: Key('mapa-de-$id'),
+                      tooltip: 'Ver $titulo en el mapa',
+                      padding: EdgeInsets.zero,
+                      iconSize: 20,
+                      icon: const Icon(Icons.map_outlined, color: AppColors.info),
+                      onPressed: onMapa,
+                    ),
+                  ),
               ],
             ),
             const SizedBox(height: 2),
@@ -597,8 +617,13 @@ class _VehiculosEnBasesScreenState extends State<VehiculosEnBasesScreen> {
     String? baseReal,
     Map<String, int> pendientesPorBase,
     List<BaseGeo> bases,
+    List<VehiculoPresencia> vehiculos,
   ) {
     final nombres = _nombreDeBase(bases);
+    BaseGeo? baseConMapa;
+    for (final b in bases) {
+      if (b.id == baseReal && posicionUtil(b.lat, b.lng)) baseConMapa = b;
+    }
     final texto = switch (_filtro) {
       _kSinPeriodicidad =>
         '$cuantos vehículo(s) en base revisados pero sin periodicidad definida',
@@ -624,6 +649,19 @@ class _VehiculosEnBasesScreenState extends State<VehiculosEnBasesScreen> {
             style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
           ),
         ),
+        // Con una base elegida, la misma lista en mapa.
+        if (baseConMapa != null)
+          OutlinedButton.icon(
+            key: const Key('ver-mapa-de-la-base'),
+            onPressed: () => _abrirMapa(baseConMapa!, vehiculos, bases),
+            icon: const Icon(Icons.map_outlined, size: 18),
+            label: const Text('Mapa'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.info,
+              side: const BorderSide(color: AppColors.info),
+              minimumSize: const Size(0, 40),
+            ),
+          ),
       ],
     );
   }
@@ -647,6 +685,18 @@ class _VehiculosEnBasesScreenState extends State<VehiculosEnBasesScreen> {
    * vehículo no los da. Nada de eso se reimplementa aquí; se busca el vehículo
    * y se entra por la puerta de siempre.
    */
+  /// El patio de una base en mapa, con sus autobuses pendientes.
+  void _abrirMapa(BaseGeo base, List<VehiculoPresencia> vehiculos, List<BaseGeo> bases) {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => MapaBaseScreen(
+        base: base,
+        pines: pinesDeLaBase(base.id, vehiculos, _revisiones),
+        nombreDeBase: _nombreDeBase(bases),
+        onRevisar: _abrirRevision,
+      ),
+    ));
+  }
+
   Future<void> _abrirRevision(VehiculoPresencia v) async {
     if (_abriendo != null) return;
     setState(() => _abriendo = v.vehiculoId);
