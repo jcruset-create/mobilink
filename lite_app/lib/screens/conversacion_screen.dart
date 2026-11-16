@@ -275,6 +275,7 @@ class _Burbuja extends StatelessWidget {
     final pendiente = mensaje['pendiente'] == true;
     final autor = (mensaje['byName'] ?? '').toString();
     final ms = (mensaje['createdAtMs'] as num?)?.toInt();
+    final urgente = mensaje['urgent'] == true;
 
     return Align(
       alignment: mio ? Alignment.centerRight : Alignment.centerLeft,
@@ -283,9 +284,20 @@ class _Burbuja extends StatelessWidget {
         margin: const EdgeInsets.only(bottom: 10),
         padding: const EdgeInsets.fromLTRB(12, 9, 12, 7),
         decoration: BoxDecoration(
-          color: mio ? AppColors.primary.withValues(alpha: 0.22) : AppColors.surface,
+          color: urgente
+              ? AppColors.danger.withValues(alpha: 0.14)
+              : mio
+                  ? AppColors.primary.withValues(alpha: 0.22)
+                  : AppColors.surface,
           border: Border.all(
-            color: mio ? AppColors.primary.withValues(alpha: 0.45) : AppColors.surfaceDeep,
+            // Un urgente se reconoce al desplazar el hilo semanas después:
+            // enmarcado en rojo, no solo con una etiqueta que ya se leyó.
+            color: urgente
+                ? AppColors.danger.withValues(alpha: 0.7)
+                : mio
+                    ? AppColors.primary.withValues(alpha: 0.45)
+                    : AppColors.surfaceDeep,
+            width: urgente ? 1.5 : 1,
           ),
           borderRadius: BorderRadius.only(
             topLeft: const Radius.circular(14),
@@ -297,6 +309,20 @@ class _Burbuja extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (urgente)
+              const Padding(
+                padding: EdgeInsets.only(bottom: 3),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.notifications_active, size: 12, color: AppColors.danger),
+                  SizedBox(width: 4),
+                  Text('URGENTE',
+                      style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.6,
+                          color: AppColors.danger)),
+                ]),
+              ),
             if (!mio && autor.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(bottom: 3),
