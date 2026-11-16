@@ -10,6 +10,13 @@ export interface ReporteRev {
   noEncontrados: string[];
   sinPosiciones: string[];
   empresa: string | null;
+  /**
+   * Solo con `soloMontados`: posiciones medidas que no tienen neumático en
+   * TyreControl y que por eso NO se han importado.
+   */
+  sinNeumatico?: { matricula: string; posiciones: string[] }[];
+  /** Solo con `respetarExistentes`: ya tenían revisión ese día y no se tocan. */
+  yaRevisados?: string[];
 }
 
 function fechaISO(v: any): string | null {
@@ -44,6 +51,26 @@ export interface OpcionesRev {
    * rueda, para poder comparar luego el arco contra la sonda.
    */
   origen?: "importacion_excel" | "checkpoint";
+  /**
+   * Medir solo lo que YA está montado: no se crea ningún neumático ni ningún
+   * montaje. Una posición sin neumático se deja fuera y se devuelve en
+   * `sinNeumatico`. Para informes de terceros, donde la medición es fiable
+   * pero no es quién para decir qué hay montado.
+   */
+  soloMontados?: boolean;
+  /**
+   * Si el vehículo ya tiene una revisión ese día, no se toca: se devuelve en
+   * `yaRevisados`. Sin esto la importación reescribe las mediciones de esa
+   * revisión, que es lo que quiere quien reimporta su propio Excel y lo que
+   * NO quiere quien trae un informe ajeno encima del trabajo de un técnico.
+   */
+  respetarExistentes?: boolean;
+  /** Qué se midió. Sin valor, la revisión no lo dice (como hasta ahora). */
+  tipoRevision?: "solo_profundidades" | "profundidades_presiones";
+  /** Nota de la revisión: de dónde sale. */
+  observaciones?: string;
+  /** Nota propia de cada vehículo, que se añade a la anterior. */
+  notaPorMatricula?: Map<string, string>;
 }
 
 export async function importRevisiones(
@@ -123,12 +150,18 @@ export async function importRevisiones(
   const planes: PlanRev[] = [];
   const noEnc = new Set<string>();
   const sinPos = new Set<string>();
+  const sinNeu = new Map<string, string[]>(); // matrícula -> posiciones sin neumático
+  const yaRevisados = new Set<string>();
   const neuCrear: { empresa_id: string; codigo_interno: string; marca: string | null; modelo: string | null; medida: string | null; estado: string; activo: boolean; vehiculo_id: string; posicion_id: string }[] = [];
 
   for (const g of grupos.values()) {
     const v = mapVeh.get(g.matricula);
     if (!v) { noEnc.add(g.matricula); continue; }
     if (!v.tipo_vehiculo_id || !posByTipo.get(v.tipo_vehiculo_id)?.length) { sinPos.add(g.matricula); continue; }
+    if (opciones.respetarExistentes && mapRevExist.has(`${v.id}|${g.fecha}`)) {
+      yaRevisados.add(g.matricula);
+      continue;
+    }
     const ps = posByTipo.get(v.tipo_vehiculo_id)!;
     const posMap = new Map<number, string>();
     for (const row of g.rows) {
@@ -151,9 +184,15 @@ export async function importRevisiones(
         if (!n || n < 1 || n > ps.length) { avisos.add(`${g.matricula}: posición ${row.posicion} fuera de rango (el tipo tiene ${ps.length})`); continue; }
         posId = ps[n - 1].id;
       }
+      const mk = `${v.id}|${posId}`;
+      if (opciones.soloMontados && !mapMontaje.has(mk)) {
+        const lista = sinNeu.get(g.matricula) ?? [];
+        lista.push(row._codigo ?? String(n));
+        sinNeu.set(g.matricula, lista);
+        continue;
+      }
       posMap.set(n, posId);
       // ¿hay que crear neumático genérico?
-      const mk = `${v.id}|${posId}`;
       if (!mapMontaje.has(mk) && !neuCrear.some((x) => x.vehiculo_id === v.id && x.posicion_id === posId)) {
         neuCrear.push({
           empresa_id: v.empresa_id, codigo_interno: `${g.matricula}-P${n}`,
@@ -162,8 +201,16 @@ export async function importRevisiones(
         });
       }
     }
+    // Sin ninguna posición que medir no se abre una revisión vacía.
+    if (opciones.soloMontados && posMap.size === 0) continue;
     planes.push({ grupo: g, vehiculo: v, posiciones: posMap });
   }
+  const extras = {
+    ...(opciones.soloMontados
+      ? { sinNeumatico: [...sinNeu].map(([matricula, posiciones]) => ({ matricula, posiciones })) }
+      : {}),
+    ...(opciones.respetarExistentes ? { yaRevisados: [...yaRevisados] } : {}),
+  };
 
   const totalDetalles = planes.reduce((s, p) => s + [...p.grupo.rows].filter((r) => p.posiciones.has(r.posN)).length, 0);
   const revisionesACrear = planes.filter((p) => !mapRevExist.has(`${p.vehiculo.id}|${p.grupo.fecha}`)).length;
@@ -172,6 +219,7 @@ export async function importRevisiones(
     return {
       resumen: { filas: rows.length, revisiones: revisionesACrear, detalles: totalDetalles, neumaticosNuevos: neuCrear.length, errores: errores.length + noEnc.size + sinPos.size },
       avisos: [...avisos], errores, noEncontrados: [...noEnc], sinPosiciones: [...sinPos], empresa: empresaNombre,
+      ...extras,
     };
   }
 
@@ -272,6 +320,13 @@ export async function importRevisiones(
       // Cuándo se midió de verdad, no cuándo se graba esto. Es lo que evita
       // reimportar la misma pasada por el arco la semana que viene.
       medido_at: momentoDeGrupo(p.grupo),
+      ...(opciones.tipoRevision ? { tipo_revision: opciones.tipoRevision } : {}),
+      ...(opciones.observaciones || opciones.notaPorMatricula?.get(p.grupo.matricula)
+        ? {
+            observaciones: [opciones.observaciones, opciones.notaPorMatricula?.get(p.grupo.matricula)]
+              .filter(Boolean).join(" · "),
+          }
+        : {}),
     }));
     const chunk = 200;
     for (let i = 0; i < nuevas.length; i += chunk) {
@@ -323,5 +378,6 @@ export async function importRevisiones(
   return {
     resumen: { filas: rows.length, revisiones: gruposSinRev.length, detalles: detalles.length, neumaticosNuevos: neuCrear.length, errores: errores.length + noEnc.size + sinPos.size },
     avisos: [...avisos], errores, noEncontrados: [...noEnc], sinPosiciones: [...sinPos], empresa: empresaNombre,
+    ...extras,
   };
 }
