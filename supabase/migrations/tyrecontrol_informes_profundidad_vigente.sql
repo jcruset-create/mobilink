@@ -999,6 +999,7 @@ $function$$fn$;
   v_n_ejecutivo bigint;
   v_urg_estado bigint;
   v_urg_flota bigint;
+  v_filas_flota bigint;
   v_json jsonb;
   v_antes jsonb := '{}'::jsonb;
   v_ms_antes numeric;
@@ -1129,8 +1130,8 @@ begin
       end if;
 
       v_t0 := clock_timestamp();
-      select coalesce(sum(f.bajo_minimo), 0), count(*) filter (where f.estado = 'urgente')
-        into v_n_flota, v_urg_flota from tc_informe_flota_detalle(v_empresa) f;
+      select coalesce(sum(f.bajo_minimo), 0), count(*) filter (where f.estado = 'urgente'), count(*)
+        into v_n_flota, v_urg_flota, v_filas_flota from tc_informe_flota_detalle(v_empresa) f;
       v_ms := round(extract(epoch from clock_timestamp() - v_t0) * 1000);
       v_medicion := v_medicion || format(' flota %s ms,', v_ms);
       if v_ms > v_limite then
@@ -1154,14 +1155,17 @@ begin
       -- Para lo que se hace todo esto: que digan lo mismo. La lista de
       -- alertas, el inicio y el ejecutivo cuentan todas las gomas montadas;
       -- el Excel de flota, solo las de vehículos en seguimiento, así que
-      -- puede dar menos pero nunca más. El semáforo y el Excel, iguales.
+      -- puede dar menos pero nunca más. El semáforo y el Excel, iguales…
+      -- cuando el Excel devuelve algo: a un operador le sale vacío desde
+      -- siempre, porque cruza con tc_empresas y las reglas de acceso solo le
+      -- dejan ver la suya. Eso no lo cambia esta migración.
       if v_n_alertas <> v_n_vigente or v_n_kpis <> v_n_vigente or v_n_ejecutivo <> v_n_vigente
-         or v_n_flota > v_n_vigente or v_urg_estado <> v_urg_flota then
+         or v_n_flota > v_n_vigente or (v_filas_flota > 0 and v_urg_estado <> v_urg_flota) then
         raise exception using errcode = 'MB001', message = format(
           'Los contadores no cuadran (%s): común %s, alertas %s, inicio %s, ejecutivo %s, flota %s; urgentes estado %s, flota %s. ',
           v_quien, v_n_vigente, v_n_alertas, v_n_kpis, v_n_ejecutivo, v_n_flota, v_urg_estado, v_urg_flota);
       end if;
-      v_medicion := v_medicion || format('[para cambiar %s, vehículos urgentes %s] ', v_n_vigente, v_urg_estado);
+      v_medicion := v_medicion || format('[para cambiar %s, vehículos urgentes %s, filas del Excel %s] ', v_n_vigente, v_urg_estado, v_filas_flota);
     end loop;
 
     v_medicion := 'OK: los informes leen la profundidad ya juzgada. ' || v_medicion;
