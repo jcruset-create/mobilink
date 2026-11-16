@@ -65,6 +65,44 @@ export function profundidadMinimaPorLlanta(medida: string | null | undefined): n
 }
 
 /**
+ * Los mínimos que una empresa se ha puesto a sí misma en la pantalla de
+ * umbrales: uno general y, si quiere, uno por medida.
+ */
+export interface MinimosDeEmpresa {
+  /** El general de la empresa, o null si no tiene. */
+  empresa: number | null;
+  /** Por medida, con la clave ya normalizada (`claveDeMedida`). */
+  porMedida: Record<string, number>;
+}
+
+export const SIN_MINIMOS: MinimosDeEmpresa = { empresa: null, porMedida: {} };
+
+/** «295/80 r22.5» → «295/80R22.5». La misma cuenta que `tc_norm_medida`. */
+export function claveDeMedida(medida: string | null | undefined): string {
+  return (medida ?? "").toUpperCase().replace(/\s/g, "");
+}
+
+/**
+ * El mínimo que rige para una goma: el de su medida en la empresa, si no el
+ * general de la empresa, y si la empresa no ha puesto ninguno, el de la llanta.
+ *
+ * Es el mismo orden que usan los informes en la base
+ * (`tc_profundidad_vigente`). Sin esto la ficha juzgaba siempre contra la
+ * llanta y una empresa con su mínimo a 3 mm veía en la ficha «para cambiar»
+ * una goma de 3,5 mm que no salía en ninguna alerta.
+ *
+ * Falta aquí el escalón por categoría que sí tiene la base
+ * (`tc_config_umbrales_categoria`): hoy no lo usa ninguna empresa.
+ */
+export function minimoDeLaGoma(
+  medida: string | null | undefined,
+  minimos: MinimosDeEmpresa | null | undefined,
+): number | null {
+  const suyo = minimos?.porMedida[claveDeMedida(medida)] ?? minimos?.empresa ?? null;
+  return suyo ?? profundidadMinimaPorLlanta(medida);
+}
+
+/**
  * ¿Hay que cambiar esta goma ya?
  *
  * Falso cuando falta la profundidad o no se sabe la llanta: en los dos casos

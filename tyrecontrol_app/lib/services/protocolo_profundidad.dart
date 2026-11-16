@@ -170,3 +170,16 @@ double? profundidadMinimaPorLlanta(String? medida) {
   if (d >= 17) return 3;
   return 2;
 }
+
+/// «295/80 r22.5» → «295/80R22.5». La misma cuenta que `tc_norm_medida`.
+String claveDeMedida(String? medida) => (medida ?? '').toUpperCase().replaceAll(RegExp(r'\s'), '');
+
+/// El mínimo que rige para una goma: el de su medida en la empresa, si no el
+/// general de la empresa, y si la empresa no ha puesto ninguno, el de la
+/// llanta. El mismo orden que los informes de la base
+/// (`tc_profundidad_vigente`) y que `minimoDeLaGoma` del panel.
+///
+/// [porMedida] va con la clave ya normalizada ([claveDeMedida]). Falta el
+/// escalón por categoría que sí tiene la base: hoy no lo usa ninguna empresa.
+double? minimoDeLaGoma(String? medida, {double? empresa, Map<String, double> porMedida = const {}}) =>
+    porMedida[claveDeMedida(medida)] ?? empresa ?? profundidadMinimaPorLlanta(medida);

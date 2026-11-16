@@ -212,7 +212,9 @@ class _VehiculoFichaScreenState extends State<VehiculoFichaScreen> {
       if (m == null || n == null) continue;
       final med = _medPorNeumatico[m.neumaticoId];
       final prof = med?.profundidadMm;
-      final minimo = profundidadMinimaPorLlanta(n.medida);
+      final minimo = minimoDeLaGoma(n.medida,
+          empresa: _umbralEmpresa?.minimaMm,
+          porMedida: {for (final e in _umbralPorMedida.entries) e.key: e.value.minimaMm});
       if (med == null || prof == null || minimo == null) continue;
       // Si manda la profundidad tecleada en el propio neumático (un
       // reesculturado, un usado con su medida), no hay nada que confirmar.

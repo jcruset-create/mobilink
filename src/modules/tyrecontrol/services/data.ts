@@ -3,7 +3,7 @@ import { codigoDeUso } from "../catalogo/usos";
 import { hasRealValue, normalizarValor, type TipoDatoItv } from "./itvValores";
 import { medidaCanonica } from "./medidas";
 import { recorrerPaginas } from "./paginacion";
-import { profundidadMinimaPorLlanta } from "./umbralProfundidad";
+import { claveDeMedida, minimoDeLaGoma, SIN_MINIMOS, type MinimosDeEmpresa } from "./umbralProfundidad";
 import { mapaUltimasMediciones, type Medicion } from "./ultimaMedicion";
 import type { PosicionOperario } from "./ubicacionOperario";
 import type { LecturaParteProveedor } from "./parteProveedor";
@@ -634,7 +634,7 @@ export async function listarUltimasMedicionesVehiculo(vehiculoId: string): Promi
   // posición posteriores a su montaje son suyas, estén a nombre de la goma
   // anterior o de ninguna.
   const { data: mons } = await supabase.from("tc_montajes_actuales")
-    .select("posicion_id, neumatico_id, fecha_montaje, neumatico:tc_neumaticos(medida)").eq("vehiculo_id", vehiculoId);
+    .select("empresa_id, posicion_id, neumatico_id, fecha_montaje, neumatico:tc_neumaticos(medida)").eq("vehiculo_id", vehiculoId);
   const montajePorPosicion = new Map((mons ?? []).map((m) => [
     m.posicion_id as string,
     { neumatico_id: m.neumatico_id as string, fecha_montaje: (m.fecha_montaje ?? null) as string | null },
@@ -643,13 +643,15 @@ export async function listarUltimasMedicionesVehiculo(vehiculoId: string): Promi
   // El reparto vive en services/ultimaMedicion.ts, con pruebas: la profundidad
   // solo de revisiones que midieron todas sus ruedas, y las lecturas siguiendo
   // a la posición desde el montaje.
-  // El mínimo de cada goma montada, por su llanta: el protocolo solo entra si
-  // su última lectura lo toca. Una goma que ya no está montada no sale en la
+  // El mínimo de cada goma montada —el de la empresa y, si no tiene, el de su
+  // llanta—: el protocolo solo entra si su última lectura lo toca. Una goma que ya no está montada no sale en la
   // ficha, así que se queda sin mínimo y vale su última lectura.
+  const empresaId = ((mons ?? [])[0]?.empresa_id ?? null) as string | null;
+  const deEmpresa = empresaId ? await leerMinimosDeEmpresa(empresaId) : SIN_MINIMOS;
   const minimos = new Map((mons ?? []).map((m) => {
     const neu = m.neumatico as unknown as { medida?: string | null } | { medida?: string | null }[] | null;
     const medida = Array.isArray(neu) ? neu[0]?.medida : neu?.medida;
-    return [m.neumatico_id as string, profundidadMinimaPorLlanta(medida ?? null)];
+    return [m.neumatico_id as string, minimoDeLaGoma(medida ?? null, deEmpresa)];
   }));
   return mapaUltimasMediciones(revs ?? [], dets ?? [], montajePorPosicion, (id) => minimos.get(id) ?? null);
 }
@@ -2413,6 +2415,40 @@ export async function desactivarConfigEjes(id: string): Promise<void> {
 }
 
 // ── Umbrales de profundidad por empresa ──────────────────────
+
+/*
+ * Los mínimos de la empresa, para la ficha del vehículo. Se guardan mientras
+ * dure la sesión —la ficha los pide dos y tres veces por vehículo— y se tiran
+ * en cuanto alguien toca la pantalla de umbrales.
+ *
+ * Si no se pueden leer, la ficha no se queda sin abrir: juzga con el mínimo de
+ * la llanta, que es lo que hacía antes.
+ */
+const minimosPorEmpresa = new Map<string, Promise<MinimosDeEmpresa>>();
+
+export function leerMinimosDeEmpresa(empresaId: string): Promise<MinimosDeEmpresa> {
+  const guardado = minimosPorEmpresa.get(empresaId);
+  if (guardado) return guardado;
+  const pedido = (async (): Promise<MinimosDeEmpresa> => {
+    const [general, medidas] = await Promise.all([
+      supabase.from("tc_config_umbrales").select("profundidad_minima_mm").eq("empresa_id", empresaId).maybeSingle(),
+      supabase.from("tc_config_umbrales_medida").select("medida, profundidad_minima_mm").eq("empresa_id", empresaId),
+    ]);
+    if (general.error || medidas.error) throw new Error((general.error ?? medidas.error)!.message);
+    const porMedida: Record<string, number> = {};
+    for (const m of medidas.data ?? []) {
+      if (m.medida && m.profundidad_minima_mm != null) porMedida[claveDeMedida(m.medida as string)] = Number(m.profundidad_minima_mm);
+    }
+    const minimo = general.data?.profundidad_minima_mm;
+    return { empresa: minimo != null ? Number(minimo) : null, porMedida };
+  })().catch(() => {
+    minimosPorEmpresa.delete(empresaId);
+    return SIN_MINIMOS;
+  });
+  minimosPorEmpresa.set(empresaId, pedido);
+  return pedido;
+}
+
 export async function obtenerUmbralesEmpresa(empresaId: string): Promise<UmbralesEmpresa | null> {
   const { data, error } = await supabase.from("tc_config_umbrales").select("*").eq("empresa_id", empresaId).maybeSingle();
   if (error) throw new Error(error.message);
@@ -2425,6 +2461,7 @@ export async function guardarUmbralesEmpresa(empresaId: string, patch: {
   const { error } = await supabase.from("tc_config_umbrales")
     .upsert({ empresa_id: empresaId, ...patch, updated_at: new Date().toISOString() }, { onConflict: "empresa_id" });
   if (error) throw new Error(error.message);
+  minimosPorEmpresa.delete(empresaId);
 }
 
 // Overrides de umbrales por medida dentro de una empresa
@@ -2440,11 +2477,13 @@ export async function guardarUmbralMedida(empresaId: string, medida: string, pat
   const { error } = await supabase.from("tc_config_umbrales_medida")
     .upsert({ empresa_id: empresaId, medida, ...patch, updated_at: new Date().toISOString() }, { onConflict: "empresa_id,medida" });
   if (error) throw new Error(error.message);
+  minimosPorEmpresa.delete(empresaId);
 }
 
 export async function eliminarUmbralMedida(empresaId: string, medida: string): Promise<void> {
   const { error } = await supabase.from("tc_config_umbrales_medida").delete().eq("empresa_id", empresaId).eq("medida", medida);
   if (error) throw new Error(error.message);
+  minimosPorEmpresa.delete(empresaId);
 }
 
 // ── Política de identificación (genérico / identificado / mixto) ─────────────

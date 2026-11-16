@@ -2466,15 +2466,20 @@ class TyreControlApi {
       // de ninguna (ver ultima_medicion.dart).
       final montajes = await _db
           .from('tc_montajes_actuales')
-          .select('posicion_id, neumatico_id, fecha_montaje, neumatico:tc_neumaticos(medida)')
+          .select('empresa_id, posicion_id, neumatico_id, fecha_montaje, neumatico:tc_neumaticos(medida)')
           .eq('vehiculo_id', vehiculoId);
-      // El mínimo de cada goma montada, por su llanta: el protocolo solo entra
-      // si su última lectura lo toca (ver protocolo_profundidad.dart).
+      // El mínimo de cada goma montada —el de la empresa y, si no tiene, el de
+      // su llanta—: el protocolo solo entra si su última lectura lo toca (ver
+      // protocolo_profundidad.dart).
+      final empresaId = (montajes as List).isEmpty ? null : montajes.first['empresa_id'] as String?;
+      final umb = empresaId == null ? null : await umbralesDeEmpresa(empresaId);
       final minimos = <String, double?>{
-        for (final m in (montajes as List))
+        for (final m in montajes)
           if (m['neumatico_id'] != null)
-            m['neumatico_id'] as String: profundidadMinimaPorLlanta(
-                (m['neumatico'] is Map ? m['neumatico']['medida'] : null) as String?),
+            m['neumatico_id'] as String: minimoDeLaGoma(
+                (m['neumatico'] is Map ? m['neumatico']['medida'] : null) as String?,
+                empresa: umb?.empresa?.minimaMm,
+                porMedida: {for (final e in (umb?.porMedida ?? const {}).entries) e.key: e.value.minimaMm}),
       };
       final montado = <String, ({String neumatico, DateTime? desde})>{
         for (final m in (montajes as List))
