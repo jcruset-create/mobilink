@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "../services/supabase";
-import type { Perfil } from "../types";
+import { perfilClienteDe, type Perfil } from "../types";
 import { esSuperadmin, olvidarSuperadmin } from "../../superadmin";
 
 type TyreAuthValue = {
@@ -16,6 +16,9 @@ type TyreAuthValue = {
 };
 
 const TyreAuthContext = createContext<TyreAuthValue | null>(null);
+
+/** Lo único que ve un director de cliente, además de su perfil y la ayuda. */
+const PANTALLAS_DIRECTOR = ["informes"];
 
 async function cargarPerfil(userId: string): Promise<Perfil | null> {
   // Consulta simple (sin join embebido, que puede fallar) + maybeSingle (no rompe con 0 filas)
@@ -106,7 +109,9 @@ export function TyreAuthProvider({ children }: { children: ReactNode }) {
     const [p, pant] = await Promise.all([cargarPerfil(nextUser.id), cargarPantallas(nextUser.id)]);
     if (!p) setError("No hay perfil activo vinculado a este usuario.");
     setPerfil(p);
-    setPantallas(pant);
+    // Un director de cliente solo tiene los informes, esté como esté su
+    // lista de pantallas: el menú y el bloqueo por dirección salen de aquí.
+    setPantallas(perfilClienteDe(p) === "director" ? PANTALLAS_DIRECTOR : pant);
     setLoading(false);
   }
 

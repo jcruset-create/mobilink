@@ -66,7 +66,15 @@ export const NAV: NavItem[] = [
 /** Pantallas que nunca se filtran por permisos. */
 export const SIEMPRE_VISIBLES = ["dashboard", "ayuda", "perfil"];
 
-export function navVisible(item: NavItem, rol: Rol | undefined, esSuperadmin: boolean, pantallas?: string[] | null): boolean {
+/**
+ * Las que nunca se filtran para ESTE usuario. Un director de cliente solo
+ * tiene informes: el dashboard, que es del día a día de la flota, tampoco.
+ */
+export function siempreVisibles(soloInformes?: boolean): string[] {
+  return soloInformes ? SIEMPRE_VISIBLES.filter((p) => p !== "dashboard") : SIEMPRE_VISIBLES;
+}
+
+export function navVisible(item: NavItem, rol: Rol | undefined, esSuperadmin: boolean, pantallas?: string[] | null, soloInformes?: boolean): boolean {
   if (item.superadminOnly) return esSuperadmin;
   // el super-admin ve lo de administrador; el resto según su rol
   if (item.roles) {
@@ -80,7 +88,7 @@ export function navVisible(item: NavItem, rol: Rol | undefined, esSuperadmin: bo
   // null = todas las del rol; el super-admin no se filtra.
   // Dashboard, Ayuda y Perfil no se filtran nunca: dejar a alguien sin su
   // propia ficha o sin la ayuda no es restringir, es dejarle atrapado.
-  if (!esSuperadmin && pantallas && !SIEMPRE_VISIBLES.includes(item.path) && !pantallas.includes(item.path)) {
+  if (!esSuperadmin && pantallas && !siempreVisibles(soloInformes).includes(item.path) && !pantallas.includes(item.path)) {
     return false;
   }
   return true;
