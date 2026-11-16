@@ -7,6 +7,7 @@ import '../services/api.dart';
 import '../services/biometria.dart';
 import '../services/file_queue.dart';
 import '../services/push.dart';
+import '../services/mensajes_central.dart';
 import '../services/preferencias.dart';
 import '../services/queue.dart';
 import '../services/session.dart';
@@ -137,6 +138,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
     if (ok != true) return;
     try { await _api.logout(); } catch (_) {}
+    // Antes de borrar la sesión: deja de sondear y quita los avisos puestos.
+    // Si no, seguirían sonando con la pantalla de login delante.
+    await MensajesCentral.instancia.detener();
     await Session.clear();
     await Preferencias.olvidarBiometria();
     if (!mounted) return;

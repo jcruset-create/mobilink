@@ -442,6 +442,19 @@ async function crearEsquemaConnect(): Promise<void> {
     -- sigue sin abrir en un móvil dentro de un furgón.
     ALTER TABLE connect_communications ADD COLUMN IF NOT EXISTS "readAtMs" BIGINT;
 
+    -- Urgente: suena cada 15 s en el móvil del operario hasta que lo lee, en
+    -- vez de una sola vez. Lo marca Central al escribir. El ESCALADO (un
+    -- mensaje normal que lleva 3 min sin leer y pasa a tratarse como urgente)
+    -- NO se guarda: se deduce de las horas en server/connect/liteMensajes.ts,
+    -- igual que en Assist Pro, para no necesitar ningun proceso que vaya
+    -- cambiando filas.
+    ALTER TABLE connect_communications ADD COLUMN IF NOT EXISTS urgent BOOLEAN NOT NULL DEFAULT false;
+
+    -- Lo que la app pide cada 15 s: los avisos del taller sin leer.
+    CREATE INDEX IF NOT EXISTS idx_connect_communications_taller_sin_leer
+      ON connect_communications ("assistanceId")
+      WHERE channel = 'workshop' AND "readAtMs" IS NULL;
+
     -- Sprint 6: histórico del score del taller/proveedor
     CREATE TABLE IF NOT EXISTS connect_workshop_scores (
       id SERIAL PRIMARY KEY,

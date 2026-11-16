@@ -8,6 +8,8 @@ import { fmtDateTime } from "../types";
 type Comm = {
   id: number; channel: string; direction: string; toRef: string | null;
   body: string; byName: string | null; createdAtMs: number; readAtMs: number | null;
+  /** Solo en el canal 'workshop'. Lo calcula el servidor, no el panel. */
+  urgent?: boolean; escalado?: boolean; sinLeerMin?: number | null;
 };
 
 const CHANNEL_LABELS: Record<string, string> = {
@@ -20,6 +22,7 @@ export default function ComunicacionesTab({ assistanceId, canOperate }: { assist
   const [channel, setChannel] = useState("note");
   const [toRef, setToRef] = useState("");
   const [body, setBody] = useState("");
+  const [urgent, setUrgent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -27,6 +30,15 @@ export default function ComunicacionesTab({ assistanceId, canOperate }: { assist
     boFetch<{ data: Comm[] }>(`/assistances/${assistanceId}/communications`).then((r) => setRows(r.data)).catch((e) => setError(e.message));
   }, [assistanceId]);
   useEffect(load, [load]);
+
+  // Mientras el taller tenga algo sin leer, la pestaña se refresca sola: el
+  // «sin leer 4 min» sube y el acuse aparece sin tener que recargar a mano.
+  const esperandoAcuse = rows.some((c) => c.channel === "workshop" && !c.readAtMs);
+  useEffect(() => {
+    if (!esperandoAcuse) return;
+    const t = setInterval(load, 30_000);
+    return () => clearInterval(t);
+  }, [esperandoAcuse, load]);
 
   const enviar = async () => {
     if (!body.trim()) return;
@@ -41,9 +53,10 @@ export default function ComunicacionesTab({ assistanceId, canOperate }: { assist
           direction: channel === "note" ? "internal" : "outbound",
           toRef: toRef || null,
           body,
+          urgent,
         },
       });
-      setBody(""); setToRef("");
+      setBody(""); setToRef(""); setUrgent(false);
       load();
     } catch (e: any) { setError(e.message); } finally { setBusy(false); }
   };
@@ -72,6 +85,21 @@ export default function ComunicacionesTab({ assistanceId, canOperate }: { assist
           <Button onClick={enviar} disabled={busy || !body.trim()}>
             {channel === "workshop" ? "Enviar" : "Registrar"}
           </Button>
+          {channel === "workshop" && (
+            <label className="flex w-full items-center gap-2 text-[13px] text-slate-300">
+              <input
+                type="checkbox"
+                checked={urgent}
+                onChange={(e) => setUrgent(e.target.checked)}
+                className="h-4 w-4 accent-rose-500"
+              />
+              <span className={urgent ? "font-semibold text-rose-300" : ""}>Urgente</span>
+              <span className="text-slate-500">
+                — suena en el móvil cada 15 s y tapa la pantalla hasta que el operario lo lee.
+                Un mensaje normal sin leer pasa a urgente solo a los 3 minutos.
+              </span>
+            </label>
+          )}
         </div>
       )}
       {rows.length === 0 ? (
@@ -87,9 +115,22 @@ export default function ComunicacionesTab({ assistanceId, canOperate }: { assist
                 <span>· {fmtDateTime(c.createdAtMs)}</span>
                 {/* Solo en lo que va al taller: distingue "no ha contestado"
                     de "no se ha enterado", que se arregla llamando. */}
+                {c.channel === "workshop" && c.urgent && (
+                  <span className="font-bold text-rose-400">· ⚠ URGENTE</span>
+                )}
                 {c.channel === "workshop" && (
-                  <span className={c.readAtMs ? "text-emerald-400" : "text-amber-400"}>
-                    · {c.readAtMs ? `✓✓ leído ${fmtDateTime(c.readAtMs)}` : "✓ enviado, sin leer"}
+                  <span className={
+                    c.readAtMs ? "text-emerald-400"
+                      : c.escalado || c.urgent ? "font-semibold text-rose-400"
+                        : "text-amber-400"
+                  }>
+                    · {c.readAtMs
+                      ? `✓✓ leído ${fmtDateTime(c.readAtMs)}`
+                      : c.escalado
+                        ? `⏰ sin leer ${c.sinLeerMin} min — sonando cada 15 s`
+                        : c.urgent
+                          ? "sin leer — sonando cada 15 s"
+                          : "✓ enviado, sin leer"}
                   </span>
                 )}
               </div>

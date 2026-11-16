@@ -59,6 +59,10 @@ class _AssistanceScreenState extends State<AssistanceScreen> {
   /// Mensajes de Central sin abrir. Lo cuenta el servidor en la propia ficha.
   int get _sinLeer => (_a?['unreadMessages'] as num?)?.toInt() ?? 0;
 
+  /// De esos, los que ya están sonando cada 15 s: urgentes, o normales con más
+  /// de 3 min sin abrir.
+  int get _urgentes => (_a?['urgentMessages'] as num?)?.toInt() ?? 0;
+
   @override
   void initState() {
     super.initState();
@@ -620,11 +624,13 @@ class _AssistanceScreenState extends State<AssistanceScreen> {
                           onTap: _observacion,
                         ),
                         _AccionFila(
-                          icono: Icons.forum,
+                          icono: _urgentes > 0 ? Icons.notifications_active : Icons.forum,
                           titulo: 'Mensajes con la central',
-                          subtitulo: _sinLeer > 0
-                              ? '$_sinLeer mensaje${_sinLeer == 1 ? '' : 's'} sin leer'
-                              : 'Escribir o leer el hilo',
+                          subtitulo: _urgentes > 0
+                              ? '$_urgentes urgente${_urgentes == 1 ? '' : 's'} sin leer'
+                              : _sinLeer > 0
+                                  ? '$_sinLeer mensaje${_sinLeer == 1 ? '' : 's'} sin leer'
+                                  : 'Escribir o leer el hilo',
                           insignia: _sinLeer,
                           onTap: _abrirConversacion,
                         ),
