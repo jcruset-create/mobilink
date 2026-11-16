@@ -248,6 +248,14 @@ export function copiasDelInforme(lineas: LineaPdf[]): LineaPdf[][] {
   return copias;
 }
 
+/**
+ * El «A1. Nº de orden» de una copia: a qué intervención pertenece. `null` si
+ * la copia no se deja leer.
+ */
+export function ordenDeLaCopia(copia: LineaPdf[]): string | null {
+  return leerCopia(copia, copia[0]?.pagina ?? 1).fila?.idOrigen ?? null;
+}
+
 /** Hasta dónde se admite que el valor de un campo esté a la derecha, en puntos. */
 const ANCHO_COLUMNA = 260;
 
