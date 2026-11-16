@@ -4,12 +4,17 @@ import { importVehiculos, type ReporteImport } from "../services/importVehiculos
 import { importRevisiones, type ReporteRev } from "../services/importRevisiones";
 import { importCheckpoint, type ReporteCheckpoint } from "../services/importCheckpoint";
 import { HOJA_DETALLE } from "../services/checkpoint";
+import {
+  altasPosibles, darDeAlta, importFleetcheck, leerFleetcheckPdf,
+  type AltaPropuesta, type ReporteFleetcheck, type ResultadoAltas,
+} from "../services/importFleetcheck";
+import type { LecturaFleetcheck } from "../services/fleetcheck";
 import { pareceHoja1, pareceHoja2 } from "../services/importHistorico";
 import ImportarHistorico from "../components/ImportarHistorico";
 import ImportarTacografo from "../components/ImportarTacografo";
 import { TableWrap, tdCls, thCls } from "../components/ui";
 
-type Modo = "vehiculos" | "revisiones" | "checkpoint" | "historico";
+type Modo = "vehiculos" | "revisiones" | "checkpoint" | "historico" | "fleetcheck";
 
 export default function Importar() {
   const [nombreArchivo, setNombreArchivo] = useState("");
@@ -18,6 +23,16 @@ export default function Importar() {
   const [repVeh, setRepVeh] = useState<ReporteImport | null>(null);
   const [repRev, setRepRev] = useState<ReporteRev | null>(null);
   const [repChk, setRepChk] = useState<ReporteCheckpoint | null>(null);
+  // El Fleetcheck Report de TIRETASK llega en PDF: lo abre el servidor.
+  const [fleetcheck, setFleetcheck] = useState<LecturaFleetcheck | null>(null);
+  const [fechaFleetcheck, setFechaFleetcheck] = useState("");
+  const [repFlt, setRepFlt] = useState<ReporteFleetcheck | null>(null);
+  // Vehículos del informe sin plano: se pueden dar de alta con sus datos,
+  // pero solo si quien importa lo marca, porque eso SÍ crea neumáticos.
+  const [altas, setAltas] = useState<AltaPropuesta[]>([]);
+  const [hacerAltas, setHacerAltas] = useState(false);
+  const [resAltas, setResAltas] = useState<ResultadoAltas | null>(null);
+  const [avanceAltas, setAvanceAltas] = useState("");
   const [ejecutado, setEjecutado] = useState(false);
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState("");
@@ -33,12 +48,24 @@ export default function Importar() {
    */
   const [tacografo, setTacografo] = useState(false);
 
-  function reset() { setRepVeh(null); setRepRev(null); setRepChk(null); setEjecutado(false); setRows([]); setModo(null); setError(""); setHistorico(null); }
+  function reset() { setAltas([]); setHacerAltas(false); setResAltas(null); setAvanceAltas(""); setFleetcheck(null); setFechaFleetcheck(""); setRepFlt(null); setRepVeh(null); setRepRev(null); setRepChk(null); setEjecutado(false); setRows([]); setModo(null); setError(""); setHistorico(null); }
 
   async function onArchivo(file: File | undefined) {
     if (!file) return;
     reset(); setNombreArchivo(file.name);
     try {
+      if (/\.pdf$/i.test(file.name) || file.type === "application/pdf") {
+        setCargando(true);
+        try {
+          const lectura = await leerFleetcheckPdf(file);
+          setFleetcheck(lectura);
+          setFechaFleetcheck(lectura.fecha ?? "");
+          setModo("fleetcheck");
+          // `rows` solo cuenta ruedas, para el rótulo y para enseñar los botones.
+          setRows(lectura.vehiculos.flatMap((v) => v.ruedas));
+        } finally { setCargando(false); }
+        return;
+      }
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { cellDates: true });
       // El informe del CheckPoint se reconoce por su hoja, y sus cabeceras
@@ -95,13 +122,26 @@ export default function Importar() {
     try {
       if (modo === "vehiculos") setRepVeh(await importVehiculos(rows, false));
       else if (modo === "checkpoint") setRepChk(await importCheckpoint(rows, false));
+      else if (modo === "fleetcheck") {
+        if (!fleetcheck) return;
+        if (!fechaFleetcheck) throw new Error("Pon la fecha en que se hicieron las mediciones.");
+        setResAltas(null);
+        setAltas(await altasPosibles(fleetcheck));
+        setRepFlt(await importFleetcheck(fleetcheck, fechaFleetcheck, false));
+      }
       else setRepRev(await importRevisiones(rows, false));
     } catch (e: any) { setError(e?.message || "Error al analizar"); } finally { setCargando(false); }
   }
 
   async function importar() {
     const n = modo === "revisiones" ? (repRev?.resumen.revisiones ?? 0) : rows.length;
-    const que = modo === "checkpoint"
+    const altasValidas = altas.filter((a) => !a.motivo);
+    const que = modo === "fleetcheck"
+      ? `${repFlt?.rev.resumen.detalles ?? 0} mediciones en ${repFlt?.rev.resumen.revisiones ?? 0} revisiones nuevas, con fecha ${fechaFleetcheck}`
+        + (hacerAltas && altasValidas.length
+          ? `, y a dar de alta ${altasValidas.length} vehículos sin plano CREANDO sus ${altasValidas.reduce((s, a) => s + a.ruedas, 0)} neumáticos`
+          : "")
+      : modo === "checkpoint"
       ? `${repChk?.mediciones ?? 0} mediciones nuevas del CheckPoint` +
         (repChk?.altas.length ? ` y el alta de ${repChk.altas.length} vehículos` : "")
       : modo === "revisiones" ? `${rows.length} filas de revisión` : `${n} vehículos`;
@@ -110,22 +150,34 @@ export default function Importar() {
     try {
       if (modo === "vehiculos") setRepVeh(await importVehiculos(rows, true));
       else if (modo === "checkpoint") setRepChk(await importCheckpoint(rows, true));
+      else if (modo === "fleetcheck") {
+        if (!fleetcheck || !fechaFleetcheck) return;
+        // Primero las altas: así sus revisiones ya existen cuando pasa la
+        // importación, que las respeta y no las duplica.
+        if (hacerAltas && altas.some((a) => !a.motivo)) {
+          setResAltas(await darDeAlta(fleetcheck, fechaFleetcheck, altas,
+            (n, total) => setAvanceAltas(`Dando de alta vehículos: ${n} de ${total}…`)));
+          setAvanceAltas("");
+          setAltas(await altasPosibles(fleetcheck).catch(() => []));
+        }
+        setRepFlt(await importFleetcheck(fleetcheck, fechaFleetcheck, true));
+      }
       else setRepRev(await importRevisiones(rows, true));
       setEjecutado(true);
     } catch (e: any) { setError(e?.message || "Error al importar"); } finally { setCargando(false); }
   }
 
-  const reporte = modo === "vehiculos" ? repVeh : modo === "checkpoint" ? repChk : repRev;
+  const reporte = modo === "vehiculos" ? repVeh : modo === "checkpoint" ? repChk : modo === "fleetcheck" ? repFlt : repRev;
 
   return (
     <div>
       <h1 className="mb-1 text-lg font-black">Importar</h1>
-      <p className="mb-3 text-sm text-slate-400">Importación desde plantilla Excel. Detecta automáticamente si es de Vehículos, de Revisiones, el informe del CheckPoint o el histórico de albaranes del taller. El informe de intervenciones de tacógrafo va en su propio apartado.</p>
+      <p className="mb-3 text-sm text-slate-400">Importación desde plantilla Excel. Detecta automáticamente si es de Vehículos, de Revisiones, el informe del CheckPoint o el histórico de albaranes del taller. También admite el PDF «Fleetcheck Report» de TIRETASK. El informe de intervenciones de tacógrafo va en su propio apartado.</p>
 
       <div className="mb-3 rounded-lg bg-slate-800 p-3">
         <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-sky-600 px-3 py-2 text-sm font-bold text-sky-300">
-          📁 Elegir archivo Excel
-          <input type="file" accept=".xlsx,.xlsm,.xls" className="hidden" onChange={(e) => onArchivo(e.target.files?.[0])} />
+          📁 Elegir archivo (Excel o PDF)
+          <input type="file" accept=".xlsx,.xlsm,.xls,.pdf,application/pdf" className="hidden" onChange={(e) => onArchivo(e.target.files?.[0])} />
         </label>
         <button onClick={() => setSoloCargas((v) => !v)}
           className="ml-3 rounded-lg border border-slate-600 px-3 py-2 text-[12px] text-slate-200 hover:bg-slate-700">
@@ -137,9 +189,18 @@ export default function Importar() {
         </button>
         {nombreArchivo && (
           <span className="ml-3 text-[13px] text-slate-300">
-            {nombreArchivo} · {rows.length} filas
-            {modo && <span className="ml-2 rounded-full bg-slate-700 px-2 py-0.5 text-[11px] font-bold text-slate-200">{modo === "revisiones" ? "Revisiones" : modo === "checkpoint" ? "CheckPoint" : modo === "historico" ? "Histórico de albaranes" : "Vehículos"}</span>}
+            {nombreArchivo} · {modo === "fleetcheck" ? `${fleetcheck?.vehiculos.length ?? 0} vehículos, ${rows.length} ruedas` : `${rows.length} filas`}
+            {modo && <span className="ml-2 rounded-full bg-slate-700 px-2 py-0.5 text-[11px] font-bold text-slate-200">{modo === "revisiones" ? "Revisiones" : modo === "checkpoint" ? "CheckPoint" : modo === "fleetcheck" ? "Fleetcheck (TIRETASK)" : modo === "historico" ? "Histórico de albaranes" : "Vehículos"}</span>}
           </span>
+        )}
+        {modo === "fleetcheck" && (
+          <label className="mt-3 flex flex-wrap items-center gap-2 text-[12px] text-slate-300">
+            Fecha de las mediciones
+            <input id="fleetcheck-fecha" type="date" value={fechaFleetcheck}
+              onChange={(e) => { setFechaFleetcheck(e.target.value); setRepFlt(null); setEjecutado(false); }}
+              className="rounded border border-slate-600 bg-slate-900 px-2 py-1 text-[13px] text-slate-100" />
+            <span className="text-slate-500">El informe solo trae una fecha, sin hora: es la que llevarán todas las revisiones.</span>
+          </label>
         )}
         {rows.length > 0 && modo !== "historico" && (
           <div className="mt-3 flex gap-2">
@@ -215,6 +276,103 @@ export default function Importar() {
           )}
           {repRev.errores.length > 0 && (
             <TablaFilas filas={repRev.errores.map((e) => ({ fila: e.fila, ref: e.matricula, accion: "error" as const, detalle: e.error }))} />
+          )}
+        </>
+      )}
+
+      {modo === "fleetcheck" && repFlt && (
+        <>
+          <div className="mb-3 grid grid-cols-2 gap-3 md:grid-cols-5">
+            <Kpi t="Vehículos del informe" v={repFlt.vehiculos} />
+            <Kpi t={ejecutado ? "Revisiones creadas" : "Revisiones a crear"} v={repFlt.rev.resumen.revisiones} tono="text-sky-300" />
+            <Kpi t="Mediciones" v={repFlt.rev.resumen.detalles} />
+            <Kpi t="Ruedas sin neumático" v={(repFlt.rev.sinNeumatico ?? []).reduce((s, x) => s + x.posiciones.length, 0)} tono="text-amber-300" />
+            <Kpi t="Ya revisados ese día" v={(repFlt.rev.yaRevisados ?? []).length} tono="text-slate-400" />
+          </div>
+          {repFlt.rev.empresa && <div className="mb-3 text-[12px] text-slate-400">Empresa: <b>{repFlt.rev.empresa}</b></div>}
+          <div className="mb-3 rounded-lg bg-slate-800 p-3 text-[12px] text-slate-300">
+            Se guarda la <b>menor</b> de las lecturas de profundidad de cada rueda y la presión del informe. No se crea ni se cambia ningún neumático ni montaje.
+            Los kilómetros no se cogen del informe: la revisión nace sin ellos y se piden a la telemática en el relleno diario.
+          </div>
+          {avanceAltas && <div className="mb-3 text-[12px] text-sky-300">{avanceAltas}</div>}
+          {resAltas && (
+            <div className="mb-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 text-[12px] text-emerald-100">
+              <div className="mb-1 font-bold uppercase text-[11px]">Vehículos dados de alta ({resAltas.hechas.length})</div>
+              <div className="font-mono text-[11px]">{resAltas.hechas.join(", ") || "Ninguno"}</div>
+              {resAltas.fallos.length > 0 && (
+                <div className="mt-2 text-rose-200">
+                  <div className="font-bold uppercase text-[11px]">No se han podido dar de alta ({resAltas.fallos.length})</div>
+                  {resAltas.fallos.map((f) => <div key={f.matricula}>· {f.matricula}: {f.error}</div>)}
+                </div>
+              )}
+              {resAltas.avisos.map((a, i) => <div key={i} className="mt-1 text-amber-200">· {a}</div>)}
+            </div>
+          )}
+          {altas.length > 0 && !ejecutado && (
+            <div className="mb-3 rounded-lg border border-sky-500/40 bg-sky-500/10 p-3 text-[12px] text-sky-100">
+              <div className="mb-1 font-bold uppercase text-[11px]">Vehículos sin plano ({altas.length})</div>
+              <table className="mb-2 w-full text-left text-[11px]">
+                <thead className="text-slate-400"><tr><th className="py-1 pr-3">Matrícula</th><th className="pr-3">Ejes en el informe</th><th className="pr-3">Tipo que se le pondría</th><th>Ruedas</th></tr></thead>
+                <tbody>
+                  {altas.map((a) => (
+                    <tr key={a.matricula} className="border-t border-slate-700/60">
+                      <td className="py-1 pr-3 font-mono">{a.matricula}</td>
+                      <td className="pr-3">{a.firma}</td>
+                      <td className="pr-3">{a.motivo ? <span className="text-amber-300">{a.motivo}</span> : a.tipoNombre}</td>
+                      <td>{a.ruedas}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {altas.some((a) => !a.motivo) && (
+                <label className="flex items-start gap-2">
+                  <input id="fleetcheck-altas" type="checkbox" className="mt-0.5" checked={hacerAltas} onChange={(e) => setHacerAltas(e.target.checked)} />
+                  <span>
+                    <b>Dar de alta estos vehículos con los datos del informe.</b> Se les pone el tipo y se crea el neumático de cada posición como carga inicial (sin descontar stock), con su marca, modelo, medida, profundidad y presión. Quedan sin número de serie ni DOT, que el informe no trae. Si no lo marcas, estos vehículos no se importan.
+                  </span>
+                </label>
+              )}
+            </div>
+          )}
+          {repFlt.rev.noEncontrados.length > 0 && (
+            <div className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 text-[12px] text-rose-200">
+              <div className="mb-1 font-bold uppercase text-[11px]">Matrículas que no están en TyreControl ({repFlt.rev.noEncontrados.length}) — no se importan</div>
+              <div className="font-mono text-[11px] text-rose-100">{repFlt.rev.noEncontrados.join(", ")}</div>
+            </div>
+          )}
+          {repFlt.rev.sinPosiciones.length > 0 && (
+            <div className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-[12px] text-amber-200">
+              <div className="mb-1 font-bold uppercase text-[11px]">Vehículos sin plano de posiciones ({repFlt.rev.sinPosiciones.length}) — no se importan</div>
+              <div className="font-mono text-[11px] text-amber-100">{repFlt.rev.sinPosiciones.join(", ")}</div>
+            </div>
+          )}
+          {(repFlt.rev.sinNeumatico ?? []).length > 0 && (
+            <div className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-[12px] text-amber-200">
+              <div className="mb-1 font-bold uppercase text-[11px]">Ruedas medidas que no tienen neumático montado en TyreControl — no se importan</div>
+              {(repFlt.rev.sinNeumatico ?? []).map((x) => (
+                <div key={x.matricula} className="font-mono text-[11px] text-amber-100">{x.matricula}: {x.posiciones.join(", ")}</div>
+              ))}
+            </div>
+          )}
+          {(repFlt.rev.yaRevisados ?? []).length > 0 && (
+            <div className="mb-3 rounded-lg bg-slate-800 p-3 text-[12px] text-slate-300">
+              <div className="mb-1 font-bold uppercase text-[11px] text-slate-400">Ya tenían una revisión ese día — no se tocan</div>
+              <div className="font-mono text-[11px]">{(repFlt.rev.yaRevisados ?? []).join(", ")}</div>
+            </div>
+          )}
+          {repFlt.medidasDistintas.length > 0 && (
+            <div className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-[12px] text-amber-200">
+              <div className="mb-1 font-bold uppercase text-[11px]">La medida del informe no es la del neumático montado ({repFlt.medidasDistintas.length}) — se importa igual, conviene mirarlo</div>
+              {repFlt.medidasDistintas.slice(0, 30).map((a, i) => <div key={i}>· {a}</div>)}
+              {repFlt.medidasDistintas.length > 30 && <div className="text-amber-300/70">…y {repFlt.medidasDistintas.length - 30} más</div>}
+            </div>
+          )}
+          {repFlt.avisos.length > 0 && (
+            <div className="mb-3 rounded-lg bg-slate-800 p-3 text-[12px] text-amber-200">
+              <div className="mb-1 font-bold uppercase text-[11px] text-slate-400">Avisos ({repFlt.avisos.length})</div>
+              {repFlt.avisos.slice(0, 20).map((a, i) => <div key={i}>· {a}</div>)}
+              {repFlt.avisos.length > 20 && <div className="text-slate-500">…y {repFlt.avisos.length - 20} más</div>}
+            </div>
           )}
         </>
       )}
