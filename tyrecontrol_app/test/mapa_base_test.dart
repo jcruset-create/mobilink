@@ -114,6 +114,24 @@ void main() {
       expect(g.lng, closeTo(_lng, 1e-9));
     });
 
+    test('con zoom máximo infinito se agrupa siempre: lado a lado no se separan nunca', () {
+      expect(
+        agruparPines(juntos, 19, zoomMaximo: double.infinity).map((x) => x.pines.length),
+        [2, 1],
+      );
+    });
+
+    test('a la vista van las tres más urgentes; el resto, detrás de «+N más»', () {
+      final cinco = [
+        for (var i = 0; i < 5; i++)
+          PinDeMapa(v: bus('x$i', '000${i}XXX'), rev: rev('x$i', 'sin_revision'), vieja: false),
+      ];
+      final g = agruparPines(cinco, 17).single;
+      expect(g.aLaVista.map((p) => p.v.matricula), ['0000XXX', '0001XXX', '0002XXX']);
+      expect(g.ocultos, 2);
+      expect(agruparPines(juntos, 16).first.ocultos, 0);
+    });
+
     test('sin pines no hay grupos', () {
       expect(agruparPines(const [], 16), isEmpty);
     });
@@ -189,6 +207,75 @@ void main() {
       await montar(t, const []);
       expect(find.text('Ningún autobús pendiente dentro de la base'), findsOneWidget);
       expect(find.textContaining('no hay ningún autobús con la revisión pendiente'), findsOneWidget);
+    });
+
+    // Lado a lado: a unos 3 m, menos que el margen del GPS.
+    PinDeMapa junto(int i, String m, String estado, {int? dias}) => PinDeMapa(
+          v: bus('j$i', m, lat: _lat + 0.00003 * i),
+          rev: rev('j$i', estado, dias: dias),
+          vieja: false,
+        );
+
+    testWidgets('dos juntos: se leen las dos matrículas y se toca la que se va a revisar', (t) async {
+      final revisados = await montar(t, [
+        junto(0, '0046JFY', 'sin_revision'),
+        junto(1, '1180JNY', 'vencida', dias: 12),
+      ]);
+      expect(find.byKey(const Key('grupo-2')), findsOneWidget);
+      expect(find.text('0046JFY'), findsOneWidget);
+      expect(find.text('1180JNY'), findsOneWidget);
+      expect(find.textContaining('más'), findsNothing);
+      await t.tap(find.byKey(const Key('pin-1180JNY')));
+      await t.pumpAndSettle();
+      await t.tap(find.text('Iniciar revisión'));
+      await t.pumpAndSettle();
+      expect(revisados, ['1180JNY']);
+    });
+
+    testWidgets('siguen juntos y legibles con el mapa al máximo', (t) async {
+      await montar(t, [junto(0, '0046JFY', 'sin_revision'), junto(1, '1180JNY', 'vencida')]);
+      for (var i = 0; i < 4; i++) {
+        await t.tap(find.byTooltip('Acercar'));
+        await t.pumpAndSettle();
+      }
+      expect(find.byKey(const Key('pin-0046JFY')), findsOneWidget);
+      expect(find.byKey(const Key('pin-1180JNY')), findsOneWidget);
+      expect(t.takeException(), isNull);
+    });
+
+    testWidgets('cinco juntos: tres a la vista y «+2 más» abre la lista de todos', (t) async {
+      final revisados = await montar(t, [
+        junto(0, '0197KXT', 'sin_revision'),
+        junto(0, '0683MNS', 'sin_revision'),
+        junto(0, '7524NNB', 'vencida', dias: 30),
+        junto(0, '3525KTG', 'vencida', dias: 4),
+        junto(0, '5709HBJ', 'proxima'),
+      ], tamano: const Size(390, 844));
+      expect(find.byKey(const Key('pin-7524NNB')), findsOneWidget);
+      expect(find.byKey(const Key('pin-3525KTG')), findsNothing);
+      await t.tap(find.text('+2 más'));
+      await t.pumpAndSettle();
+      expect(find.text('5 autobuses juntos'), findsOneWidget);
+      expect(find.byKey(const Key('fila-3525KTG')), findsOneWidget);
+      expect(find.text('Vencida · 4 d'), findsOneWidget);
+      await t.tap(find.byKey(const Key('revisar-5709HBJ')));
+      await t.pumpAndSettle();
+      expect(revisados, ['5709HBJ']);
+      expect(find.text('5 autobuses juntos'), findsNothing);
+      expect(t.takeException(), isNull);
+    });
+
+    testWidgets('en la lista del grupo, tocar la fila abre la ficha de ese autobús', (t) async {
+      await montar(t, [
+        for (final (i, m) in ['1111AAA', '2222BBB', '3333CCC', '4444DDD'].indexed)
+          PinDeMapa(v: bus('k$i', m), rev: rev('k$i', 'sin_revision'), vieja: false),
+      ]);
+      await t.tap(find.text('+1 más'));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('fila-4444DDD')));
+      await t.pumpAndSettle();
+      expect(find.byKey(const ValueKey('ficha-k3')), findsOneWidget);
+      expect(find.byKey(const Key('como-llegar')), findsOneWidget);
     });
 
     testWidgets('cabe en un móvil sin desbordar, con la ficha abierta', (t) async {

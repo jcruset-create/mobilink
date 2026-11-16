@@ -18,8 +18,9 @@ import '../widgets/ficha_vehiculo_en_base.dart';
 ///
 /// - Rojo, sin revisión; ámbar, vencida; amarillo, próxima.
 /// - Borde discontinuo y reloj: la posición tiene más de una hora.
-/// - Los que se pisan se juntan en un círculo con el número; al tocarlo, el
-///   mapa se acerca y se separan.
+/// - Los que se pisan se juntan en una etiqueta con sus matrículas una debajo
+///   de otra, cada una con su color: se toca la que se va a revisar. Caben
+///   tres; si hay más, «+N más» abre la lista del grupo entero.
 /// - Al tocar una etiqueta sale abajo la misma ficha que en la lista, con
 ///   «Iniciar revisión» y «cómo llegar».
 ///
@@ -124,10 +125,113 @@ class _MapaBaseScreenState extends State<MapaBaseScreen> {
     return null;
   }
 
-  void _acercarA(GrupoDePines g) {
-    final destino = (_zoom + 1.5).clamp(0, _zoomMaximo).toDouble();
-    _mapa.move(LatLng(g.lat, g.lng), destino);
+  /// La lista de un grupo que no cabe entero en su etiqueta. Tocar una fila
+  /// la elige en el mapa (y sale su ficha, con el «cómo llegar»); «Revisar»
+  /// va directo.
+  Future<void> _verGrupo(GrupoDePines g) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (hoja) => SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: MediaQuery.of(hoja).size.height * 0.7),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: Text(
+                  '${g.pines.length} autobuses juntos',
+                  style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: AppColors.textPrimary),
+                ),
+              ),
+              Flexible(
+                child: ListView.separated(
+                  key: const Key('lista-del-grupo'),
+                  shrinkWrap: true,
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                  itemCount: g.pines.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 8),
+                  itemBuilder: (_, i) {
+                    final p = g.pines[i];
+                    final color = _colorDe(p.rev.estado);
+                    return Material(
+                      color: AppColors.background,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        side: const BorderSide(color: AppColors.cardBorder),
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: InkWell(
+                        key: Key('fila-${p.v.matricula}'),
+                        onTap: () {
+                          Navigator.of(hoja).pop();
+                          setState(() => _elegido = p.v.vehiculoId);
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+                          child: Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                                decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(7)),
+                                child: Text(
+                                  p.v.matricula,
+                                  style: TextStyle(
+                                    color: _textoSobre(color),
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 0.4,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  '${_estadoCorto(p.rev)}${p.vieja ? ' · posición de hace más de 1 h' : ''}',
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              FilledButton(
+                                key: Key('revisar-${p.v.matricula}'),
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: AppColors.success,
+                                  foregroundColor: const Color(0xFF052E16),
+                                  minimumSize: const Size(0, 44),
+                                ),
+                                onPressed: () {
+                                  Navigator.of(hoja).pop();
+                                  setState(() => _elegido = p.v.vehiculoId);
+                                  unawaited(_revisar(p.v));
+                                },
+                                child: const Text('Revisar'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
+
+  static String _estadoCorto(RevisionEstado r) => switch (r.estado) {
+        'sin_revision' => 'Sin revisión',
+        'vencida' => (r.diasVencido ?? 0) > 0 ? 'Vencida · ${r.diasVencido} d' : 'Vencida',
+        _ => 'Próxima',
+      };
 
   Future<void> _revisar(VehiculoPresencia v) async {
     if (_abriendo != null) return;
@@ -142,7 +246,7 @@ class _MapaBaseScreenState extends State<MapaBaseScreen> {
   @override
   Widget build(BuildContext context) {
     final pines = widget.pines;
-    final grupos = agruparPines(pines, _zoom, zoomMaximo: _zoomMaximo);
+    final grupos = agruparPines(pines, _zoom, zoomMaximo: double.infinity);
     final elegido = _pinElegido;
     final b = widget.base;
 
@@ -242,12 +346,15 @@ class _MapaBaseScreenState extends State<MapaBaseScreen> {
                   else
                     Marker(
                       point: LatLng(g.lat, g.lng),
-                      width: 52,
-                      height: 52,
-                      child: _Grupo(
-                        cuantos: g.pines.length,
-                        color: _colorDe(g.estadoMasUrgente),
-                        onTap: () => _acercarA(g),
+                      width: 124,
+                      height: _Pila.alto(g),
+                      alignment: Alignment.topCenter,
+                      child: _Pila(
+                        grupo: g,
+                        colorDe: _colorDe,
+                        elegido: _elegido,
+                        onElegir: (p) => setState(() => _elegido = p.v.vehiculoId),
+                        onVerTodos: () => _verGrupo(g),
                       ),
                     ),
               ]),
@@ -503,37 +610,144 @@ class _Etiqueta extends StatelessWidget {
       };
 }
 
-/// Varios autobuses que a este zoom se taparían: un círculo con cuántos son.
-class _Grupo extends StatelessWidget {
-  final int cuantos;
-  final Color color;
-  final VoidCallback onTap;
+/// El color de la letra que se lee sobre cada color de etiqueta.
+Color _textoSobre(Color fondo) => fondo == AppColors.danger ? Colors.white : const Color(0xFF2A1700);
 
-  const _Grupo({required this.cuantos, required this.color, required this.onTap});
+/// Varios autobuses que caen en el mismo sitio: sus matrículas una debajo de
+/// otra, cada una con su color y cada una un botón. Dos autobuses aparcados
+/// lado a lado no se separan ni con el mapa al máximo, así que un círculo con
+/// un «2» no dejaba saber cuáles eran ni tocar ninguno.
+class _Pila extends StatelessWidget {
+  final GrupoDePines grupo;
+  final Color Function(String estado) colorDe;
+  final String? elegido;
+  final void Function(PinDeMapa p) onElegir;
+  final VoidCallback onVerTodos;
+
+  const _Pila({
+    required this.grupo,
+    required this.colorDe,
+    required this.elegido,
+    required this.onElegir,
+    required this.onVerTodos,
+  });
+
+  static const _altoFila = 38.0;
+  static const _altoMas = 34.0;
+  static const _hueco = 3.0;
+  static const _margen = 4.0;
+  static const _punta = 16.0;
+
+  /// Lo que mide la etiqueta de ese grupo: el marcador del mapa necesita el
+  /// alto de antemano.
+  static double alto(GrupoDePines g) {
+    final filas = g.aLaVista.length;
+    final piezas = filas + (g.ocultos > 0 ? 1 : 0);
+    return _margen * 2 + filas * _altoFila + (g.ocultos > 0 ? _altoMas : 0) + (piezas - 1) * _hueco + _punta;
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Semantics(
-      button: true,
-      label: '$cuantos autobuses pendientes juntos: tocar para acercar',
-      child: GestureDetector(
-        key: Key('grupo-$cuantos'),
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: Container(
-          alignment: Alignment.center,
+    final puntaColor = colorDe(grupo.estadoMasUrgente);
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.end,
+      children: [
+        Container(
+          key: Key('grupo-${grupo.pines.length}'),
+          padding: const EdgeInsets.all(_margen),
           decoration: BoxDecoration(
-            color: color,
-            shape: BoxShape.circle,
-            border: Border.all(color: AppColors.background, width: 3),
+            color: AppColors.background,
+            borderRadius: BorderRadius.circular(11),
             boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 5, offset: Offset(0, 2))],
           ),
-          child: Text(
-            '$cuantos',
-            style: TextStyle(
-              color: color == AppColors.danger ? Colors.white : const Color(0xFF2A1700),
-              fontSize: 17,
-              fontWeight: FontWeight.w800,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final (i, p) in grupo.aLaVista.indexed) ...[
+                if (i > 0) const SizedBox(height: _hueco),
+                _fila(p),
+              ],
+              if (grupo.ocultos > 0) ...[
+                const SizedBox(height: _hueco),
+                Semantics(
+                  button: true,
+                  label: '${grupo.ocultos} autobuses más en este grupo: ver la lista',
+                  child: GestureDetector(
+                    key: Key('mas-${grupo.pines.length}'),
+                    behavior: HitTestBehavior.opaque,
+                    onTap: onVerTodos,
+                    child: Container(
+                      height: _altoMas,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: AppColors.surface,
+                        borderRadius: BorderRadius.circular(7),
+                        border: Border.all(color: AppColors.cardBorder),
+                      ),
+                      child: Text(
+                        '+${grupo.ocultos} más',
+                        style: const TextStyle(color: AppColors.textPrimary, fontSize: 13, fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        Container(width: 2, height: 7, color: AppColors.background),
+        Container(
+          width: 9,
+          height: 9,
+          decoration: BoxDecoration(
+            color: puntaColor,
+            shape: BoxShape.circle,
+            border: Border.all(color: AppColors.background, width: 2),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _fila(PinDeMapa p) {
+    final color = colorDe(p.rev.estado);
+    final marcada = p.v.vehiculoId == elegido;
+    // Igual que en la etiqueta suelta: con la posición vieja, solo el contorno.
+    final relleno = p.vieja ? AppColors.surface : color;
+    final texto = p.vieja ? color : _textoSobre(color);
+    return Semantics(
+      button: true,
+      label: '${p.v.matricula}, ${_Etiqueta._estado(p.rev.estado)}'
+          '${p.vieja ? ', posición de hace más de una hora' : ''}',
+      child: GestureDetector(
+        key: Key('pin-${p.v.matricula}'),
+        behavior: HitTestBehavior.opaque,
+        onTap: () => onElegir(p),
+        child: Container(
+          height: _altoFila,
+          alignment: Alignment.center,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          decoration: BoxDecoration(
+            color: relleno,
+            borderRadius: BorderRadius.circular(7),
+            border: Border.all(color: marcada ? Colors.white : color, width: marcada ? 3 : 2),
+          ),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (p.vieja) ...[
+                  Icon(Icons.schedule, size: 13, color: texto),
+                  const SizedBox(width: 4),
+                ],
+                Text(
+                  p.v.matricula,
+                  maxLines: 1,
+                  style: TextStyle(color: texto, fontSize: 14, fontWeight: FontWeight.w800, letterSpacing: 0.4),
+                ),
+              ],
             ),
           ),
         ),
