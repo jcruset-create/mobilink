@@ -74,6 +74,17 @@ class GrupoDePines {
 
   bool get esUno => pines.length == 1;
 
+  /// Cuántas matrículas de un grupo se leen en el propio mapa. Más alta, la
+  /// etiqueta taparía medio patio.
+  static const maxALaVista = 3;
+
+  /// Las matrículas que se enseñan apiladas: las más urgentes, que para eso
+  /// llegan ordenadas.
+  List<PinDeMapa> get aLaVista => pines.take(maxALaVista).toList();
+
+  /// Las que no caben en la etiqueta y van detrás de «+N más».
+  int get ocultos => pines.length > maxALaVista ? pines.length - maxALaVista : 0;
+
   /// El estado más urgente del grupo: es el color del círculo.
   String get estadoMasUrgente => pines
       .map((p) => p.rev.estado)
@@ -98,9 +109,10 @@ math.Point<double> _pixel(double lat, double lng, double zoom) {
 ///
 /// Cada pin se une al primer grupo que tenga lo bastante cerca; como llegan
 /// ordenados por urgencia, el grupo se forma alrededor del que más falta hace.
-/// Al acercar el mapa los grupos se deshacen solos. Con el mapa al máximo
-/// ([zoomMaximo]) ya no se agrupa: ahí no se puede acercar más, y un círculo
-/// que no se abre nunca escondería las matrículas para siempre.
+/// Al acercar el mapa los grupos se deshacen solos. Desde [zoomMaximo] ya no
+/// se agrupa; el mapa de la base no lo usa (pasa infinito), porque dos
+/// autobuses lado a lado están más cerca que el margen del GPS y ni al máximo
+/// se separan: ahí el grupo enseña sus matrículas apiladas.
 List<GrupoDePines> agruparPines(
   List<PinDeMapa> pines,
   double zoom, {
