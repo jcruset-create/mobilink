@@ -173,7 +173,7 @@ export default function InformeEstadoFlota() {
       )}
 
       <div className="mt-3 text-[11px] text-slate-500">
-        Clasificación por la profundidad mínima de la última revisión de cada vehículo: urgente ≤ 1,6 mm · revisar ≤ 3,0 mm.
+        Clasificación por la peor goma montada de cada vehículo, con la profundidad de su última revisión completa: urgente, en su mínimo (4 mm en llanta de 22,5") · revisar, a 1 mm del mínimo o con una lectura baja por confirmar.
         Cada vehículo se clasifica por su neumático en peor estado. Los umbrales son configurables por empresa y por medida en la ficha de la empresa (Empresas → ficha → Umbrales de profundidad).
       </div>
     </div>
