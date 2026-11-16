@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle, Ruler } from "lucide-react";
-import { listarUltimasMedicionesVehiculo } from "../services/data";
+import { leerMinimosDeEmpresa, listarUltimasMedicionesVehiculo } from "../services/data";
 import { profundidadVigente } from "../utils/profundidad";
-import { profundidadMinimaPorLlanta } from "../services/umbralProfundidad";
+import { minimoDeLaGoma, SIN_MINIMOS, type MinimosDeEmpresa } from "../services/umbralProfundidad";
 import { veredictoEnLaFicha } from "../services/protocoloProfundidad";
 import type { Medicion } from "../services/ultimaMedicion";
 import { fechaCorta } from "../services/alertasPorVehiculo";
@@ -46,6 +46,18 @@ export default function AvisosCambioVehiculo({ vehiculoId, montajes }: {
   montajes: MontajeActual[];
 }) {
   const [mediciones, setMediciones] = useState<Record<string, Medicion>>({});
+  // El mínimo que se ha puesto la empresa; mientras no llega, el de la llanta.
+  const [minimos, setMinimos] = useState<MinimosDeEmpresa>(SIN_MINIMOS);
+  const empresaId = montajes[0]?.empresa_id ?? null;
+  const tieneMinimoPropio = minimos.empresa != null || Object.keys(minimos.porMedida).length > 0;
+
+  useEffect(() => {
+    if (!empresaId) return;
+    let vivo = true;
+    // No lanza: si no se pueden leer devuelve «sin mínimos».
+    leerMinimosDeEmpresa(empresaId).then((m) => { if (vivo) setMinimos(m); });
+    return () => { vivo = false; };
+  }, [empresaId]);
 
   useEffect(() => {
     if (!vehiculoId) return;
@@ -71,7 +83,7 @@ export default function AvisosCambioVehiculo({ vehiculoId, montajes }: {
       if (!neu) return null;
       const med = mediciones[neu.id];
       const prof = profundidadVigente(med, neu);
-      const minimo = profundidadMinimaPorLlanta(neu.medida);
+      const minimo = minimoDeLaGoma(neu.medida, minimos);
       const juicio = veredictoEnLaFicha(prof, med, minimo);
       if (juicio === "ok" || prof == null) return null;
       return {
@@ -123,7 +135,9 @@ export default function AvisosCambioVehiculo({ vehiculoId, montajes }: {
           </div>
 
           <div className="mt-2 text-[11px] text-slate-400">
-            El mínimo depende de la llanta: 22.5 → 4 mm · 19.5 y 17.5 → 3 mm · 16 o menos → 2 mm.
+            {tieneMinimoPropio
+              ? "El mínimo es el que tiene puesto la empresa en sus umbrales."
+              : "El mínimo depende de la llanta: 22.5 → 4 mm · 19.5 y 17.5 → 3 mm · 16 o menos → 2 mm."}
           </div>
         </div>
       )}

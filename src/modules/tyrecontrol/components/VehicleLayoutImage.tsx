@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle } from "lucide-react";
-import { profundidadMinimaPorLlanta } from "../services/umbralProfundidad";
+import { minimoDeLaGoma, SIN_MINIMOS, type MinimosDeEmpresa } from "../services/umbralProfundidad";
 import { veredictoEnLaFicha } from "../services/protocoloProfundidad";
 import type { Medicion } from "../services/ultimaMedicion";
 import { profundidadVigente } from "../utils/profundidad";
@@ -9,7 +9,7 @@ import { presionTxt } from "../types";
 import {
   listarNeumaticosDisponibles, montarNeumatico, desmontarNeumatico,
   cambiarPosicion, intercambiarPosiciones, aplicarPlanTrabajo, listarMarcasRecauchutadas,
-  actualizarImagenChasis, guardarCoordenadasPosicion, guardarOrdenRevisionPosicion, listarUltimasMedicionesVehiculo, listarPresionesCatalogoPorModelo,
+  actualizarImagenChasis, guardarCoordenadasPosicion, guardarOrdenRevisionPosicion, listarUltimasMedicionesVehiculo, listarPresionesCatalogoPorModelo, leerMinimosDeEmpresa,
   listarFotosCatalogoPorModelo, claveModeloCatalogo, listarProfundidadesCatalogoPorModelo,
   buscarNeumaticosParaCorregir, corregirMontado, listarAlertasPresionVehiculo,
 } from "../services/data";
@@ -132,6 +132,15 @@ export default function VehicleLayoutImage({
    * avisos sería peor que un plano sin marcar.
    */
   const [posicionesConAviso, setPosicionesConAviso] = useState<Set<string>>(new Set());
+  // El mínimo que se ha puesto la empresa; mientras no llega, el de la llanta.
+  const [minimosEmpresa, setMinimosEmpresa] = useState<MinimosDeEmpresa>(SIN_MINIMOS);
+
+  useEffect(() => {
+    if (!empresaId) return;
+    let vivo = true;
+    leerMinimosDeEmpresa(empresaId).then((m) => { if (vivo) setMinimosEmpresa(m); });
+    return () => { vivo = false; };
+  }, [empresaId]);
 
   useEffect(() => {
     if (!vehiculoId) return;
@@ -733,7 +742,7 @@ export default function VehicleLayoutImage({
              * es la de `services/protocoloProfundidad.ts`, la misma del informe.
              */
             const medDe = neuDe ? medicionesActuales[neuDe.id] : undefined;
-            const juicio = veredictoEnLaFicha(profDe, medDe, profundidadMinimaPorLlanta(neuDe?.medida));
+            const juicio = veredictoEnLaFicha(profDe, medDe, minimoDeLaGoma(neuDe?.medida, minimosEmpresa));
             const paraCambiar = juicio === "cambiar";
             const porConfirmar = juicio === "por_confirmar";
             return (
