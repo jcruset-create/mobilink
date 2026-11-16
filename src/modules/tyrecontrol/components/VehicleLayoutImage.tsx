@@ -963,6 +963,18 @@ export default function VehicleLayoutImage({
                     {fila("Presión recom.", presionRecom != null ? `${presionTxt(presionRecom)} bar` : "")}
                     {fila("Última prof.", profundidad != null ? `${profundidad} mm` : "")}
                     {fila("Última pres.", presionMedida != null ? `${presionTxt(presionMedida)} bar` : "")}
+                    {/* Una presión distinta, de una revisión incompleta más
+                        reciente: no es la que se da por buena, pero una rueda
+                        que se ha desinflado después no se puede callar. */}
+                    {medicion?.presion_posterior_bar != null && (
+                      <div className="flex justify-between gap-2 border-t border-slate-700/50 py-1" title="Leída en una revisión posterior que no midió todas las ruedas">
+                        <span className="text-[11px] text-amber-300">Pres. posterior</span>
+                        <span className="text-right text-[12px] font-semibold text-amber-200">
+                          {presionTxt(medicion.presion_posterior_bar)} bar
+                          {medicion.presion_posterior_en ? ` · ${String(medicion.presion_posterior_en).slice(8, 10)}/${String(medicion.presion_posterior_en).slice(5, 7)}` : ""}
+                        </span>
+                      </div>
+                    )}
                     {fila("Montado", `${montajeSeleccionado.fecha_montaje}${montajeSeleccionado.km_montaje != null ? ` · ${montajeSeleccionado.km_montaje} km` : ""}`)}
                   </div>
                 </div>

@@ -72,9 +72,32 @@ describe("mapaUltimasMediciones · el caso del 4300GZD", () => {
     expect(mapa["n-int"].medido_en).toBe("2026-10-31T07:00:00Z");
   });
 
-  it("la PRESIÓN sí sale de la parcial: con lluvia el arco la mide bien", () => {
-    expect(mapa["n-int"].presion_bar).toBe(7.9);
-    expect(mapa["n-ext"].presion_bar).toBe(7.7);
+  it("la PRESIÓN también es la de la última revisión completa, con su fecha", () => {
+    expect(mapa["n-int"].presion_bar).toBe(8.0);
+    expect(mapa["n-ext"].presion_bar).toBe(8.1);
+    expect(mapa["n-int"].presion_en).toBe("2026-10-30");
+  });
+
+  it("y la presión distinta de la parcial posterior no se esconde: va aparte", () => {
+    expect(mapa["n-int"]).toMatchObject({ presion_posterior_bar: 7.9, presion_posterior_en: "2026-11-05" });
+    expect(mapa["n-ext"].presion_posterior_bar).toBe(7.7);
+  });
+});
+
+describe("mapaUltimasMediciones · la presión", () => {
+  it("si la parcial posterior lee LA MISMA presión, no hay nada que avisar", () => {
+    const m = mapaUltimasMediciones(REVS, [det("r3", "n", null, 8.0), det("r2", "n", 12.7, 8.0)], new Map())["n"];
+    expect(m).toMatchObject({ presion_bar: 8.0, presion_posterior_bar: null, presion_posterior_en: null });
+  });
+
+  it("una parcial ANTERIOR a la completa no cuenta como posterior", () => {
+    const m = mapaUltimasMediciones(REVS, [det("r3", "n", 12.0, 8.2), det("r2", "n", null, 6.0)], new Map())["n"];
+    expect(m).toMatchObject({ presion_bar: 8.2, presion_posterior_bar: null });
+  });
+
+  it("si la completa no midió la presión, vale la última que haya", () => {
+    const m = mapaUltimasMediciones(REVS, [det("r3", "n", null, 7.5), det("r2", "n", 12.7, null)], new Map())["n"];
+    expect(m).toMatchObject({ profundidad_mm: 12.7, presion_bar: 7.5, presion_posterior_bar: null });
   });
 });
 

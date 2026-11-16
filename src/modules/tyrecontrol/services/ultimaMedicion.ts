@@ -21,9 +21,23 @@
  * profundidad. Si le falta una, no se usa ninguna de las suyas y el vehículo se
  * queda con su última revisión completa.
  *
- * La PRESIÓN no se toca: el arco la mide bien con lluvia —el 03/11 sacó las
- * seis presiones de cada vehículo y ninguna profundidad—, así que la presión
- * sigue saliendo de la última revisión que la traiga, completa o no.
+ * ── Y la presión, igual: la ficha enseña UNA revisión ──────────────────────
+ *
+ * Hasta el 16/11/2026 la presión salía de la última revisión que la trajera,
+ * completa o no, porque el arco la mide bien con lluvia. El resultado era una
+ * ficha con la profundidad del día 5 y la presión del día 13: dos fechas en
+ * la misma rueda, y nadie sabía de cuál de las dos revisiones estaba leyendo.
+ *
+ * Ahora la presión sale de la misma clase de revisión que la profundidad: la
+ * última COMPLETA. Dos salvedades, para no perder lo que sí se sabe:
+ *
+ *  · Si ninguna revisión completa trae presión de esa goma, vale la última
+ *    que haya. Un vehículo al que el arco nunca le lee las profundidades se
+ *    quedaría si no sin presión para siempre.
+ *  · Si una revisión incompleta POSTERIOR trae otra presión, no se enseña
+ *    como la buena pero tampoco se esconde: va aparte, con su fecha
+ *    (`presion_posterior_*`). Una rueda que se ha desinflado después de la
+ *    última revisión completa es justo lo que no se puede callar.
  *
  * ── Las lecturas siguen a la posición ──────────────────────────────────────
  *
@@ -93,7 +107,16 @@ export function esPosteriorAlMontaje(fechaLectura: string | null | undefined, fe
 export interface Medicion {
   /** La profundidad que se da por buena: la del protocolo, no la última. */
   profundidad_mm: number | null;
+  /** La de la última revisión completa; si ninguna la trae, la última que haya. */
   presion_bar: number | null;
+  /** La fecha de la revisión de la que sale esa presión. */
+  presion_en: string | null;
+  /**
+   * Una presión DISTINTA leída en una revisión incompleta más reciente. No es
+   * la que se da por buena, pero se enseña aparte.
+   */
+  presion_posterior_bar: number | null;
+  presion_posterior_en: string | null;
   /** La fecha de la revisión de la que sale la PROFUNDIDAD. */
   medido_en: string | null;
   /** Si otra lectura, o un técnico, respalda esa profundidad. */
@@ -165,7 +188,11 @@ export function mapaUltimasMediciones(
   // De cada goma, sus lecturas de profundidad válidas de la más reciente a la
   // más antigua —hacen falta tres para el protocolo— y su última presión.
   const series = new Map<string, LecturaDeSerie[]>();
-  const presiones = new Map<string, number>();
+  // La presión de la última revisión completa, y la última de todas: la
+  // segunda solo cuenta si no hay primera, o para avisar de que ha cambiado.
+  type Presion = { bar: number; fecha: string | null; orden: number };
+  const presionesCompletas = new Map<string, Presion>();
+  const presionesUltimas = new Map<string, Presion>();
   for (const d of enOrden) {
     // Una fila de una revisión que no está en la lista —una anulada, por
     // ejemplo— no se puede fechar ni ordenar: no entra en la serie.
@@ -188,18 +215,32 @@ export function mapaUltimasMediciones(
           series.set(nid, serie);
         }
       }
-      if (d.presion_bar != null && !presiones.has(nid)) presiones.set(nid, d.presion_bar);
+      if (d.presion_bar != null) {
+        // El DÍA de la revisión y no su sello de entrada: el arco entra en la
+        // base al día siguiente, y aquí la fecha es para que la lea una persona.
+        const p: Presion = { bar: d.presion_bar, fecha: dia.get(d.revision_id) ?? null, orden: orden.get(d.revision_id)! };
+        if (!presionesUltimas.has(nid)) presionesUltimas.set(nid, p);
+        if (completas.has(d.revision_id) && !presionesCompletas.has(nid)) presionesCompletas.set(nid, p);
+      }
     }
   }
 
   const mapa: Record<string, Medicion> = {};
-  for (const nid of new Set([...series.keys(), ...presiones.keys()])) {
+  for (const nid of new Set([...series.keys(), ...presionesUltimas.keys()])) {
     // La última lectura, salvo que deje la goma en el mínimo: entonces decide
     // el protocolo, con la última como pendiente si no está confirmada.
     const valor = valorDeLaGoma(series.get(nid) ?? [], minimoDe(nid));
+    const completa = presionesCompletas.get(nid);
+    const ultima = presionesUltimas.get(nid);
+    const presion = completa ?? ultima;
+    // Posterior: de una revisión más reciente que la completa, y distinta.
+    const posterior = completa && ultima && ultima.orden < completa.orden && ultima.bar !== completa.bar ? ultima : null;
     mapa[nid] = {
       profundidad_mm: valor?.mm ?? null,
-      presion_bar: presiones.get(nid) ?? null,
+      presion_bar: presion?.bar ?? null,
+      presion_en: presion?.fecha ?? null,
+      presion_posterior_bar: posterior?.bar ?? null,
+      presion_posterior_en: posterior?.fecha ?? null,
       medido_en: valor?.fecha ?? null,
       confirmada: valor?.confirmada ?? false,
       pendiente_mm: valor?.pendiente?.mm ?? null,

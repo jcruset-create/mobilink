@@ -108,6 +108,12 @@ class MedicionVigente {
   /// De cuándo es la presión, por si no hay profundidad que fechar.
   DateTime? presionEn;
 
+  /// Una presión DISTINTA leída en una revisión incompleta más reciente que
+  /// la que se da por buena. No manda, pero no se esconde: una rueda que se
+  /// ha desinflado después de la última revisión completa hay que verla.
+  double? presionPosteriorBar;
+  DateTime? presionPosteriorEn;
+
   /// Si otra lectura, o un técnico, respalda la profundidad. Sin protocolo
   /// (reparto por posición) es siempre true: es como era.
   bool confirmada = true;
@@ -138,8 +144,15 @@ Set<String> revisionesConTodasLasRuedas(Iterable<FilaMedicion> filas, {String? c
   };
 }
 
-/// El reparto: para cada clave, la profundidad de su última revisión completa
-/// y la presión de su última fila con presión.
+/// El reparto: para cada clave, la profundidad Y la presión de su última
+/// revisión completa.
+///
+/// La presión salía antes de la última fila que la trajera, completa o no, y
+/// la ficha acababa con la profundidad de un día y la presión de otro. Ahora
+/// las dos salen de la misma clase de revisión. Si ninguna completa trae
+/// presión de esa rueda vale la última que haya, y una presión distinta de
+/// una revisión incompleta posterior se guarda aparte (`presionPosterior*`).
+/// La misma regla que el panel: `services/ultimaMedicion.ts`.
 ///
 /// [filas] tiene que venir de la MÁS RECIENTE a la más antigua. Si la consulta
 /// llevaba `limit` y lo ha agotado, se pasa [limite] para no fiarse de la
@@ -159,7 +172,14 @@ Map<String, MedicionVigente> repartirUltimasMediciones(
 
   final out = <String, MedicionVigente>{};
   final series = <String, List<LecturaDeSerie>>{};
+  // La última presión de todas (con su turno en la lista) y la de la última
+  // revisión completa: la primera solo cuenta si no hay segunda, o para
+  // avisar de que ha cambiado después.
+  final ultimaPresion = <String, (double, DateTime?, int)>{};
+  final presionCompleta = <String, (double, DateTime?, int)>{};
+  var turno = 0;
   for (final f in filas) {
+    turno += 1;
     final deCompleta = f.revisionId != null && completas.contains(f.revisionId);
     final aportaProfundidad = f.profundidadMm != null && deCompleta;
     final aportaPresion = f.presionBar != null;
@@ -181,10 +201,24 @@ Map<String, MedicionVigente> repartirUltimasMediciones(
         m.profundidadMm = f.profundidadMm;
         m.medidoEn = f.momento;
       }
-      if (m.presionBar == null && aportaPresion) {
-        m.presionBar = f.presionBar;
-        m.presionEn = f.momento;
+      if (aportaPresion) {
+        ultimaPresion.putIfAbsent(clave, () => (f.presionBar!, f.momento, turno));
+        if (deCompleta) presionCompleta.putIfAbsent(clave, () => (f.presionBar!, f.momento, turno));
       }
+    }
+  }
+
+  for (final e in ultimaPresion.entries) {
+    final m = out.putIfAbsent(e.key, MedicionVigente.new);
+    final completa = presionCompleta[e.key];
+    final ultima = e.value;
+    final buena = completa ?? ultima;
+    m.presionBar = buena.$1;
+    m.presionEn = buena.$2;
+    // Posterior: salió antes en la lista (es más reciente) y es otra presión.
+    if (completa != null && ultima.$3 < completa.$3 && ultima.$1 != completa.$1) {
+      m.presionPosteriorBar = ultima.$1;
+      m.presionPosteriorEn = ultima.$2;
     }
   }
 

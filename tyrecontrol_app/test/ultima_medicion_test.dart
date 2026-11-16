@@ -59,10 +59,16 @@ void main() {
       expect(mapa['int']!.medidoEn, DateTime.parse('2026-10-30'));
     });
 
-    test('la presión sí sale de la parcial: con lluvia el arco la mide bien', () {
-      expect(mapa['int']!.presionBar, 7.9);
-      expect(mapa['ext']!.presionBar, 7.7);
-      expect(mapa['int']!.presionEn, DateTime.parse('2026-11-05'));
+    test('la presión también es la de la última revisión completa', () {
+      expect(mapa['int']!.presionBar, 8.0);
+      expect(mapa['ext']!.presionBar, 8.1);
+      expect(mapa['int']!.presionEn, DateTime.parse('2026-10-30'));
+    });
+
+    test('y la presión distinta de la parcial posterior no se esconde: va aparte', () {
+      expect(mapa['int']!.presionPosteriorBar, 7.9);
+      expect(mapa['int']!.presionPosteriorEn, DateTime.parse('2026-11-05'));
+      expect(mapa['ext']!.presionPosteriorBar, 7.7);
     });
   });
 
@@ -82,7 +88,37 @@ void main() {
         fila('r1', 'a', 9.5, pres: 8.0),
       ]);
       expect(mapa['a']!.profundidadMm, 9.5);
+      // La presión que manda es la de la revisión completa; la otra va aparte.
+      expect(mapa['a']!.presionBar, 8.0);
+      expect(mapa['a']!.presionPosteriorBar, 8.2);
+    });
+
+    test('si la parcial posterior lee la misma presión, no hay nada que avisar', () {
+      final mapa = repartirUltimasMediciones([
+        fila('r2', 'a', null, pres: 8.0),
+        fila('r1', 'a', 9.5, pres: 8.0),
+      ]);
+      expect(mapa['a']!.presionBar, 8.0);
+      expect(mapa['a']!.presionPosteriorBar, isNull);
+    });
+
+    test('si la completa no midió la presión, vale la última que haya', () {
+      final mapa = repartirUltimasMediciones([
+        fila('r2', 'a', null, pres: 7.5),
+        fila('r1', 'a', 9.5),
+      ]);
+      expect(mapa['a']!.presionBar, 7.5);
+      expect(mapa['a']!.presionPosteriorBar, isNull);
+    });
+
+    test('una parcial anterior a la completa no cuenta como posterior', () {
+      final mapa = repartirUltimasMediciones([
+        fila('r2', 'a', 9.5, pres: 8.2),
+        fila('r1', 'a', null, pres: 6.0),
+        fila('r1', 'b', 5),
+      ]);
       expect(mapa['a']!.presionBar, 8.2);
+      expect(mapa['a']!.presionPosteriorBar, isNull);
     });
 
     test('una fila sin clave no se reparte, pero sí cuenta para saber si la revisión está completa', () {
