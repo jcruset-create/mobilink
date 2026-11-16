@@ -129,6 +129,11 @@ export interface RuedaAlerta {
   confirmada?: boolean | null;
   pendiente_mm?: number | null;
   pendiente_fecha?: string | null;
+  /**
+   * La cuenta que dice que la lectura baja no cabe en los kilómetros hechos
+   * (`alertasCreibles.ts`). La pone el panel, no la base.
+   */
+  no_creible?: string | null;
 }
 
 export interface EconomicoInformes {
