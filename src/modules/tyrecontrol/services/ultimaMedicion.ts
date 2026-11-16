@@ -52,7 +52,10 @@
  * llanta.
  */
 
-import { valorDeLaGoma, type LecturaDeSerie } from "./protocoloProfundidad";
+import {
+  juzgarDesgaste, kmEnFecha, ritmoDeLaGoma, ritmoMedio, type LecturaConKm, type PuntoKm,
+} from "./desgasteCreible";
+import { valorDeLaGoma, veredicto, type LecturaDeSerie } from "./protocoloProfundidad";
 
 export interface RevisionParaMedicion {
   id: string;
@@ -60,6 +63,8 @@ export interface RevisionParaMedicion {
   fecha_revision?: string | null;
   /** Con técnico, la revisión es A MANO; las del arco no lo tienen. */
   tecnico_id?: string | null;
+  /** Los km del vehículo ese día: para saber si una bajada cabe en ellos. */
+  km_vehiculo?: number | null;
 }
 
 export interface DetalleParaMedicion {
@@ -101,6 +106,11 @@ export interface Medicion {
   /** La última lectura, cuando NO es la que se ha dado por buena. */
   pendiente_mm: number | null;
   pendiente_en: string | null;
+  /**
+   * La cuenta que dice que la lectura baja no cabe en los kilómetros hechos
+   * (`desgasteCreible.ts`). Con ella, `pendiente_mm` es esa lectura.
+   */
+  no_creible?: string | null;
 }
 
 /**
@@ -165,6 +175,16 @@ export function mapaUltimasMediciones(
   // De cada goma, sus lecturas de profundidad válidas de la más reciente a la
   // más antigua —hacen falta tres para el protocolo— y su última presión.
   const series = new Map<string, LecturaDeSerie[]>();
+  // Las mismas lecturas, TODAS y con sus km: son las que dicen a qué ritmo se
+  // gasta la goma y si una bajada cabe en lo que ha rodado.
+  const largas = new Map<string, LecturaConKm[]>();
+  const puntos: PuntoKm[] = revisiones
+    .filter((r) => r.km_vehiculo != null && Number(r.km_vehiculo) > 0 && r.fecha_revision)
+    .map((r) => ({ fecha: r.fecha_revision as string, km: Number(r.km_vehiculo) }));
+  const kmDe = new Map(revisiones.map((r) => [
+    r.id,
+    r.km_vehiculo != null && Number(r.km_vehiculo) > 0 ? Number(r.km_vehiculo) : kmEnFecha(puntos, r.fecha_revision ?? null),
+  ]));
   const presiones = new Map<string, number>();
   for (const d of enOrden) {
     // Una fila de una revisión que no está en la lista —una anulada, por
@@ -182,6 +202,12 @@ export function mapaUltimasMediciones(
 
     for (const nid of destinatarios) {
       if (d.profundidad_mm != null && completas.has(d.revision_id)) {
+        const larga = largas.get(nid) ?? [];
+        larga.push({
+          mm: d.profundidad_mm, fecha: dia.get(d.revision_id) ?? null,
+          km: kmDe.get(d.revision_id) ?? null, manual: esManual.get(d.revision_id) ?? false,
+        });
+        largas.set(nid, larga);
         const serie = series.get(nid) ?? [];
         if (serie.length < 3) {
           serie.push({ mm: d.profundidad_mm, manual: esManual.get(d.revision_id) ?? false, fecha: sello.get(d.revision_id) ?? null });
@@ -196,7 +222,21 @@ export function mapaUltimasMediciones(
   for (const nid of new Set([...series.keys(), ...presiones.keys()])) {
     // La última lectura, salvo que deje la goma en el mínimo: entonces decide
     // el protocolo, con la última como pendiente si no está confirmada.
-    const valor = valorDeLaGoma(series.get(nid) ?? [], minimoDe(nid));
+    let valor = valorDeLaGoma(series.get(nid) ?? [], minimoDe(nid));
+    // Un «cambiar» confirmado todavía tiene que caber en los kilómetros: dos
+    // malas lecturas del arco seguidas se confirman entre ellas.
+    let noCreible: string | null = null;
+    if (valor && veredicto(valor, minimoDe(nid)) === "cambiar") {
+      const reserva = ritmoMedio([...largas].filter(([otra]) => otra !== nid).map(([, l]) => ritmoDeLaGoma(l)));
+      const juicio = juzgarDesgaste(largas.get(nid) ?? [], reserva);
+      if (juicio.creible === false && juicio.base) {
+        noCreible = juicio.explicacion;
+        valor = {
+          mm: juicio.base.mm, fecha: juicio.base.fecha, confirmada: true,
+          pendiente: { mm: valor.mm, fecha: valor.fecha },
+        };
+      }
+    }
     mapa[nid] = {
       profundidad_mm: valor?.mm ?? null,
       presion_bar: presiones.get(nid) ?? null,
@@ -204,6 +244,7 @@ export function mapaUltimasMediciones(
       confirmada: valor?.confirmada ?? false,
       pendiente_mm: valor?.pendiente?.mm ?? null,
       pendiente_en: valor?.pendiente?.fecha ?? null,
+      no_creible: noCreible,
     };
   }
   return mapa;

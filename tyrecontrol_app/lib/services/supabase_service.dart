@@ -2457,7 +2457,7 @@ class TyreControlApi {
       final data = await _db
           .from('revisiones_neumaticos_detalle')
           .select('revision_id, neumatico_id, posicion_id, profundidad_mm, presion_bar, created_at, '
-              'revision:revisiones_vehiculo(fecha_revision, tecnico_id)')
+              'revision:revisiones_vehiculo(fecha_revision, tecnico_id, km_vehiculo)')
           .eq('vehiculo_id', vehiculoId)
           .order('created_at', ascending: false)
           .limit(limite);
@@ -2507,6 +2507,9 @@ class TyreControlApi {
           momento: creada,
           // Con técnico es una medición a mano; sin él, del arco.
           manual: rev is Map && rev['tecnico_id'] != null,
+          // Para el juicio de los kilómetros (desgaste_creible.dart).
+          dia: dia,
+          kmVehiculo: rev is Map ? (rev['km_vehiculo'] as num?)?.toDouble() : null,
         ));
       }
 

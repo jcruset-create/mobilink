@@ -103,7 +103,11 @@ function tituloDeRueda(r: RuedaAlerta, estado: EstadoRueda): string {
   if (r.profundidad_mm != null) partes.push(`${mm(r.profundidad_mm)} mm`);
   else partes.push("sin medición");
   if ((estado === "cambiar" || estado === "por_confirmar") && r.minimo_mm != null) partes.push(`mínimo ${mm(r.minimo_mm)}`);
-  if (estado === "por_confirmar") {
+  if (estado === "por_confirmar" && r.no_creible) {
+    // No es «falta otra lectura»: hay lecturas, y no caben en los kilómetros.
+    partes.push(`última lectura ${mm(r.pendiente_mm)} mm${r.pendiente_fecha ? ` el ${fechaCorta(r.pendiente_fecha)}` : ""}`);
+    partes.push(r.no_creible);
+  } else if (estado === "por_confirmar") {
     partes.push(r.pendiente_mm != null
       ? `última lectura ${mm(r.pendiente_mm)} mm${r.pendiente_fecha ? ` el ${fechaCorta(r.pendiente_fecha)}` : ""}, sin confirmar`
       : "una sola lectura, sin confirmar");

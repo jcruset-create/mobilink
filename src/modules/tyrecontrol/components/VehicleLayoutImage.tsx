@@ -790,7 +790,9 @@ export default function VehicleLayoutImage({
                       conAviso ? "Aviso de presión abierto en esta rueda" : null,
                       paraCambiar ? `Para cambiar: ${profDe} mm` : null,
                       porConfirmar
-                        ? (medDe?.pendiente_mm != null
+                        ? (medDe?.no_creible
+                          ? `Por confirmar: el arco ha leído ${medDe.pendiente_mm} mm. ${medDe.no_creible}`
+                          : medDe?.pendiente_mm != null
                           ? `Por confirmar: el arco ha leído ${medDe.pendiente_mm} mm y las anteriores decían ${profDe}. Medir con sonda`
                           : `Por confirmar: ${profDe} mm con una sola lectura. Medir con sonda`)
                         : null,
