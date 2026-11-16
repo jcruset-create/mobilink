@@ -55,6 +55,11 @@ dependencies:
   # lite_app (Mobilink Assist Lite), que ya lo usa: una sola que mantener.
   local_auth: ^3.0.1
 
+  # Mapa de cada base con los autobuses pendientes, sobre OpenStreetMap (sin
+  # clave). Mismas versiones que flutter_app y lite_app, que ya lo usan.
+  flutter_map: ^6.1.0
+  latlong2: ^0.9.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
