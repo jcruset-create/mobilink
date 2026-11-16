@@ -59,7 +59,7 @@ import type { EstadoTacografo } from "./vencimiento.ts";
 import { evaluar } from "./deshacer.ts";
 import {
   aplicarPropuesta, borrarLote, cerrarLote, completarDePdf, crearLote, guardarBloqueadas,
-  guardarInformePdf, insertarFilas, insertarIntervencionDePdf, insertarPropuestas,
+  almacenDeInformes, guardarInformePdf, insertarFilas, insertarIntervencionDePdf, insertarPropuestas,
   rechazarPropuesta, urlFirmadaDeInforme, vincularIntervencion,
 } from "./escribir.ts";
 import {
@@ -70,6 +70,7 @@ import { aFilaInsert, parcheParaCompletar, preparar } from "./importar.ts";
 import { ErrorFichero, leerHoja, type Lectura } from "./parser.ts";
 import { simular } from "./simular.ts";
 import { pdfParaAdjuntar } from "./ejemplarCliente.ts";
+import { recortarAdjuntos } from "./recortarAdjuntos.ts";
 import { decidirInforme, pareceOtroCliente } from "./informes.ts";
 import type { Generacion } from "./generacion.ts";
 import { leerInformePdf, leerInformesDelPdf, lineasDeInforme } from "./informePdf.ts";
@@ -773,6 +774,41 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
     } catch (e: any) {
       console.error("[tacografo-informes] error:", e?.message ?? e);
       res.status(500).json({ error: e?.message || "No se han podido leer los informes" });
+    }
+  });
+
+  /**
+   * Dejar solo el ejemplar del cliente en los informes que ya estaban
+   * adjuntos. Con `?simular=1` no escribe: cuenta lo que haría.
+   *
+   * Es una tarea de una vez, para lo subido antes de que el adjunto se
+   * recortara al entrar. Repetirla no hace daño: lo ya recortado se reconoce
+   * y no se toca.
+   */
+  app.post("/api/tyrecontrol/tacografo/informes-pdf/recortar", ...guards, async (req, res) => {
+    try {
+      const alcance = await empresaParaOperar(req, req.query.empresa ?? req.body?.empresa);
+      if (!alcance.empresa) return res.status(alcance.estado!).json({ error: alcance.error });
+      const simular = String(req.query.simular ?? req.body?.simular ?? "") === "1";
+
+      const resultados = await recortarAdjuntos(almacenDeInformes(alcance.empresa), simular);
+      const cuenta = (a: string) => resultados.filter((r) => r.accion === a).length;
+      res.json({
+        ok: true,
+        simulado: simular,
+        resumen: {
+          total: resultados.length,
+          recortados: cuenta("recortado"),
+          seRecortarian: cuenta("se_recortaria"),
+          yaEstaban: cuenta("ya_estaba"),
+          noSePuede: cuenta("no_se_puede"),
+        },
+        resultados,
+      });
+    } catch (e) {
+      const mensaje = e instanceof Error ? e.message : String(e);
+      console.error("[tacografo-recortar] error:", mensaje);
+      res.status(500).json({ error: mensaje || "No se han podido recortar los informes" });
     }
   });
 

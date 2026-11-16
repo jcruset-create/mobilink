@@ -85,3 +85,30 @@ export async function pdfParaAdjuntar(
     return entero("No se ha podido separar el ejemplar del cliente: se adjunta el PDF entero.");
   }
 }
+
+/** Qué hacer con un PDF que YA está adjunto. */
+export type DecisionRecorte =
+  | { estado: "ya_estaba" }
+  | { estado: "recortar"; pdf: Buffer; paginas: number }
+  | { estado: "no_se_puede"; motivo: string };
+
+/**
+ * Lo mismo que `pdfParaAdjuntar`, para un fichero que ya está guardado.
+ *
+ * Se distingue de él en dos cosas: un adjunto que ya es solo el ejemplar del
+ * cliente se reconoce y no se toca (repetir la tarea no reescribe nada), y lo
+ * que no se puede recortar se dice con su motivo en vez de darlo por bueno.
+ */
+export async function decidirRecorte(pdf: Buffer, lineas: LineaPdf[], idOrigen: string): Promise<DecisionRecorte> {
+  const paginas = paginasDelEjemplarCliente(lineas, idOrigen);
+  if (!paginas) {
+    return { estado: "no_se_puede", motivo: "No se encuentra un único «Ejemplar para el cliente» de esta intervención." };
+  }
+  try {
+    const total = (await PDFDocument.load(pdf)).getPageCount();
+    if (paginas.length === total) return { estado: "ya_estaba" };
+    return { estado: "recortar", pdf: await soloPaginas(pdf, paginas), paginas: paginas.length };
+  } catch {
+    return { estado: "no_se_puede", motivo: "El PDF no se deja reescribir." };
+  }
+}

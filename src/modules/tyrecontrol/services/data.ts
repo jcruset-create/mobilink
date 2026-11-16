@@ -4573,6 +4573,31 @@ export async function importarInformesPdf(
     { method: "POST", body: fd });
 }
 
+export interface ResultadoRecorteInformes {
+  ok: true;
+  simulado: boolean;
+  resumen: { total: number; recortados: number; seRecortarian: number; yaEstaban: number; noSePuede: number };
+  resultados: Array<{
+    id: string; nombre: string; idOrigen: string | null; matricula: string | null;
+    accion: "recortado" | "se_recortaria" | "ya_estaba" | "no_se_puede";
+    motivo?: string; aviso?: string; paginas?: number; bytesAntes?: number; bytesDespues?: number;
+  }>;
+}
+
+/**
+ * Deja solo el ejemplar del cliente en los informes que ya estaban adjuntos.
+ *
+ * Con `simular` no escribe nada: cuenta lo que haría. Sin él, sustituye cada
+ * PDF por el recortado y borra el fichero entero, que no se puede recuperar.
+ */
+export async function recortarInformesAdjuntos(
+  empresaId: string, simular: boolean,
+): Promise<ResultadoRecorteInformes> {
+  return tcg<ResultadoRecorteInformes>(
+    `/api/tyrecontrol/tacografo/informes-pdf/recortar?empresa=${encodeURIComponent(empresaId)}${simular ? "&simular=1" : ""}`,
+    { method: "POST" });
+}
+
 /**
  * Los avisos de presión ABIERTOS de un vehículo.
  *
