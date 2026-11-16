@@ -1,3 +1,6 @@
+import { PDFDocument } from "pdf-lib";
+
+import { paginasDelEjemplarCliente, pdfParaAdjuntar, soloPaginas } from "./ejemplarCliente.ts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -555,5 +558,73 @@ describe("leerInformePdf(), el de la ficha: una y solo una", () => {
     expect(r.fila).toBeNull();
     expect(r.problemas[0].motivo).toContain("2 intervenciones");
     expect(r.problemas[0].motivo).toContain("E943009005411D");
+  });
+});
+
+describe("El adjunto: solo el ejemplar del cliente", () => {
+  /** El mismo impreso, pero firmado como ejemplar del cliente. */
+  const delCliente = (o: Opciones): LineaPdf[] =>
+    impreso(o).map((l) => (l.texto === "Ejemplar para el taller" ? { ...l, texto: "Ejemplar para el cliente" } : l));
+
+  /** Como llega del centro: taller, una página en blanco y cliente. */
+  const fichero = (a1: string, desde: number): LineaPdf[] => [
+    ...impreso({ a1, pagina: desde }),
+    ...delCliente({ a1, pagina: desde + 2 }),
+  ];
+
+  /** Un PDF de verdad con `n` páginas, cada una de un ancho distinto para reconocerla. */
+  async function pdfDe(n: number): Promise<Buffer> {
+    const doc = await PDFDocument.create();
+    for (let i = 1; i <= n; i += 1) doc.addPage([100 + i, 200]);
+    return Buffer.from(await doc.save());
+  }
+  const anchos = async (pdf: Buffer) => (await PDFDocument.load(pdf)).getPages().map((p) => p.getWidth());
+
+  it("señala las páginas del ejemplar del cliente, no las del taller ni la blanca", () => {
+    expect(paginasDelEjemplarCliente(fichero("E1", 1), "E1")).toEqual([3]);
+  });
+
+  it("en un PDF con varias intervenciones, cada una se queda con SU ejemplar", () => {
+    const mes = [...fichero("E1", 1), ...fichero("E2", 4)];
+    expect(paginasDelEjemplarCliente(mes, "E1")).toEqual([3]);
+    expect(paginasDelEjemplarCliente(mes, "E2")).toEqual([6]);
+  });
+
+  it("sin ejemplar del cliente, o con dos de la misma intervención, no se elige", () => {
+    expect(paginasDelEjemplarCliente(impreso({ a1: "E1" }), "E1")).toBeNull();
+    expect(paginasDelEjemplarCliente([...delCliente({ a1: "E1", pagina: 1 }), ...delCliente({ a1: "E1", pagina: 2 })], "E1")).toBeNull();
+    expect(paginasDelEjemplarCliente(fichero("E1", 1), "OTRA")).toBeNull();
+  });
+
+  it("soloPaginas copia esas páginas y ninguna más", async () => {
+    expect(await anchos(await soloPaginas(await pdfDe(7), [5, 6, 7]))).toEqual([105, 106, 107]);
+  });
+
+  it("soloPaginas no se inventa páginas que no existen", async () => {
+    await expect(soloPaginas(await pdfDe(3), [4])).rejects.toThrow(/fuera del documento/);
+    await expect(soloPaginas(await pdfDe(3), [])).rejects.toThrow();
+  });
+
+  it("pdfParaAdjuntar deja el ejemplar del cliente y dice cuántas páginas tiene", async () => {
+    const r = await pdfParaAdjuntar(await pdfDe(3), fichero("E1", 1), "E1", 2);
+    expect(r).toMatchObject({ recortado: true, paginas: 1, aviso: null });
+    expect(await anchos(r.pdf)).toEqual([103]);
+  });
+
+  it("si no hay ejemplar del cliente se adjunta entero, y se dice", async () => {
+    const entero = await pdfDe(3);
+    const r = await pdfParaAdjuntar(entero, impreso({ a1: "E1" }), "E1", 3);
+    expect(r.recortado).toBe(false);
+    expect(r.pdf).toBe(entero);
+    expect(r.paginas).toBe(3);
+    expect(r.aviso).toContain("Ejemplar para el cliente");
+  });
+
+  it("un PDF que no se deja reescribir se adjunta entero en vez de perder el adjunto", async () => {
+    const roto = Buffer.from("%PDF-1.4 esto no es un pdf");
+    const r = await pdfParaAdjuntar(roto, fichero("E1", 1), "E1", 7);
+    expect(r).toMatchObject({ recortado: false, paginas: 7 });
+    expect(r.pdf).toBe(roto);
+    expect(r.aviso).toContain("entero");
   });
 });

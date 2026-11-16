@@ -29,6 +29,7 @@
 
 import { supabase, SUPABASE_DOCS_BUCKET } from "../../supabase.ts";
 import { TIPO_DOC_INFORME } from "./datos.ts";
+import type { Almacen } from "./recortarAdjuntos.ts";
 import type { FilaBloqueada, FilaInsert } from "./importar.ts";
 import type { PropuestaInsert } from "./propuestas.ts";
 
@@ -435,6 +436,58 @@ export async function guardarInformePdf(i: InformeParaGuardar): Promise<{ id: st
     .single();
   if (error) throw new Error(`No se ha podido registrar el informe: ${error.message}`);
   return { id: String((data as any).id), ruta };
+}
+
+/**
+ * El almacén de verdad para `recortarAdjuntos`: los informes de tacógrafo de
+ * una empresa, en el bucket privado de documentos.
+ */
+export function almacenDeInformes(empresa: string): Almacen {
+  const bucket = () => supabase.storage.from(SUPABASE_DOCS_BUCKET);
+  return {
+    async listar() {
+      const { data, error } = await supabase
+        .from("tc_vehiculo_documentos")
+        .select("id, storage_path, nombre_original, intervencion:tc_tacografo_intervenciones(id_origen, matricula_origen)")
+        .eq("empresa_id", empresa)
+        .eq("tipo", TIPO_DOC_INFORME)
+        .order("created_at", { ascending: true });
+      if (error) throw new Error(error.message);
+      type Fila = {
+        id: string; storage_path: string; nombre_original: string | null;
+        intervencion: { id_origen: string | null; matricula_origen: string | null } | null;
+      };
+      return ((data ?? []) as unknown as Fila[]).map((d) => ({
+        id: String(d.id),
+        ruta: String(d.storage_path),
+        nombre: String(d.nombre_original ?? "informe.pdf"),
+        idOrigen: d.intervencion?.id_origen ? String(d.intervencion.id_origen) : null,
+        matricula: d.intervencion?.matricula_origen ? String(d.intervencion.matricula_origen) : null,
+      }));
+    },
+    async descargar(ruta) {
+      const { data, error } = await bucket().download(ruta);
+      if (error || !data) throw new Error(`No se ha podido leer el PDF guardado: ${error?.message ?? "vacío"}`);
+      return Buffer.from(await data.arrayBuffer());
+    },
+    async subir(ruta, pdf) {
+      // `upsert` porque una pasada anterior pudo dejar el recortado subido y
+      // caerse antes de apuntarlo: repetir tiene que poder terminar.
+      const { error } = await bucket().upload(ruta, pdf, { contentType: "application/pdf", upsert: true });
+      if (error) throw new Error(`No se ha podido guardar el recortado: ${error.message}`);
+    },
+    async apuntar(id, c) {
+      const { error } = await supabase
+        .from("tc_vehiculo_documentos")
+        .update({ storage_path: c.ruta, paginas: c.paginas, tamano_bytes: c.bytes })
+        .eq("id", id).eq("empresa_id", empresa).eq("tipo", TIPO_DOC_INFORME);
+      if (error) throw new Error(`No se ha podido actualizar el informe: ${error.message}`);
+    },
+    async borrar(ruta) {
+      const { error } = await bucket().remove([ruta]);
+      if (error) throw new Error(error.message);
+    },
+  };
 }
 
 /** La URL firmada con la que el panel abre o descarga un informe. */
