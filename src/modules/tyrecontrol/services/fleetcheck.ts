@@ -270,3 +270,63 @@ export function filasDeFleetcheck(lectura: LecturaFleetcheck, fecha: string): Fi
   }
   return filas;
 }
+
+/** Lo que dice el texto de un neumático, troceado. */
+export interface PartesNeumatico {
+  marca: string;
+  modelo: string;
+  medida: string;
+  /** Índice de carga en simple («154»); null si el informe no lo trae. */
+  carga: string | null;
+  /** Índice en gemelo, cuando viene como «154/150». */
+  cargaDoble: string | null;
+  /** Código de velocidad («M»). */
+  velocidad: string | null;
+}
+
+/**
+ * «Hankook 295/80 R22.5 Smart Flex AH51 3PMSF 154M» → marca, medida, modelo e
+ * índices.
+ *
+ * El «3PMSF» es el marcaje de invierno, no parte del modelo: se quita para
+ * que «Smart Flex AH51 3PMSF» case con el «Smart Flex AH51» del catálogo y no
+ * abra un modelo nuevo. Si no hay medida reconocible, null: sin ella no se
+ * puede identificar el neumático.
+ */
+export function partesDeNeumatico(texto: string): PartesNeumatico | null {
+  const t = String(texto ?? "").replace(/\s+/g, " ").trim();
+  const m = /^(.*?)\s*(\d{3}\/\d{2})\s*R\s*(\d{2}(?:[.,]\d)?)\s*(.*)$/i.exec(t);
+  if (!m || !m[1]) return null;
+  let resto = m[4].trim();
+  let carga: string | null = null; let cargaDoble: string | null = null; let velocidad: string | null = null;
+  const idx = /(?:^|\s)(\d{2,3})(?:\/(\d{2,3}))?([A-Z])$/.exec(resto);
+  if (idx) {
+    carga = idx[1]; cargaDoble = idx[2] ?? null; velocidad = idx[3];
+    resto = resto.slice(0, idx.index).trim();
+  }
+  const modelo = resto.replace(/\s*\b3PMSF\b/gi, "").replace(/\s+/g, " ").trim();
+  return {
+    marca: m[1].trim(),
+    modelo,
+    medida: `${m[2]} R${m[3].replace(",", ".")}`,
+    carga, cargaDoble, velocidad,
+  };
+}
+
+/** Las ruedas por eje de un vehículo, como las nombra el catálogo: «2x4x2». */
+export function firmaDeEjes(ruedas: Pick<RuedaFleetcheck, "eje">[]): string {
+  const porEje = new Map<number, number>();
+  for (const r of ruedas) porEje.set(r.eje, (porEje.get(r.eje) ?? 0) + 1);
+  return [...porEje].sort((a, b) => a[0] - b[0]).map(([, n]) => n).join("x");
+}
+
+/**
+ * El tipo de vehículo que corresponde a cada reparto de ruedas en una flota
+ * de autobuses. Solo los que no admiten duda: un 2x2 puede ser furgoneta o
+ * turismo, y eso no lo decide un informe de neumáticos.
+ */
+export const TIPO_POR_FIRMA: Record<string, string> = {
+  "2x4": "autobus",
+  "2x4x2": "autocar",
+  "2x4x4": "autocar_2x4x4",
+};

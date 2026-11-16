@@ -4,7 +4,10 @@ import { importVehiculos, type ReporteImport } from "../services/importVehiculos
 import { importRevisiones, type ReporteRev } from "../services/importRevisiones";
 import { importCheckpoint, type ReporteCheckpoint } from "../services/importCheckpoint";
 import { HOJA_DETALLE } from "../services/checkpoint";
-import { importFleetcheck, leerFleetcheckPdf, type ReporteFleetcheck } from "../services/importFleetcheck";
+import {
+  altasPosibles, darDeAlta, importFleetcheck, leerFleetcheckPdf,
+  type AltaPropuesta, type ReporteFleetcheck, type ResultadoAltas,
+} from "../services/importFleetcheck";
 import type { LecturaFleetcheck } from "../services/fleetcheck";
 import { pareceHoja1, pareceHoja2 } from "../services/importHistorico";
 import ImportarHistorico from "../components/ImportarHistorico";
@@ -24,6 +27,12 @@ export default function Importar() {
   const [fleetcheck, setFleetcheck] = useState<LecturaFleetcheck | null>(null);
   const [fechaFleetcheck, setFechaFleetcheck] = useState("");
   const [repFlt, setRepFlt] = useState<ReporteFleetcheck | null>(null);
+  // Vehículos del informe sin plano: se pueden dar de alta con sus datos,
+  // pero solo si quien importa lo marca, porque eso SÍ crea neumáticos.
+  const [altas, setAltas] = useState<AltaPropuesta[]>([]);
+  const [hacerAltas, setHacerAltas] = useState(false);
+  const [resAltas, setResAltas] = useState<ResultadoAltas | null>(null);
+  const [avanceAltas, setAvanceAltas] = useState("");
   const [ejecutado, setEjecutado] = useState(false);
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState("");
@@ -39,7 +48,7 @@ export default function Importar() {
    */
   const [tacografo, setTacografo] = useState(false);
 
-  function reset() { setFleetcheck(null); setFechaFleetcheck(""); setRepFlt(null); setRepVeh(null); setRepRev(null); setRepChk(null); setEjecutado(false); setRows([]); setModo(null); setError(""); setHistorico(null); }
+  function reset() { setAltas([]); setHacerAltas(false); setResAltas(null); setAvanceAltas(""); setFleetcheck(null); setFechaFleetcheck(""); setRepFlt(null); setRepVeh(null); setRepRev(null); setRepChk(null); setEjecutado(false); setRows([]); setModo(null); setError(""); setHistorico(null); }
 
   async function onArchivo(file: File | undefined) {
     if (!file) return;
@@ -116,6 +125,8 @@ export default function Importar() {
       else if (modo === "fleetcheck") {
         if (!fleetcheck) return;
         if (!fechaFleetcheck) throw new Error("Pon la fecha en que se hicieron las mediciones.");
+        setResAltas(null);
+        setAltas(await altasPosibles(fleetcheck));
         setRepFlt(await importFleetcheck(fleetcheck, fechaFleetcheck, false));
       }
       else setRepRev(await importRevisiones(rows, false));
@@ -124,8 +135,12 @@ export default function Importar() {
 
   async function importar() {
     const n = modo === "revisiones" ? (repRev?.resumen.revisiones ?? 0) : rows.length;
+    const altasValidas = altas.filter((a) => !a.motivo);
     const que = modo === "fleetcheck"
       ? `${repFlt?.rev.resumen.detalles ?? 0} mediciones en ${repFlt?.rev.resumen.revisiones ?? 0} revisiones nuevas, con fecha ${fechaFleetcheck}`
+        + (hacerAltas && altasValidas.length
+          ? `, y a dar de alta ${altasValidas.length} vehículos sin plano CREANDO sus ${altasValidas.reduce((s, a) => s + a.ruedas, 0)} neumáticos`
+          : "")
       : modo === "checkpoint"
       ? `${repChk?.mediciones ?? 0} mediciones nuevas del CheckPoint` +
         (repChk?.altas.length ? ` y el alta de ${repChk.altas.length} vehículos` : "")
@@ -137,6 +152,14 @@ export default function Importar() {
       else if (modo === "checkpoint") setRepChk(await importCheckpoint(rows, true));
       else if (modo === "fleetcheck") {
         if (!fleetcheck || !fechaFleetcheck) return;
+        // Primero las altas: así sus revisiones ya existen cuando pasa la
+        // importación, que las respeta y no las duplica.
+        if (hacerAltas && altas.some((a) => !a.motivo)) {
+          setResAltas(await darDeAlta(fleetcheck, fechaFleetcheck, altas,
+            (n, total) => setAvanceAltas(`Dando de alta vehículos: ${n} de ${total}…`)));
+          setAvanceAltas("");
+          setAltas(await altasPosibles(fleetcheck).catch(() => []));
+        }
         setRepFlt(await importFleetcheck(fleetcheck, fechaFleetcheck, true));
       }
       else setRepRev(await importRevisiones(rows, true));
@@ -271,6 +294,46 @@ export default function Importar() {
             Se guarda la <b>menor</b> de las lecturas de profundidad de cada rueda y la presión del informe. No se crea ni se cambia ningún neumático ni montaje.
             Los kilómetros no se cogen del informe: la revisión nace sin ellos y se piden a la telemática en el relleno diario.
           </div>
+          {avanceAltas && <div className="mb-3 text-[12px] text-sky-300">{avanceAltas}</div>}
+          {resAltas && (
+            <div className="mb-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 text-[12px] text-emerald-100">
+              <div className="mb-1 font-bold uppercase text-[11px]">Vehículos dados de alta ({resAltas.hechas.length})</div>
+              <div className="font-mono text-[11px]">{resAltas.hechas.join(", ") || "Ninguno"}</div>
+              {resAltas.fallos.length > 0 && (
+                <div className="mt-2 text-rose-200">
+                  <div className="font-bold uppercase text-[11px]">No se han podido dar de alta ({resAltas.fallos.length})</div>
+                  {resAltas.fallos.map((f) => <div key={f.matricula}>· {f.matricula}: {f.error}</div>)}
+                </div>
+              )}
+              {resAltas.avisos.map((a, i) => <div key={i} className="mt-1 text-amber-200">· {a}</div>)}
+            </div>
+          )}
+          {altas.length > 0 && !ejecutado && (
+            <div className="mb-3 rounded-lg border border-sky-500/40 bg-sky-500/10 p-3 text-[12px] text-sky-100">
+              <div className="mb-1 font-bold uppercase text-[11px]">Vehículos sin plano ({altas.length})</div>
+              <table className="mb-2 w-full text-left text-[11px]">
+                <thead className="text-slate-400"><tr><th className="py-1 pr-3">Matrícula</th><th className="pr-3">Ejes en el informe</th><th className="pr-3">Tipo que se le pondría</th><th>Ruedas</th></tr></thead>
+                <tbody>
+                  {altas.map((a) => (
+                    <tr key={a.matricula} className="border-t border-slate-700/60">
+                      <td className="py-1 pr-3 font-mono">{a.matricula}</td>
+                      <td className="pr-3">{a.firma}</td>
+                      <td className="pr-3">{a.motivo ? <span className="text-amber-300">{a.motivo}</span> : a.tipoNombre}</td>
+                      <td>{a.ruedas}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {altas.some((a) => !a.motivo) && (
+                <label className="flex items-start gap-2">
+                  <input id="fleetcheck-altas" type="checkbox" className="mt-0.5" checked={hacerAltas} onChange={(e) => setHacerAltas(e.target.checked)} />
+                  <span>
+                    <b>Dar de alta estos vehículos con los datos del informe.</b> Se les pone el tipo y se crea el neumático de cada posición como carga inicial (sin descontar stock), con su marca, modelo, medida, profundidad y presión. Quedan sin número de serie ni DOT, que el informe no trae. Si no lo marcas, estos vehículos no se importan.
+                  </span>
+                </label>
+              )}
+            </div>
+          )}
           {repFlt.rev.noEncontrados.length > 0 && (
             <div className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 text-[12px] text-rose-200">
               <div className="mb-1 font-bold uppercase text-[11px]">Matrículas que no están en TyreControl ({repFlt.rev.noEncontrados.length}) — no se importan</div>

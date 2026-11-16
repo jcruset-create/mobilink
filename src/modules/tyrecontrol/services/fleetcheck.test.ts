@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { filasDeFleetcheck, leerFleetcheck, medidaDeNeumatico, type LineaFleetcheck } from "./fleetcheck";
+import {
+  filasDeFleetcheck, firmaDeEjes, leerFleetcheck, medidaDeNeumatico, partesDeNeumatico, type LineaFleetcheck,
+} from "./fleetcheck";
 
 /**
  * Un informe en miniatura, con las mismas coordenadas que el de verdad
@@ -136,5 +138,43 @@ describe("medidaDeNeumatico", () => {
     expect(medidaDeNeumatico("Hankook 295/80 R22.5 Smart Flex AH51 3PMSF 154M")).toBe("295/80 R22.5");
     expect(medidaDeNeumatico("Hankook 225/75 R16 Vantra LT RA18 121R")).toBe("225/75 R16");
     expect(medidaDeNeumatico("Recacor Bus")).toBeNull();
+  });
+});
+
+describe("partesDeNeumatico", () => {
+  it("trocea marca, medida, modelo e índices, y quita el 3PMSF del modelo", () => {
+    expect(partesDeNeumatico("Hankook 295/80 R22.5 Smart Flex AH51 3PMSF 154M")).toEqual({
+      marca: "Hankook", modelo: "Smart Flex AH51", medida: "295/80 R22.5", carga: "154", cargaDoble: null, velocidad: "M",
+    });
+    expect(partesDeNeumatico("Michelin 205/75 R16 Agilis Cross Climate 3PMSF 113R"))
+      .toMatchObject({ marca: "Michelin", modelo: "Agilis Cross Climate", medida: "205/75 R16", carga: "113", velocidad: "R" });
+  });
+
+  it("un modelo que parece un índice no se confunde con el índice", () => {
+    expect(partesDeNeumatico("Yokohama 295/80 R22.5 124R 3PMSF 154M"))
+      .toMatchObject({ modelo: "124R", carga: "154", velocidad: "M" });
+  });
+
+  it("índice doble", () => {
+    expect(partesDeNeumatico("Marca 315/80 R22.5 Modelo 156/150L"))
+      .toMatchObject({ modelo: "Modelo", carga: "156", cargaDoble: "150", velocidad: "L" });
+  });
+
+  it("sin índice de carga lo deja a null, no lo inventa", () => {
+    expect(partesDeNeumatico("InsaTruck 295/80 R22.5 K25")).toMatchObject({ modelo: "K25", carga: null, velocidad: null });
+    expect(partesDeNeumatico("Hankook 265/70 R17.5 Smart Flex AH35 3PMSF")).toMatchObject({ modelo: "Smart Flex AH35", carga: null });
+  });
+
+  it("sin medida o sin marca no hay neumático", () => {
+    expect(partesDeNeumatico("Recacor Bus")).toBeNull();
+    expect(partesDeNeumatico("295/80 R22.5 Bus 154M")).toBeNull();
+  });
+});
+
+describe("firmaDeEjes", () => {
+  it("cuenta las ruedas de cada eje, en orden", () => {
+    const v = leerFleetcheck(INFORME).vehiculos;
+    expect(firmaDeEjes(v[0].ruedas)).toBe("2x4");
+    expect(firmaDeEjes(v[1].ruedas)).toBe("2x4x2");
   });
 });
