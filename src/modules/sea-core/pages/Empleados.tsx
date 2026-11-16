@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import CoreLayout from "../layouts/CoreLayout";
 import { supabase } from "../../almacen-neumaticos/services/supabase";
+import { apiFetch } from "../../apiFetch";
 
 type Empleado = {
   id: string;
@@ -22,6 +23,7 @@ type Empleado = {
   activo: boolean;
   roadside_capable: boolean;
   fecha_alta: string | null;
+  estado_alta: string | null;
   company_id: string | null;
   work_center_id: string | null;
   sea_companies: { nombre: string } | null;
@@ -38,11 +40,25 @@ const ROL_BADGE: Record<string, string> = {
   almacen:     "bg-green-100 text-green-800",
 };
 
+/**
+ * En qué punto está el alta que rellena el propio operario.
+ *
+ * `completa` no se pinta: es lo que tiene toda la plantilla de siempre, y un
+ * distintivo que lleva todo el mundo no distingue nada.
+ */
+const ESTADO_ALTA: Record<string, { label: string; clase: string }> = {
+  pendiente: { label: "Sin enlace",   clase: "bg-slate-700 text-slate-300" },
+  enviado:   { label: "Enlace enviado", clase: "bg-sky-500/20 text-sky-300" },
+  abierto:   { label: "Rellenando",   clase: "bg-sky-500/20 text-sky-300" },
+  recibida:  { label: "Por revisar",  clase: "bg-amber-500/20 text-amber-300" },
+};
+
 const EMPTY = {
   nombre: "", apellidos: "", dni_nie: "", num_seguridad_social: "", telefono: "", email: "",
   direccion: "", codigo_postal: "", poblacion: "", provincia: "",
   cargo: "", departamento: "", rol: "operario", codigo_operario: "",
   fecha_alta: "", activo: true, roadside_capable: false, company_id: "", work_center_id: "",
+  alta_por_enlace: false,
 };
 
 export default function Empleados() {
@@ -60,6 +76,8 @@ export default function Empleados() {
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState("");
   const [mensaje, setMensaje] = useState("");
+  /** Empleado al que se le está mandando el enlace. */
+  const [enviando, setEnviando] = useState<string | null>(null);
 
   useEffect(() => { cargar(); }, []);
 
@@ -67,7 +85,7 @@ export default function Empleados() {
     setCargando(true);
     const [{ data: emps }, { data: emp }, { data: cent }] = await Promise.all([
       supabase.from("sea_employees")
-        .select("id, nombre, apellidos, dni_nie, num_seguridad_social, direccion, codigo_postal, poblacion, provincia, telefono, email, cargo, departamento, rol, codigo_operario, activo, fecha_alta, company_id, work_center_id, sea_companies(nombre), sea_work_centers(nombre)")
+        .select("id, nombre, apellidos, dni_nie, num_seguridad_social, direccion, codigo_postal, poblacion, provincia, telefono, email, cargo, departamento, rol, codigo_operario, activo, fecha_alta, company_id, work_center_id, estado_alta, sea_companies(nombre), sea_work_centers(nombre)")
         .order("nombre"),
       supabase.from("sea_companies").select("id, nombre").eq("activa", true).order("nombre"),
       supabase.from("sea_work_centers").select("id, nombre").eq("activo", true).order("nombre"),
@@ -90,6 +108,33 @@ export default function Empleados() {
     }
     return true;
   });
+
+  /**
+   * Le manda (o le vuelve a mandar) el enlace del formulario por SMS.
+   *
+   * Lo hace el servidor: es quien tiene las credenciales de Twilio y quien
+   * guarda el token sin que el navegador llegue a verlo.
+   */
+  async function enviarEnlace(e: Empleado) {
+    setEnviando(e.id);
+    setMensaje("");
+    try {
+      const r = await apiFetch("/api/core/alta/invitar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ employeeId: e.id }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d?.error ?? "No se ha podido mandar el enlace.");
+      setMensaje(`Enlace enviado a ${e.nombre} por SMS. Caduca en 72 horas.`);
+      setTimeout(() => setMensaje(""), 5000);
+      cargar();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se ha podido mandar el enlace.");
+    } finally {
+      setEnviando(null);
+    }
+  }
 
   function abrirNuevo() {
     setForm({ ...EMPTY });
@@ -142,14 +187,30 @@ export default function Empleados() {
       company_id:       form.company_id || null,
       work_center_id:  form.work_center_id || null,
     };
-    const { error: err } = editId
-      ? await supabase.from("sea_employees").update(payload).eq("id", editId)
-      : await supabase.from("sea_employees").insert(payload);
+    /*
+     * `estado_alta` solo se toca al crear. En una edición no: la ficha de
+     * alguien que ya está dado de alta no tiene por qué volver a ponerse en
+     * «pendiente» porque a alguien le cambien el teléfono.
+     */
+    const alta = !editId && form.alta_por_enlace === true;
+    const { data: creado, error: err } = editId
+      ? await supabase.from("sea_employees").update(payload).eq("id", editId).select("id").single()
+      : await supabase
+          .from("sea_employees")
+          .insert({ ...payload, estado_alta: alta ? "pendiente" : "completa" })
+          .select("id")
+          .single();
     setGuardando(false);
     if (err) { setError(err.message); return; }
-    setMensaje(editId ? "Empleado actualizado." : "Empleado creado.");
     setModal(false);
-    setTimeout(() => setMensaje(""), 3000);
+    setTimeout(() => setMensaje(""), 5000);
+
+    if (alta && creado?.id) {
+      setMensaje("Empleado creado. Mandando el enlace…");
+      await enviarEnlace({ id: creado.id, nombre: payload.nombre } as Empleado);
+      return;
+    }
+    setMensaje(editId ? "Empleado actualizado." : "Empleado creado.");
     cargar();
   }
 
@@ -239,9 +300,16 @@ export default function Empleados() {
                   </td>
                   <td className="p-3 font-mono text-slate-400">{e.codigo_operario ?? "—"}</td>
                   <td className="p-3">
-                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${e.activo ? "bg-green-100 text-green-800" : "bg-red-500/20 text-red-300"}`}>
-                      {e.activo ? "Activo" : "Inactivo"}
-                    </span>
+<div className="flex flex-col items-start gap-1">
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${e.activo ? "bg-green-100 text-green-800" : "bg-red-500/20 text-red-300"}`}>
+                        {e.activo ? "Activo" : "Inactivo"}
+                      </span>
+                      {ESTADO_ALTA[e.estado_alta ?? ""] && (
+                        <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${ESTADO_ALTA[e.estado_alta!].clase}`}>
+                          {ESTADO_ALTA[e.estado_alta!].label}
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="p-3">
                     <div className="flex gap-1">
@@ -253,6 +321,13 @@ export default function Empleados() {
                         className="rounded-lg bg-slate-700 px-2 py-1 text-xs hover:bg-slate-600">
                         Editar
                       </button>
+                      {ESTADO_ALTA[e.estado_alta ?? ""] && (
+                        <button onClick={() => void enviarEnlace(e)} disabled={enviando === e.id}
+                          title="Le manda por SMS el enlace para que rellene su ficha"
+                          className="rounded-lg bg-sky-600 px-2 py-1 text-xs text-white hover:bg-sky-500 disabled:opacity-50">
+                          {enviando === e.id ? "Enviando…" : e.estado_alta === "pendiente" ? "Enviar enlace" : "Reenviar"}
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -306,6 +381,20 @@ export default function Empleados() {
                   <div><label className="text-xs font-medium text-slate-300">Email</label>
                     <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })}
                       className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
+                  {!editId && (
+                    <div className="col-span-2 rounded-lg border border-slate-600 bg-slate-900/60 p-3">
+                      <label className="flex cursor-pointer items-start gap-2 text-sm text-slate-300">
+                        <input type="checkbox" checked={form.alta_por_enlace === true}
+                          onChange={(e) => setForm({ ...form, alta_por_enlace: e.target.checked })}
+                          className="mt-0.5 h-4 w-4 accent-sky-500" />
+                        <span>
+                          Que rellene él su ficha.
+                          <span className="text-slate-500"> Con el nombre y el móvil basta: al guardar le llega
+                            un SMS con el enlace del formulario, que caduca en 72 h.</span>
+                        </span>
+                      </label>
+                    </div>
+                  )}
                   <div><label className="text-xs font-medium text-slate-300">Fecha de alta</label>
                     <input type="date" value={form.fecha_alta} onChange={(e) => setForm({ ...form, fecha_alta: e.target.value })}
                       className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
