@@ -75,6 +75,8 @@ export interface Perfil {
   id: string;
   empresa_id: string;
   delegacion_id?: string | null;
+  /** Solo en el rol cliente. Vacío equivale a «flota». */
+  perfil_cliente?: PerfilCliente | null;
   nombre: string;
   email: string;
   rol: Rol;
@@ -103,6 +105,30 @@ export const ROL_LABELS: Record<Rol, string> = {
   operador: "Operador",
   cliente: "Cliente",
 };
+
+/**
+ * Cómo es un usuario de cliente por dentro. No es un rol nuevo: los tres son
+ * de solo consulta. Cambia cuánto ven.
+ */
+export type PerfilCliente = "flota" | "delegacion" | "director";
+
+export const PERFIL_CLIENTE_LABELS: Record<PerfilCliente, string> = {
+  flota: "Responsable de flota",
+  delegacion: "Jefe de base",
+  director: "Director",
+};
+
+export const PERFIL_CLIENTE_AYUDA: Record<PerfilCliente, string> = {
+  flota: "Ve toda su empresa: vehículos, neumáticos, trabajos e informes.",
+  delegacion: "Ve solo los vehículos de su delegación y lo que cuelga de ellos.",
+  director: "Ve solo los informes, de toda su empresa.",
+};
+
+/** El perfil de un usuario, con «flota» cuando no tiene ninguno puesto. */
+export function perfilClienteDe(p: { rol: Rol; es_superadmin?: boolean; perfil_cliente?: PerfilCliente | null } | null | undefined): PerfilCliente | null {
+  if (!p || p.rol !== "cliente" || p.es_superadmin) return null;
+  return p.perfil_cliente ?? "flota";
+}
 
 export type EmpresaInput = Omit<Empresa, "id" | "created_at" | "updated_at">;
 export type DelegacionInput = Omit<Delegacion, "id" | "created_at" | "updated_at" | "empresa">;

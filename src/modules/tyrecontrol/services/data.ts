@@ -24,6 +24,7 @@ import type {
   OperacionMantenimiento, PlanMantenimiento, PlanMantenimientoInput, PlanEstado, MantenimientoRealizada,
   PlantillaMantenimiento, PlantillaItem, LoteRevision, LoteVehiculo,
   CatTipoOperacion, CatMotivo, CatDestino, CatTipoReparacion, CatResultadoReparacion, OperacionAdjunto, ReservaNeumatico, OperacionMovimiento,
+  PerfilCliente,
 } from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
@@ -134,6 +135,7 @@ export type NuevoUsuario = {
   acceso_panel: boolean;
   empresa_id?: string;
   delegacion_id?: string | null;
+  perfil_cliente?: PerfilCliente | null;
 };
 
 export async function crearUsuario(input: NuevoUsuario): Promise<void> {
@@ -299,6 +301,9 @@ export async function actualizarUsuario(id: string, patch: Partial<Perfil>): Pro
       acceso_apk: patch.acceso_apk,
       acceso_panel: patch.acceso_panel,
       delegacion_id: patch.delegacion_id,
+      // Sin valor no se manda: la columna llega con la migración de los
+      // perfiles, y guardar una ficha no puede depender de ella.
+      perfil_cliente: patch.perfil_cliente,
       updated_at: new Date().toISOString(),
     })
     .eq("id", id);

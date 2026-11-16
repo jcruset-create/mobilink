@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate, useLocation } from "react-router-dom";
 import { Menu, LogOut, Home } from "lucide-react";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
-import { NAV, navVisible, SIEMPRE_VISIBLES } from "../config/navigation";
-import { ROL_LABELS } from "../types";
+import { NAV, navVisible, siempreVisibles } from "../config/navigation";
+import { PERFIL_CLIENTE_LABELS, ROL_LABELS, perfilClienteDe } from "../types";
 import CampanaAvisos from "../components/CampanaAvisos";
 import AsistenteChat from "../components/AsistenteChat";
 import AccesosCabecera from "../../../components/AccesosCabecera";
@@ -17,7 +17,8 @@ export default function TyreLayout() {
   const [open, setOpen] = useState(false);
 
   const esSuperadmin = Boolean(perfil?.es_superadmin);
-  const items = NAV.filter((i) => navVisible(i, perfil?.rol, esSuperadmin, pantallas));
+  const soloInformes = perfilClienteDe(perfil) === "director";
+  const items = NAV.filter((i) => navVisible(i, perfil?.rol, esSuperadmin, pantallas, soloInformes));
 
   /*
    * Distintivo de la conciliación telemática.
@@ -46,7 +47,7 @@ export default function TyreLayout() {
   const bloqueada =
     !esSuperadmin &&
     pantallas !== null &&
-    !SIEMPRE_VISIBLES.includes(pantallaActual) &&
+    !siempreVisibles(soloInformes).includes(pantallaActual) &&
     !pantallas.includes(pantallaActual);
 
   async function handleSignOut() {
@@ -83,7 +84,7 @@ export default function TyreLayout() {
           <div className="hidden text-right sm:block">
             <div className="text-[12px] font-semibold leading-tight">👤 {perfil?.nombre}</div>
             <div className="text-[10px] text-slate-400">
-              {perfil?.es_superadmin ? "Super-admin" : perfil ? ROL_LABELS[perfil.rol] : ""}
+              {perfil?.es_superadmin ? "Super-admin" : perfil ? (perfilClienteDe(perfil) ? PERFIL_CLIENTE_LABELS[perfilClienteDe(perfil)!] : ROL_LABELS[perfil.rol]) : ""}
               {perfil?.empresa?.nombre ? ` · ${perfil.empresa.nombre}` : ""}
             </div>
           </div>

@@ -146,6 +146,28 @@ Estado:
 
 ## Fase 2 — Perfiles
 
+Estado:
+- [x] 2.1 Base de datos — `supabase/migrations/tyrecontrol_cliente_perfiles.sql`:
+  `perfil_cliente`, las funciones `tc_cliente_por_delegacion()`,
+  `tc_cliente_delegacion_id()` y `tc_cliente_ve_vehiculo()`, y una regla
+  restrictiva de lectura (`cliente_por_delegacion`) en 44 tablas. Las reglas
+  que había no se tocan.
+- [x] 2.1 Servidor y panel: el servidor niega al jefe de base todo lo que
+  saca datos de la empresa entera (`puedeVerEmpresa`, `empresaDelInforme`);
+  alta y ficha de usuario con perfil y delegación; el director solo tiene
+  «Informes» en el menú y por dirección.
+- [ ] 2.2 Que los informes del servidor (PDF mensual, de flota, de revisiones,
+  de pendientes) y el resto de rutas con `service_role` filtren por
+  delegación, para devolvérselos al jefe de base.
+- [ ] Vehículos sin delegación: 291 de los 807 de Plana (16/11/2026). Un jefe
+  de base no los ve. Hay que asignarlos (existe `tc_asignar_base_habitual`).
+- [ ] `tc_informes_economico` y `tc_informes_productividad` siguen siendo
+  ejecutables por un cliente (el panel no se los enseña y los costes están
+  vacíos, pero la productividad cuenta trabajos por técnico). Pendiente de
+  la fase 1.
+- El director lee en la base lo mismo que el responsable de flota: es su
+  empresa. Lo que cambia es que el panel solo le enseña informes.
+
 - Migración: `perfil_cliente` con un check, más `delegacion_id` obligatorio
   cuando el perfil es `delegacion`.
 - Función `tc_cliente_ve_vehiculo(vehiculo_id)` y uso en las políticas SELECT de

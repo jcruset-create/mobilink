@@ -20613,6 +20613,18 @@ app.post("/api/tyrecontrol/usuarios", async (req, res) => {
     if (!nombre || !email) return res.status(400).json({ error: "Nombre y email son obligatorios" });
     if (!["administrador", "operador", "cliente"].includes(rol)) return res.status(400).json({ error: "Rol no válido" });
 
+    // El perfil solo existe en el rol cliente. Sin perfil es «responsable de
+    // flota», que es lo que había. La base de datos comprueba además que la
+    // delegación sea de la empresa del usuario.
+    const perfilCliente = rol === "cliente" ? String(b.perfil_cliente ?? "").trim() : "";
+    const delegacionId = perfilCliente === "delegacion" ? String(b.delegacion_id ?? "").trim() : "";
+    if (perfilCliente && !["flota", "delegacion", "director"].includes(perfilCliente)) {
+      return res.status(400).json({ error: "Perfil de cliente no válido" });
+    }
+    if (perfilCliente === "delegacion" && !delegacionId) {
+      return res.status(400).json({ error: "Un jefe de base necesita una delegación" });
+    }
+
     // La contraseña solo hace falta para entrar en la APK (allí es el PIN). En
     // el panel se entra con enlace por email, así que obligar a un admin a
     // inventar una contraseña para un cliente creaba una credencial que nadie
@@ -20637,6 +20649,11 @@ app.post("/api/tyrecontrol/usuarios", async (req, res) => {
       acceso_panel: accesoPanel,
       es_superadmin: false,
       activo: true,
+      // Solo se mandan si hay perfil: así crear usuarios sigue funcionando
+      // aunque la migración de los perfiles aún no esté aplicada.
+      ...(perfilCliente && perfilCliente !== "flota"
+        ? { perfil_cliente: perfilCliente, ...(delegacionId ? { delegacion_id: delegacionId } : {}) }
+        : {}),
     });
     if (insErr) {
       // rollback del usuario de auth si falla el perfil
