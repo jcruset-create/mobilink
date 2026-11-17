@@ -1,5 +1,6 @@
 /**
- * Configuración · catálogo · Importar Excel.
+ * Configuración · medidas, índices de carga, códigos de velocidad y modelos
+ * vinculados · Importar Excel.
  *
  * Se sube el Excel de un fabricante, se ve qué falta —marcas, medidas, índices
  * de carga, códigos de velocidad y modelos— y lo que ya está, y se importa con

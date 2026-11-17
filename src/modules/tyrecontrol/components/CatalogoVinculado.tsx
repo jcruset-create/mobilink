@@ -165,7 +165,7 @@ export default function CatalogoVinculado({ puedeEditar }: { puedeEditar: boolea
 
   return (
     <div className="mt-4 rounded-lg bg-slate-800 p-3">
-      <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Medidas, cargas y velocidades vinculadas</div>
+      <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Medidas, índices de carga, códigos de velocidad y modelos vinculados</div>
       <div className="mb-3 text-[11px] text-slate-500">
         Cada medida con las combinaciones de índice de carga y velocidad que se montan, y los modelos de cada una. Las
         combinaciones se crean al dar de alta un neumático; aquí se consultan.
