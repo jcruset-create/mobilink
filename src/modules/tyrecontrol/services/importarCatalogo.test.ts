@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  claveModelo, elegirHoja, kgDeIndice, kmhDeCodigo, leerHoja, medidaDeCatalogo, modeloDeCatalogo, planificar, planVacio,
+  claveModelo, claveOferta, elegirHoja, ofertaDelModelo, kgDeIndice, kmhDeCodigo, leerHoja, medidaDeCatalogo, modeloDeCatalogo, planificar, planVacio,
 } from "./importarCatalogo";
 
 describe("medidas", () => {
@@ -102,15 +102,75 @@ describe("planificar", () => {
     expect(p.yaEstaban).toEqual({ medidas: 1, indices: 1, velocidades: 1, modelos: 2 });
   });
 
-  it("un Excel que ya se importó no tiene nada que hacer", () => {
+  it("guarda la oferta: una fila por modelo, medida, IC y CV", () => {
+    // El «Roadian CT8 / CTX» no tiene modelo y no entra.
+    expect(p.oferta).toHaveLength(5);
+    expect(p.oferta[1]).toEqual({ marca: "Hankook", modelo: "RA18", medida: "195/70R15", simple: "100", doble: "98", cv: "R" });
+    expect(p.ofertaNueva).toBe(5);
+  });
+
+  const yaImportado = {
+    marcas: [...hay.marcas, { id: "nx", nombre: "Nexen" }],
+    modelos: [
+      { id: "m1", marca_id: "hk", nombre: "RA58" }, { id: "m2", marca_id: "du", nombre: "SP346" },
+      { id: "m3", marca_id: "du", nombre: "SP346+" }, { id: "m4", marca_id: "hk", nombre: "RA18" }, { id: "m5", marca_id: "nx", nombre: "Roadian CT8" },
+    ],
+    medidas: [...hay.medidas, { valor: "205/75R17.5" }, { valor: "315/60R22.5" }],
+    indices: ["98", "100", "102", "104", "122", "124", "148", "154"].map((valor) => ({ valor })),
+    velocidades: ["L", "M", "R"].map((valor) => ({ valor })),
+  };
+
+  it("un Excel ya importado pero sin su oferta: solo falta la oferta", () => {
+    const despues = planificar(filas, yaImportado);
+    expect(despues.modelos).toEqual([]);
+    expect(despues.ofertaNueva).toBe(5);
+    expect(planVacio(despues)).toBe(false);
+  });
+
+  it("un Excel que ya se importó, con su oferta, no tiene nada que hacer", () => {
     const despues = planificar(filas, {
-      marcas: [...hay.marcas, { id: "nx", nombre: "Nexen" }],
-      modelos: [...hay.modelos, { marca_id: "du", nombre: "SP346+" }, { marca_id: "hk", nombre: "RA18" }, { marca_id: "nx", nombre: "Roadian CT8" }],
-      medidas: [...hay.medidas, { valor: "205/75R17.5" }, { valor: "315/60R22.5" }],
-      indices: ["98", "100", "102", "104", "122", "124", "148", "154"].map((valor) => ({ valor })),
-      velocidades: ["L", "M", "R"].map((valor) => ({ valor })),
+      ...yaImportado,
+      oferta: [
+        claveOferta("m1", "195/70R15", "104", "102", "R"), claveOferta("m4", "195/70 R15", "100", "98", "r"),
+        claveOferta("m3", "315/60R22.5", "154", "148", "L"), claveOferta("m2", "205/75R17.5", "124", "122", "M"),
+        claveOferta("m5", "195/70R15", "104", "102", "R"),
+      ],
     });
     expect(planVacio(despues)).toBe(true);
+  });
+});
+
+describe("la oferta en el formulario de nueva referencia", () => {
+  const oferta = [
+    { modelo_id: "ra18", medida: "195/70R15", simple: "104", doble: "102", cv: "R" },
+    { modelo_id: "ra18", medida: "225/75R16", simple: "121", doble: "120", cv: "R" },
+    { modelo_id: "ra18", medida: "225/75R16", simple: "118", doble: "116", cv: "R" },
+    { modelo_id: "ra58", medida: "205/65R16", simple: "107", doble: "105", cv: "T" },
+  ];
+
+  it("de un modelo, solo sus medidas", () => {
+    const o = ofertaDelModelo(oferta, "ra18", "");
+    expect(o.conOferta).toBe(true);
+    expect(o.medidas).toEqual(["195/70R15", "225/75R16"]);
+    expect(o.simples).toEqual([]);
+  });
+
+  it("de una medida, sus IC y CV", () => {
+    const o = ofertaDelModelo(oferta, "ra18", "225/75 R16");
+    expect(o.simples).toEqual(["118", "121"]);
+    expect(o.dobles).toEqual(["116", "120"]);
+    expect(o.velocidades).toEqual(["R"]);
+    expect(o.medidaFuera).toBe(false);
+  });
+
+  it("una medida que el modelo no tiene se avisa", () => {
+    expect(ofertaDelModelo(oferta, "ra18", "12R22.5").medidaFuera).toBe(true);
+  });
+
+  it("un modelo sin oferta no filtra nada", () => {
+    const o = ofertaDelModelo(oferta, "otro", "225/75R16");
+    expect(o.conOferta).toBe(false);
+    expect(o.medidaFuera).toBe(false);
   });
 });
 

@@ -71,7 +71,7 @@ export default function ImportarCatalogo({ catalogo, onImportado }: {
     setImportando(true); setMsg("");
     try {
       const r = await aplicarImportacionCatalogo(plan, tipo);
-      setMsg(`✔ Importado: ${r.marcas} marcas, ${r.medidas} medidas, ${r.indices} índices de carga, ${r.velocidades} códigos de velocidad y ${r.modelos} modelos.`);
+      setMsg(`✔ Importado: ${r.marcas} marcas, ${r.medidas} medidas, ${r.indices} índices de carga, ${r.velocidades} códigos de velocidad, ${r.modelos} modelos y ${r.oferta} filas de oferta del fabricante.`);
       onImportado();
     } catch (e: unknown) {
       setMsg(e instanceof Error ? e.message : "Error al importar");
@@ -122,6 +122,13 @@ export default function ImportarCatalogo({ catalogo, onImportado }: {
             <Lista titulo="Índices de carga nuevos" items={plan.indices} vacio="Ninguno: ya están todos" />
             <Lista titulo="Códigos de velocidad nuevos" items={plan.velocidades} vacio="Ninguno: ya están todos" />
             <Lista titulo="Modelos nuevos" items={plan.modelos.map((m) => `${m.marca} ${m.nombre}`)} vacio="Ninguno: ya están todos" />
+            <div className="rounded border border-slate-700 bg-slate-900 p-2">
+              <div className="mb-1 text-[10px] font-bold uppercase text-slate-400">Oferta del fabricante · {plan.ofertaNueva} nuevas</div>
+              <div className="text-[11px] text-slate-400">
+                {plan.oferta.length} filas modelo × medida × IC × CV. No crean referencias: sirven para que, al crear una,
+                el formulario enseñe solo las medidas de ese modelo y proponga su IC y su CV.
+              </div>
+            </div>
           </div>
           <div className="text-[11px] text-slate-500">
             Ya estaban y no se repiten: {plan.yaEstaban.medidas} medidas, {plan.yaEstaban.indices} índices,{" "}

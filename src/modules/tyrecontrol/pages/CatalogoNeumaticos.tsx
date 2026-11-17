@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { listarReferenciasPendientes, validarReferencia, listarReferenciasNeumatico, subirFotoModelo, eliminarFotoModelo, actualizarReferenciaNeumatico, eliminarReferenciaNeumatico, listarNeumaticosSinCatalogar, crearReferenciaNeumatico, actualizarModeloTecnico, proponerIndicesMedida,
   listarMarcas, crearMarca, listarModelos, crearModelo, listarMedidas, crearMedida,
   listarIndicesCarga, crearIndiceCarga, listarIndicesVelocidad, crearIndiceVelocidad,
-  listarEjesNeumatico, listarAplicacionesNeumatico, crearUsoCatalogo, type UsoCatalogo } from "../services/data";
+  listarEjesNeumatico, listarAplicacionesNeumatico, crearUsoCatalogo, type UsoCatalogo,
+  leerOfertaFabricante, type OfertaFabricante } from "../services/data";
+import { ofertaDelModelo } from "../services/importarCatalogo";
 import type { ComboSinCatalogar } from "../services/data";
 import type { ReferenciaNeumatico, EjeRecomendado, MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad } from "../types";
 import { presionTxt } from "../types";
@@ -81,6 +83,9 @@ export default function CatalogoNeumaticos() {
     ejes: UsoCatalogo[]; aplicaciones: UsoCatalogo[];
   } | null>(null);
   const [modelosMarca, setModelosMarca] = useState<ModeloNeumatico[]>([]);
+  // Lo que fabrica cada modelo según el Excel del fabricante: filtra la medida
+  // y propone el IC y el CV. Vacía si no se ha importado (o la tabla no está).
+  const [oferta, setOferta] = useState<OfertaFabricante[]>([]);
   const [sinCatalogar, setSinCatalogar] = useState<ComboSinCatalogar[] | null>(null);
   const [cargandoSC, setCargandoSC] = useState(false);
   const [creandoClave, setCreandoClave] = useState<string | null>(null);
@@ -90,11 +95,12 @@ export default function CatalogoNeumaticos() {
     setMsgRef("");
     setNuevaRef({ ...vacioRef, ...prefill });
     try {
-      const [marcas, medidas, cargas, velocidades, ejes, aplicaciones] = await Promise.all([
+      const [marcas, medidas, cargas, velocidades, ejes, aplicaciones, of] = await Promise.all([
         listarMarcas(), listarMedidas(), listarIndicesCarga(), listarIndicesVelocidad(),
-        listarEjesNeumatico(), listarAplicacionesNeumatico(),
+        listarEjesNeumatico(), listarAplicacionesNeumatico(), leerOfertaFabricante(),
       ]);
       setCats({ marcas, medidas, cargas, velocidades, ejes, aplicaciones });
+      setOferta(of);
       if (prefill?.marca) await cargarModelos(prefill.marca, marcas);
     } catch (e: any) {
       // Sin catálogos el formulario sigue sirviendo: los desplegables saldrán
@@ -123,6 +129,34 @@ export default function CatalogoNeumaticos() {
 
   /** Las opciones de cada desplegable. Ver `catalogo/usos.ts`. */
   const opciones = opcionesConElegido;
+
+  /** Lo que el fabricante dice de este modelo y esta medida. */
+  const idModelo = (nombre: string) =>
+    modelosMarca.find((m) => m.nombre.toLowerCase() === nombre.trim().toLowerCase())?.id ?? null;
+  const ofertaForm = nuevaRef ? ofertaDelModelo(oferta, modeloExistente?.id, nuevaRef.medida) : null;
+
+  /**
+   * Al elegir modelo o medida: si el fabricante solo da un IC y un CV para esa
+   * medida, quedan puestos; si da varios, se vacían para elegir entre ellos.
+   * Una medida que ese modelo no tiene se quita al cambiar de modelo; elegida
+   * a propósito (con ＋), se respeta.
+   */
+  function conOferta(f: FormRef, cambiaModelo = false): FormRef {
+    const o = ofertaDelModelo(oferta, idModelo(f.modelo), f.medida);
+    if (!o.conOferta || (o.medidaFuera && !cambiaModelo)) return f;
+    if (o.medidaFuera) return { ...f, medida: "", indiceCargaSimple: "", indiceCargaDoble: "", codigoVelocidad: "" };
+    if (!f.medida) return f;
+    const uno = (xs: string[], actual: string) => (xs.includes(actual) ? actual : xs.length === 1 ? xs[0] : "");
+    return {
+      ...f,
+      indiceCargaSimple: uno(o.simples, f.indiceCargaSimple),
+      indiceCargaDoble: uno(o.dobles, f.indiceCargaDoble),
+      codigoVelocidad: uno(o.velocidades, f.codigoVelocidad),
+    };
+  }
+  /** Las opciones de un desplegable: las del fabricante si las hay, si no todas. */
+  const deOferta = (delFabricante: string[] | undefined, todas: string[]) =>
+    delFabricante && delFabricante.length ? delFabricante : todas;
 
   async function guardarNuevaRef() {
     if (!nuevaRef) return;
@@ -579,7 +613,7 @@ export default function CatalogoNeumaticos() {
               label="Modelo"
               opciones={opciones(modelosMarca.map((m) => m.nombre), nuevaRef.modelo)}
               valor={nuevaRef.modelo}
-              onChange={(v) => setNuevaRef({ ...nuevaRef, modelo: v })}
+              onChange={(v) => setNuevaRef(conOferta({ ...nuevaRef, modelo: v }, true))}
               deshabilitado={!nuevaRef.marca}
               ayuda={!nuevaRef.marca ? "Elige antes la marca" : undefined}
               onCrear={async (nombre) => {
@@ -594,9 +628,9 @@ export default function CatalogoNeumaticos() {
 
             <SelectorConAlta
               label="Medida"
-              opciones={opciones((cats?.medidas ?? []).map((m) => m.valor), nuevaRef.medida)}
+              opciones={opciones(deOferta(ofertaForm?.medidas, (cats?.medidas ?? []).map((m) => m.valor)), nuevaRef.medida)}
               valor={nuevaRef.medida}
-              onChange={(v) => setNuevaRef({ ...nuevaRef, medida: v })}
+              onChange={(v) => setNuevaRef(conOferta({ ...nuevaRef, medida: v }))}
               onCrear={async (valor) => {
                 await crearMedida(valor);
                 const medidas = await listarMedidas();
@@ -608,7 +642,7 @@ export default function CatalogoNeumaticos() {
 
             <SelectorConAlta
               label="Índice carga simple"
-              opciones={opciones((cats?.cargas ?? []).map((i) => i.valor), nuevaRef.indiceCargaSimple)}
+              opciones={opciones(deOferta(ofertaForm?.simples, (cats?.cargas ?? []).map((i) => i.valor)), nuevaRef.indiceCargaSimple)}
               valor={nuevaRef.indiceCargaSimple}
               onChange={(v) => setNuevaRef({ ...nuevaRef, indiceCargaSimple: v })}
               onCrear={async (valor) => {
@@ -622,7 +656,7 @@ export default function CatalogoNeumaticos() {
 
             <SelectorConAlta
               label="Índice carga doble (opc.)"
-              opciones={opciones((cats?.cargas ?? []).map((i) => i.valor), nuevaRef.indiceCargaDoble)}
+              opciones={opciones(deOferta(ofertaForm?.dobles, (cats?.cargas ?? []).map((i) => i.valor)), nuevaRef.indiceCargaDoble)}
               valor={nuevaRef.indiceCargaDoble}
               onChange={(v) => setNuevaRef({ ...nuevaRef, indiceCargaDoble: v })}
               onCrear={async (valor) => {
@@ -636,7 +670,7 @@ export default function CatalogoNeumaticos() {
 
             <SelectorConAlta
               label="Código velocidad"
-              opciones={opciones((cats?.velocidades ?? []).map((i) => i.valor), nuevaRef.codigoVelocidad)}
+              opciones={opciones(deOferta(ofertaForm?.velocidades, (cats?.velocidades ?? []).map((i) => i.valor)), nuevaRef.codigoVelocidad)}
               valor={nuevaRef.codigoVelocidad}
               onChange={(v) => setNuevaRef({ ...nuevaRef, codigoVelocidad: v })}
               onCrear={async (valor) => {
@@ -648,6 +682,14 @@ export default function CatalogoNeumaticos() {
               placeholder="L"
             />
           </div>
+
+          {ofertaForm?.conOferta && (
+            <p className={`mt-2 text-[11px] ${ofertaForm.medidaFuera ? "text-amber-300" : "text-sky-300"}`}>
+              {ofertaForm.medidaFuera
+                ? `${nuevaRef.marca} no fabrica el ${nuevaRef.modelo} en ${nuevaRef.medida} según su Excel. Si de verdad existe, se puede crear igual.`
+                : `Según el Excel de ${nuevaRef.marca}, el ${nuevaRef.modelo} se fabrica en ${ofertaForm.medidas.length} medida(s): solo salen esas, y el IC y el CV de la medida elegida. Lo que no esté se añade con ＋.`}
+            </p>
+          )}
 
           {/* ── El uso: del MODELO, no de esta medida ────────────────────── */}
           <div className="mt-4 rounded-lg border border-slate-700 bg-slate-900/40 p-3">

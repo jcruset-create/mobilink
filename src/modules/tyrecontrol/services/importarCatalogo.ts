@@ -16,6 +16,11 @@
  *     SP346; en Hankook vale el código («Vantra Transit (RA58)» → RA58), y un
  *     nombre que junta dos dibujos («Roadian CT8 / CTX») no se crea.
  *
+ * Además guarda la OFERTA del fabricante (tc_cat_oferta_fabricante): cada
+ * fila del Excel tal cual, modelo × medida × IC × CV. No son referencias ni
+ * combinaciones del catálogo; solo sirven para que el formulario de nueva
+ * referencia enseñe las medidas de ese modelo y proponga su IC y su CV.
+ *
  * Es código puro: recibe las filas de la hoja ya leídas y lo que hay en el
  * catálogo, y devuelve qué falta. Quien escribe es `services/data.ts`.
  */
@@ -138,11 +143,27 @@ export function elegirHoja(hojas: Record<string, Celdas[]>): { nombre: string; f
 
 export interface CatalogoActual {
   marcas: { id: string; nombre: string }[];
-  modelos: { marca_id: string | null; nombre: string }[];
+  modelos: { id?: string; marca_id: string | null; nombre: string }[];
   medidas: { valor: string; activo?: boolean }[];
   indices: { valor: string }[];
   velocidades: { valor: string }[];
+  /** La oferta ya guardada, como `claveOferta`. Sin ella, toda la del Excel cuenta como nueva. */
+  oferta?: string[];
 }
+
+/** Una fila de la oferta del fabricante: este modelo se fabrica en esta medida con este IC y CV. */
+export interface FilaOferta {
+  marca: string;
+  modelo: string;
+  medida: string;
+  simple: string;
+  doble: string;
+  cv: string;
+}
+
+/** Para comparar filas de oferta: modelo por su id, medida normalizada, IC y CV. */
+export const claveOferta = (modeloId: string, medida: string, simple: string, doble: string, cv: string) =>
+  `${modeloId}|${medidaDeCatalogo(medida)}|${simple}|${doble}|${cv.toUpperCase()}`;
 
 export interface PlanImportacion {
   marcas: string[];
@@ -150,6 +171,10 @@ export interface PlanImportacion {
   indices: string[];
   velocidades: string[];
   modelos: { marca: string; nombre: string; temporada: string | null; eje: FilaCatalogo["eje"] }[];
+  /** Todas las filas de oferta del Excel, sin repetir. Se escriben todas: las que ya estaban no se duplican. */
+  oferta: FilaOferta[];
+  /** De esas, cuántas no estaban guardadas. */
+  ofertaNueva: number;
   /** Lo que ya estaba, para decir que no se repite. */
   yaEstaban: { medidas: number; indices: number; velocidades: number; modelos: number };
 }
@@ -183,6 +208,22 @@ export function planificar(filas: FilaCatalogo[], hay: CatalogoActual): PlanImpo
     modelos.set(k, { marca: f.marca, nombre: f.modelo, temporada: f.temporada, eje: f.eje });
   }
 
+  // La oferta: una fila por modelo, medida, IC y CV.
+  const idModelo = new Map(hay.modelos.filter((m) => m.id).map((m) => [`${m.marca_id}|${claveModelo(m.nombre)}`, m.id!]));
+  const ofertaHay = new Set(hay.oferta ?? []);
+  const oferta = new Map<string, FilaOferta>();
+  let ofertaNueva = 0;
+  for (const f of filas) {
+    if (!f.modelo || !f.marca) continue;
+    const o: FilaOferta = { marca: f.marca, modelo: f.modelo, medida: f.medida, simple: f.simple ?? "", doble: f.doble ?? "", cv: f.cv ?? "" };
+    const k = `${f.marca.toUpperCase()}|${claveModelo(f.modelo)}|${o.medida}|${o.simple}|${o.doble}|${o.cv}`;
+    if (oferta.has(k)) continue;
+    oferta.set(k, o);
+    const marcaId = marcasHay.get(f.marca.toUpperCase());
+    const id = marcaId ? idModelo.get(`${marcaId}|${claveModelo(f.modelo)}`) : undefined;
+    if (!id || !ofertaHay.has(claveOferta(id, o.medida, o.simple, o.doble, o.cv))) ofertaNueva++;
+  }
+
   const nuevasMedidas = [...medidas].filter((m) => !medidasHay.has(m)).sort(porTexto);
   const nuevosIc = [...ic].filter((v) => !icHay.has(v)).sort(porNumero);
   const nuevasCv = [...cv].filter((v) => !cvHay.has(v)).sort();
@@ -192,6 +233,8 @@ export function planificar(filas: FilaCatalogo[], hay: CatalogoActual): PlanImpo
     indices: nuevosIc,
     velocidades: nuevasCv,
     modelos: [...modelos.values()].sort((a, b) => porTexto(a.marca + a.nombre, b.marca + b.nombre)),
+    oferta: [...oferta.values()],
+    ofertaNueva,
     yaEstaban: {
       medidas: medidas.size - nuevasMedidas.length,
       indices: ic.size - nuevosIc.length,
@@ -202,7 +245,31 @@ export function planificar(filas: FilaCatalogo[], hay: CatalogoActual): PlanImpo
 }
 
 export const planVacio = (p: PlanImportacion) =>
-  p.marcas.length + p.medidas.length + p.indices.length + p.velocidades.length + p.modelos.length === 0;
+  p.marcas.length + p.medidas.length + p.indices.length + p.velocidades.length + p.modelos.length + p.ofertaNueva === 0;
+
+/**
+ * Lo que el formulario de nueva referencia puede ofrecer de un modelo, según la
+ * oferta del fabricante. Sin oferta para ese modelo, `conOferta` es false y el
+ * formulario enseña todo, como antes.
+ */
+export function ofertaDelModelo(
+  oferta: { modelo_id: string; medida: string; simple: string; doble: string; cv: string }[],
+  modeloId: string | null | undefined,
+  medida: string | null | undefined,
+): { conOferta: boolean; medidas: string[]; simples: string[]; dobles: string[]; velocidades: string[]; medidaFuera: boolean } {
+  const delModelo = modeloId ? oferta.filter((o) => o.modelo_id === modeloId) : [];
+  const m = medida ? medidaDeCatalogo(medida) : "";
+  const deMedida = delModelo.filter((o) => medidaDeCatalogo(o.medida) === m);
+  const unicos = (xs: string[], orden: (a: string, b: string) => number) => [...new Set(xs.filter(Boolean))].sort(orden);
+  return {
+    conOferta: delModelo.length > 0,
+    medidas: unicos(delModelo.map((o) => medidaDeCatalogo(o.medida)), porTexto),
+    simples: unicos(deMedida.map((o) => o.simple), porNumero),
+    dobles: unicos(deMedida.map((o) => o.doble), porNumero),
+    velocidades: unicos(deMedida.map((o) => o.cv), (a, b) => (kmhDeCodigo(a) ?? 0) - (kmhDeCodigo(b) ?? 0)),
+    medidaFuera: delModelo.length > 0 && !!m && deMedida.length === 0,
+  };
+}
 
 /** Ancho, perfil y llanta de una medida, para guardarlos con ella. */
 export function partesDeMedida(m: string): { ancho: number | null; perfil: number | null; diametro: number | null } {
