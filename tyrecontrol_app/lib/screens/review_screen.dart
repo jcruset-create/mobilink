@@ -82,6 +82,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
   Timer? _commitTimer;
   bool _modoRuta = true;
   double? _liveProf; // medida en curso para la rueda activa
+  int? _liveProfN; // su número de orden en la sonda, para el pitido
   double? _livePres;
 
   @override
@@ -350,6 +351,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
     bool nuevaProfundidad = false;
     if (r.tipo == LecturaTipo.profundidad && r.valor != null) {
       _liveProf = r.valor;
+      _liveProfN = r.n;
       nuevaProfundidad = true;
     } else if (r.tipo == LecturaTipo.presion && r.valor != null) {
       _livePres = r.valor; // ya en bar
@@ -383,6 +385,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
     // Cambiamos de rueda: descartamos cualquier medida en curso de la anterior.
     _commitTimer?.cancel();
     _liveProf = null;
+    _liveProfN = null;
     _livePres = null;
     HapticFeedback.selectionClick();
     setState(() => _index = idx);
@@ -392,6 +395,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
     final draft = _detalles[p.id];
     if (draft == null) return;
     final prof = _liveProf;
+    final profN = _liveProfN;
     final pres = _livePres;
     if (prof == null && pres == null) return;
 
@@ -401,9 +405,14 @@ class _ReviewScreenState extends State<ReviewScreen> {
       ..metodoProfundidad = prof != null ? 'sonda' : draft.metodoProfundidad
       ..metodoPresion = pres != null ? 'sonda' : draft.metodoPresion;
     _liveProf = null;
+    _liveProfN = null;
     _livePres = null;
 
-    await _guardarDraft(p, draft);
+    final registrada = await _guardarDraft(p, draft);
+    // La sonda pita cuando la profundidad YA está registrada —guardada o en
+    // la cola sin cobertura—, no al recibirla. Ni por una presión sola, ni si
+    // el servidor ha rechazado el dato.
+    if (registrada && prof != null) _sonda.confirmarProfundidadN(profN);
     if (!mounted) return;
     await _autoIncidenciaSiBajoMinimo(p, draft);
     if (!mounted) return;
@@ -423,7 +432,9 @@ class _ReviewScreenState extends State<ReviewScreen> {
     }
   }
 
-  Future<void> _guardarDraft(PosicionVehiculo p, RevisionDetalleDraft draft) async {
+  /// Guarda la medición. Devuelve si ha quedado registrada: en el servidor o,
+  /// sin cobertura, en la cola. Es falso si el servidor la ha rechazado.
+  Future<bool> _guardarDraft(PosicionVehiculo p, RevisionDetalleDraft draft) async {
     final payload = draft.toJson(
       revisionId: _revision!.id,
       empresaId: widget.vehiculo.empresaId,
@@ -433,14 +444,17 @@ class _ReviewScreenState extends State<ReviewScreen> {
       // Online primero: si hay cobertura, se guarda directo en el servidor.
       await TyreControlApi.guardarDetalleRevision(payload);
       OfflineStore.offline.value = false;
+      return true;
     } on PostgrestException catch (e) {
       // El servidor respondió y rechazó el dato (no es falta de cobertura):
       // se aparta al buzón de errores para no bloquear y seguimos online.
       await OfflineStore.parkFailed({'type': 'detalle', 'payload': payload}, e.message);
+      return false;
     } catch (_) {
       // Sin cobertura: a la cola, se enviará solo al recuperar la conexión.
       OfflineStore.offline.value = true;
       await OfflineStore.enqueueDetalle(payload);
+      return true;
     }
   }
 
