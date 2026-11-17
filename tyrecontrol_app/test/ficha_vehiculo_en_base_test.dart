@@ -73,6 +73,35 @@ final circulando = VehiculoPresencia(
 );
 
 void main() {
+  testWidgets('el número de bus sale al lado de la matrícula, y cabe a 360 px', (tester) async {
+    await montar(
+      tester,
+      const VehiculoPresencia(
+        vehiculoId: 'v1', estado: 'en_base', delegacionId: 'd1', esSuBase: false,
+        distanciaM: 43, antiguedadMin: 9, matricula: '0069HYY', numeroUnidad: '1253',
+      ),
+      rev: const RevisionEstado(vehiculoId: 'v1', estado: 'sin_revision'),
+      bases: const {'d1': 'Vilanova'},
+    );
+    expect(tester.takeException(), isNull);
+    expect(find.text('0069HYY'), findsOneWidget);
+    expect(find.text('Nº 1253'), findsOneWidget);
+    // Al lado: en la misma línea que la matrícula y a su derecha.
+    final m = tester.getRect(find.text('0069HYY'));
+    final n = tester.getRect(find.text('Nº 1253'));
+    expect(n.left, greaterThan(m.right));
+    expect((n.center.dy - m.center.dy).abs(), lessThan(6));
+  });
+
+  testWidgets('sin número de bus no se pinta nada de más', (tester) async {
+    await montar(
+      tester,
+      const VehiculoPresencia(vehiculoId: 'v1', estado: 'en_base', matricula: '5329KLN', numeroUnidad: '  '),
+    );
+    expect(tester.takeException(), isNull);
+    expect(find.textContaining('Nº'), findsNothing);
+  });
+
   testWidgets('cabe a 360 px con todo relleno y el peor texto largo', (tester) async {
     await montar(
       tester,
