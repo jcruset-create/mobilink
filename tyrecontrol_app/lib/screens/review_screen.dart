@@ -863,7 +863,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
           Expanded(
             child: _imagenChasis != null
                 ? Padding(
-                    padding: const EdgeInsets.all(10),
+                    padding: const EdgeInsets.all(6),
                     child: VehicleLayoutImage(
                       imagenUrl: _imagenChasis!,
                       posiciones: _posiciones,
@@ -1006,14 +1006,39 @@ class _PanelInferior extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
+    // En una pantalla baja cada punto que ocupan los botones se lo quitan al
+    // plano: el aviso de lo que queda va en la misma línea que la posición y
+    // el relleno se queda en lo justo.
+    // SafeArea: con la barra de Android a la vista (tablets Samsung), los
+    // botones de «Finalizar» quedaban debajo de ella.
+    return SafeArea(
+      top: false,
+      child: Container(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
       decoration: const BoxDecoration(border: Border(top: BorderSide(color: AppColors.cardBorder))),
       child: Column(
         children: [
           if (actual != null)
-            Text('${actual!.nombre ?? actual!.codigoPosicion} (${index + 1} de $total)',
-                style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+            Text.rich(
+              TextSpan(children: [
+                TextSpan(text: '${actual!.nombre ?? actual!.codigoPosicion} (${index + 1} de $total)'),
+                if (pendientes > 0)
+                  TextSpan(
+                    text: '  ·  ${pendientes == 1 ? 'queda 1' : 'quedan $pendientes'} sin medir',
+                    style: const TextStyle(color: AppColors.warning, fontWeight: FontWeight.w600),
+                  ),
+              ]),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: AppColors.textSecondary, fontSize: 13),
+            )
+          else if (pendientes > 0)
+            Text(
+              'Quedan $pendientes ${pendientes == 1 ? 'posición' : 'posiciones'} sin medir',
+              style: const TextStyle(color: AppColors.warning, fontSize: 12, fontWeight: FontWeight.w600),
+              textAlign: TextAlign.center,
+            ),
           if (sondaLista) ...[
             const SizedBox(height: 8),
             Container(
@@ -1034,7 +1059,7 @@ class _PanelInferior extends StatelessWidget {
             const SizedBox(height: 6),
             const Text('Apoya la sonda: si la rueda lleva RFID, se selecciona sola.', style: TextStyle(color: AppColors.textHint, fontSize: 12)),
           ],
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
           Row(
             children: [
               Expanded(
@@ -1064,16 +1089,7 @@ class _PanelInferior extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 10),
-          if (pendientes > 0)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: Text(
-                'Quedan $pendientes ${pendientes == 1 ? 'posición' : 'posiciones'} sin medir',
-                style: const TextStyle(color: AppColors.warning, fontSize: 12, fontWeight: FontWeight.w600),
-                textAlign: TextAlign.center,
-              ),
-            ),
+          const SizedBox(height: 8),
           Row(
             children: [
               Expanded(
@@ -1106,6 +1122,7 @@ class _PanelInferior extends StatelessWidget {
             ],
           ),
         ],
+      ),
       ),
     );
   }
