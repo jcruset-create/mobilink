@@ -4,7 +4,7 @@ import { hasRealValue, normalizarValor, type TipoDatoItv } from "./itvValores";
 import { medidaCanonica } from "./medidas";
 import { recorrerPaginas } from "./paginacion";
 import type { CombinacionCat, ReferenciaCat } from "./catalogoVinculado";
-import { kgDeIndice, kmhDeCodigo, partesDeMedida, type PlanImportacion } from "./importarCatalogo";
+import { claveModelo, kgDeIndice, kmhDeCodigo, medidaDeCatalogo, partesDeMedida, type PlanImportacion } from "./importarCatalogo";
 import { claveDeMedida, minimoDeLaGoma, SIN_MINIMOS, type MinimosDeEmpresa } from "./umbralProfundidad";
 import { mapaUltimasMediciones, type Medicion } from "./ultimaMedicion";
 import type { PosicionOperario } from "./ubicacionOperario";
@@ -3298,7 +3298,7 @@ export async function leerCombinacionesYReferencias(): Promise<{
 export async function aplicarImportacionCatalogo(
   plan: PlanImportacion,
   tipo: "furgoneta" | "camion" | "turismo",
-): Promise<{ marcas: number; indices: number; velocidades: number; medidas: number; modelos: number }> {
+): Promise<{ marcas: number; indices: number; velocidades: number; medidas: number; modelos: number; oferta: number }> {
   const comprobar = (r: { error: { message: string } | null }) => { if (r.error) throw new Error(r.error.message); };
 
   if (plan.marcas.length) {
@@ -3332,10 +3332,64 @@ export async function aplicarImportacionCatalogo(
     comprobar(await supabase.from("tc_cat_modelos_neumatico")
       .upsert(filas, { onConflict: "marca_id,nombre", ignoreDuplicates: true }));
   }
+  // La oferta del fabricante: cada fila con el id de su modelo y de su medida,
+  // ya con los que se acaban de crear. Se escribe toda; la clave única de la
+  // tabla hace que lo que ya estaba no se duplique.
+  let oferta = 0;
+  if (plan.oferta.length) {
+    const [ma, mo, me] = await Promise.all([
+      supabase.from("tc_cat_marcas_neumatico").select("id, nombre"),
+      supabase.from("tc_cat_modelos_neumatico").select("id, marca_id, nombre").limit(5000),
+      supabase.from("tc_cat_medidas_neumatico").select("id, valor").limit(5000),
+    ]);
+    for (const r of [ma, mo, me]) comprobar(r);
+    const idMarca = new Map((ma.data ?? []).map((m) => [String(m.nombre).toUpperCase(), m.id as string]));
+    const idModelo = new Map((mo.data ?? []).map((m) => [`${m.marca_id}|${claveModelo(String(m.nombre))}`, m.id as string]));
+    const idMedida = new Map((me.data ?? []).map((m) => [medidaDeCatalogo(String(m.valor)), m.id as string]));
+    const filas = plan.oferta.flatMap((o) => {
+      const modelo_id = idModelo.get(`${idMarca.get(o.marca.toUpperCase())}|${claveModelo(o.modelo)}`);
+      const medida_id = idMedida.get(medidaDeCatalogo(o.medida));
+      return modelo_id && medida_id ? [{
+        modelo_id, medida_id,
+        indice_carga_simple: o.simple, indice_carga_doble: o.doble, codigo_velocidad: o.cv,
+      }] : [];
+    });
+    for (let i = 0; i < filas.length; i += 500) {
+      comprobar(await supabase.from("tc_cat_oferta_fabricante").upsert(filas.slice(i, i + 500), {
+        onConflict: "modelo_id,medida_id,indice_carga_simple,indice_carga_doble,codigo_velocidad", ignoreDuplicates: true,
+      }));
+    }
+    oferta = plan.ofertaNueva;
+  }
   return {
     marcas: plan.marcas.length, indices: plan.indices.length, velocidades: plan.velocidades.length,
-    medidas: plan.medidas.length, modelos: plan.modelos.length,
+    medidas: plan.medidas.length, modelos: plan.modelos.length, oferta,
   };
+}
+
+/** Una fila de la oferta del fabricante, con la medida en texto. */
+export interface OfertaFabricante { modelo_id: string; medida: string; simple: string; doble: string; cv: string }
+
+/**
+ * Toda la oferta del fabricante, a páginas de mil (el límite del servidor).
+ * Si la tabla aún no existe —la migración sin pegar— devuelve vacío: el
+ * formulario sigue enseñando todo, como antes.
+ */
+export async function leerOfertaFabricante(): Promise<OfertaFabricante[]> {
+  const salida: OfertaFabricante[] = [];
+  for (let desde = 0; ; desde += 1000) {
+    const { data, error } = await supabase.from("tc_cat_oferta_fabricante")
+      .select("modelo_id, indice_carga_simple, indice_carga_doble, codigo_velocidad, medida:tc_cat_medidas_neumatico(valor)")
+      .order("id").range(desde, desde + 999);
+    if (error) return salida;
+    for (const r of (data ?? []) as unknown as {
+      modelo_id: string; indice_carga_simple: string; indice_carga_doble: string; codigo_velocidad: string;
+      medida: { valor: string } | null;
+    }[]) {
+      if (r.medida) salida.push({ modelo_id: r.modelo_id, medida: r.medida.valor, simple: r.indice_carga_simple, doble: r.indice_carga_doble, cv: r.codigo_velocidad });
+    }
+    if ((data ?? []).length < 1000) return salida;
+  }
 }
 
 /**

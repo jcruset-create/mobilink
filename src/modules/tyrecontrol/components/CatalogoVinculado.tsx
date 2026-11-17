@@ -11,8 +11,9 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   actualizarKgIndiceCarga, actualizarKmhVelocidad, crearIndiceCarga, crearIndiceVelocidad,
   leerCombinacionesYReferencias, listarIndicesCarga, listarIndicesVelocidad, listarMarcas, listarMedidas,
-  listarModelos,
+  listarModelos, leerOfertaFabricante, type OfertaFabricante,
 } from "../services/data";
+import { claveOferta } from "../services/importarCatalogo";
 import {
   combosVista, delModelo, porIndice, porMedida, porVelocidad,
   type CombinacionCat, type ComboVista, type ReferenciaCat,
@@ -118,6 +119,7 @@ export default function CatalogoVinculado({ puedeEditar }: { puedeEditar: boolea
   const [marcas, setMarcas] = useState<MarcaNeumatico[]>([]);
   const [modelos, setModelos] = useState<ModeloNeumatico[]>([]);
   const [crudos, setCrudos] = useState<{ combos: CombinacionCat[]; refs: ReferenciaCat[] }>({ combos: [], refs: [] });
+  const [oferta, setOferta] = useState<OfertaFabricante[]>([]);
   const [msg, setMsg] = useState("");
 
   const [busca, setBusca] = useState("");
@@ -133,10 +135,10 @@ export default function CatalogoVinculado({ puedeEditar }: { puedeEditar: boolea
     let vivo = true;
     Promise.all([
       listarMedidas(), listarIndicesCarga(), listarIndicesVelocidad(), listarMarcas(), listarModelos(),
-      leerCombinacionesYReferencias(),
-    ]).then(([me, ic, cv, ma, mo, cr]) => {
+      leerCombinacionesYReferencias(), leerOfertaFabricante(),
+    ]).then(([me, ic, cv, ma, mo, cr, of]) => {
       if (!vivo) return;
-      setMedidas(me); setIndices(ic); setVelocidades(cv); setMarcas(ma); setModelos(mo); setCrudos(cr);
+      setMedidas(me); setIndices(ic); setVelocidades(cv); setMarcas(ma); setModelos(mo); setCrudos(cr); setOferta(of);
     }).catch((e: unknown) => {
       if (vivo) setMsg(e instanceof Error ? e.message : "No se ha podido leer el catálogo");
     });
@@ -360,7 +362,10 @@ export default function CatalogoVinculado({ puedeEditar }: { puedeEditar: boolea
       )}
       {pestana === "importar" && puedeEditar && (
         <ImportarCatalogo
-          catalogo={{ marcas, modelos, medidas, indices, velocidades }}
+          catalogo={{
+            marcas, modelos, medidas, indices, velocidades,
+            oferta: oferta.map((o) => claveOferta(o.modelo_id, o.medida, o.simple, o.doble, o.cv)),
+          }}
           onImportado={() => setVuelta((n) => n + 1)}
         />
       )}
