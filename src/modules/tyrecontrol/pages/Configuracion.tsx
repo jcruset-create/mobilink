@@ -3,7 +3,6 @@ import {
   listarMarcas, crearMarca, actualizarMarca, eliminarMarca, subirLogoMarca,
   listarModelos, crearModelo, actualizarModelo, eliminarModelo,
   listarMedidas, crearMedida,
-  listarIndicesCarga, crearIndiceCarga, listarIndicesVelocidad, crearIndiceVelocidad,
   listarTiposVehiculo,
   subirImagenChasisCambio, actualizarImagenChasisCambio,
   listarTiposDeMedida, fijarTiposDeMedida, actualizarMedidaCategoria,
@@ -18,12 +17,13 @@ import {
   alternarTipoMarcaVehiculo, subirLogoMarcaVehiculo,
   crearTipoVehiculo, actualizarTipoVehiculo, generarPosicionesDeTipo, contarVehiculosDeTipo,
 } from "../services/data";
-import type { MarcaVehiculo, MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, TipoVehiculo, Fabricante, MarcaContadores, SegmentoMarca, MotivoFueraAlmacen, ConfigEjes, TipoLlanta } from "../types";
+import type { MarcaVehiculo, MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, TipoVehiculo, Fabricante, MarcaContadores, SegmentoMarca, MotivoFueraAlmacen, ConfigEjes, TipoLlanta } from "../types";
 import { tipoLlantaLabel, CATEGORIAS_NEUMATICO, CATEGORIA_NEUMATICO_LABELS } from "../types";
 import { SEGMENTO_LABELS } from "../types";
 import { inputCls, TableWrap, tdCls, thCls } from "../components/ui";
 import ConfigWebfleet from "../components/ConfigWebfleet";
 import AdminCamposItv from "../components/AdminCamposItv";
+import CatalogoVinculado from "../components/CatalogoVinculado";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 import { prepararTipo, claveDeTipo, cuentasDeConfiguracion, type BorradorTipo } from "../catalogo/tipoVehiculo";
 
@@ -777,31 +777,6 @@ function FilaTipoVehiculo({ tipo, puedeEditar, editando, onEditar, onCerrar, onG
   );
 }
 
-function ListaSimple({ titulo, placeholder, items, puedeEditar, onCrear }: {
-  titulo: string; placeholder: string; items: { id: string; valor: string }[]; puedeEditar: boolean; onCrear: (v: string) => Promise<void>;
-}) {
-  const [nuevo, setNuevo] = useState("");
-  async function guardar() {
-    if (!nuevo.trim()) return;
-    await onCrear(nuevo);
-    setNuevo("");
-  }
-  return (
-    <div>
-      <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">{titulo} ({items.length})</div>
-      {puedeEditar && (
-        <div className="mb-2 flex gap-2">
-          <input className={inputCls} placeholder={placeholder} value={nuevo} onChange={(e) => setNuevo(e.target.value)} />
-          <button onClick={guardar} className="rounded bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white">+</button>
-        </div>
-      )}
-      <div className="max-h-64 space-y-1 overflow-y-auto">
-        {items.map((x) => <div key={x.id} className="rounded bg-slate-900 px-2 py-1 text-[12px] text-slate-300">{x.valor}</div>)}
-      </div>
-    </div>
-  );
-}
-
 export default function Configuracion() {
   const { perfil } = useTyreAuth();
   const puedeEditar = !!perfil?.es_superadmin;
@@ -809,8 +784,6 @@ export default function Configuracion() {
   const [marcas, setMarcas] = useState<MarcaNeumatico[]>([]);
   const [modelos, setModelos] = useState<ModeloNeumatico[]>([]);
   const [medidas, setMedidas] = useState<MedidaNeumatico[]>([]);
-  const [indicesCarga, setIndicesCarga] = useState<IndiceCarga[]>([]);
-  const [indicesVelocidad, setIndicesVelocidad] = useState<IndiceVelocidad[]>([]);
   // `tipos` trae también los inactivos, porque su tabla es la única desde la
   // que se pueden volver a activar. Todo lo demás de esta pantalla (marcas,
   // medidas, presiones) solo debe ver los activos, que es lo que hay en
@@ -849,13 +822,13 @@ export default function Configuracion() {
   const tiposActivos = tipos.filter((t) => t.activo);
 
   async function cargar() {
-    const [m, med, ic, iv, t, f, c, mf, ce, tl, po, mv] = await Promise.all([
-      listarMarcas(), listarMedidas(), listarIndicesCarga(), listarIndicesVelocidad(),
+    const [m, med, t, f, c, mf, ce, tl, po, mv] = await Promise.all([
+      listarMarcas(), listarMedidas(),
       listarTiposVehiculo({ incluirInactivos: true }), listarFabricantes(), listarContadoresMarcas(), listarMotivosFueraAlmacen(),
       listarConfigEjes(), listarTiposLlanta(), listarPresionesObjetivo().catch(() => []),
       listarMarcasVehiculo().catch(() => []),
     ]);
-    setMarcas(m); setMedidas(med); setIndicesCarga(ic); setIndicesVelocidad(iv); setTipos(t); setFabricantes(f); setContadores(c); setMotivosFueraAlmacen(mf);
+    setMarcas(m); setMedidas(med); setTipos(t); setFabricantes(f); setContadores(c); setMotivosFueraAlmacen(mf);
     setConfigEjes(ce); setTiposLlanta(tl); setPresiones(po); setMarcasVeh(mv);
   }
 
@@ -1161,9 +1134,9 @@ export default function Configuracion() {
           </div>
         </div>
 
+        <CatalogoVinculado puedeEditar={puedeEditar} />
+
         <div className="mt-4 grid gap-4 lg:grid-cols-3">
-          <ListaSimple titulo="Índice de carga" placeholder="Ej. 156" items={indicesCarga.map((x) => ({ id: x.id, valor: x.valor }))} puedeEditar={puedeEditar} onCrear={async (v) => { await crearIndiceCarga(v); await cargar(); }} />
-          <ListaSimple titulo="Código de velocidad" placeholder="Ej. L" items={indicesVelocidad.map((x) => ({ id: x.id, valor: x.valor }))} puedeEditar={puedeEditar} onCrear={async (v) => { await crearIndiceVelocidad(v); await cargar(); }} />
           <div>
             <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Motivos de montaje fuera de almacén ({motivosFueraAlmacen.length})</div>
             {puedeEditar && (

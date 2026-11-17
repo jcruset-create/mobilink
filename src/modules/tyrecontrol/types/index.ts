@@ -1111,8 +1111,10 @@ export interface UmbralCategoria {
   profundidad_minima_mm: number;
   profundidad_aviso_mm: number;
 }
-export interface IndiceCarga { id: string; valor: string; activo: boolean; }
-export interface IndiceVelocidad { id: string; valor: string; activo: boolean; }
+/** `kg`: la carga máxima del índice (tabla ETRTO). Null hasta pegar la migración del catálogo. */
+export interface IndiceCarga { id: string; valor: string; activo: boolean; kg?: number | null; }
+/** `km_h`: la velocidad máxima del código. Null hasta pegar la migración del catálogo. */
+export interface IndiceVelocidad { id: string; valor: string; activo: boolean; km_h?: number | null; }
 export interface MotivoFueraAlmacen { id: string; motivo: string; activo: boolean; }
 
 export type GravedadIncidencia = "leve" | "importante" | "critica";

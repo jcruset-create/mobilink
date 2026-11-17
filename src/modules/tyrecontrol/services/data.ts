@@ -3,6 +3,7 @@ import { codigoDeUso } from "../catalogo/usos";
 import { hasRealValue, normalizarValor, type TipoDatoItv } from "./itvValores";
 import { medidaCanonica } from "./medidas";
 import { recorrerPaginas } from "./paginacion";
+import type { CombinacionCat, ReferenciaCat } from "./catalogoVinculado";
 import { claveDeMedida, minimoDeLaGoma, SIN_MINIMOS, type MinimosDeEmpresa } from "./umbralProfundidad";
 import { mapaUltimasMediciones, type Medicion } from "./ultimaMedicion";
 import type { PosicionOperario } from "./ubicacionOperario";
@@ -3224,8 +3225,14 @@ export async function listarIndicesCarga(): Promise<IndiceCarga[]> {
   if (error) throw new Error(error.message);
   return (data ?? []) as IndiceCarga[];
 }
-export async function crearIndiceCarga(valor: string): Promise<void> {
-  const { error } = await supabase.from("tc_cat_indices_carga").insert({ valor: valor.trim() });
+export async function crearIndiceCarga(valor: string, kg?: number | null): Promise<void> {
+  const fila: Record<string, unknown> = { valor: valor.trim() };
+  if (kg != null) fila.kg = kg;
+  const { error } = await supabase.from("tc_cat_indices_carga").insert(fila);
+  if (error) throw new Error(error.message);
+}
+export async function actualizarKgIndiceCarga(id: string, kg: number | null): Promise<void> {
+  const { error } = await supabase.from("tc_cat_indices_carga").update({ kg }).eq("id", id);
   if (error) throw new Error(error.message);
 }
 
@@ -3234,9 +3241,55 @@ export async function listarIndicesVelocidad(): Promise<IndiceVelocidad[]> {
   if (error) throw new Error(error.message);
   return (data ?? []) as IndiceVelocidad[];
 }
-export async function crearIndiceVelocidad(valor: string): Promise<void> {
-  const { error } = await supabase.from("tc_cat_indices_velocidad").insert({ valor: valor.trim() });
+export async function crearIndiceVelocidad(valor: string, kmh?: number | null): Promise<void> {
+  const fila: Record<string, unknown> = { valor: valor.trim().toUpperCase() };
+  if (kmh != null) fila.km_h = kmh;
+  const { error } = await supabase.from("tc_cat_indices_velocidad").insert(fila);
   if (error) throw new Error(error.message);
+}
+export async function actualizarKmhVelocidad(id: string, kmh: number | null): Promise<void> {
+  const { error } = await supabase.from("tc_cat_indices_velocidad").update({ km_h: kmh }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+/**
+ * Las combinaciones (medida + índices + velocidad) y en qué modelos está cada
+ * una, para ver el catálogo vinculado en Configuración. Son cientos, no miles:
+ * caben en una lectura.
+ */
+export async function leerCombinacionesYReferencias(): Promise<{
+  combos: CombinacionCat[];
+  refs: ReferenciaCat[];
+}> {
+  const [c, r] = await Promise.all([
+    supabase.from("tyre_sizes")
+      .select("id, medida_id, medida, indice_carga_simple, indice_carga_doble, codigo_velocidad")
+      .eq("activo", true).limit(5000),
+    supabase.from("tc_referencias_neumatico")
+      .select("id, modelo_id, tyre_size_id, modelo:tc_cat_modelos_neumatico(id, nombre, marca:tc_cat_marcas_neumatico(nombre))")
+      .eq("activo", true).limit(5000),
+  ]);
+  if (c.error) throw new Error(c.error.message);
+  if (r.error) throw new Error(r.error.message);
+  return { combos: (c.data ?? []) as never, refs: (r.data ?? []) as never };
+}
+
+/**
+ * Al dar de alta un neumático, su combinación (medida + índices + velocidad) y
+ * su vínculo con el modelo entran en el catálogo si no estaban. Es la misma
+ * función que usa la tablet; lo nuevo queda «pendiente de validar».
+ */
+export async function registrarCombinacionDeAlta(p: {
+  empresaId: string; marca: string; modelo: string; medida: string;
+  cargaSimple: string; cargaDoble: string; velocidad: string;
+}): Promise<{ creada: boolean }> {
+  const { data, error } = await supabase.rpc("tc_crear_referencia_provisional", {
+    p_empresa: p.empresaId, p_marca: p.marca, p_modelo: p.modelo, p_medida: p.medida,
+    p_carga_simple: p.cargaSimple, p_carga_doble: p.cargaDoble || null, p_velocidad: p.velocidad || null,
+  });
+  if (error) throw new Error(error.message);
+  const creado = (data as { creado?: { medida?: boolean; referencia?: boolean } } | null)?.creado;
+  return { creada: !!(creado?.medida || creado?.referencia) };
 }
 
 export async function listarMotivosFueraAlmacen(): Promise<MotivoFueraAlmacen[]> {
