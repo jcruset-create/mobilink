@@ -4,6 +4,7 @@ import { hasRealValue, normalizarValor, type TipoDatoItv } from "./itvValores";
 import { medidaCanonica } from "./medidas";
 import { recorrerPaginas } from "./paginacion";
 import type { CombinacionCat, ReferenciaCat } from "./catalogoVinculado";
+import { kgDeIndice, kmhDeCodigo, partesDeMedida, type PlanImportacion } from "./importarCatalogo";
 import { claveDeMedida, minimoDeLaGoma, SIN_MINIMOS, type MinimosDeEmpresa } from "./umbralProfundidad";
 import { mapaUltimasMediciones, type Medicion } from "./ultimaMedicion";
 import type { PosicionOperario } from "./ubicacionOperario";
@@ -3272,6 +3273,55 @@ export async function leerCombinacionesYReferencias(): Promise<{
   if (c.error) throw new Error(c.error.message);
   if (r.error) throw new Error(r.error.message);
   return { combos: (c.data ?? []) as never, refs: (r.data ?? []) as never };
+}
+
+/**
+ * Escribe en el catálogo lo que falta de un Excel de fabricante (ver
+ * `importarCatalogo.ts`). Por orden: marcas, índices, velocidades, medidas y
+ * modelos, cada uno sin pisar lo que ya haya (`ignoreDuplicates`). Solo un
+ * superadministrador puede escribir en estas tablas.
+ */
+export async function aplicarImportacionCatalogo(
+  plan: PlanImportacion,
+  tipo: "furgoneta" | "camion" | "turismo",
+): Promise<{ marcas: number; indices: number; velocidades: number; medidas: number; modelos: number }> {
+  const comprobar = (r: { error: { message: string } | null }) => { if (r.error) throw new Error(r.error.message); };
+
+  if (plan.marcas.length) {
+    comprobar(await supabase.from("tc_cat_marcas_neumatico")
+      .upsert(plan.marcas.map((nombre) => ({ nombre, activo: true })), { onConflict: "nombre", ignoreDuplicates: true }));
+  }
+  if (plan.indices.length) {
+    comprobar(await supabase.from("tc_cat_indices_carga")
+      .upsert(plan.indices.map((valor) => ({ valor, kg: kgDeIndice(valor) })), { onConflict: "valor", ignoreDuplicates: true }));
+  }
+  if (plan.velocidades.length) {
+    comprobar(await supabase.from("tc_cat_indices_velocidad")
+      .upsert(plan.velocidades.map((valor) => ({ valor, km_h: kmhDeCodigo(valor) })), { onConflict: "valor", ignoreDuplicates: true }));
+  }
+  if (plan.medidas.length) {
+    comprobar(await supabase.from("tc_cat_medidas_neumatico")
+      .upsert(plan.medidas.map((valor) => ({ valor, activo: true, categoria: tipo, ...partesDeMedida(valor) })),
+        { onConflict: "valor", ignoreDuplicates: true }));
+  }
+  if (plan.modelos.length) {
+    // Los ids de las marcas, ya con las que se acaban de crear.
+    const { data: marcas, error } = await supabase.from("tc_cat_marcas_neumatico").select("id, nombre");
+    if (error) throw new Error(error.message);
+    const id = new Map((marcas ?? []).map((m) => [String(m.nombre).toUpperCase(), m.id as string]));
+    const filas = plan.modelos
+      .filter((m) => id.has(m.marca.toUpperCase()))
+      .map((m) => ({
+        marca_id: id.get(m.marca.toUpperCase()), nombre: m.nombre, activo: true,
+        tipo_vehiculo: tipo, aplicacion: m.temporada, eje_recomendado: m.eje,
+      }));
+    comprobar(await supabase.from("tc_cat_modelos_neumatico")
+      .upsert(filas, { onConflict: "marca_id,nombre", ignoreDuplicates: true }));
+  }
+  return {
+    marcas: plan.marcas.length, indices: plan.indices.length, velocidades: plan.velocidades.length,
+    medidas: plan.medidas.length, modelos: plan.modelos.length,
+  };
 }
 
 /**
