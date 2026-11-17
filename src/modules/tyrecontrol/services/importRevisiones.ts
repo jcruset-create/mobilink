@@ -50,7 +50,7 @@ export interface OpcionesRev {
    * De dónde vienen las mediciones. Cambia el método que se apunta en cada
    * rueda, para poder comparar luego el arco contra la sonda.
    */
-  origen?: "importacion_excel" | "checkpoint";
+  origen?: "importacion_excel" | "checkpoint" | "manual";
   /**
    * Medir solo lo que YA está montado: no se crea ningún neumático ni ningún
    * montaje. Una posición sin neumático se deja fuera y se devuelve en
