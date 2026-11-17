@@ -188,6 +188,13 @@ class _MapaBaseScreenState extends State<MapaBaseScreen> {
                                   ),
                                 ),
                               ),
+                              if ((p.v.numeroUnidad ?? '').trim().isNotEmpty) ...[
+                                const SizedBox(width: 8),
+                                Text(
+                                  'Nº ${p.v.numeroUnidad!.trim()}',
+                                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
+                                ),
+                              ],
                               const SizedBox(width: 10),
                               Expanded(
                                 child: Text(
