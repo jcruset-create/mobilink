@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { listarRevisionesHistorico, listarEmpresas, listarUsuarios, listarDetalleRevision, listarIncidenciasDeRevision, listarTiposIncidencia, listarMotivosPendiente, abrirInformeRevisionesPdf } from "../services/data";
+import { listarRevisionesHistorico, listarEmpresas, listarUsuarios, listarDetalleRevision, listarIncidenciasDeRevision, listarTiposIncidencia, listarMotivosPendiente, abrirInformeRevisionesPdf, umbralDesgasteIrregular } from "../services/data";
+import CeldaProfundidad from "../components/CeldaProfundidad";
 import type { Empresa, Perfil, RevisionDetalle } from "../types";
 import type { MontajeSnapshot } from "../services/data";
 import {
@@ -127,6 +128,7 @@ export default function HistoricoRevisiones() {
   const [fichaDetalle, setFichaDetalle] = useState<RevisionDetalle[]>([]);
   const [fichaIncidencias, setFichaIncidencias] = useState<any[]>([]);
   const [cargandoFicha, setCargandoFicha] = useState(false);
+  const [deltaIrregular, setDeltaIrregular] = useState<number | null>(null);
   const fichaDetalleOrden = useMemo(() => [...fichaDetalle].sort((a, b) => ordenPos(a.posicion, b.posicion)), [fichaDetalle]);
   const fichaIncidenciasOrden = useMemo(() => [...fichaIncidencias].sort((a, b) => ordenPos(a.posicion, b.posicion)), [fichaIncidencias]);
   // Etiquetas configurables (tipos de problema y motivos pendientes)
@@ -138,6 +140,7 @@ export default function HistoricoRevisiones() {
     try {
       const [det, incs] = await Promise.all([listarDetalleRevision(f.id), listarIncidenciasDeRevision(f.id)]);
       setFichaDetalle(det); setFichaIncidencias(incs);
+      setDeltaIrregular(det[0]?.empresa_id ? await umbralDesgasteIrregular(det[0].empresa_id) : null);
     } catch { setFichaDetalle([]); setFichaIncidencias([]); }
     finally { setCargandoFicha(false); }
   }
@@ -602,7 +605,7 @@ export default function HistoricoRevisiones() {
                     {[d.neumatico?.marca, d.neumatico?.modelo].filter(Boolean).join(" ") || "—"}
                     {d.neumatico?.medida ? <span className="ml-1 text-[11px] text-slate-500">{d.neumatico.medida}</span> : null}
                   </td>
-                  <td className={tdCls + " text-slate-400"}>{d.no_accesible ? "No accesible" : d.profundidad_mm != null ? `${d.profundidad_mm} mm` : "—"}</td>
+                  <td className={tdCls + " text-slate-400"}><CeldaProfundidad d={d} deltaUmbralMm={deltaIrregular} /></td>
                   <td className={tdCls + " text-slate-400"}>{d.no_accesible ? "—" : d.presion_bar != null ? `${presionTxt(d.presion_bar)} bar` : "—"}</td>
                   <td className={tdCls + " text-slate-400"}>{d.estado_visual ?? "—"}</td>
                   <td className={tdCls + " text-slate-400"}>{d.observaciones ?? "—"}</td>

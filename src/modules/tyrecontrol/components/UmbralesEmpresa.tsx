@@ -20,6 +20,9 @@ export default function UmbralesEmpresa({ empresaId }: { empresaId: string }) {
   const [minimo, setMinimo] = useState("1.6");
   const [aviso, setAviso] = useState("3.0");
   const [tolerancia, setTolerancia] = useState("0.5");
+  // Medición doble (banda interior + exterior) y aviso de desgaste irregular.
+  const [doble, setDoble] = useState(true);
+  const [deltaIrregular, setDeltaIrregular] = useState("2.0");
   const [guardando, setGuardando] = useState(false);
   const [msg, setMsg] = useState("");
 
@@ -45,6 +48,10 @@ export default function UmbralesEmpresa({ empresaId }: { empresaId: string }) {
       setMinimo(String(u.profundidad_minima_mm));
       setAviso(String(u.profundidad_aviso_mm));
       setTolerancia(String(u.presion_tolerancia_bar));
+      if (u.medicion_doble !== undefined) setDoble(u.medicion_doble !== false);
+      if (u.desgaste_irregular_delta_mm !== undefined) {
+        setDeltaIrregular(u.desgaste_irregular_delta_mm == null ? "" : String(u.desgaste_irregular_delta_mm));
+      }
     }
     setOverrides(ov);
     setMedidas(meds);
@@ -62,6 +69,9 @@ export default function UmbralesEmpresa({ empresaId }: { empresaId: string }) {
     try {
       await guardarUmbralesEmpresa(empresaId, {
         profundidad_minima_mm: num(minimo), profundidad_aviso_mm: num(aviso), presion_tolerancia_bar: num(tolerancia),
+        medicion_doble: doble,
+        // Vacío = sin aviso. Se guarda NULL, no 0 (0 avisaría siempre).
+        desgaste_irregular_delta_mm: deltaIrregular.trim() === "" ? null : num(deltaIrregular),
       });
       setMsg("✔ Umbrales por defecto guardados");
     } catch (e: any) { setMsg(e?.message || "Error al guardar"); } finally { setGuardando(false); }
@@ -110,6 +120,20 @@ export default function UmbralesEmpresa({ empresaId }: { empresaId: string }) {
         <Field label="Mínimo legal por defecto (mm)"><input type="number" step="0.1" className={inputCls} value={minimo} disabled={!puedeEditar} onChange={(e) => setMinimo(e.target.value)} /></Field>
         <Field label="Aviso por defecto (mm)"><input type="number" step="0.1" className={inputCls} value={aviso} disabled={!puedeEditar} onChange={(e) => setAviso(e.target.value)} /></Field>
         <Field label="Tolerancia de presión (bar)"><input type="number" step="0.1" className={inputCls} value={tolerancia} disabled={!puedeEditar} onChange={(e) => setTolerancia(e.target.value)} /></Field>
+      </div>
+      <div className="mt-2 grid gap-2 sm:grid-cols-3">
+        <label className="flex items-center gap-2 rounded bg-slate-900 px-3 py-2 text-[12px] text-slate-200 sm:col-span-1">
+          <input type="checkbox" checked={doble} disabled={!puedeEditar} onChange={(e) => setDoble(e.target.checked)} />
+          Medir dos bandas por rueda (interior y exterior)
+        </label>
+        <Field label="Aviso de desgaste irregular: diferencia entre bandas (mm)">
+          <input type="number" step="0.1" min="0" className={inputCls} placeholder="vacío = sin aviso" value={deltaIrregular} disabled={!puedeEditar}
+            onChange={(e) => setDeltaIrregular(e.target.value)} />
+        </Field>
+        <div className="self-end pb-1 text-[11px] text-slate-500 sm:col-span-1">
+          Con dos bandas, cuenta la menor para todo (semáforo, alertas, informes). La ficha de la revisión guarda las dos.
+          Recomendado: 2,0 mm (la práctica del sector sitúa "revisar alineación" en 1,6–2,4 mm). Solo avisa; no crea incidencias.
+        </div>
       </div>
       {puedeEditar && (
         <div className="mt-2 flex items-center gap-3">

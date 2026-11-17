@@ -119,6 +119,8 @@ export async function leerMediciones(c: Consulta, revisionIds: string[]): Promis
           marca: m.marca ?? null,
           medida: m.medida ?? null,
           codigo_interno: m.codigo_interno ?? null,
+          profundidad_int_mm: m.profundidad_int_mm == null ? null : Number(m.profundidad_int_mm),
+          profundidad_ext_mm: m.profundidad_ext_mm == null ? null : Number(m.profundidad_ext_mm),
         });
       }
       if (pagina.length < PAGINA) break;
