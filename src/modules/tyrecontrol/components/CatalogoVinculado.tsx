@@ -19,14 +19,16 @@ import {
 } from "../services/catalogoVinculado";
 import type { IndiceCarga, IndiceVelocidad, MarcaNeumatico, MedidaNeumatico, ModeloNeumatico } from "../types";
 import { inputCls } from "./ui";
+import ImportarCatalogo from "./ImportarCatalogo";
 
-type Pestana = "medidas" | "indices" | "velocidades" | "modelos";
+type Pestana = "medidas" | "indices" | "velocidades" | "modelos" | "importar";
 
 const ETIQUETAS: Record<Pestana, string> = {
   medidas: "Medidas",
   indices: "Índices de carga",
   velocidades: "Códigos de velocidad",
   modelos: "Modelos",
+  importar: "Importar Excel",
 };
 
 const COMO: Record<string, string> = { sencillo: "Sencillo", gemelo: "Gemelo", ambos: "Sencillo y gemelo" };
@@ -170,7 +172,7 @@ export default function CatalogoVinculado({ puedeEditar }: { puedeEditar: boolea
       </div>
 
       <div role="tablist" aria-label="Tablas del catálogo" className="mb-3 flex flex-wrap gap-1 border-b border-slate-700 pb-2">
-        {(Object.keys(ETIQUETAS) as Pestana[]).map((p) => (
+        {(Object.keys(ETIQUETAS) as Pestana[]).filter((p) => p !== "importar" || puedeEditar).map((p) => (
           <button
             key={p}
             type="button"
@@ -355,6 +357,12 @@ export default function CatalogoVinculado({ puedeEditar }: { puedeEditar: boolea
             </>
           )}
         </div>
+      )}
+      {pestana === "importar" && puedeEditar && (
+        <ImportarCatalogo
+          catalogo={{ marcas, modelos, medidas, indices, velocidades }}
+          onImportado={() => setVuelta((n) => n + 1)}
+        />
       )}
     </div>
   );
