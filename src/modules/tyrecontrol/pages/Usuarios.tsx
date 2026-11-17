@@ -366,7 +366,7 @@ function FichaUsuario({ usuario, empresas, delegaciones, esSuper, onClose, onDon
     setCambiandoPin(true); setPinMsg("");
     try {
       await cambiarPasswordUsuario(usuario.id, nuevoPin.trim());
-      setNuevoPin(""); setPinMsg("✔ Contraseña actualizada");
+      setNuevoPin(""); setPinMsg("✔ PIN cambiado");
     } catch (e: any) { setPinMsg(e?.message || "Error"); }
     finally { setCambiandoPin(false); }
   }
@@ -562,7 +562,7 @@ function FichaUsuario({ usuario, empresas, delegaciones, esSuper, onClose, onDon
         <div className="rounded-lg bg-slate-800 p-3">
           <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">PIN de la APK</div>
           <div className="mb-2 text-[11px] text-slate-500">
-            Es el PIN con el que este usuario entra en la APK. Escribe el nuevo y pulsa cambiar.
+            Es el PIN con el que este usuario entra en la APK: 4 dígitos, que son las casillas de la tablet. Escribe el nuevo y pulsa cambiar.
           </div>
           <div className="flex items-center gap-2">
             <input

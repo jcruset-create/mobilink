@@ -152,9 +152,14 @@ class TyreControlApi {
       throw Exception(data['error'] ?? 'Usuario o PIN incorrectos');
     }
     final email = data['email'] as String;
+    // El PIN de cuatro dígitos no llega a la longitud que pide Auth, así que
+    // el servidor lo guarda con un sufijo y, una vez comprobado, devuelve la
+    // contraseña con la que entrar. Un servidor de antes no la manda, y
+    // entonces vale el PIN tal cual, como hasta ahora.
+    final clave = (data['clave'] as String?) ?? pin;
 
     try {
-      final auth = await _db.auth.signInWithPassword(email: email, password: pin);
+      final auth = await _db.auth.signInWithPassword(email: email, password: clave);
       if (auth.user == null) throw Exception('Usuario o PIN incorrectos');
     } on AuthException {
       throw Exception('Usuario o PIN incorrectos');
