@@ -111,6 +111,7 @@ import { hasRealValue, normalizarValor } from "../src/modules/tyrecontrol/servic
 import { resumenOperaciones } from "../src/modules/tyrecontrol/services/resumenOperaciones.ts";
 import { calcularConfiguracion, avisosCoherencia } from "./tyrecontrol/ficha-tecnica/axleMapper.ts";
 import { rasterizarPdf } from "./tyrecontrol/ficha-tecnica/pdfRasterizer.ts";
+import { claveDePin, clavesPosibles, LONGITUD_MINIMA_PIN } from "./tyrecontrol/pinApk.ts";
 import { cotejarPlano, generarPosiciones } from "./tyrecontrol/posicionesDesdeConfig.ts";
 import { initConnect, mountConnect, startConnectWorker } from "./connect/index.ts";
 import { createDispatchRouter, initDispatch, startDispatchWorker } from "./dispatch/index.ts";
@@ -20398,11 +20399,22 @@ app.post("/api/tyrecontrol/login-operario", async (req, res) => {
       return res.status(401).json({ error: "Usuario o PIN incorrectos" });
     }
 
-    const comprobacion = await supabaseAnonAuth.auth.signInWithPassword({
-      email: user.email,
-      password: code,
-    });
-    if (comprobacion.error || !comprobacion.data?.user) {
+    // El PIN puede estar guardado tal cual (los operarios de antes) o, si es
+    // corto, con el sufijo que lo lleva a la longitud que pide Auth: ver
+    // tyrecontrol/pinApk.ts. Se devuelve la que ha valido para que la tablet
+    // inicie su sesión con ella.
+    let clave: string | null = null;
+    for (const posible of clavesPosibles(code)) {
+      const comprobacion = await supabaseAnonAuth.auth.signInWithPassword({
+        email: user.email,
+        password: posible,
+      });
+      if (!comprobacion.error && comprobacion.data?.user) {
+        clave = posible;
+        break;
+      }
+    }
+    if (!clave) {
       registrarFalloIntento(limite);
       return res.status(401).json({ error: "Usuario o PIN incorrectos" });
     }
@@ -20423,7 +20435,7 @@ app.post("/api/tyrecontrol/login-operario", async (req, res) => {
       }
     }
 
-    res.json({ ok: true, email: user.email, techName: user.nombre });
+    res.json({ ok: true, email: user.email, techName: user.nombre, clave });
   } catch (error: any) {
     console.error("POST /api/tyrecontrol/login-operario error:", error);
     res.status(500).json({ error: error?.message || "Error iniciando sesión" });
@@ -20490,8 +20502,10 @@ app.post("/api/tyrecontrol/usuarios/:id/password", async (req, res) => {
     }
 
     const nueva = String(req.body?.password ?? "");
-    if (nueva.length < 4) return res.status(400).json({ error: "La contraseña debe tener al menos 4 caracteres" });
-    const { error } = await supabase.auth.admin.updateUserById(objetivoId, { password: nueva });
+    if (nueva.length < LONGITUD_MINIMA_PIN) return res.status(400).json({ error: "El PIN debe tener al menos 4 caracteres" });
+    // Un PIN de cuatro dígitos —las casillas de la tablet— no llega a lo que
+    // pide Auth: se guarda con sufijo (tyrecontrol/pinApk.ts).
+    const { error } = await supabase.auth.admin.updateUserById(objetivoId, { password: claveDePin(nueva) });
     if (error) return res.status(400).json({ error: error.message });
     console.log(
       `[tyrecontrol] contraseña restablecida por ${userData.user.id} sobre ${objetivoId}`
@@ -20634,7 +20648,7 @@ app.post("/api/tyrecontrol/usuarios", async (req, res) => {
     if (accesoApk && passwordPedida.length < 4) {
       return res.status(400).json({ error: "Un usuario con acceso a la APK necesita un PIN de al menos 4 caracteres" });
     }
-    const password = passwordPedida || crypto.randomBytes(24).toString("base64url");
+    const password = passwordPedida ? claveDePin(passwordPedida) : crypto.randomBytes(24).toString("base64url");
 
     const { data: created, error: createErr } = await supabase.auth.admin.createUser({ email, password, email_confirm: true });
     if (createErr || !created.user) return res.status(400).json({ error: mensajeDeCorreo(createErr?.message ?? "No se pudo crear el usuario") });
