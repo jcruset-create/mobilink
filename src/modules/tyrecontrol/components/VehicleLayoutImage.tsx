@@ -4,7 +4,7 @@ import { minimoDeLaGoma, SIN_MINIMOS, type MinimosDeEmpresa } from "../services/
 import { veredictoEnLaFicha } from "../services/protocoloProfundidad";
 import type { Medicion } from "../services/ultimaMedicion";
 import { profundidadVigente } from "../utils/profundidad";
-import type { MontajeActual, Neumatico, PosicionVehiculo, TipoVehiculo } from "../types";
+import type { MontajeActual, Neumatico, PosicionVehiculo, ReferenciaNeumatico, TipoVehiculo } from "../types";
 import { presionTxt } from "../types";
 import {
   listarNeumaticosDisponibles, montarNeumatico, desmontarNeumatico,
@@ -13,6 +13,7 @@ import {
   listarFotosCatalogoPorModelo, claveModeloCatalogo, listarProfundidadesCatalogoPorModelo,
   buscarNeumaticosParaCorregir, corregirMontado, listarAlertasPresionVehiculo,
 } from "../services/data";
+import { corregirConReferencia, listarReferenciasNeumatico } from "../services/data";
 import { inputCls, Modal } from "./ui";
 import { mismaMedida } from "../services/medidas";
 import ModalMontarDesdeFicha from "./ModalMontarDesdeFicha";
@@ -203,6 +204,13 @@ export default function VehicleLayoutImage({
   const [correccionElegido, setCorreccionElegido] = useState("");
   const [correccionObs, setCorreccionObs] = useState("");
   const [correccionMsg, setCorreccionMsg] = useState("");
+  // La goma de verdad no tiene ficha: se da de alta eligiéndola del catálogo.
+  const [correccionModo, setCorreccionModo] = useState<"ficha" | "catalogo">("ficha");
+  const [referencias, setReferencias] = useState<ReferenciaNeumatico[] | null>(null);
+  const [refBusqueda, setRefBusqueda] = useState("");
+  const [refElegida, setRefElegida] = useState("");
+  const [refDot, setRefDot] = useState("");
+  const [refSerie, setRefSerie] = useState("");
   const [modalFicha, setModalFicha] = useState<null | { sustitucion: boolean }>(null);
   const [modalBulk, setModalBulk] = useState(false);
   // Las gomas que el vehículo YA LLEVA. No es un montaje: ni descuenta stock
@@ -493,8 +501,35 @@ export default function VehicleLayoutImage({
     return () => { vivo = false; clearTimeout(t); };
   }, [correccion, correccionBusqueda, empresaId]);
 
+  // El catálogo se lee una vez, al pasar a «goma nueva del catálogo».
+  useEffect(() => {
+    if (!correccion || correccionModo !== "catalogo" || referencias) return;
+    let vivo = true;
+    listarReferenciasNeumatico()
+      .then((r) => { if (vivo) setReferencias(r); })
+      .catch((e: unknown) => { if (vivo) { setReferencias([]); setCorreccionMsg((e as Error)?.message ?? "No se ha podido leer el catálogo"); } });
+    return () => { vivo = false; };
+  }, [correccion, correccionModo, referencias]);
+
   async function confirmarCorreccion() {
-    if (!correccion || !correccionElegido) return;
+    if (!correccion) return;
+    if (correccionModo === "catalogo") {
+      const ref = referencias?.find((r) => r.id === refElegida);
+      if (!ref) return;
+      setSaving(true); setCorreccionMsg("");
+      try {
+        await corregirConReferencia({
+          montajeId: correccion.montajeId, referencia: ref,
+          dot: refDot.trim() || null, numeroSerie: refSerie.trim() || null,
+          observaciones: correccionObs.trim() || null,
+        });
+        setCorreccion(null); setSeleccion(null); onChanged?.();
+      } catch (e: unknown) {
+        setCorreccionMsg((e as Error)?.message || "Error en la corrección");
+      } finally { setSaving(false); }
+      return;
+    }
+    if (!correccionElegido) return;
     setSaving(true); setCorreccionMsg("");
     try {
       await corregirMontado({
@@ -996,6 +1031,7 @@ export default function VehicleLayoutImage({
                     setCorreccion({ montajeId: montajeSeleccionado.id });
                     setCorreccionBusqueda(""); setCorreccionElegido("");
                     setCorreccionObs(""); setCorreccionMsg("");
+                    setCorreccionModo("ficha"); setRefBusqueda(""); setRefElegida(""); setRefDot(""); setRefSerie("");
                   }}
                   className="rounded border border-amber-500 px-2 py-1 text-[12px] font-bold text-amber-300 hover:bg-amber-500/10"
                 >
@@ -1131,6 +1167,16 @@ export default function VehicleLayoutImage({
         const m = montajes.find((x) => x.id === correccion.montajeId);
         const actual = m?.neumatico;
         const elegido = correccionOpciones.find((n) => n.id === correccionElegido);
+        const refSel = referencias?.find((r) => r.id === refElegida) ?? null;
+        // Por defecto, el catálogo de la misma medida que la goma registrada:
+        // ofrecer 500 referencias para elegir una 295/80R22.5 es ofrecer un error.
+        const t = refBusqueda.trim().toLowerCase();
+        const refsVisibles = (referencias ?? [])
+          .filter((r) => (t
+            ? (r.referencia_completa ?? "").toLowerCase().includes(t)
+            : !actual?.medida || mismaMedida(r.tyre_size?.medida ?? "", actual.medida)))
+          .slice(0, 300);
+        const puedeCorregir = correccionModo === "catalogo" ? !!refSel : !!correccionElegido;
         return (
           <Modal
             title="No coincide: corregir el neumático registrado"
@@ -1138,7 +1184,7 @@ export default function VehicleLayoutImage({
             footer={
               <div className="flex justify-end gap-2">
                 <button onClick={() => setCorreccion(null)} className="rounded border border-slate-600 px-4 py-2 text-sm text-slate-200">Cancelar</button>
-                <button onClick={confirmarCorreccion} disabled={saving || !correccionElegido}
+                <button onClick={confirmarCorreccion} disabled={saving || !puedeCorregir}
                         className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
                   {saving ? "Corrigiendo…" : "Corregir el registro"}
                 </button>
@@ -1164,12 +1210,63 @@ export default function VehicleLayoutImage({
                 </div>
                 <div className="rounded-lg border border-emerald-700/50 bg-emerald-500/5 p-3">
                   <div className="text-[11px] font-bold uppercase text-emerald-500">Lo que hay de verdad</div>
-                  <div className="mt-1 font-semibold text-slate-100">{elegido ? (elegido.numero_interno ?? elegido.codigo_interno ?? elegido.numero_serie ?? "—") : "Elígelo abajo"}</div>
-                  <div className="text-[12px] text-slate-400">{elegido ? [elegido.marca, elegido.modelo, elegido.medida].filter(Boolean).join(" · ") : "—"}</div>
+                  {correccionModo === "catalogo" ? (
+                    <>
+                      <div className="mt-1 font-semibold text-slate-100">{refSel ? "Ficha nueva" : "Elígela del catálogo"}</div>
+                      <div className="text-[12px] text-slate-400">{refSel?.referencia_completa ?? "—"}</div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="mt-1 font-semibold text-slate-100">{elegido ? (elegido.numero_interno ?? elegido.codigo_interno ?? elegido.numero_serie ?? "—") : "Elígelo abajo"}</div>
+                      <div className="text-[12px] text-slate-400">{elegido ? [elegido.marca, elegido.modelo, elegido.medida].filter(Boolean).join(" · ") : "—"}</div>
+                    </>
+                  )}
                 </div>
               </div>
 
-              <div>
+              <div className="flex gap-1 rounded-lg bg-slate-900/60 p-1 text-[12px]">
+                {([["ficha", "Ya tiene ficha"], ["catalogo", "Goma nueva del catálogo"]] as const).map(([k, l]) => (
+                  <button key={k} type="button" onClick={() => setCorreccionModo(k)}
+                    className={`flex-1 rounded px-3 py-1.5 font-semibold ${correccionModo === k ? "bg-sky-700 text-white" : "text-slate-300 hover:bg-slate-800"}`}>
+                    {l}
+                  </button>
+                ))}
+              </div>
+
+              {correccionModo === "catalogo" && (
+                <div className="space-y-2">
+                  <div>
+                    <label className="text-[11px] font-bold uppercase text-slate-400">Buscar en el catálogo</label>
+                    <input className={inputCls} placeholder={`Marca, modelo o medida${actual?.medida ? ` (sin escribir nada: ${actual.medida})` : ""}`}
+                           value={refBusqueda} onChange={(e) => { setRefBusqueda(e.target.value); setRefElegida(""); }} />
+                    <select className={`${inputCls} mt-2`} size={8} value={refElegida}
+                            onChange={(e) => setRefElegida(e.target.value)}>
+                      {refsVisibles.map((r) => <option key={r.id} value={r.id}>{r.referencia_completa}</option>)}
+                    </select>
+                    {referencias === null && <div className="mt-1 text-[11px] text-slate-400">Leyendo el catálogo…</div>}
+                    {referencias !== null && refsVisibles.length === 0 && (
+                      <div className="mt-1 text-[11px] text-amber-300">
+                        No hay ninguna referencia que encaje. Si falta, créala en Catálogo de neumáticos con «+ Nueva referencia».
+                      </div>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[11px] font-bold uppercase text-slate-400">DOT (opcional)</label>
+                      <input className={inputCls} placeholder="4524" value={refDot} onChange={(e) => setRefDot(e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-bold uppercase text-slate-400">Nº de serie (opcional)</label>
+                      <input className={inputCls} value={refSerie} onChange={(e) => setRefSerie(e.target.value)} />
+                    </div>
+                  </div>
+                  <div className="text-[11px] text-slate-400">
+                    Se da de alta una ficha nueva con esta referencia, ya montada en esta posición.
+                  </div>
+                </div>
+              )}
+
+              {correccionModo === "ficha" && <div>
                 <label className="text-[11px] font-bold uppercase text-slate-400">Buscar la ficha</label>
                 <input className={inputCls} placeholder="Nº interno, nº de serie, RFID o DOT"
                        value={correccionBusqueda} onChange={(e) => { setCorreccionBusqueda(e.target.value); setCorreccionElegido(""); }} />
@@ -1190,10 +1287,10 @@ export default function VehicleLayoutImage({
                 {correccionOpciones.length === 0 && (
                   <div className="mt-1 text-[11px] text-amber-300">
                     No hay ninguna ficha libre que encaje. Si la goma que has encontrado no está
-                    dada de alta, créala primero desde el catálogo de neumáticos.
+                    dada de alta, usa «Goma nueva del catálogo».
                   </div>
                 )}
-              </div>
+              </div>}
 
               <div>
                 <label className="text-[11px] font-bold uppercase text-slate-400">Por qué se corrige</label>

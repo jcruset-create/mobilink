@@ -847,6 +847,39 @@ export async function corregirMontadoNuevaFicha(params: {
 }
 
 /**
+ * «No coincide» con una goma que no tiene ficha: se da de alta eligiéndola del
+ * catálogo. Usa tc_corregir_montado_nueva_ficha (la misma que la APK: nace ya
+ * montada y la que estaba registrada pasa a no localizada) y después le pone
+ * el índice de carga y el código de velocidad de la referencia, que esa
+ * función no recibe.
+ */
+export async function corregirConReferencia(params: {
+  montajeId: string; referencia: ReferenciaNeumatico;
+  dot?: string | null; numeroSerie?: string | null; observaciones?: string | null;
+}): Promise<{ neumatico_id: string; operacion_id: string }> {
+  const r = params.referencia;
+  const marca = r.modelo?.marca?.nombre ?? "";
+  const medida = r.tyre_size?.medida ?? "";
+  if (!marca || !medida) throw new Error("La referencia no tiene marca o medida: complétala en el catálogo");
+  const hecho = await corregirMontadoNuevaFicha({
+    montajeId: params.montajeId, marca, modelo: r.modelo?.nombre ?? null, medida,
+    dot: params.dot, numeroSerie: params.numeroSerie, observaciones: params.observaciones,
+    metodo: "catalogo",
+  });
+  const ts = r.tyre_size;
+  const ic = ts?.indice_carga_simple
+    ? `${ts.indice_carga_simple}${ts.indice_carga_doble ? `/${ts.indice_carga_doble}` : ""}` : null;
+  if (ic || ts?.codigo_velocidad) {
+    // Si esto falla, la corrección ya está hecha y es lo importante: se avisa.
+    const { error } = await supabase.from("tc_neumaticos")
+      .update({ indice_carga: ic, indice_velocidad: ts?.codigo_velocidad ?? null })
+      .eq("id", hecho.neumatico_id);
+    if (error) throw new Error(`Corregido, pero no se ha podido apuntar el IC/CV: ${error.message}`);
+  }
+  return hecho;
+}
+
+/**
  * Apunta el neumático que YA ESTABA montado en una posición, con su medición.
  *
  * No es una venta, ni un trabajo facturable, ni una salida de almacén: es
