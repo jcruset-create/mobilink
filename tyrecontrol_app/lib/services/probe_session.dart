@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'offline_store.dart';
+import 'pitido_medicion.dart';
 import 'rfid_service.dart';
 import 'tlgx_probe_service.dart';
 
@@ -89,6 +90,25 @@ class ProbeSession extends ChangeNotifier {
 
   TlgxProbeService _asegurarProbe() =>
       _probe ??= TlgxProbeService(onLine: _onLine, onState: _onState);
+
+  // ── Pitido de confirmación ─────────────────────────────────────────────────
+  //
+  // Va por el mismo canal que todo lo demás: no abre otra conexión.
+  late final PitidoDeMedicion _pitido = PitidoDeMedicion((cmd) => _asegurarProbe().enviar(cmd));
+
+  /// La lectura de profundidad [lectura] ya está registrada: la sonda pita una
+  /// vez. No hace nada si no es una profundidad, si ya se pitó por ella o si
+  /// la sonda no está conectada; y nunca lanza ni hace esperar.
+  void confirmarProfundidad(LecturaSonda lectura) {
+    if (lectura.tipo != LecturaTipo.profundidad) return;
+    confirmarProfundidadN(lectura.n);
+  }
+
+  /// Lo mismo, con el número de orden de la lectura ([LecturaSonda.n]).
+  void confirmarProfundidadN(int? n) {
+    if (!conectada) return;
+    _pitido.registrada(n);
+  }
 
   // ── Lector RFID ────────────────────────────────────────────────────────────
   //
@@ -224,6 +244,10 @@ class ProbeSession extends ChangeNotifier {
     switch (r.tipo) {
       case LecturaTipo.profundidad:
         profundidadMm = r.valor;
+        // Se numera para poder confirmarla con un pitido una sola vez.
+        if (r.valor != null) {
+          emitir = LecturaSonda(LecturaTipo.profundidad, valor: r.valor, raw: r.raw, n: _pitido.siguiente());
+        }
         break;
       case LecturaTipo.presion:
         presionBar = r.valor != null

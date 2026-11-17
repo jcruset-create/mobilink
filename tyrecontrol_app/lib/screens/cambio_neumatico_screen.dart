@@ -2060,6 +2060,8 @@ class _CampoReesculturaState extends State<_CampoReescultura> {
       if (l.tipo != LecturaTipo.profundidad || l.valor == null) return;
       _c.text = l.valor!.toStringAsFixed(1);
       widget.onCambio(l.valor!);
+      // La lectura ya está anotada en el cambio: la sonda lo confirma.
+      ProbeSession.instance.confirmarProfundidad(l);
       _sub?.cancel();
       if (mounted) setState(() => _esperando = false);
     });
