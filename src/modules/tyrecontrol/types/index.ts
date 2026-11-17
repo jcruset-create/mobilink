@@ -548,6 +548,11 @@ export interface UmbralesEmpresa {
   profundidad_minima_mm: number;
   profundidad_aviso_mm: number;
   presion_tolerancia_bar: number;
+  /** La APK pide las dos bandas (interior y exterior) de cada rueda. */
+  medicion_doble?: boolean;
+  /** Diferencia entre bandas (mm) a partir de la cual se avisa de desgaste
+   *  irregular. null = sin aviso. */
+  desgaste_irregular_delta_mm?: number | null;
 }
 
 // Modo de identificación de neumáticos de una empresa.
@@ -971,7 +976,13 @@ export interface RevisionDetalle {
   vehiculo_id: string;
   neumatico_id?: string | null;
   posicion_id: string;
+  /** La profundidad OFICIAL: con medición doble, la menor de las dos bandas
+   *  (lo garantiza un trigger en la BD). Es lo que leen todos los informes. */
   profundidad_mm?: number | null;
+  /** Medición doble: banda interior y exterior de la rodadura. Solo en
+   *  revisiones medidas así; la ficha de la revisión las enseña. */
+  profundidad_int_mm?: number | null;
+  profundidad_ext_mm?: number | null;
   presion_bar?: number | null;
   temperatura?: number | null;
   metodo_profundidad?: "manual" | "bluetooth" | "importacion_excel" | null;

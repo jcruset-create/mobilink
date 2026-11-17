@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 import 'fotos.dart';
+import 'offline_store.dart';
 import 'protocolo_profundidad.dart';
 import 'ultima_medicion.dart';
 import '../config.dart';
@@ -492,10 +493,51 @@ class TyreControlApi {
   }
 
   static Future<void> guardarDetalleRevision(Map<String, dynamic> detalle) async {
-    await _db.from('revisiones_neumaticos_detalle').upsert(
-          detalle,
-          onConflict: 'revision_id,posicion_id',
-        );
+    try {
+      await _db.from('revisiones_neumaticos_detalle').upsert(
+            detalle,
+            onConflict: 'revision_id,posicion_id',
+          );
+    } on PostgrestException catch (e) {
+      // Base de datos sin la migración de la medición doble: no conoce las
+      // columnas de las bandas. Se guarda sin ellas —profundidad_mm ya lleva
+      // la menor— en vez de perder la medición.
+      final sinBandas = Map<String, dynamic>.from(detalle)
+        ..remove('profundidad_int_mm')
+        ..remove('profundidad_ext_mm');
+      final hablaDeBandas = e.message.contains('profundidad_int_mm') || e.message.contains('profundidad_ext_mm');
+      if (!hablaDeBandas || sinBandas.length == detalle.length) rethrow;
+      await _db.from('revisiones_neumaticos_detalle').upsert(
+            sinBandas,
+            onConflict: 'revision_id,posicion_id',
+          );
+    }
+  }
+
+  /// Cómo se mide en esta empresa: si se piden las dos bandas de cada rueda
+  /// y a partir de qué diferencia entre ellas se avisa de desgaste irregular.
+  /// Por defecto, doble medición y aviso a 2,0 mm. Con caché para trabajar
+  /// sin cobertura.
+  static Future<({bool doble, double? deltaIrregularMm})> configMedicion(String empresaId) async {
+    const porDefecto = (doble: true, deltaIrregularMm: 2.0);
+    final clave = 'config_medicion_$empresaId';
+    try {
+      final e = await _db.from('tc_config_umbrales').select().eq('empresa_id', empresaId).maybeSingle();
+      // Columnas aún sin migrar: los defaults (que no mandan bandas que la
+      // BD no sepa guardar, gracias al reintento de guardarDetalleRevision).
+      final doble = e == null ? porDefecto.doble : (e['medicion_doble'] as bool? ?? porDefecto.doble);
+      final delta = e == null || !e.containsKey('desgaste_irregular_delta_mm')
+          ? porDefecto.deltaIrregularMm
+          : (e['desgaste_irregular_delta_mm'] as num?)?.toDouble();
+      await OfflineStore.cacheJson(clave, {'doble': doble, 'delta': delta});
+      return (doble: doble, deltaIrregularMm: delta);
+    } catch (_) {
+      final c = OfflineStore.cachedJson(clave);
+      if (c is Map) {
+        return (doble: c['doble'] as bool? ?? porDefecto.doble, deltaIrregularMm: (c['delta'] as num?)?.toDouble());
+      }
+      return porDefecto;
+    }
   }
 
   /// Cierra la revisión con su cronometraje (Analítica de Productividad).

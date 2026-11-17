@@ -2456,8 +2456,22 @@ export async function obtenerUmbralesEmpresa(empresaId: string): Promise<Umbrale
   return (data as UmbralesEmpresa) ?? null;
 }
 
+/** Umbral de desgaste irregular (diferencia entre bandas) de una empresa,
+ *  con la misma regla que la APK: sin configuración → 2,0 mm; configurado a
+ *  vacío → sin aviso. Si falla la lectura, sin aviso (nunca inventarlo). */
+export async function umbralDesgasteIrregular(empresaId: string): Promise<number | null> {
+  try {
+    const u = await obtenerUmbralesEmpresa(empresaId);
+    if (!u || u.desgaste_irregular_delta_mm === undefined) return 2.0;
+    return u.desgaste_irregular_delta_mm == null ? null : Number(u.desgaste_irregular_delta_mm);
+  } catch {
+    return null;
+  }
+}
+
 export async function guardarUmbralesEmpresa(empresaId: string, patch: {
   profundidad_minima_mm: number; profundidad_aviso_mm: number; presion_tolerancia_bar: number;
+  medicion_doble?: boolean; desgaste_irregular_delta_mm?: number | null;
 }): Promise<void> {
   const { error } = await supabase.from("tc_config_umbrales")
     .upsert({ empresa_id: empresaId, ...patch, updated_at: new Date().toISOString() }, { onConflict: "empresa_id" });

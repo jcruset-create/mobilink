@@ -353,6 +353,11 @@ class RevisionDetalleDraft {
   final String posicionId;
   String? neumaticoId;
   double? profundidadMm;
+  /// Medición doble: banda interior y exterior de la rodadura. Cuando hay
+  /// alguna, [profundidadMm] es la MENOR (ver [ponerBandas]); la base de
+  /// datos lo garantiza también por su lado con un trigger.
+  double? profundidadIntMm;
+  double? profundidadExtMm;
   double? presionBar;
   String? metodoProfundidad; // 'sonda' | 'manual'
   String? metodoPresion;     // 'sonda' | 'manual'
@@ -376,6 +381,8 @@ class RevisionDetalleDraft {
     required this.posicionId,
     this.neumaticoId,
     this.profundidadMm,
+    this.profundidadIntMm,
+    this.profundidadExtMm,
     this.presionBar,
     this.metodoProfundidad,
     this.metodoPresion,
@@ -392,6 +399,27 @@ class RevisionDetalleDraft {
 
   bool get medido => noAccesible || neumaticoAusente || (profundidadMm != null || presionBar != null);
 
+  /// Guarda las dos bandas y deja como profundidad oficial la menor de las
+  /// medidas (si solo hay una, esa). Con las dos a null no toca la
+  /// profundidad: es una medición simple.
+  void ponerBandas(double? interior, double? exterior) {
+    profundidadIntMm = interior;
+    profundidadExtMm = exterior;
+    final menor = menorDeBandas(interior, exterior);
+    if (menor != null) profundidadMm = menor;
+  }
+
+  /// Diferencia entre bandas (mm), solo si se midieron las dos.
+  double? get deltaBandas => (profundidadIntMm == null || profundidadExtMm == null)
+      ? null
+      : (profundidadIntMm! - profundidadExtMm!).abs();
+
+  /// ¿Desgaste irregular según el umbral de la empresa? (null = sin aviso).
+  bool desgasteIrregular(double? umbralMm) {
+    final d = deltaBandas;
+    return umbralMm != null && d != null && d >= umbralMm - 1e-9;
+  }
+
   /// Copia con otra profundidad, conservando lo demás (presión, estado
   /// visual, no accesible…). Se usa para diagnosticar con la profundidad
   /// VIGENTE cuando la de la revisión se ha quedado vieja.
@@ -399,6 +427,8 @@ class RevisionDetalleDraft {
         posicionId: posicionId,
         neumaticoId: neumaticoId,
         profundidadMm: mm,
+        profundidadIntMm: profundidadIntMm,
+        profundidadExtMm: profundidadExtMm,
         presionBar: presionBar,
         metodoProfundidad: metodoProfundidad,
         metodoPresion: metodoPresion,
@@ -420,6 +450,12 @@ class RevisionDetalleDraft {
         'posicion_id': posicionId,
         'neumatico_id': neumaticoId,
         'profundidad_mm': profundidadMm,
+        // Las bandas solo viajan si se midieron: una medición simple deja la
+        // fila como siempre (y una base sin migrar no ve columnas que no conoce).
+        if (profundidadIntMm != null || profundidadExtMm != null) ...{
+          'profundidad_int_mm': profundidadIntMm,
+          'profundidad_ext_mm': profundidadExtMm,
+        },
         'presion_bar': presionBar,
         'metodo_profundidad': profundidadMm != null ? (metodoProfundidad ?? 'manual') : null,
         'metodo_presion': presionBar != null ? (metodoPresion ?? 'manual') : null,
@@ -428,6 +464,13 @@ class RevisionDetalleDraft {
         'no_accesible': noAccesible,
         'neumatico_ausente': neumaticoAusente,
       };
+}
+
+/// La menor de dos bandas medidas (si solo hay una, esa; si ninguna, null).
+double? menorDeBandas(double? a, double? b) {
+  if (a == null) return b;
+  if (b == null) return a;
+  return a < b ? a : b;
 }
 
 /// Profundidad que hay que ENSEÑAR y con la que hay que diagnosticar: la de
