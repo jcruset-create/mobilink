@@ -19624,19 +19624,60 @@ app.put("/api/otf/trabajos/:tid", requireSupervisorRole, async (req, res) => {
   try {
     const tid = Number(req.params.tid);
     const b = req.body ?? {};
-    const trabajo = b.trabajoPlantilla != null || b.detalleManual != null
-      ? combineTrabajo(b.trabajoPlantilla, b.detalleManual) : null;
+    /*
+     * Solo cambia lo que llega. Antes la plantilla y el detalle se pisaban
+     * siempre: cambiar el estado desde el desplegable (que solo manda
+     * «status») los dejaba en nulo.
+     */
+    const tocaTexto = b.trabajoPlantilla !== undefined || b.detalleManual !== undefined || b.neumaticos !== undefined;
+    // Cambio de neumáticos: undefined no toca, null lo quita, un objeto lo sustituye.
+    let neumaticos: NeumaticosTrabajo | null = null;
+    if (b.neumaticos) {
+      try {
+        neumaticos = limpiarNeumaticos(b.neumaticos);
+      } catch (e) {
+        if (e instanceof ErrorNeumaticos) return res.status(400).json({ error: e.message });
+        throw e;
+      }
+    }
+    const previo = (await db.query(`SELECT * FROM otf_trabajos WHERE id = $1`, [tid])).rows[0];
+    if (!previo) return res.status(404).json({ error: "Trabajo no encontrado" });
+    // Un trabajo ya registrado en TyreControl no cambia de ruedas: allí ya están montadas.
+    if (b.neumaticos !== undefined && previo.tcMontaje?.estado === "hecho") {
+      return res.status(409).json({ error: "El montaje ya está registrado en TyreControl: no se pueden cambiar las ruedas" });
+    }
+    const plantilla = b.trabajoPlantilla !== undefined ? (String(b.trabajoPlantilla ?? "").trim() || null) : previo.trabajoPlantilla;
+    const detalle = tocaTexto
+      ? (String(b.detalleManual ?? "").trim() || (neumaticos ? textoNeumaticos(neumaticos) : "")) || null
+      : previo.detalleManual;
+    const trabajo = tocaTexto ? combineTrabajo(plantilla, detalle) : previo.trabajo;
+    const ahora = Date.now();
     const r = await db.query(
       `UPDATE otf_trabajos SET
          plate = COALESCE($2,plate), "plateRemolque" = COALESCE($3,"plateRemolque"), "tipoVehiculo" = COALESCE($4,"tipoVehiculo"),
-         "trabajoPlantilla" = $5, "detalleManual" = $6, trabajo = COALESCE($7,trabajo),
-         status = COALESCE($8,status), observaciones = COALESCE($9,observaciones), "updatedAtMs" = $10
+         "trabajoPlantilla" = $5, "detalleManual" = $6, trabajo = $7,
+         status = COALESCE($8,status),
+         observaciones = CASE WHEN $9::boolean THEN $10::text ELSE observaciones END,
+         neumaticos = CASE WHEN $11::boolean THEN $12::jsonb ELSE neumaticos END,
+         "updatedAtMs" = $13
        WHERE id = $1 RETURNING *`,
       [tid, b.plate != null ? String(b.plate).toUpperCase().trim() : null, b.plateRemolque ?? null,
-       b.tipoVehiculo ?? null, b.trabajoPlantilla ?? null, b.detalleManual ?? null, trabajo,
-       b.status ?? null, b.observaciones ?? null, Date.now()]
+       b.tipoVehiculo ?? null, plantilla, detalle, trabajo, b.status ?? null,
+       b.observaciones !== undefined, String(b.observaciones ?? "").trim() || null,
+       b.neumaticos !== undefined, neumaticos ? JSON.stringify(neumaticos) : null, ahora]
     );
-    if (!r.rows[0]) return res.status(404).json({ error: "Trabajo no encontrado" });
+    // El neumático que puso la oficina como material sigue al trabajo.
+    if (b.neumaticos !== undefined) {
+      await db.query(`DELETE FROM otf_trabajo_material WHERE "trabajoId" = $1 AND "creadoPor" = 'oficina' AND tipo = 'neumatico'`, [tid]);
+      if (neumaticos) {
+        await db.query(
+          `INSERT INTO otf_trabajo_material ("trabajoId","otfId",tipo,descripcion,marca,estado,cantidad,"creadoPor","createdAtMs")
+           VALUES ($1,$2,'neumatico',$3,$4,$5,$6,'oficina',$7)`,
+          [tid, previo.otfId, neumaticos.medida, [neumaticos.marca, neumaticos.modelo].filter(Boolean).join(" ") || null,
+           neumaticos.condicion, neumaticos.seleccion.length, ahora],
+        );
+      }
+    }
     res.json(normalizeOtfTrabajo(r.rows[0]));
   } catch (e) {
     console.error("PUT /api/otf/trabajos/:tid error:", e);
