@@ -18,7 +18,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
-  buscarNeumaticosParaCorregir, corregirMontado, corregirMontadoNuevaFicha,
+  buscarNeumaticosParaCorregir, corregirConReferencia, corregirMontado, corregirMontadoNuevaFicha,
   inventarioInicialFinalizar, inventarioInicialPosicion, listarReferenciasNeumatico,
   kilometrajeActualVehiculo, type LecturaKmActual,
 } from "../services/data";
@@ -147,6 +147,14 @@ export default function ModalNeumaticosMontados({
           await corregirMontado({
             montajeId: fila.montajeId!, neumaticoCorrectoId: borrador.neumaticoCorrectoId,
             observaciones: borrador.motivo.trim() || null, metodo: "busqueda",
+          });
+        } else if (borrador.referenciaCorreccionId && referencias.some((r) => r.id === borrador.referenciaCorreccionId)) {
+          // Elegida del catálogo: la ficha nueva lleva también su IC y su CV.
+          await corregirConReferencia({
+            montajeId: fila.montajeId!,
+            referencia: referencias.find((r) => r.id === borrador.referenciaCorreccionId)!,
+            dot: borrador.dot.trim() || null, numeroSerie: borrador.numeroSerie.trim() || null,
+            observaciones: borrador.motivo.trim() || null,
           });
         } else {
           await corregirMontadoNuevaFicha({
@@ -322,6 +330,7 @@ export default function ModalNeumaticosMontados({
                   modo={modo}
                   empresaId={empresaId}
                   opciones={opciones}
+                  referencias={referencias}
                   guardada={hechas.includes(fila.codigo)}
                   onCambio={(c) => set(fila.posicionId, c)}
                 />
@@ -493,10 +502,10 @@ function BloqueCatalogo({
 }
 
 function Fila({
-  fila, borrador, modo, empresaId, opciones, guardada, onCambio,
+  fila, borrador, modo, empresaId, opciones, referencias, guardada, onCambio,
 }: {
   fila: FilaMontada; borrador: BorradorFila; modo: "informar" | "actualizar";
-  empresaId: string; opciones: ReferenciaNeumatico[]; guardada: boolean;
+  empresaId: string; opciones: ReferenciaNeumatico[]; referencias: ReferenciaNeumatico[]; guardada: boolean;
   onCambio: (c: Partial<BorradorFila>) => void;
 }) {
   const error = validarFila(fila, borrador);
@@ -572,7 +581,7 @@ function Fila({
         <tr className="border-t border-slate-800 bg-slate-900/50">
           <td />
           <td colSpan={4} className="px-3 py-3">
-            <Correccion fila={fila} borrador={borrador} empresaId={empresaId} onCambio={onCambio} />
+            <Correccion fila={fila} borrador={borrador} empresaId={empresaId} referencias={referencias} onCambio={onCambio} />
           </td>
         </tr>
       )}
@@ -589,10 +598,24 @@ function Fila({
 
 /** Qué goma hay de verdad: una ficha que ya existe, o una que no estaba. */
 function Correccion({
-  fila, borrador, empresaId, onCambio,
-}: { fila: FilaMontada; borrador: BorradorFila; empresaId: string; onCambio: (c: Partial<BorradorFila>) => void }) {
+  fila, borrador, empresaId, referencias, onCambio,
+}: {
+  fila: FilaMontada; borrador: BorradorFila; empresaId: string; referencias: ReferenciaNeumatico[];
+  onCambio: (c: Partial<BorradorFila>) => void;
+}) {
   const [busqueda, setBusqueda] = useState("");
   const [candidatos, setCandidatos] = useState<Neumatico[]>([]);
+  const [busquedaCat, setBusquedaCat] = useState("");
+  // El catálogo: sin escribir nada, las de la medida que figura en la ficha;
+  // escribiendo, todo el catálogo (la goma de verdad puede ser de otra medida:
+  // 295/80 donde la ficha dice 315/80).
+  const medidaFicha = baseMedida(fila.neumatico?.medida);
+  const tCat = busquedaCat.trim().toLowerCase();
+  const delCatalogo = referencias
+    .filter((r) => (tCat
+      ? (r.referencia_completa ?? "").toLowerCase().includes(tCat)
+      : !medidaFicha || baseMedida(r.tyre_size?.medida) === medidaFicha))
+    .slice(0, MAX_OPCIONES);
 
   useEffect(() => {
     if (borrador.correccion !== "ficha") return;
@@ -642,13 +665,41 @@ function Correccion({
           )}
         </div>
       ) : (
-        <div className="grid gap-2 sm:grid-cols-3">
-          <input className={inputCls} placeholder="Marca *" value={borrador.marca}
-                 onChange={(e) => onCambio({ marca: e.target.value })} />
-          <input className={inputCls} placeholder="Modelo" value={borrador.modelo}
-                 onChange={(e) => onCambio({ modelo: e.target.value })} />
-          <input className={inputCls} placeholder="Medida *" value={borrador.medida}
-                 onChange={(e) => onCambio({ medida: e.target.value })} />
+        <div className="space-y-2">
+          {/* Del catálogo: rellena marca, modelo y medida, y la ficha nueva
+              nace con su índice de carga y su código de velocidad. */}
+          <div className="grid gap-2 sm:grid-cols-[1fr_2fr]">
+            <input className={inputCls} placeholder={`Buscar en el catálogo${medidaFicha ? ` (sin escribir: ${medidaFicha})` : ""}`}
+                   value={busquedaCat} onChange={(e) => setBusquedaCat(e.target.value)} />
+            <select className={inputCls} value={borrador.referenciaCorreccionId}
+                    onChange={(e) => {
+                      const r = referencias.find((x) => x.id === e.target.value);
+                      onCambio(r
+                        ? {
+                            referenciaCorreccionId: r.id,
+                            marca: r.modelo?.marca?.nombre ?? "",
+                            modelo: r.modelo?.nombre ?? "",
+                            medida: r.tyre_size?.medida ?? "",
+                          }
+                        : { referenciaCorreccionId: "" });
+                    }}>
+              <option value="">— elige el neumático del catálogo —</option>
+              {delCatalogo.map((r) => <option key={r.id} value={r.id}>{r.referencia_completa}</option>)}
+            </select>
+          </div>
+          {delCatalogo.length === 0 && (
+            <div className="text-[11px] text-amber-300">
+              No hay ninguna referencia que encaje. Búscala por otra medida, o escribe marca, modelo y medida a mano.
+            </div>
+          )}
+          <div className="grid gap-2 sm:grid-cols-3">
+            <input className={inputCls} placeholder="Marca *" value={borrador.marca}
+                   onChange={(e) => onCambio({ marca: e.target.value, referenciaCorreccionId: "" })} />
+            <input className={inputCls} placeholder="Modelo" value={borrador.modelo}
+                   onChange={(e) => onCambio({ modelo: e.target.value, referenciaCorreccionId: "" })} />
+            <input className={inputCls} placeholder="Medida *" value={borrador.medida}
+                   onChange={(e) => onCambio({ medida: e.target.value, referenciaCorreccionId: "" })} />
+          </div>
         </div>
       )}
 
