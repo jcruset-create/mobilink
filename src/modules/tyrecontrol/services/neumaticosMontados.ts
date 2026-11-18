@@ -61,6 +61,8 @@ export interface BorradorFila {
   marca: string;
   modelo: string;
   medida: string;
+  /** Si no está dada de alta y se elige del catálogo: la referencia (trae IC y CV). */
+  referenciaCorreccionId: string;
   motivo: string;
 }
 
@@ -68,7 +70,7 @@ export function borradorVacio(): BorradorFila {
   return {
     referenciaId: "", profundidadMm: "", presionBar: "", numeroSerie: "", dot: "",
     observaciones: "", coincide: true, correccion: "ficha", neumaticoCorrectoId: "",
-    marca: "", modelo: "", medida: "", motivo: "",
+    marca: "", modelo: "", medida: "", referenciaCorreccionId: "", motivo: "",
   };
 }
 
