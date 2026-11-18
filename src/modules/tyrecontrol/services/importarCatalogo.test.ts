@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  claveModelo, claveOferta, elegirHoja, ofertaDelModelo, kgDeIndice, kmhDeCodigo, leerHoja, medidaDeCatalogo, modeloDeCatalogo, planificar, planVacio,
+  claveModelo, claveOferta, elegirHoja, etiquetaModelo, gamaDeCatalogo, ofertaDelModelo, kgDeIndice, kmhDeCodigo, leerHoja, medidaDeCatalogo, modeloDeCatalogo, planificar, planVacio,
 } from "./importarCatalogo";
 
 describe("medidas", () => {
@@ -36,7 +36,7 @@ describe("modelos", () => {
 describe("leer una hoja", () => {
   it("formato de camión: IC en dos columnas y eje", () => {
     const f = leerHoja([{ Marca: "Dunlop", "Modelo / dibujo": "SP346 (17.5/19.5)", Medida: "205/75 R17.5", "IC completo": "124/122", CV: "M", "IC sencillo": 124, "IC gemelo": 122, Eje: "Dirección" }])!;
-    expect(f[0]).toEqual({ marca: "Dunlop", modelo: "SP346", medida: "205/75R17.5", simple: "124", doble: "122", cv: "M", temporada: null, eje: "direccion" });
+    expect(f[0]).toEqual({ marca: "Dunlop", modelo: "SP346", medida: "205/75R17.5", simple: "124", doble: "122", cv: "M", temporada: null, eje: "direccion", gama: null });
   });
 
   it("formato de furgoneta: IC en una columna y temporada", () => {
@@ -112,8 +112,8 @@ describe("planificar", () => {
   const yaImportado = {
     marcas: [...hay.marcas, { id: "nx", nombre: "Nexen" }],
     modelos: [
-      { id: "m1", marca_id: "hk", nombre: "RA58" }, { id: "m2", marca_id: "du", nombre: "SP346" },
-      { id: "m3", marca_id: "du", nombre: "SP346+" }, { id: "m4", marca_id: "hk", nombre: "RA18" }, { id: "m5", marca_id: "nx", nombre: "Roadian CT8" },
+      { id: "m1", marca_id: "hk", nombre: "RA58", gama: "Vantra Transit" }, { id: "m2", marca_id: "du", nombre: "SP346" },
+      { id: "m3", marca_id: "du", nombre: "SP346+" }, { id: "m4", marca_id: "hk", nombre: "RA18", gama: "Vantra LT" }, { id: "m5", marca_id: "nx", nombre: "Roadian CT8" },
     ],
     medidas: [...hay.medidas, { valor: "205/75R17.5" }, { valor: "315/60R22.5" }],
     indices: ["98", "100", "102", "104", "122", "124", "148", "154"].map((valor) => ({ valor })),
@@ -181,5 +181,35 @@ describe("kilos y km/h", () => {
     expect(kgDeIndice("300")).toBeNull();
     expect(kmhDeCodigo("r")).toBe(170);
     expect(kmhDeCodigo("H")).toBe(210);
+  });
+});
+
+describe("el nombre comercial del modelo", () => {
+  it("de Hankook se guarda aparte del código", () => {
+    expect(gamaDeCatalogo("Hankook", "Vantra LT (RA18)")).toBe("Vantra LT");
+    expect(gamaDeCatalogo("Hankook", "SmartFlex AL51")).toBe("SmartFlex");
+    expect(gamaDeCatalogo("Hankook", "TH31+")).toBeNull();
+    expect(gamaDeCatalogo("Michelin", "Agilis 3")).toBeNull();
+  });
+
+  it("y en las listas sale junto al código", () => {
+    expect(etiquetaModelo({ nombre: "RA18", gama: "Vantra LT" })).toBe("RA18 Vantra LT");
+    expect(etiquetaModelo({ nombre: "RA18", gama: null })).toBe("RA18");
+    expect(etiquetaModelo({ nombre: "Smart Flex AH51", gama: "Smart Flex" })).toBe("Smart Flex AH51");
+  });
+
+  it("un Excel ya importado completa el nombre de los que no lo tienen", () => {
+    const filas = leerHoja([
+      { Marca: "Hankook", Modelo: "Vantra LT", Referencia: "RA18", Medida: "195/70 R15C", "IC sencillo": 104, "IC gemelo": 102, CV: "R" },
+      { Marca: "Hankook", Modelo: "Vantra Transit", Referencia: "RA58", Medida: "195/70 R15C", "IC sencillo": 104, "IC gemelo": 102, CV: "R" },
+    ])!;
+    expect(filas[0]).toMatchObject({ modelo: "RA18", gama: "Vantra LT" });
+    const p = planificar(filas, {
+      marcas: [{ id: "hk", nombre: "Hankook" }],
+      modelos: [{ marca_id: "hk", nombre: "RA18", gama: null }, { marca_id: "hk", nombre: "RA58", gama: "Vantra Transit" }],
+      medidas: [{ valor: "195/70R15" }], indices: [{ valor: "104" }, { valor: "102" }], velocidades: [{ valor: "R" }],
+    });
+    expect(p.gamas).toEqual([{ marca: "Hankook", nombre: "RA18", gama: "Vantra LT" }]);
+    expect(planVacio(p)).toBe(false);
   });
 });

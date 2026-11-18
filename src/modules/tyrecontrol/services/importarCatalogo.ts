@@ -35,6 +35,8 @@ export interface FilaCatalogo {
   cv: string | null;
   temporada: string | null;
   eje: "direccion" | "traccion" | "remolque" | "mixto" | null;
+  /** El nombre comercial cuando el modelo se guarda por código: «Vantra LT» del RA18. */
+  gama?: string | null;
 }
 
 type Celdas = Record<string, unknown>;
@@ -67,6 +69,21 @@ export function modeloDeCatalogo(marca: string, s: string): string | null {
     else t = t.replace(/^smart\s?flex\s+/i, "");
   }
   return t;
+}
+
+/**
+ * El nombre comercial que acompaña al código, cuando el modelo se guarda por
+ * código (Hankook): «Vantra LT (RA18)» → «Vantra LT», «SmartFlex AL51» →
+ * «SmartFlex». Null si no hay nada más que el código.
+ */
+export function gamaDeCatalogo(marca: string, s: string): string | null {
+  const nombre = modeloDeCatalogo(marca, s);
+  if (!nombre || marca.toUpperCase() !== "HANKOOK") return null;
+  const resto = s
+    .replace(/\s*\(17\.5\/19\.5\)\s*$/, "")
+    .replace(new RegExp(`\\(?\\b${nombre.replace(/[+]/g, "\\+")}(?![A-Za-z0-9+])\\)?`), "")
+    .replace(/\s+/g, " ").trim();
+  return resto && resto !== nombre ? resto : null;
 }
 
 /** Para comparar modelos dentro de una marca. */
@@ -114,6 +131,7 @@ export function leerHoja(filas: Celdas[]): FilaCatalogo[] | null {
     salida.push({
       marca,
       modelo: conCodigo ? modeloDeCatalogo(marca, conCodigo) : null,
+      gama: conCodigo ? gamaDeCatalogo(marca, conCodigo) : null,
       medida: medidaDeCatalogo(medidaTxt),
       simple: /^\d{2,3}$/.test(simple) ? simple : null,
       doble: /^\d{2,3}$/.test(doble) ? doble : null,
@@ -143,7 +161,7 @@ export function elegirHoja(hojas: Record<string, Celdas[]>): { nombre: string; f
 
 export interface CatalogoActual {
   marcas: { id: string; nombre: string }[];
-  modelos: { id?: string; marca_id: string | null; nombre: string }[];
+  modelos: { id?: string; marca_id: string | null; nombre: string; gama?: string | null }[];
   medidas: { valor: string; activo?: boolean }[];
   indices: { valor: string }[];
   velocidades: { valor: string }[];
@@ -170,7 +188,9 @@ export interface PlanImportacion {
   medidas: string[];
   indices: string[];
   velocidades: string[];
-  modelos: { marca: string; nombre: string; temporada: string | null; eje: FilaCatalogo["eje"] }[];
+  modelos: { marca: string; nombre: string; temporada: string | null; eje: FilaCatalogo["eje"]; gama?: string | null }[];
+  /** Modelos que ya estaban sin nombre comercial y el Excel lo trae: se completa. */
+  gamas: { marca: string; nombre: string; gama: string }[];
   /** Todas las filas de oferta del Excel, sin repetir. Se escriben todas: las que ya estaban no se duplican. */
   oferta: FilaOferta[];
   /** De esas, cuántas no estaban guardadas. */
@@ -196,6 +216,8 @@ export function planificar(filas: FilaCatalogo[], hay: CatalogoActual): PlanImpo
   for (const f of filas) if (f.marca && !marcasHay.has(f.marca.toUpperCase())) marcas.set(f.marca.toUpperCase(), f.marca);
 
   const modelos = new Map<string, PlanImportacion["modelos"][number]>();
+  const sinGama = new Set(hay.modelos.filter((m) => !m.gama?.trim()).map((m) => `${m.marca_id}|${claveModelo(m.nombre)}`));
+  const gamas: PlanImportacion["gamas"] = [];
   let modelosYa = 0;
   const vistos = new Set<string>();
   for (const f of filas) {
@@ -204,8 +226,12 @@ export function planificar(filas: FilaCatalogo[], hay: CatalogoActual): PlanImpo
     if (vistos.has(k)) continue;
     vistos.add(k);
     const id = marcasHay.get(f.marca.toUpperCase());
-    if (id && modelosHay.has(`${id}|${claveModelo(f.modelo)}`)) { modelosYa++; continue; }
-    modelos.set(k, { marca: f.marca, nombre: f.modelo, temporada: f.temporada, eje: f.eje });
+    if (id && modelosHay.has(`${id}|${claveModelo(f.modelo)}`)) {
+      modelosYa++;
+      if (f.gama && sinGama.has(`${id}|${claveModelo(f.modelo)}`)) gamas.push({ marca: f.marca, nombre: f.modelo, gama: f.gama });
+      continue;
+    }
+    modelos.set(k, { marca: f.marca, nombre: f.modelo, temporada: f.temporada, eje: f.eje, gama: f.gama ?? null });
   }
 
   // La oferta: una fila por modelo, medida, IC y CV.
@@ -233,6 +259,7 @@ export function planificar(filas: FilaCatalogo[], hay: CatalogoActual): PlanImpo
     indices: nuevosIc,
     velocidades: nuevasCv,
     modelos: [...modelos.values()].sort((a, b) => porTexto(a.marca + a.nombre, b.marca + b.nombre)),
+    gamas,
     oferta: [...oferta.values()],
     ofertaNueva,
     yaEstaban: {
@@ -245,7 +272,12 @@ export function planificar(filas: FilaCatalogo[], hay: CatalogoActual): PlanImpo
 }
 
 export const planVacio = (p: PlanImportacion) =>
-  p.marcas.length + p.medidas.length + p.indices.length + p.velocidades.length + p.modelos.length + p.ofertaNueva === 0;
+  p.marcas.length + p.medidas.length + p.indices.length + p.velocidades.length + p.modelos.length + p.ofertaNueva + p.gamas.length === 0;
+
+/** Cómo se enseña un modelo en las listas: «RA18 Vantra LT», «AH51 SmartFlex». */
+export const etiquetaModelo = (m: { nombre: string; gama?: string | null }) =>
+  m.gama?.trim() && !m.nombre.toUpperCase().includes(m.gama.trim().toUpperCase())
+    ? `${m.nombre} ${m.gama.trim()}` : m.nombre;
 
 /**
  * Lo que el formulario de nueva referencia puede ofrecer de un modelo, según la
