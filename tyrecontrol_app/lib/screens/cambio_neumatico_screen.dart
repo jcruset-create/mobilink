@@ -62,6 +62,11 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   bool _ejesSeparados = false; // usando la imagen de chasis con ejes separados (remap de tarjetas)
   List<StockAlmacenLinea> _stock = [];
   Set<String> _medidasVehiculo = {}; // medidas base admitidas por el vehículo
+  // La medida de cada eje (base, «295/80R22.5»). Si todos llevan la misma va
+  // una vez arriba y en grande; si no, encima de las tarjetas de cada eje. Y
+  // las tarjetas dejan de repetirla salvo cuando la rueda NO es de esa medida.
+  Map<int, String> _medidaPorEje = {};
+  String? _medidaUnica;
   Map<String, RevisionDetalleDraft> _mediciones = {}; // última medición por NEUMÁTICO
   UmbralConfig? _umbralEmpresa; // umbrales de profundidad para pintar el estado
   Map<String, UmbralConfig> _umbralPorMedida = {};
@@ -235,14 +240,25 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
       final ejes = results[3] as List<Map<String, dynamic>>;
       final porEje = (v['medidas_por_eje'] as bool?) == true;
       final set = <String>{};
+      final porEjeMedida = <int, String>{};
+      String? unica;
       if (porEje) {
         for (final e in ejes) {
           final lbl = medidas[e['medida_id']];
-          if (lbl != null) set.add(_baseMedida(lbl));
+          if (lbl != null) {
+            set.add(_baseMedida(lbl));
+            final n = (e['eje'] as num?)?.toInt();
+            if (n != null) porEjeMedida[n] = _baseMedida(lbl);
+          }
         }
+        final distintas = porEjeMedida.values.toSet();
+        if (distintas.length == 1) unica = distintas.first;
       } else {
         final lbl = medidas[v['medida_id']];
-        if (lbl != null) set.add(_baseMedida(lbl));
+        if (lbl != null) {
+          set.add(_baseMedida(lbl));
+          unica = _baseMedida(lbl);
+        }
       }
 
       final tipo = v['tipo'];
@@ -273,6 +289,8 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         _posiciones = posiciones;
         _montajePorPosicion = {for (final m in results[1] as List<MontajeActual>) m.posicionId: m};
         _medidasVehiculo = set;
+        _medidaPorEje = porEjeMedida;
+        _medidaUnica = unica;
         _stock = (results[4] as List<StockAlmacenLinea>)
             .where((l) => set.isEmpty || set.contains(_baseMedida(l.medida)))
             .toList();
@@ -815,6 +833,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
                   Column(children: [
                     if (_modoPermuta) _bandaPermuta(),
                     _franjaStock(),
+                    if (_medidaUnica != null) _cabeceraMedida(_medidaUnica!),
                     Expanded(child: _zonaPlano()),
                     if (_posSel != null) _panelOperaciones(_posSel!),
                     if (_seleccion.length > 1) _panelVarias(),
@@ -932,6 +951,26 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   // ── Plano ─────────────────────────────────────────────────────────────────
   // Las zonas de destino (almacén / papelera) ya no cuelgan de aquí: viven en
   // la barra inferior, junto al resto de operaciones.
+  /// Todos los ejes con la misma medida: una vez, arriba y en grande. Fuera
+  /// del plano, así no hay tarjeta que pueda taparla.
+  Widget _cabeceraMedida(String medida) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Column(children: [
+        Text(medida, style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w900, color: AppColors.textPrimary, letterSpacing: 0.5)),
+        const Text('TODOS LOS EJES', style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w800, color: AppColors.textSecondary, letterSpacing: 0.8)),
+      ]),
+    );
+  }
+
+  /// Medida que se espera en esta posición: la de su eje, o la única.
+  String? _medidaEsperada(PosicionVehiculo p) => (p.eje != null ? _medidaPorEje[p.eje] : null) ?? _medidaUnica;
+
+  /// Medidas distintas por eje: la etiqueta va encima de las tarjetas de cada
+  /// eje y necesita este sitio libre por encima de ellas.
+  static const double _kAltoEtiquetaEje = 26;
+  bool get _etiquetaPorEje => _medidaUnica == null && _medidaPorEje.values.toSet().length > 1;
+
   Widget _zonaPlano() {
     return _imagenChasis == null || _aspect == null
         ? Center(child: _imagenChasis == null
@@ -1022,11 +1061,43 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
           // El tamaño de cada tarjeta, lo más grande posible sin pisar a
           // ninguna otra (ver widgets/tarjetas_plano.dart).
           ...() {
-            final cajas = [
+            var cajas = [
               for (int i = 0; i < _posiciones.length; i++) _cajaTarjeta(_posiciones[i], i, ox, oy, iw, ih, k),
             ];
-            final tam = repartirTarjetas(cajas, areaAncho: 2 * ox + iw, areaAlto: h, anchoMax: _kAnchoMaxTarjeta);
+            // Con una medida por eje, cada eje necesita sitio encima de sus
+            // tarjetas para la etiqueta: se baja la fila si no cabe arriba, y
+            // las tarjetas de la fila de encima no pueden bajar hasta ella.
+            final reserva = <double>[];
+            final etiquetas = <({String medida, double top, int eje})>[];
+            if (_etiquetaPorEje) {
+              final topPorEje = <int, double>{};
+              for (int i = 0; i < _posiciones.length; i++) {
+                final e = _posiciones[i].eje;
+                if (e == null || _medidaPorEje[e] == null) continue;
+                final tp = cajas[i].top < _kAltoEtiquetaEje ? _kAltoEtiquetaEje : cajas[i].top;
+                if (!topPorEje.containsKey(e) || tp < topPorEje[e]!) topPorEje[e] = tp;
+              }
+              cajas = [
+                for (int i = 0; i < _posiciones.length; i++)
+                  CajaTarjeta(cajas[i].centroX,
+                      cajas[i].top < _kAltoEtiquetaEje && _medidaPorEje[_posiciones[i].eje] != null ? _kAltoEtiquetaEje : cajas[i].top),
+              ];
+              for (final p in _posiciones) {
+                reserva.add(p.eje != null && _medidaPorEje[p.eje] != null ? _kAltoEtiquetaEje : 0);
+              }
+              topPorEje.forEach((e, tp) => etiquetas.add((medida: _medidaPorEje[e]!, top: tp - _kAltoEtiquetaEje, eje: e)));
+            }
+            final tam = repartirTarjetas(cajas, areaAncho: 2 * ox + iw, areaAlto: h, anchoMax: _kAnchoMaxTarjeta,
+                reservaArriba: reserva.isEmpty ? null : reserva);
             return [
+              for (final et in etiquetas)
+                Positioned(
+                  left: 0, right: 0, top: et.top, height: _kAltoEtiquetaEje,
+                  child: Center(child: Text.rich(TextSpan(children: [
+                    TextSpan(text: et.medida, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: AppColors.textPrimary)),
+                    TextSpan(text: '  EJE ${et.eje}', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: AppColors.textSecondary)),
+                  ]))),
+                ),
               for (int i = 0; i < _posiciones.length; i++)
                 _tarjetaPosicion(_posiciones[i], i, cajas[i], tam[i], 2 * ox + iw),
             ];
@@ -1542,10 +1613,10 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
                     maxSimultaneousDrags: _modoPermuta ? 0 : 1,
                     data: _DragMontaje(m),
                     feedback: _cardMontado(p, m, cardW, arrastrando: true),
-                    childWhenDragging: Opacity(opacity: 0.3, child: _cardMontado(p, m, cardW)),
+                    childWhenDragging: Opacity(opacity: 0.3, child: _cardMontado(p, m, cardW, seleccionada: sel && !esA)),
                     child: GestureDetector(
                       onTap: () => _toggleSeleccion(p.id),
-                      child: _cardMontado(p, m, cardW,
+                      child: _cardMontado(p, m, cardW, seleccionada: sel && !esA,
                           resaltar: resaltar || cand.isNotEmpty, conIncidencia: problemas != null),
                     ),
                   ),
@@ -1563,7 +1634,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
                   },
                   builder: (ctx, cand, rej) => GestureDetector(
                     onTap: () => _toggleSeleccion(p.id),
-                    child: _cardVacia(p, cardW, activo: cand.isNotEmpty, resaltar: problemas != null),
+                    child: _cardVacia(p, cardW, activo: cand.isNotEmpty, resaltar: problemas != null, seleccionada: sel && !esA),
                   ),
                 ),
         ),
@@ -1620,7 +1691,18 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     return Umbrales(profCriticaMm: c.minimaMm, profAvisoMm: c.avisoMm);
   }
 
-  Widget _cardMontado(PosicionVehiculo p, MontajeActual m, double cardW, {bool resaltar = false, bool arrastrando = false, bool conIncidencia = false}) {
+  /// El visto de rueda elegida: grande, centrado arriba de la tarjeta.
+  Widget _vistoSeleccion(double s) => Container(
+        width: 30 * s, height: 30 * s,
+        decoration: BoxDecoration(
+          color: AppColors.success, shape: BoxShape.circle,
+          border: Border.all(color: Colors.white, width: 2.5),
+          boxShadow: const [BoxShadow(color: Color(0x88000000), blurRadius: 6, offset: Offset(0, 2))],
+        ),
+        child: Icon(Icons.check, color: Colors.white, size: 19 * s),
+      );
+
+  Widget _cardMontado(PosicionVehiculo p, MontajeActual m, double cardW, {bool resaltar = false, bool arrastrando = false, bool conIncidencia = false, bool seleccionada = false}) {
     final n = m.neumatico;
     // Medición del PROPIO neumático (no de la posición): un nuevo no hereda mm del anterior.
     final med = _mediciones[m.neumaticoId];
@@ -1683,6 +1765,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         border: Border.all(color: borde, width: (resaltar || conIncidencia) ? 3 : 2),
       ),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
+        if (seleccionada) Padding(padding: EdgeInsets.only(bottom: 2 * s), child: _vistoSeleccion(s)),
         Text(p.codigoPosicion, style: TextStyle(fontSize: 9.5 * s, fontWeight: FontWeight.w800, color: cAcento), maxLines: 1, overflow: TextOverflow.ellipsis),
         Text.rich(
           TextSpan(children: [
@@ -1696,7 +1779,18 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         Text([n?.marca ?? '—', if ((n?.modelo ?? '').isNotEmpty) n!.modelo!].join(' '),
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 11 * s, fontWeight: FontWeight.w800, color: cTexto), maxLines: 2, overflow: TextOverflow.ellipsis),
-        Text(n?.medida ?? '', style: TextStyle(fontSize: 9.5 * s, color: cSuave), maxLines: 1, overflow: TextOverflow.ellipsis),
+        // La medida ya está arriba (o encima del eje): aquí solo sale si no
+        // se sabe la del eje, o en rojo si esta rueda NO es de esa medida.
+        if (_medidaEsperada(p) == null)
+          Text(n?.medida ?? '', style: TextStyle(fontSize: 9.5 * s, color: cSuave), maxLines: 1, overflow: TextOverflow.ellipsis)
+        else if ((n?.medida ?? '').isNotEmpty && _baseMedida(n!.medida) != _medidaEsperada(p))
+          Container(
+            margin: EdgeInsets.only(top: 2 * s),
+            padding: EdgeInsets.symmetric(horizontal: 4 * s, vertical: 1),
+            decoration: BoxDecoration(color: AppColors.danger, borderRadius: BorderRadius.circular(5)),
+            child: Text('⚠ ${n.medida}', style: TextStyle(fontSize: 9.5 * s, fontWeight: FontWeight.w800, color: Colors.white),
+                maxLines: 1, overflow: TextOverflow.ellipsis),
+          ),
         if (n != null &&
             (esNuevoReciente ||
                 TyreControlApi.esMarcaRecauchutada(n.marca) ||
@@ -1716,7 +1810,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     return arrastrando ? Material(color: Colors.transparent, child: card) : card;
   }
 
-  Widget _cardVacia(PosicionVehiculo p, double cardW, {bool activo = false, bool resaltar = false}) {
+  Widget _cardVacia(PosicionVehiculo p, double cardW, {bool activo = false, bool resaltar = false, bool seleccionada = false}) {
     final color = activo ? AppColors.info : (resaltar ? AppColors.danger : AppColors.cardBorder);
     final s = (cardW / 110).clamp(0.9, 1.6);
     return Container(
@@ -1728,6 +1822,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         border: Border.all(color: color, width: (activo || resaltar) ? 3 : 1.5, style: BorderStyle.solid),
       ),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
+        if (seleccionada) Padding(padding: EdgeInsets.only(bottom: 2 * s), child: _vistoSeleccion(s)),
         Text(p.codigoPosicion, style: TextStyle(fontSize: 9.5 * s, fontWeight: FontWeight.w800, color: AppColors.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis),
         const SizedBox(height: 2),
         Icon(Icons.add_circle_outline, size: 18 * s, color: activo ? AppColors.info : AppColors.textHint),

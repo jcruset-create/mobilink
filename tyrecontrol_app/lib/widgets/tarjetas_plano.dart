@@ -43,6 +43,9 @@ List<TamanoTarjeta> repartirTarjetas(
   double anchoMax = 200,
   double anchoMin = 70,
   double altoMax = 170,
+  /// Sitio que hay que dejar libre ENCIMA de cada tarjeta (la etiqueta de la
+  /// medida de su eje): las de la fila de arriba no pueden bajar hasta él.
+  List<double>? reservaArriba,
 }) {
   final n = cajas.length;
   final anchos = List<double>.filled(n, anchoMax);
@@ -74,7 +77,7 @@ List<TamanoTarjeta> repartirTarjetas(
           if (b.top - a.top < kMismaFila) continue; // misma fila o por encima
           final seTocan = (a.centroX - b.centroX).abs() < (anchos[i] + anchos[j]) / 2;
           if (!seTocan) continue;
-          final d = b.top - a.top - hueco;
+          final d = b.top - (reservaArriba?[j] ?? 0) - a.top - hueco;
           if (d < h) h = d;
         }
         if (h > altoMax) h = altoMax;

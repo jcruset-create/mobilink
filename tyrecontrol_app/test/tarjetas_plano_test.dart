@@ -29,4 +29,10 @@ void main() {
     final t = repartirTarjetas(const [CajaTarjeta(50, 40)], areaAncho: 520, areaAlto: 560);
     expect(t[0].ancho, 100);
   });
+
+  test('con etiqueta de medida encima del eje de abajo, la de arriba se queda antes de la etiqueta', () {
+    final t = repartirTarjetas(const [CajaTarjeta(100, 100), CajaTarjeta(100, 300)],
+        areaAncho: 520, areaAlto: 560, reservaArriba: const [26, 26]);
+    expect(t[0].altoMax, 166); // 300 - 26 - 100 - 8
+  });
 }
