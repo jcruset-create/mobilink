@@ -30,6 +30,7 @@ import {
 import type { MontajeActual, Neumatico, PosicionVehiculo, ReferenciaNeumatico } from "../types";
 import { baseMedida } from "../services/medidas";
 import { Modal, inputCls } from "./ui";
+import NuevaReferenciaModal from "./NuevaReferenciaModal";
 
 interface Props {
   modo: "informar" | "actualizar";
@@ -79,6 +80,9 @@ export default function ModalNeumaticosMontados({
   const [lecturaKm, setLecturaKm] = useState<LecturaKmActual | null>(null);
   const [pidiendoKm, setPidiendoKm] = useState(false);
   const [cerrado, setCerrado] = useState(false);
+  // La goma no está en el catálogo: se da de alta sin salir del vehículo.
+  const [altaRef, setAltaRef] = useState(false);
+  const [msgAlta, setMsgAlta] = useState("");
 
   useEffect(() => { listarReferenciasNeumatico().then(setReferencias).catch(() => setReferencias([])); }, []);
 
@@ -278,6 +282,23 @@ export default function ModalNeumaticosMontados({
             medidaVehiculo={medidaVehiculo ?? null}
             libres={filas.filter((f) => !f.montajeId).length}
             onAplicar={aplicarATodas}
+            onNueva={() => { setMsgAlta(""); setAltaRef(true); }}
+            msgAlta={msgAlta}
+          />
+        )}
+
+        {altaRef && (
+          <NuevaReferenciaModal
+            prefill={{ medida: medidaVehiculo ?? "" }}
+            onClose={() => setAltaRef(false)}
+            onCreada={(r) => {
+              setAltaRef(false);
+              // Se relee el catálogo y se busca la nueva para que salga en
+              // los desplegables, también si es de otra medida.
+              void listarReferenciasNeumatico().then(setReferencias).catch(() => undefined);
+              setBusquedaRef(r.modelo);
+              setMsgAlta(`✔ ${r.marca} ${r.modelo} ${r.medida} añadida al catálogo: ya puedes elegirla.`);
+            }}
           />
         )}
 
@@ -404,16 +425,25 @@ function Aviso({ modo }: { modo: "informar" | "actualizar" }) {
 
 function BloqueCatalogo({
   opciones, totalReferencias, busqueda, onBusqueda, soloMedida, onSoloMedida, medidaVehiculo, libres, onAplicar,
+  onNueva, msgAlta,
 }: {
   opciones: ReferenciaNeumatico[]; totalReferencias: number; busqueda: string; onBusqueda: (v: string) => void;
   soloMedida: boolean; onSoloMedida: (v: boolean) => void; medidaVehiculo: string | null;
   libres: number; onAplicar: (referenciaId: string, profundidad: string) => void;
+  onNueva: () => void; msgAlta: string;
 }) {
   const [refTodas, setRefTodas] = useState("");
   const [profTodas, setProfTodas] = useState("");
   return (
     <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-3">
-      <div className="text-[11px] font-bold uppercase text-slate-400">El neumático del catálogo</div>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-[11px] font-bold uppercase text-slate-400">El neumático del catálogo</div>
+        <button type="button" onClick={onNueva}
+          className="rounded border border-emerald-600 px-3 py-1 text-[12px] font-bold text-emerald-300 hover:bg-emerald-600/10">
+          + Nuevo neumático para el catálogo
+        </button>
+      </div>
+      {msgAlta && <div className="mt-2 text-[12px] text-emerald-300">{msgAlta}</div>}
       <div className="mt-2 grid gap-2 sm:grid-cols-2">
         <input className={inputCls} placeholder="Buscar marca, modelo o medida"
                value={busqueda} onChange={(e) => onBusqueda(e.target.value)} />
@@ -450,7 +480,7 @@ function BloqueCatalogo({
       {opciones.length === 0 && (
         <div className="mt-2 text-[11px] text-amber-300">
           Sin referencias que encajen{medidaVehiculo && soloMedida ? ` con la medida ${medidaVehiculo}` : ""}.
-          Si la goma no está en el catálogo, hay que darla de alta antes.
+          Si la goma no está en el catálogo, dala de alta con «+ Nuevo neumático para el catálogo».
         </div>
       )}
       {opciones.length >= MAX_OPCIONES && (
