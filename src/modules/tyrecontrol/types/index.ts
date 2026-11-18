@@ -507,6 +507,10 @@ export interface Vehiculo {
   // Nació en la tablet con lo mínimo (tc_alta_vehiculo_desde_parte) y le
   // faltan marca, modelo o delegación. Un administrador lo completa.
   pendiente_validar?: boolean;
+  // Del alta desde «Nueva revisión» en la tablet: la foto de la matrícula
+  // (bucket tc-revisiones-fotos) y si se tecleó porque la foto no se leía.
+  foto_matricula_path?: string | null;
+  matricula_tecleada?: boolean;
   /**
    * Si entra en el mantenimiento integral.
    *

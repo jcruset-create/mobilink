@@ -9950,6 +9950,57 @@ async function detectPlateFromImage(
   }
 }
 
+/**
+ * Como detectPlateFromImage, pero diciendo además qué caracteres ha leído con
+ * duda (0/O, 8/B, 1/I, 5/S, 2/Z, una letra tapada por barro…). Lo usa el alta
+ * de vehículos de la tablet: antes de crear un camión nuevo hay que estar
+ * seguros de la matrícula, y una duda se resuelve repitiendo la foto.
+ *
+ * `dudosos` son posiciones (desde 0) sobre la matrícula ya normalizada.
+ */
+async function detectarMatriculaConDudas(
+  imageUrl: string
+): Promise<{ plate: string | null; dudosos: number[] }> {
+  try {
+    const r = await pedirIA<{ matricula: string | null; dudosos: number[] }>({
+      operacion: "tyrecontrol.detectarMatricula",
+      proposito: "documento",
+      prompt:
+        "Esta es una foto de la matrícula de un vehículo español. " +
+        "En España la matrícula BLANCA es la del CAMIÓN/vehículo y la ROJA la del REMOLQUE. " +
+        "Si aparecen las dos, devuelve SOLO la BLANCA. " +
+        "Devuelve la matrícula sin espacios ni guiones, o null si no se puede leer. " +
+        "En `dudosos` pon las posiciones (empezando en 0, sobre la matrícula sin espacios) de los " +
+        "caracteres de los que NO estés seguro: confusiones como 0/O, 8/B, 1/I, 5/S, 2/Z, o letras " +
+        "tapadas, borrosas o cortadas. Lista vacía si la lees entera con seguridad.",
+      imagenes: [{ url: imageUrl }],
+      maxTokens: 2000,
+      esquema: {
+        nombre: "matricula_con_dudas",
+        schema: {
+          type: "object", additionalProperties: false,
+          required: ["matricula", "dudosos"],
+          properties: {
+            matricula: { type: ["string", "null"] },
+            dudosos: { type: "array", items: { type: "integer" } },
+          },
+        },
+      },
+    });
+    const datos: Partial<{ matricula: unknown; dudosos: unknown }> = r.datos ?? {};
+    const plate = normalizePlateText(datos.matricula);
+    if (!plate || plate === "NONE" || plate.length < 5) return { plate: null, dudosos: [] };
+    const posiciones: unknown[] = Array.isArray(datos.dudosos) ? datos.dudosos : [];
+    const dudosos = [...new Set(
+      posiciones.filter((i): i is number => Number.isInteger(i) && (i as number) >= 0 && (i as number) < plate.length)
+    )].sort((a, b) => a - b);
+    return { plate, dudosos };
+  } catch (error) {
+    console.error("detectarMatriculaConDudas error:", error);
+    return { plate: null, dudosos: [] };
+  }
+}
+
 // Detecta a la vez la matrícula BLANCA (camión) y la ROJA (remolque) de una sola foto.
 // Devuelve { white, red } con cada matrícula normalizada o null si no se lee.
 async function detectBothPlatesFromImage(
@@ -20943,8 +20994,12 @@ app.post(
       if (upErr) throw new Error(upErr.message);
       const { data: pub } = supabase.storage.from("tc-revisiones-fotos").getPublicUrl(storagePath);
 
-      const plate = await detectPlateFromImage(pub.publicUrl);
-      return res.json({ plate });
+      // Además de la matrícula se devuelve dónde ha quedado la foto (el alta
+      // desde la tablet la guarda en el vehículo como prueba) y qué caracteres
+      // ha leído con duda la IA, para pedir otra foto en vez de dar de alta
+      // un camión con la matrícula mal leída. Las APK antiguas solo leen `plate`.
+      const lectura = await detectarMatriculaConDudas(pub.publicUrl);
+      return res.json({ plate: lectura.plate, dudosos: lectura.dudosos, fotoPath: storagePath });
     } catch (e: any) {
       console.error("POST /api/tyrecontrol/scan-plate error:", e);
       res.status(500).json({ error: e?.message || "Error escaneando matrícula" });

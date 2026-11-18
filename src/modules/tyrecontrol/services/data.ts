@@ -3689,6 +3689,12 @@ export async function contarSinSeguimiento(empresaId?: string | null): Promise<n
   return count ?? 0;
 }
 
+/** La foto de la matrícula que hizo la tablet al dar de alta el vehículo. */
+export function urlFotoMatricula(path: string | null | undefined): string | null {
+  if (!path) return null;
+  return supabase.storage.from("tc-revisiones-fotos").getPublicUrl(path).data.publicUrl;
+}
+
 /** Da por bueno un vehículo dado de alta desde la tablet. Solo administradores. */
 export async function validarVehiculo(id: string): Promise<void> {
   const { error } = await supabase.rpc("tc_validar_vehiculo", { p_vehiculo: id });
