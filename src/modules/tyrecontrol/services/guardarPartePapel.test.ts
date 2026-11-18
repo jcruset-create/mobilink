@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { estadoParaGuardar, fechaDelParte, origenDelParte } from "./guardarPartePapel";
+import {
+  borradorDe, estadoParaGuardar, fechaDelParte, filaVacia, lecturaDelBorrador, numeroDe, origenDelParte,
+} from "./guardarPartePapel";
 import type { FilaLeidaFlotas } from "./parteFlotas";
 
 const fila = (pos: number, mm: number | null): FilaLeidaFlotas =>
@@ -65,5 +67,39 @@ describe("estado para guardar", () => {
 
   it("deja dicho de dónde sale la revisión", () => {
     expect(origenDelParte("20261117.pdf", 3)).toBe("Importada del parte en papel 20261117.pdf, hoja 3");
+  });
+});
+
+describe("corregir a mano lo leído", () => {
+  const lectura = { matricula: "4638 HSL", numero_unidad: "1255", fecha: "16-11-2026" };
+
+  it("el borrador lleva lo leído y vuelve igual si no se toca", () => {
+    const b = borradorDe(lectura, base.filas);
+    expect(b.filas[0]).toEqual({ pos: "1", profundidad: "14", medida: "295/80R22.5", marca: "Hankook", modelo: "AH51", serie: "" });
+    const l = lecturaDelBorrador(b);
+    expect(l.numero_unidad).toBe("1255");
+    expect(l.filas).toHaveLength(6);
+    expect(l.filas[0]).toMatchObject({ pos: 1, profundidad_mm: 14, medida: "295/80R22.5" });
+  });
+
+  it("se corrige una profundidad, la matrícula y se quita una fila vacía", () => {
+    const b = borradorDe(lectura, base.filas);
+    b.matricula = "1685 HSW";
+    b.filas[1].profundidad = "9,5";
+    b.filas.push(filaVacia("7"));
+    b.filas[6].pos = "";
+    const l = lecturaDelBorrador(b);
+    expect(l.matricula).toBe("1685 HSW");
+    expect(l.filas[1].profundidad_mm).toBe(9.5);
+    expect(l.filas).toHaveLength(6);
+  });
+
+  it("lo que no es un número queda sin leer y bloquea al guardar", () => {
+    const b = borradorDe(lectura, base.filas);
+    b.filas[0].profundidad = "1O";
+    const l = lecturaDelBorrador(b);
+    expect(l.filas[0].profundidad_mm).toBeNull();
+    expect(estadoParaGuardar({ ...base, filas: l.filas }).bloqueos.join(" ")).toMatch(/sin leer/);
+    expect(numeroDe("12")).toBe(12);
   });
 });

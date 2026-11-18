@@ -8,7 +8,9 @@ import {
   discrepanciaDeCroquis, filasConDatos, numeracionDelParteFlotas, pareceNota,
 } from "../services/parteFlotas";
 import { inputCls, TableWrap, tdCls, thCls } from "../components/ui";
-import { estadoParaGuardar, origenDelParte } from "../services/guardarPartePapel";
+import {
+  borradorDe, estadoParaGuardar, filaVacia, lecturaDelBorrador, origenDelParte, type BorradorHoja,
+} from "../services/guardarPartePapel";
 import { importRevisiones, type ReporteRev } from "../services/importRevisiones";
 
 /**
@@ -141,6 +143,22 @@ export default function ImportarPartesPapel() {
     return { veh: null, aviso: "No se ha reconocido el vehículo." };
   }
 
+  /** Lo corregido a mano pasa a ser la lectura: todo se recalcula con ello. */
+  function corregir(i: number, c: ReturnType<typeof lecturaDelBorrador>) {
+    setEstados((p) => p.map((e, j) => (j !== i || e.fase !== "leida" ? e : {
+      fase: "leida",
+      lectura: {
+        ...e.lectura,
+        matricula: c.matricula, numero_unidad: c.numero_unidad, fecha: c.fecha,
+        filas: c.filas.map((f) => ({
+          ...f, recauchutado: null, reestriado: null, llanta_ha: null, llanta_cd: null, llanta_gp: null,
+        })),
+        // La duda de la lectura la ha resuelto quien tiene el papel delante.
+        aviso: null,
+      },
+    })));
+  }
+
   async function posicionesDe(v: Vehiculo): Promise<PosicionVehiculo[]> {
     if (!v.tipo_vehiculo_id) return [];
     const ya = posicionesPorTipo[v.tipo_vehiculo_id];
@@ -178,6 +196,7 @@ export default function ImportarPartesPapel() {
           <Hoja
             key={i} numero={i + 1} estado={e} fichero={nombre}
             casar={casar} posicionesDe={posicionesDe}
+            onCorregir={(c) => corregir(i, c)}
           />
         ))}
       </div>
@@ -185,10 +204,11 @@ export default function ImportarPartesPapel() {
   );
 }
 
-function Hoja({ numero, estado, fichero, casar, posicionesDe }: {
+function Hoja({ numero, estado, fichero, casar, posicionesDe, onCorregir }: {
   numero: number;
   estado: EstadoHoja;
   fichero: string;
+  onCorregir: (c: ReturnType<typeof lecturaDelBorrador>) => void;
   casar: (l: HojaPapel) => { veh: Vehiculo | null; aviso: string | null };
   posicionesDe: (v: Vehiculo) => Promise<PosicionVehiculo[]>;
 }) {
@@ -239,6 +259,21 @@ function Hoja({ numero, estado, fichero, casar, posicionesDe }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lectura, vehId, posiciones, numeracion]);
 
+  // ── Corregir a mano ───────────────────────────────────────────────────────
+  const [borrador, setBorrador] = useState<BorradorHoja | null>(null);
+  const [editada, setEditada] = useState(false);
+  function editar() {
+    if (!lectura) return;
+    setBorrador(borradorDe(lectura, filasConDatos(lectura.filas)));
+  }
+  function aplicarEdicion() {
+    if (!borrador) return;
+    onCorregir(lecturaDelBorrador(borrador));
+    setBorrador(null); setEditada(true); setConfirmado(false);
+  }
+  const cambiaFila = (j: number, campo: keyof BorradorHoja["filas"][number], v: string) =>
+    setBorrador((b) => (b ? { ...b, filas: b.filas.map((f, k) => (k === j ? { ...f, [campo]: v } : f)) } : b));
+
   async function guardar() {
     if (!guardado || guardado.filas.length === 0) return;
     setGuardando(true); setErrorGuardar("");
@@ -284,9 +319,25 @@ function Hoja({ numero, estado, fichero, casar, posicionesDe }: {
                 confianza {Math.round(estado.lectura.confianza * 100)} %
               </span>
             )}
+            {editada && (
+              <span className="rounded bg-sky-500/20 px-1.5 py-0.5 text-[11px] font-bold text-sky-300">corregida a mano</span>
+            )}
+            {!borrador && !resultado && (
+              <button type="button" onClick={editar}
+                className="ml-auto rounded border border-sky-600 px-3 py-1 text-[12px] font-bold text-sky-300 hover:bg-sky-600/10">
+                ✎ Editar
+              </button>
+            )}
           </>
         )}
       </div>
+
+      {borrador && (
+        <EditorHoja
+          borrador={borrador} onCambia={setBorrador} onCambiaFila={cambiaFila}
+          onAplicar={aplicarEdicion} onCancelar={() => setBorrador(null)}
+        />
+      )}
 
       {estado.fase === "leida" && (
         <Avisos
@@ -295,7 +346,7 @@ function Hoja({ numero, estado, fichero, casar, posicionesDe }: {
         />
       )}
 
-      {estado.fase === "leida" && (
+      {estado.fase === "leida" && !borrador && (
         <TableWrap>
           <thead className="bg-slate-900"><tr>
             <th className={thCls}>POS</th>
@@ -337,13 +388,80 @@ function Hoja({ numero, estado, fichero, casar, posicionesDe }: {
         </TableWrap>
       )}
 
-      {guardado && (
+      {guardado && !borrador && (
         <BarraGuardar
           guardado={guardado} confirmado={confirmado} onConfirmar={setConfirmado}
           guardando={guardando} resultado={resultado} error={errorGuardar}
           onGuardar={() => void guardar()}
         />
       )}
+    </div>
+  );
+}
+
+/** Corregir a mano la cabecera y las filas de una hoja antes de guardarla. */
+function EditorHoja({ borrador, onCambia, onCambiaFila, onAplicar, onCancelar }: {
+  borrador: BorradorHoja;
+  onCambia: (b: BorradorHoja) => void;
+  onCambiaFila: (j: number, campo: keyof BorradorHoja["filas"][number], v: string) => void;
+  onAplicar: () => void;
+  onCancelar: () => void;
+}) {
+  const celda = "w-full rounded border border-slate-600 bg-slate-900 px-2 py-1 text-[13px] text-slate-100";
+  const columnas: [keyof BorradorHoja["filas"][number], string, string][] = [
+    ["pos", "Pos", "w-14"], ["profundidad", "Profundidad (mm)", "w-24"], ["medida", "Medida", ""],
+    ["marca", "Marca", ""], ["modelo", "Modelo", ""], ["serie", "Serie / nota", ""],
+  ];
+  return (
+    <div className="mb-2 flex flex-col gap-2 rounded border border-sky-700/60 bg-slate-900/60 p-3">
+      <div className="text-[12px] text-sky-200">
+        Corrige lo que no cuadre con el papel. La unidad es la que elige el vehículo; la posición (1, 2, 3…) es la
+        del papel y decide la rueda.
+      </div>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+        {([["matricula", "Matrícula"], ["unidad", "Unidad"], ["fecha", "Fecha (dd-mm-aaaa)"]] as const).map(([k, l]) => (
+          <label key={k} className="flex flex-col gap-1 text-[11px] font-bold uppercase text-slate-400">
+            {l}
+            <input className={celda} value={borrador[k]} onChange={(e) => onCambia({ ...borrador, [k]: e.target.value })} />
+          </label>
+        ))}
+      </div>
+      <TableWrap>
+        <thead className="bg-slate-900"><tr>
+          {columnas.map(([, l]) => <th key={l} className={thCls}>{l}</th>)}
+          <th className={thCls}></th>
+        </tr></thead>
+        <tbody>
+          {borrador.filas.map((f, j) => (
+            <tr key={j} className="border-t border-slate-700/60">
+              {columnas.map(([k, l, ancho]) => (
+                <td key={k} className={tdCls}>
+                  <input aria-label={`${l} fila ${j + 1}`} className={`${celda} ${ancho}`} value={f[k]}
+                    inputMode={k === "pos" || k === "profundidad" ? "decimal" : undefined}
+                    onChange={(e) => onCambiaFila(j, k, e.target.value)} />
+                </td>
+              ))}
+              <td className={tdCls}>
+                <button type="button" title="Quitar la fila"
+                  onClick={() => onCambia({ ...borrador, filas: borrador.filas.filter((_, k) => k !== j) })}
+                  className="rounded px-2 py-1 text-rose-300 hover:bg-rose-500/10">✕</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </TableWrap>
+      <div className="flex flex-wrap gap-2">
+        <button type="button"
+          onClick={() => {
+            const ultima = borrador.filas[borrador.filas.length - 1];
+            const sig = ultima && /^\d+$/.test(ultima.pos.trim()) ? String(Number(ultima.pos) + 1) : "";
+            onCambia({ ...borrador, filas: [...borrador.filas, { ...filaVacia(sig), medida: ultima?.medida ?? "", marca: ultima?.marca ?? "", modelo: ultima?.modelo ?? "" }] });
+          }}
+          className="rounded border border-slate-600 px-3 py-1.5 text-[12px] text-slate-200">+ Fila</button>
+        <span className="flex-1" />
+        <button type="button" onClick={onCancelar} className="rounded border border-slate-600 px-3 py-1.5 text-[12px] text-slate-200">Cancelar</button>
+        <button type="button" onClick={onAplicar} className="rounded bg-sky-600 px-4 py-1.5 text-[12px] font-bold text-white">Aplicar cambios</button>
+      </div>
     </div>
   );
 }
