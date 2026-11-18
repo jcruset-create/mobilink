@@ -38,7 +38,11 @@ class ReviewScreen extends StatefulWidget {
   /// Se reutiliza mientras siga vigente para no gastar dos veces el cupo del
   /// proveedor en la misma revisión. Si ha caducado, se vuelve a preguntar.
   final Map<String, dynamic>? lecturaKm;
-  const ReviewScreen({super.key, required this.vehiculo, this.revisionExistente, this.verificarPresiones = false, this.kmManual, this.lecturaKm});
+  /// Revisión que cierra un trabajo de taller (pantalla «Cambiar»): no se
+  /// puede salir ni finalizar hasta tener todas las ruedas medidas o marcadas
+  /// «No accesible». Después de cualquier operación hay que revisarlas todas.
+  final bool obligatoria;
+  const ReviewScreen({super.key, required this.vehiculo, this.revisionExistente, this.verificarPresiones = false, this.kmManual, this.lecturaKm, this.obligatoria = false});
 
   @override
   State<ReviewScreen> createState() => _ReviewScreenState();
@@ -617,6 +621,20 @@ class _ReviewScreenState extends State<ReviewScreen> {
   /// confirmación antes de cerrar (repuesto, sin neumático, saltadas…).
   Future<void> _finalizarConAviso() async {
     final pendientes = _posiciones.where((p) => !_completo(_detalles[p.id])).toList();
+    if (pendientes.isNotEmpty && widget.obligatoria) {
+      final nombres = pendientes.map((p) => p.nombre ?? p.codigoPosicion).join(', ');
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Faltan ruedas por revisar'),
+          content: Text('Después de un trabajo hay que revisar todas las ruedas: profundidad y presión.\n\n'
+              'Faltan ${pendientes.length} de ${_posiciones.length}: $nombres.\n\n'
+              'Mídelas, o márcalas «No accesible» si no se pueden medir.'),
+          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Seguir revisando'))],
+        ),
+      );
+      return;
+    }
     if (pendientes.isNotEmpty) {
       final nombres = pendientes.map((p) => p.nombre ?? p.codigoPosicion).join(', ');
       final ok = await showDialog<bool>(
@@ -937,7 +955,15 @@ class _ReviewScreenState extends State<ReviewScreen> {
     final estados = {for (final p in _posiciones) p.id: _statusDe(p)};
     final actual = _posiciones.isEmpty ? null : _posiciones[_index];
 
-    return Scaffold(
+    // Obligatoria: el botón de atrás no la abandona. Sale al finalizarla.
+    return PopScope(
+      canPop: !widget.obligatoria,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Termina la revisión de todas las ruedas para cerrar el trabajo.')));
+      },
+      child: Scaffold(
       appBar: AppBar(
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1021,7 +1047,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
           ),
         ],
       )),
-    );
+    ));
   }
 
   /// Cubre el body con el overlay de pausa cuando el trabajo está pausado.

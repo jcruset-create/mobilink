@@ -15,7 +15,9 @@ import '../widgets/etiqueta_neumatico.dart';
 import '../widgets/km_vehiculo.dart';
 import '../widgets/pausa_trabajo.dart';
 import 'catalogo_screen.dart';
+import 'review_screen.dart';
 import '../widgets/plano_margen.dart';
+import '../widgets/tarjetas_plano.dart';
 
 /// Cambio rápido de neumático (tablet, táctil).
 ///
@@ -443,7 +445,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
       } else {
         _aviso(_conParte('Cambios guardados', numeroParte), ok: true);
       }
-      if (mounted) Navigator.of(context).pop(true);
+      await _revisionObligatoria();
       return;
     }
 
@@ -471,7 +473,29 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         numeroParte),
       ok: total > 0,
     );
-    if (mounted) Navigator.of(context).pop(true);
+    await _revisionObligatoria();
+  }
+
+  /// Después de cualquier trabajo se revisan TODAS las ruedas: profundidad y
+  /// presión de cada una (o «No accesible»). La revisión sustituye a esta
+  /// pantalla y no se puede abandonar hasta finalizarla (ver
+  /// `ReviewScreen.obligatoria`). Al terminar vuelve al inicio.
+  Future<void> _revisionObligatoria() async {
+    final v = _vehiculo;
+    if (!mounted) return;
+    if (v == null) {
+      Navigator.of(context).pop(true);
+      return;
+    }
+    await Navigator.of(context).pushReplacement(
+      MaterialPageRoute(builder: (_) => ReviewScreen(
+        vehiculo: v,
+        verificarPresiones: true,
+        kmManual: _km?.round(),
+        obligatoria: true,
+      )),
+      result: true,
+    );
   }
 
   /// "Ya solucionado": la avería que marcaba el aviso ya no existe (la rueda
@@ -995,8 +1019,18 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
               ),
             );
           }),
-          for (int i = 0; i < _posiciones.length; i++)
-            _tarjetaPosicion(_posiciones[i], i, ox, oy, iw, ih, k),
+          // El tamaño de cada tarjeta, lo más grande posible sin pisar a
+          // ninguna otra (ver widgets/tarjetas_plano.dart).
+          ...() {
+            final cajas = [
+              for (int i = 0; i < _posiciones.length; i++) _cajaTarjeta(_posiciones[i], i, ox, oy, iw, ih, k),
+            ];
+            final tam = repartirTarjetas(cajas, areaAncho: 2 * ox + iw, areaAlto: h, anchoMax: _kAnchoMaxTarjeta);
+            return [
+              for (int i = 0; i < _posiciones.length; i++)
+                _tarjetaPosicion(_posiciones[i], i, cajas[i], tam[i], 2 * ox + iw),
+            ];
+          }(),
         ]),
       );
     });
@@ -1283,6 +1317,57 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
 
   int get _totalMarcas => _marcas.values.fold(0, (a, s) => a + s.length);
 
+  /// Ya se ha alineado la dirección en esta sesión (el botón lo enseña).
+  bool _alineada = false;
+
+  /// Alinear la dirección es del VEHÍCULO, no de una rueda: un toque, con
+  /// confirmación, y queda en el parte como operación del plan de trabajo.
+  /// El plan exige una rueda montada a la que colgarla: se usa una del eje de
+  /// dirección (E1_/DEL_), o la primera que haya.
+  Future<void> _alinearDireccion() async {
+    final montajes = _montajePorPosicion.entries.toList();
+    if (montajes.isEmpty) {
+      _aviso('El vehículo no tiene ruedas montadas.', ok: false);
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Alinear dirección'),
+        content: const Text('Se apunta la alineación de la dirección de todo el vehículo en este trabajo.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(c).pop(false), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.of(c).pop(true), child: const Text('Alineada')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final dir = montajes.firstWhere(
+      (e) {
+        final c = _codigo(e.key).toUpperCase();
+        return c.startsWith('E1') || c.startsWith('DEL');
+      },
+      orElse: () => montajes.first,
+    ).value;
+    setState(() => _trabajando = true);
+    try {
+      await TyreControlApi.aplicarPlanTrabajo(
+        vehiculoId: widget.vehiculoId,
+        acciones: [{'tipo': 'alineacion', 'montaje': dir.id}],
+        km: _km,
+        observaciones: 'Alineación de la dirección (vehículo completo)',
+        intervencionId: _intervencionId,
+      );
+      HapticFeedback.mediumImpact();
+      if (mounted) setState(() => _alineada = true);
+      _aviso('Alineación de la dirección apuntada', ok: true, conDeshacer: true);
+    } catch (e) {
+      _aviso('No se pudo apuntar la alineación: $e', ok: false);
+    } finally {
+      if (mounted) setState(() => _trabajando = false);
+    }
+  }
+
   /// Atajo por arrastre: soltar una rueda montada sobre otra posición del
   /// plano. Pasa por el mismo diálogo de confirmación que el modo permuta.
   void _soltarMontajeEnPosicion(MontajeActual m, PosicionVehiculo destino) {
@@ -1392,12 +1477,21 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     }
   }
 
-  Widget _tarjetaPosicion(PosicionVehiculo p, int i, double ox, double oy, double iw, double ih, double k) {
+  /// Dónde va la tarjeta: anclada por el CENTRO y separada del eje del camión
+  /// por el factor `k` (calculado en _plano()), para que se abra hacia fuera
+  /// sin despegarse de su rueda.
+  CajaTarjeta _cajaTarjeta(PosicionVehiculo p, int i, double ox, double oy, double iw, double ih, double k) {
     final co = cajaAVista(_coords(p, i));
-    // `k` viene calculado en _plano(): es lo que se abren las tarjetas hacia
-    // los lados para aprovechar el hueco que deja la foto proporcionada.
-    final areaW = 2 * ox + iw;
-    final cardW = co.w / 100 * iw * k;
+    final centroPlano = ox + iw / 2;
+    final centroX = ox + (co.x + co.w / 2) / 100 * iw;
+    return CajaTarjeta(
+      centroPlano + (centroX - centroPlano) * k,
+      (oy + co.y / 100 * ih).clamp(0.0, oy + ih - 44),
+    );
+  }
+
+  Widget _tarjetaPosicion(PosicionVehiculo p, int i, CajaTarjeta caja, TamanoTarjeta tam, double areaW) {
+    final cardW = tam.ancho;
     // En modo plan el plano enseña CÓMO VA A QUEDAR: cada posición pinta la
     // rueda que acabará ahí, con una etiqueta de dónde viene.
     final mReal = _montajePorPosicion[p.id];
@@ -1419,17 +1513,19 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
             border: Border.all(color: AppColors.info, width: esA ? 3 : 2),
           )
         : null;
-    // Anclada por el CENTRO y separada del eje del camión por el mismo factor
-    // `k`, para que la tarjeta se abra hacia fuera sin despegarse de su rueda.
-    final centroPlano = ox + iw / 2;
-    final centroX = ox + (co.x + co.w / 2) / 100 * iw;
-    final centroAbierto = centroPlano + (centroX - centroPlano) * k;
     final topeIzq = areaW - cardW;
     return Positioned(
-      left: (centroAbierto - cardW / 2).clamp(0.0, topeIzq < 0 ? 0.0 : topeIzq),
-      top: (oy + co.y / 100 * ih).clamp(0.0, oy + ih - 44),
+      left: (caja.centroX - cardW / 2).clamp(0.0, topeIzq < 0 ? 0.0 : topeIzq),
+      top: caja.top,
       width: cardW,
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
+      // Si el contenido no cabe en el alto que deja la fila de debajo, la
+      // tarjeta se encoge entera en vez de montarse sobre la otra.
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: tam.altoMax),
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.topCenter,
+          child: SizedBox(width: cardW, child: Column(mainAxisSize: MainAxisSize.min, children: [
         Container(
           decoration: anilloSel,
           padding: sel ? const EdgeInsets.all(2) : EdgeInsets.zero,
@@ -1484,7 +1580,9 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
                 style: const TextStyle(color: AppColors.info, fontSize: 9.5, fontWeight: FontWeight.w800)),
           ),
         if (problemas != null) _bannerIncidencia(problemas),
-      ]),
+      ])),
+        ),
+      ),
     );
   }
 
@@ -1534,7 +1632,6 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     final prof = profundidadVigente(med, n) ?? cat?.prof;
     // Presión: revisión → presión recomendada del eje → presión máx. del catálogo.
     final pres = med?.presionBar ?? obj?.presion.toDouble() ?? cat?.pres;
-    final profTxt = prof != null ? '${prof.toStringAsFixed(1)} mm' : '— mm';
     final presTxt = pres != null ? '${pres.toStringAsFixed(1)} bar' : '— bar';
     final esNuevoReciente = med == null && (n?.origen == 'almacen_generico' || n?.origen == 'catalogo_sin_stock');
     // Estado de la rueda: nuevo (verde brillante) > incidencia abierta (rojo) >
@@ -1572,23 +1669,34 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     final cTexto = fill != null ? (banda?.tinta ?? tireStatusOnFill(estado)) : AppColors.textPrimary;
     final cSuave = fill != null ? cTexto.withValues(alpha: 0.72) : AppColors.textSecondary;
     final cAcento = fill != null ? cTexto : borde;
+    // La letra crece con la tarjeta: en la tablet en vertical caben tarjetas
+    // de 150-200 px y se leen de lejos. Lo más grande es la profundidad, que
+    // es lo que decide si la rueda se cambia.
+    final s = (cardW / 110).clamp(0.9, 1.6);
+    final profGrande = prof != null ? prof.toStringAsFixed(1).replaceAll('.', ',') : '—';
     final card = Container(
       width: cardW,
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+      padding: EdgeInsets.symmetric(horizontal: 6 * s, vertical: 5 * s),
       decoration: BoxDecoration(
         color: fill ?? AppColors.surface.withValues(alpha: 0.94),
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(10 * s),
         border: Border.all(color: borde, width: (resaltar || conIncidencia) ? 3 : 2),
       ),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Text(p.codigoPosicion, style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: cAcento), maxLines: 1, overflow: TextOverflow.ellipsis),
-        Text(n?.marca ?? '—', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: cTexto), maxLines: 1, overflow: TextOverflow.ellipsis),
-        // El modelo, igual que en la ficha del vehículo (vehicle_layout_image):
-        // "Hankook" a secas no dice qué goma es cuando el cliente trabaja con
-        // dos modelos de la misma marca y medida.
-        if ((n?.modelo ?? '').isNotEmpty)
-          Text(n!.modelo!, style: TextStyle(fontSize: 9, color: cSuave), maxLines: 1, overflow: TextOverflow.ellipsis),
-        Text(n?.medida ?? '', style: TextStyle(fontSize: 9, color: cSuave), maxLines: 1, overflow: TextOverflow.ellipsis),
+        Text(p.codigoPosicion, style: TextStyle(fontSize: 9.5 * s, fontWeight: FontWeight.w800, color: cAcento), maxLines: 1, overflow: TextOverflow.ellipsis),
+        Text.rich(
+          TextSpan(children: [
+            TextSpan(text: profGrande, style: TextStyle(fontSize: 20 * s, fontWeight: FontWeight.w900, color: cTexto)),
+            TextSpan(text: ' mm', style: TextStyle(fontSize: 10 * s, fontWeight: FontWeight.w700, color: cSuave)),
+          ]),
+          maxLines: 1, overflow: TextOverflow.ellipsis,
+        ),
+        // Marca y modelo juntos: "Hankook" a secas no dice qué goma es cuando
+        // el cliente trabaja con dos modelos de la misma marca y medida.
+        Text([n?.marca ?? '—', if ((n?.modelo ?? '').isNotEmpty) n!.modelo!].join(' '),
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 11 * s, fontWeight: FontWeight.w800, color: cTexto), maxLines: 2, overflow: TextOverflow.ellipsis),
+        Text(n?.medida ?? '', style: TextStyle(fontSize: 9.5 * s, color: cSuave), maxLines: 1, overflow: TextOverflow.ellipsis),
         if (n != null &&
             (esNuevoReciente ||
                 TyreControlApi.esMarcaRecauchutada(n.marca) ||
@@ -1602,7 +1710,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
             if (n.reesculturado) EtiquetaNeu(txt: 'REESC.', color: cTexto, fondo: AppColors.reesculturado),
             if (n.giradoEnLlanta) EtiquetaNeu(txt: 'GIRADO', color: cTexto),
           ]),
-        Text('$profTxt · $presTxt', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: cAcento), maxLines: 1, overflow: TextOverflow.ellipsis),
+        Text(presTxt, style: TextStyle(fontSize: 10.5 * s, fontWeight: FontWeight.w800, color: cAcento), maxLines: 1, overflow: TextOverflow.ellipsis),
       ]),
     );
     return arrastrando ? Material(color: Colors.transparent, child: card) : card;
@@ -1610,19 +1718,20 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
 
   Widget _cardVacia(PosicionVehiculo p, double cardW, {bool activo = false, bool resaltar = false}) {
     final color = activo ? AppColors.info : (resaltar ? AppColors.danger : AppColors.cardBorder);
+    final s = (cardW / 110).clamp(0.9, 1.6);
     return Container(
       width: cardW,
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+      padding: EdgeInsets.symmetric(horizontal: 6 * s, vertical: 8 * s),
       decoration: BoxDecoration(
         color: activo ? AppColors.info.withValues(alpha: 0.2) : AppColors.surface.withValues(alpha: 0.55),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: color, width: (activo || resaltar) ? 3 : 1.5, style: BorderStyle.solid),
       ),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Text(p.codigoPosicion, style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: AppColors.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis),
+        Text(p.codigoPosicion, style: TextStyle(fontSize: 9.5 * s, fontWeight: FontWeight.w800, color: AppColors.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis),
         const SizedBox(height: 2),
-        Icon(Icons.add_circle_outline, size: 16, color: activo ? AppColors.info : AppColors.textHint),
-        Text(activo ? 'Soltar aquí' : 'Libre', style: TextStyle(fontSize: 9, color: activo ? AppColors.info : AppColors.textHint)),
+        Icon(Icons.add_circle_outline, size: 18 * s, color: activo ? AppColors.info : AppColors.textHint),
+        Text(activo ? 'Soltar aquí' : 'Libre', style: TextStyle(fontSize: 11 * s, fontWeight: FontWeight.w700, color: activo ? AppColors.info : AppColors.textHint)),
       ]),
     );
   }
@@ -1743,7 +1852,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         const SizedBox(height: 6),
         LayoutBuilder(builder: (ctx, c) {
           const sep = 8.0;
-          final total = _kAcciones.length;
+          final total = _kAcciones.length + 1; // + Alinear dirección
           // Tantos botones por fila como quepan sin bajar de ~190 px de ancho.
           int porFila = ((c.maxWidth + sep) / (190 + sep)).floor();
           if (porFila < 2) porFila = 2;
@@ -1755,6 +1864,22 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
             children: [
               for (final e in _kAcciones.entries)
                 SizedBox(width: ancho, child: _btnAccion(e.key, e.value.label, e.value.icono)),
+              // Del vehículo entero: no se marcan ruedas, se apunta y ya.
+              SizedBox(
+                width: ancho,
+                child: OutlinedButton.icon(
+                  onPressed: _trabajando ? null : _alinearDireccion,
+                  icon: Icon(_alineada ? Icons.check_circle : Icons.straighten,
+                      color: _alineada ? AppColors.success : AppColors.warning),
+                  label: Text(_alineada ? 'Dirección alineada' : 'Alinear dirección',
+                      style: TextStyle(color: _alineada ? AppColors.success : AppColors.warning, fontWeight: FontWeight.w700)),
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(50),
+                    alignment: Alignment.centerLeft,
+                    side: BorderSide(color: (_alineada ? AppColors.success : AppColors.warning).withValues(alpha: 0.7)),
+                  ),
+                ),
+              ),
             ],
           );
         }),
