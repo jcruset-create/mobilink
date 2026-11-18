@@ -16,7 +16,7 @@ import {
   listarEjesNeumatico, listarAplicacionesNeumatico, crearUsoCatalogo, type UsoCatalogo,
   leerOfertaFabricante, type OfertaFabricante, crearReferenciaNeumatico,
 } from "../services/data";
-import { ofertaDelModelo } from "../services/importarCatalogo";
+import { etiquetaModelo, ofertaDelModelo } from "../services/importarCatalogo";
 import type { MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad } from "../types";
 import { Modal } from "./ui";
 import { SelectorConAlta } from "./SelectorConAlta";
@@ -108,9 +108,21 @@ export default function NuevaReferenciaModal({ prefill, onClose, onCreada }: {
       codigoVelocidad: uno(o.velocidades, f.codigoVelocidad),
     };
   }
-  /** Las opciones de un desplegable: las del fabricante si las hay, si no todas. */
-  const deOferta = (delFabricante: string[] | undefined, todas: string[]) =>
-    delFabricante && delFabricante.length ? delFabricante : todas;
+  /**
+   * Las opciones de un desplegable: primero las del fabricante y después el
+   * resto, marcadas. Ocultarlas no servía: un Excel incompleto (el RA58 en
+   * 225/75R16 lo llevan vehículos de Plana y Hankook no lo lista) dejaba sin
+   * poder elegir una medida que sí existe.
+   */
+  const deOferta = (delFabricante: string[] | undefined, todas: string[], elegido: string) => {
+    if (!delFabricante?.length) return opciones(todas, elegido);
+    const suyas = new Set(delFabricante.map((x) => x.toUpperCase()));
+    return [
+      ...opciones(delFabricante, elegido),
+      ...todas.filter((x) => !suyas.has(x.toUpperCase()) && x.toUpperCase() !== elegido.trim().toUpperCase())
+        .map((x) => ({ valor: x, etiqueta: `${x} · no está en el Excel` })),
+    ];
+  };
 
   async function guardar() {
     setCreando(true); setMsg("");
@@ -160,7 +172,11 @@ export default function NuevaReferenciaModal({ prefill, onClose, onCreada }: {
 
           <SelectorConAlta
             label="Modelo"
-            opciones={opciones(modelosMarca.map((m) => m.nombre), nuevaRef.modelo)}
+            opciones={opciones(modelosMarca.map((m) => m.nombre), nuevaRef.modelo)
+              .map((o) => {
+                const m = modelosMarca.find((x) => x.nombre === o.valor);
+                return m ? { ...o, etiqueta: etiquetaModelo(m) } : o;
+              })}
             valor={nuevaRef.modelo}
             onChange={(v) => setNuevaRef(conOferta({ ...nuevaRef, modelo: v }, true))}
             deshabilitado={!nuevaRef.marca}
@@ -177,7 +193,7 @@ export default function NuevaReferenciaModal({ prefill, onClose, onCreada }: {
 
           <SelectorConAlta
             label="Medida"
-            opciones={opciones(deOferta(ofertaForm?.medidas, (cats?.medidas ?? []).map((m) => m.valor)), nuevaRef.medida)}
+            opciones={deOferta(ofertaForm?.medidas, (cats?.medidas ?? []).map((m) => m.valor), nuevaRef.medida)}
             valor={nuevaRef.medida}
             onChange={(v) => setNuevaRef(conOferta({ ...nuevaRef, medida: v }))}
             onCrear={async (valor) => {
@@ -191,7 +207,7 @@ export default function NuevaReferenciaModal({ prefill, onClose, onCreada }: {
 
           <SelectorConAlta
             label="Índice carga simple"
-            opciones={opciones(deOferta(ofertaForm?.simples, (cats?.cargas ?? []).map((i) => i.valor)), nuevaRef.indiceCargaSimple)}
+            opciones={deOferta(ofertaForm?.simples, (cats?.cargas ?? []).map((i) => i.valor), nuevaRef.indiceCargaSimple)}
             valor={nuevaRef.indiceCargaSimple}
             onChange={(v) => setNuevaRef({ ...nuevaRef, indiceCargaSimple: v })}
             onCrear={async (valor) => {
@@ -205,7 +221,7 @@ export default function NuevaReferenciaModal({ prefill, onClose, onCreada }: {
 
           <SelectorConAlta
             label="Índice carga doble (opc.)"
-            opciones={opciones(deOferta(ofertaForm?.dobles, (cats?.cargas ?? []).map((i) => i.valor)), nuevaRef.indiceCargaDoble)}
+            opciones={deOferta(ofertaForm?.dobles, (cats?.cargas ?? []).map((i) => i.valor), nuevaRef.indiceCargaDoble)}
             valor={nuevaRef.indiceCargaDoble}
             onChange={(v) => setNuevaRef({ ...nuevaRef, indiceCargaDoble: v })}
             onCrear={async (valor) => {
@@ -219,7 +235,7 @@ export default function NuevaReferenciaModal({ prefill, onClose, onCreada }: {
 
           <SelectorConAlta
             label="Código velocidad"
-            opciones={opciones(deOferta(ofertaForm?.velocidades, (cats?.velocidades ?? []).map((i) => i.valor)), nuevaRef.codigoVelocidad)}
+            opciones={deOferta(ofertaForm?.velocidades, (cats?.velocidades ?? []).map((i) => i.valor), nuevaRef.codigoVelocidad)}
             valor={nuevaRef.codigoVelocidad}
             onChange={(v) => setNuevaRef({ ...nuevaRef, codigoVelocidad: v })}
             onCrear={async (valor) => {
@@ -236,7 +252,7 @@ export default function NuevaReferenciaModal({ prefill, onClose, onCreada }: {
           <p className={`mt-2 text-[11px] ${ofertaForm.medidaFuera ? "text-amber-300" : "text-sky-300"}`}>
             {ofertaForm.medidaFuera
               ? `${nuevaRef.marca} no fabrica el ${nuevaRef.modelo} en ${nuevaRef.medida} según su Excel. Si de verdad existe, se puede crear igual.`
-              : `Según el Excel de ${nuevaRef.marca}, el ${nuevaRef.modelo} se fabrica en ${ofertaForm.medidas.length} medida(s): solo salen esas, y el IC y el CV de la medida elegida. Lo que no esté se añade con ＋.`}
+              : `Según el Excel de ${nuevaRef.marca}, el ${nuevaRef.modelo} se fabrica en ${ofertaForm.medidas.length} medida(s): salen primero, y el IC y el CV de la medida elegida. Las demás siguen en la lista, marcadas «no está en el Excel».`}
           </p>
         )}
 

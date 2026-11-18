@@ -3368,10 +3368,23 @@ export async function aplicarImportacionCatalogo(
       .filter((m) => id.has(m.marca.toUpperCase()))
       .map((m) => ({
         marca_id: id.get(m.marca.toUpperCase()), nombre: m.nombre, activo: true,
-        tipo_vehiculo: tipo, aplicacion: m.temporada, eje_recomendado: m.eje,
+        tipo_vehiculo: tipo, aplicacion: m.temporada, eje_recomendado: m.eje, gama: m.gama ?? null,
       }));
     comprobar(await supabase.from("tc_cat_modelos_neumatico")
       .upsert(filas, { onConflict: "marca_id,nombre", ignoreDuplicates: true }));
+  }
+  // Nombre comercial de modelos que ya estaban sin él («RA18» → «Vantra LT»).
+  // Solo donde estaba vacío: lo que alguien haya escrito a mano no se pisa.
+  if (plan.gamas.length) {
+    const { data: marcas, error } = await supabase.from("tc_cat_marcas_neumatico").select("id, nombre");
+    if (error) throw new Error(error.message);
+    const id = new Map((marcas ?? []).map((m) => [String(m.nombre).toUpperCase(), m.id as string]));
+    for (const g of plan.gamas) {
+      const marcaId = id.get(g.marca.toUpperCase());
+      if (!marcaId) continue;
+      comprobar(await supabase.from("tc_cat_modelos_neumatico").update({ gama: g.gama })
+        .eq("marca_id", marcaId).eq("nombre", g.nombre).or("gama.is.null,gama.eq."));
+    }
   }
   // La oferta del fabricante: cada fila con el id de su modelo y de su medida,
   // ya con los que se acaban de crear. Se escribe toda; la clave única de la

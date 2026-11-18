@@ -121,7 +121,8 @@ export default function ImportarCatalogo({ catalogo, onImportado }: {
             <Lista titulo="Medidas nuevas" items={plan.medidas} vacio="Ninguna: ya están todas" />
             <Lista titulo="Índices de carga nuevos" items={plan.indices} vacio="Ninguno: ya están todos" />
             <Lista titulo="Códigos de velocidad nuevos" items={plan.velocidades} vacio="Ninguno: ya están todos" />
-            <Lista titulo="Modelos nuevos" items={plan.modelos.map((m) => `${m.marca} ${m.nombre}`)} vacio="Ninguno: ya están todos" />
+            <Lista titulo="Modelos nuevos" items={plan.modelos.map((m) => `${m.marca} ${m.nombre}${m.gama ? ` ${m.gama}` : ""}`)} vacio="Ninguno: ya están todos" />
+            <Lista titulo="Nombre comercial que se completa" items={plan.gamas.map((g) => `${g.marca} ${g.nombre} ${g.gama}`)} vacio="Ninguno" />
             <div className="rounded border border-slate-700 bg-slate-900 p-2">
               <div className="mb-1 text-[10px] font-bold uppercase text-slate-400">Oferta del fabricante · {plan.ofertaNueva} nuevas</div>
               <div className="text-[11px] text-slate-400">
