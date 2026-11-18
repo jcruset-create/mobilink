@@ -1051,6 +1051,14 @@ class TyreControlApi {
   ///
   /// Si la matrícula ya existía NO falla: devuelve la que hay con
   /// `ya_existia: true`, para que el parte siga con ella.
+  /// Antes de dar de alta: la matrícula normalizada en las flotas que ve el
+  /// técnico, también las de baja, y las que se diferencian en un carácter.
+  /// De otras flotas solo dice si existe (`en_flota_no_visible`).
+  static Future<Map<String, dynamic>> comprobarMatricula(String matricula) async {
+    final data = await _db.rpc('tc_comprobar_matricula', params: {'p_matricula': matricula});
+    return Map<String, dynamic>.from(data as Map);
+  }
+
   static Future<Map<String, dynamic>> altaVehiculoDesdeParte({
     required String empresaId,
     required String matricula,
@@ -1064,8 +1072,15 @@ class TyreControlApi {
     /// tc_vehiculo_ejes; desde la tablet no se puede escribir esa tabla a mano
     /// (tc_set_vehiculo_ejes pide administrador) y no se amplía ese permiso.
     List<Map<String, dynamic>>? ejes,
+    /// Foto de la matrícula (ruta en tc-revisiones-fotos) y si se tecleó a
+    /// mano. Solo se mandan cuando hay algo: así esta llamada sigue sirviendo
+    /// con la versión de 8 argumentos de la función.
+    String? fotoMatricula,
+    bool matriculaTecleada = false,
   }) async {
     final data = await _db.rpc('tc_alta_vehiculo_desde_parte', params: {
+      if (fotoMatricula != null) 'p_foto_matricula': fotoMatricula,
+      if (matriculaTecleada) 'p_matricula_tecleada': true,
       'p_empresa': empresaId,
       'p_matricula': matricula,
       'p_tipo': tipoVehiculoId,

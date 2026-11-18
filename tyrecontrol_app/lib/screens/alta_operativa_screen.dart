@@ -38,12 +38,16 @@ class AltaOperativaScreen extends StatefulWidget {
   final String matricula;
   /// El tipo que ya tuviera, para saltarse los pasos ya hechos al reanudar.
   final String? tipoIdActual;
+  /// Viene del alta desde «Nueva revisión», que ya ha enseñado el vehículo y
+  /// ha elegido el tipo: se empieza por la medida y no se pregunta dos veces.
+  final bool empezarEnMedida;
 
   const AltaOperativaScreen({
     super.key,
     required this.vehiculoId,
     required this.matricula,
     this.tipoIdActual,
+    this.empezarEnMedida = false,
   });
 
   @override
@@ -81,6 +85,7 @@ class _AltaOperativaScreenState extends State<AltaOperativaScreen> {
   void initState() {
     super.initState();
     _tipoId = widget.tipoIdActual;
+    if (widget.empezarEnMedida && _tipoId != null) _paso = _Paso.medida;
     _cargar();
   }
 
@@ -278,7 +283,7 @@ class _AltaOperativaScreenState extends State<AltaOperativaScreen> {
     }
     return Column(children: [
       for (final t in _tipos) ...[
-        _TarjetaTipo(
+        TarjetaTipoVehiculo(
           tipo: t,
           elegido: t['id'] == _tipoId,
           onTap: () => setState(() => _tipoId = t['id'] as String?),
@@ -449,11 +454,11 @@ class _AltaOperativaScreenState extends State<AltaOperativaScreen> {
 }
 
 /// Una tarjeta de tipo: grande, con lo justo para reconocerlo de un vistazo.
-class _TarjetaTipo extends StatelessWidget {
+class TarjetaTipoVehiculo extends StatelessWidget {
   final Map<String, dynamic> tipo;
   final bool elegido;
   final VoidCallback onTap;
-  const _TarjetaTipo({required this.tipo, required this.elegido, required this.onTap});
+  const TarjetaTipoVehiculo({super.key, required this.tipo, required this.elegido, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -574,7 +579,7 @@ class _Aviso extends StatelessWidget {
 
 /// Una opción de lista, del tamaño de un dedo con guante.
 ///
-/// Mismo lenguaje visual que `_TarjetaTipo` (borde grueso y fondo teñido para
+/// Mismo lenguaje visual que `TarjetaTipoVehiculo` (borde grueso y fondo teñido para
 /// lo elegido) para que elegir una medida se parezca a elegir un tipo.
 class _Opcion extends StatelessWidget {
   final String texto;

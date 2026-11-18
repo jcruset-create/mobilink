@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import '../services/fotos.dart';
 import '../models/models.dart';
@@ -6,6 +7,8 @@ import '../services/ocr_service.dart';
 import '../services/offline_store.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
+import '../services/matricula.dart';
+import 'alta_desde_revision_screen.dart';
 import 'cambio_neumatico_screen.dart';
 import 'confirm_vehicle_screen.dart';
 
@@ -37,6 +40,18 @@ class _IdentifyVehicleScreenState extends State<IdentifyVehicleScreen> {
   bool _buscando = false;
   bool _escaneando = false;
   String? _error;
+  /// Fotos de matrícula que no han servido (no se leyó, o el técnico dijo que
+  /// no era la del camión). Al llegar a [fotosFallidasParaTeclear] se deja dar
+  /// de alta con la matrícula escrita.
+  int _fotosFallidas = 0;
+  /// La última foto leída que no encontró un vehículo exacto: con ella se
+  /// ofrece el alta.
+  LecturaMatricula? _lectura;
+  Uint8List? _fotoBytes;
+
+  /// El alta solo desde «Nueva revisión»: Operaciones trabaja sobre vehículos
+  /// que ya existen.
+  bool get _puedeDarDeAlta => widget.destino == DestinoVehiculo.revision;
 
   @override
   void dispose() {
@@ -47,6 +62,9 @@ class _IdentifyVehicleScreenState extends State<IdentifyVehicleScreen> {
 
   void _onSearchChanged(String value) {
     _debounce?.cancel();
+    if (_lectura != null && normalizarMatricula(value) != _lectura!.matricula) {
+      setState(() => _lectura = null);
+    }
     _debounce = Timer(const Duration(milliseconds: 300), () => _buscar(value));
   }
 
@@ -73,25 +91,71 @@ class _IdentifyVehicleScreenState extends State<IdentifyVehicleScreen> {
     setState(() {
       _escaneando = true;
       _error = null;
+      _lectura = null;
     });
     try {
-      final plate = await OcrService.reconocerMatricula(foto);
+      final bytes = await foto.readAsBytes();
+      final lectura = await OcrService.leerMatricula(foto);
+      final plate = lectura.matricula;
       if (plate == null) {
+        _fotosFallidas++;
         setState(() => _error = 'No se ha podido leer la matrícula. Prueba de nuevo o escríbela a mano.');
         return;
       }
       final res = await TyreControlApi.buscarVehiculos(plate);
-      if (res.length == 1) {
-        _irAConfirmar(res.first);
-      } else {
-        _searchController.text = plate;
-        setState(() => _resultados = res);
-        if (res.isEmpty) setState(() => _error = 'Matrícula leída: $plate. No se encontró ningún vehículo con ella.');
+      final exactos = res.where((v) => normalizarMatricula(v.matricula) == plate).toList();
+      if (exactos.length == 1) {
+        _irAConfirmar(exactos.first);
+        return;
+      }
+      _searchController.text = plate;
+      setState(() {
+        _resultados = res;
+        _lectura = lectura;
+        _fotoBytes = bytes;
+      });
+      // Nada que se le parezca en la flota: directo a comprobar y dar de alta.
+      if (res.isEmpty) {
+        if (_puedeDarDeAlta) {
+          await _abrirAlta();
+        } else {
+          setState(() => _error = 'Matrícula leída: $plate. No se encontró ningún vehículo con ella.');
+        }
       }
     } catch (e) {
       setState(() => _error = 'No se pudo escanear (¿sin conexión?). Escribe la matrícula a mano.');
     } finally {
       if (mounted) setState(() => _escaneando = false);
+    }
+  }
+
+  /// Alta desde la foto ([_lectura]) o, tras varias fotos fallidas, con la
+  /// matrícula escrita en el buscador.
+  Future<void> _abrirAlta({bool tecleada = false}) async {
+    final lectura = _lectura;
+    final matricula = tecleada ? normalizarMatricula(_searchController.text) : lectura?.matricula;
+    if (matricula == null || matricula.isEmpty) return;
+    final r = await Navigator.of(context).push<SalidaAltaDesdeRevision>(MaterialPageRoute(
+      builder: (_) => AltaDesdeRevisionScreen(
+        matricula: matricula,
+        dudososIa: tecleada ? const [] : (lectura?.dudosos ?? const []),
+        fotoBytes: tecleada ? null : _fotoBytes,
+        fotoPath: tecleada ? null : lectura?.fotoPath,
+        tecleada: tecleada,
+      ),
+    ));
+    if (!mounted) return;
+    switch (r) {
+      case RepetirFoto():
+        _fotosFallidas++;
+        setState(() => _lectura = null);
+        await _escanearMatricula();
+      case UsarVehiculo(:final vehiculo):
+        await _irAConfirmar(vehiculo);
+      case AltaTerminada():
+        Navigator.of(context).pop(true);
+      case null:
+        break;
     }
   }
 
@@ -162,6 +226,31 @@ class _IdentifyVehicleScreenState extends State<IdentifyVehicleScreen> {
                     const _SeccionTitulo('Resultados'),
                     for (final v in _resultados) _VehiculoTile(v: v, onTap: () => _irAConfirmar(v)),
                   ],
+                  if (_puedeDarDeAlta && _lectura != null && _resultados.isNotEmpty)
+                    _OfertaAlta(
+                      texto: '¿No es ninguno? ${_lectura!.matricula} se puede dar de alta.',
+                      boton: 'Dar de alta ${_lectura!.matricula}',
+                      icono: Icons.add_circle_outline,
+                      onTap: () => _abrirAlta(),
+                    ),
+                  if (_puedeDarDeAlta && _lectura == null && !_buscando &&
+                      _resultados.isEmpty && normalizarMatricula(_searchController.text).length >= 4) ...[
+                    _OfertaAlta(
+                      texto: 'No hay ningún vehículo con «${_searchController.text.trim().toUpperCase()}». '
+                          'Para darlo de alta, haz una foto de la matrícula: así no hay errores al escribirla.',
+                      boton: 'Foto de la matrícula para darlo de alta',
+                      icono: Icons.camera_alt,
+                      onTap: _escaneando ? null : _escanearMatricula,
+                    ),
+                    if (_fotosFallidas >= fotosFallidasParaTeclear)
+                      _OfertaAlta(
+                        texto: 'La foto no ha funcionado. Puedes darlo de alta con la matrícula escrita; '
+                            'oficina la revisará al validarlo.',
+                        boton: 'Dar de alta ${normalizarMatricula(_searchController.text)} escrita a mano',
+                        icono: Icons.keyboard,
+                        onTap: () => _abrirAlta(tecleada: true),
+                      ),
+                  ],
                   if (_resultados.isEmpty && _searchController.text.isEmpty && recientes.isNotEmpty) ...[
                     const _SeccionTitulo('Vehículos recientes'),
                     for (final j in recientes)
@@ -210,4 +299,25 @@ class _VehiculoTile extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Tarjeta que ofrece el alta desde la búsqueda.
+class _OfertaAlta extends StatelessWidget {
+  final String texto;
+  final String boton;
+  final IconData icono;
+  final VoidCallback? onTap;
+  const _OfertaAlta({required this.texto, required this.boton, required this.icono, this.onTap});
+
+  @override
+  Widget build(BuildContext context) => Card(
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Text(texto, style: const TextStyle(color: AppColors.textSecondary)),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(onPressed: onTap, icon: Icon(icono), label: Text(boton)),
+          ]),
+        ),
+      );
 }
