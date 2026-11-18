@@ -5,7 +5,7 @@ import { useSearchParams } from "react-router-dom";
 import {
   listarEmpresas, listarVehiculos, listarPosiciones, listarMontajesVehiculo, obtenerVehiculo,
   crearRevision, guardarDetalleRevision, completarRevision, listarRevisiones, listarDetalleRevision,
-  cambiarFechaRevision, kilometrajeActualVehiculo,
+  cambiarFechaRevision, cambiarKmRevision, kilometrajeActualVehiculo,
   listarUltimasMedicionesVehiculo, listarPresionesCatalogoPorModelo, eliminarRevision,
 } from "../services/data";
 import type { LecturaKmActual } from "../services/data";
@@ -14,6 +14,7 @@ import { presionTxt } from "../types";
 import { inputCls, Field, Modal, TableWrap, tdCls, thCls } from "../components/ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 import ModalMontarDesdeFicha from "../components/ModalMontarDesdeFicha";
+import ModalNoCoincide from "../components/ModalNoCoincide";
 import {
   avisoKmDeOtroDia, hoyISO, juzgarFecha, origenDeLosKm, textoEnPapel,
 } from "../services/revisionEnPapel";
@@ -52,6 +53,8 @@ export default function RevisionVehiculo() {
   const [vehiculoId, setVehiculoId] = useState("");
   const [posiciones, setPosiciones] = useState<PosicionVehiculo[]>([]);
   const [montajes, setMontajes] = useState<MontajeActual[]>([]);
+  // «No coincide»: la goma montada no es la que dice Mobilink.
+  const [noCoincideEn, setNoCoincideEn] = useState<MontajeActual | null>(null);
   const [historialRevisiones, setHistorialRevisiones] = useState<RevisionVehiculoT[]>([]);
 
   const [revision, setRevision] = useState<RevisionVehiculoT | null>(null);
@@ -177,6 +180,33 @@ export default function RevisionVehiculo() {
    * de antes en la pantalla, para que no quede diciendo una fecha que no se ha
    * guardado.
    */
+  async function guardarKm(origen: "telematica" | "manual" = "manual", valor: string = kmVehiculo) {
+    if (!revision) return;
+    const km = valor.trim() === "" ? null : Number(valor);
+    if (km != null && (!Number.isFinite(km) || km < 0)) { setMsg("Los km tienen que ser un número positivo."); return; }
+    if (km === (revision.km_vehiculo ?? null)) return;
+    try {
+      await cambiarKmRevision(revision.id, km, origen);
+      setRevision({ ...revision, km_vehiculo: km });
+    } catch (e: unknown) { setMsg((e as Error)?.message ?? "No se han podido guardar los km"); }
+  }
+
+  /** Pedir km con la revisión ya empezada: solo vale como «telemática» si es de hoy. */
+  async function pedirKmEnCurso() {
+    if (!revision || pidiendoKm) return;
+    setPidiendoKm(true);
+    try {
+      const l = await kilometrajeActualVehiculo(revision.vehiculo_id);
+      setLecturaKm(l);
+      if (l.km != null) {
+        const v = String(Math.round(l.km));
+        setKmVehiculo(v);
+        await guardarKm(origenDeLosKm(true, fechaRevision), v);
+      }
+    } catch (e: unknown) { setMsg((e as Error)?.message ?? "No se ha podido consultar la telemática"); }
+    finally { setPidiendoKm(false); }
+  }
+
   async function corregirFecha(nueva: string) {
     if (!revision) return;
     const { error: errorFecha } = juzgarFecha(nueva);
@@ -202,7 +232,7 @@ export default function RevisionVehiculo() {
    * guardaría sin decir de qué neumático es.
    */
   async function trasMontar() {
-    setMontarEn(null);
+    setMontarEn(null); setNoCoincideEn(null);
     const [mon, medic] = await Promise.all([
       listarMontajesVehiculo(vehiculoId),
       listarUltimasMedicionesVehiculo(vehiculoId),
@@ -348,6 +378,9 @@ export default function RevisionVehiculo() {
 
   async function finalizar() {
     if (!revision) return;
+    // Sin km la revisión no dice cuánto ha rodado cada goma.
+    if (!kmVehiculo.trim()) { setMsg("Faltan los km del vehículo: escríbelos o pulsa «Pedir km»."); return; }
+    await guardarKm();
     const faltan = posiciones.filter((p) => {
       const d = detalles[p.id];
       const ocupado = !!montajePorPosicion.get(p.id);
@@ -550,7 +583,27 @@ export default function RevisionVehiculo() {
                 className={`${inputCls} w-auto py-0.5 text-[12px]`}
                 title="La fecha en que se hizo la revisión"
               />
-              <span>· {kmVehiculo} km</span>
+              {/*
+                * Los km también se piden aquí: una revisión empezada sin ellos
+                * (o con los de la telemática de otro día) se corrige sin
+                * borrar el borrador. Se guardan al salir de la casilla.
+                */}
+              <span>· Km</span>
+              <input
+                type="number" min={0} inputMode="numeric" value={kmVehiculo} disabled={saving}
+                placeholder="obligatorio"
+                onChange={(e) => { setKmVehiculo(e.target.value); setKmDeTelematica(false); }}
+                onBlur={() => void guardarKm()}
+                className={`${inputCls} w-32 py-0.5 text-[12px] ${kmVehiculo ? "" : "border-amber-500"}`}
+                title="Kilómetros del vehículo el día de la revisión"
+              />
+              <button
+                type="button" onClick={() => void pedirKmEnCurso()} disabled={pidiendoKm || saving}
+                className="rounded border border-slate-600 px-2 py-0.5 text-[11px] text-slate-200 disabled:opacity-50"
+                title="Pregunta el cuentakilómetros al proveedor de telemática"
+              >
+                {pidiendoKm ? "Consultando…" : "Pedir km"}
+              </button>
               {textoEnPapel(revision) && (
                 <span className="rounded bg-amber-500/20 px-2 py-0.5 text-[11px] font-bold text-amber-200"
                   title="Sin cronómetro ni coordenadas: no se hizo con la tablet">
@@ -563,6 +616,26 @@ export default function RevisionVehiculo() {
               <button onClick={finalizar} disabled={saving} className="rounded bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white disabled:opacity-50">Finalizar revisión</button>
             </div>
           </div>
+
+          {/*
+            * Gomas montadas en posiciones que no son del tipo del vehículo:
+            * pasa cuando se le cambia el tipo después de montarlas (3215KWV,
+            * de «Autobús 2x4» a «Turismo»). La revisión solo ve las posiciones
+            * del tipo nuevo y todas salen «sin neumático montado».
+            */}
+          {(() => {
+            const ids = new Set(posiciones.map((p) => p.id));
+            const fuera = montajes.filter((x) => !ids.has(x.posicion_id));
+            if (!fuera.length) return null;
+            return (
+              <div className="mb-2 rounded-lg border border-amber-600/50 bg-amber-500/10 p-3 text-[12px] text-amber-200">
+                <b>Este vehículo lleva {fuera.length} neumático(s) montado(s) en posiciones que no son de su tipo actual</b>
+                {" "}({fuera.map((x) => x.posicion?.codigo_posicion ?? "?").join(", ")}). Seguramente se le cambió el
+                tipo después de montarlos. Revisa el tipo en Vehículos: con el tipo correcto, aquí salen las gomas que
+                lleva puestas.
+              </div>
+            );
+          })()}
 
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {posiciones.map((p) => {
@@ -588,6 +661,15 @@ export default function RevisionVehiculo() {
                       * Se monta con la FECHA DE LA REVISIÓN, no con la de hoy:
                       * de ahí salen los kilómetros que lleva la goma.
                       */}
+                    {m?.neumatico && (
+                      <button
+                        onClick={() => setNoCoincideEn(m)}
+                        className="shrink-0 rounded border border-amber-500/70 px-2 py-0.5 text-[11px] font-bold text-amber-300 hover:bg-amber-500/10"
+                        title="La goma que hay puesta no es la que dice Mobilink: corregirla"
+                      >
+                        ⚠ No coincide
+                      </button>
+                    )}
                     {!m && (
                       <button
                         onClick={() => setMontarEn(p)}
@@ -636,6 +718,15 @@ export default function RevisionVehiculo() {
             })}
           </div>
         </div>
+      )}
+
+      {noCoincideEn && (
+        <ModalNoCoincide
+          montaje={noCoincideEn}
+          empresaId={noCoincideEn.empresa_id}
+          onClose={() => setNoCoincideEn(null)}
+          onCorregido={() => void trasMontar()}
+        />
       )}
 
       {montarEn && revision && (

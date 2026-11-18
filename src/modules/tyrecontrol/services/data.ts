@@ -1741,6 +1741,14 @@ export async function cambiarFechaRevision(id: string, fecha: string): Promise<v
   if (error) throw new Error(error.message);
 }
 
+/** Corrige los km de una revisión en borrador. Los tecleados son «manual». */
+export async function cambiarKmRevision(id: string, km: number | null, origenKm: "telematica" | "manual" = "manual"): Promise<void> {
+  const { error } = await supabase.from("revisiones_vehiculo")
+    .update({ km_vehiculo: km, origen_km: origenKm, updated_at: new Date().toISOString() })
+    .eq("id", id).eq("estado_revision", "borrador");
+  if (error) throw new Error(error.message);
+}
+
 export async function eliminarRevision(id: string): Promise<void> {
   const { error } = await supabase.from("revisiones_vehiculo").delete().eq("id", id);
   if (error) throw new Error(error.message);
