@@ -6,8 +6,9 @@ import {
   listarEmpresas, listarVehiculos, listarPosiciones, listarMontajesVehiculo, obtenerVehiculo,
   crearRevision, guardarDetalleRevision, completarRevision, listarRevisiones, listarDetalleRevision,
   cambiarFechaRevision, cambiarKmRevision, kilometrajeActualVehiculo,
-  listarUltimasMedicionesVehiculo, listarPresionesCatalogoPorModelo, eliminarRevision,
+  listarUltimasMedicionesVehiculo, listarPresionesCatalogoPorModelo, eliminarRevision, leerMinimosDeEmpresa,
 } from "../services/data";
+import { minimoDeLaGoma, SIN_MINIMOS, type MinimosDeEmpresa } from "../services/umbralProfundidad";
 import type { LecturaKmActual } from "../services/data";
 import type { Empresa, Vehiculo, PosicionVehiculo, MontajeActual, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle } from "../types";
 import { presionTxt } from "../types";
@@ -83,6 +84,8 @@ export default function RevisionVehiculo() {
   const [fichaDetalle, setFichaDetalle] = useState<RevisionDetalle[]>([]);
   const [cargandoFicha, setCargandoFicha] = useState(false);
   const [medicionesActuales, setMedicionesActuales] = useState<Record<string, Medicion>>({});
+  // Los mínimos de la empresa del vehículo: pintan en rojo la goma que ya está por debajo.
+  const [minimos, setMinimos] = useState<MinimosDeEmpresa>(SIN_MINIMOS);
   const [presionesCatalogo, setPresionesCatalogo] = useState<Record<string, number>>({});
 
   const [searchParams] = useSearchParams();
@@ -107,12 +110,12 @@ export default function RevisionVehiculo() {
   function referenciasDePosicion(posicionId: string) {
     const m = montajePorPosicion.get(posicionId);
     const neu = m?.neumatico;
-    if (!neu) return { ultimaProfundidad: null as number | null, presionRecomendada: null as number | null };
+    if (!neu) return { ultimaProfundidad: null as number | null, presionRecomendada: null as number | null, medicion: undefined };
     const medicion = medicionesActuales[neu.id];
     const ultimaProfundidad = profundidadVigente(medicion, neu);
     const claveCatalogo = neu.marca && neu.modelo && neu.medida ? `${neu.marca}|${neu.modelo}|${neu.medida}`.toLowerCase().replace(/\s+/g, "") : "";
     const presionRecomendada = medicion?.presion_bar ?? neu.producto_almacen?.referencia?.presion_maxima_bar ?? presionesCatalogo[claveCatalogo] ?? null;
-    return { ultimaProfundidad, presionRecomendada };
+    return { ultimaProfundidad, presionRecomendada, medicion };
   }
 
   async function verFichaRevision(r: RevisionVehiculoT) {
@@ -291,13 +294,14 @@ export default function RevisionVehiculo() {
     const veh = vehOverride ?? vehiculos.find((v) => v.id === vid);
     if (!veh) { setPosiciones([]); setMontajes([]); return; }
     setKmVehiculo(veh.km_actual != null ? String(veh.km_actual) : "");
-    const [pos, mon, hist, medic] = await Promise.all([
+    const [pos, mon, hist, medic, mins] = await Promise.all([
       veh.tipo_vehiculo_id ? listarPosiciones(veh.tipo_vehiculo_id) : Promise.resolve([]),
       listarMontajesVehiculo(vid),
       listarRevisiones(vid),
       listarUltimasMedicionesVehiculo(vid),
+      veh.empresa_id ? leerMinimosDeEmpresa(veh.empresa_id).catch(() => SIN_MINIMOS) : Promise.resolve(SIN_MINIMOS),
     ]);
-    setPosiciones(pos); setMontajes(mon); setHistorialRevisiones(hist); setMedicionesActuales(medic);
+    setPosiciones(pos); setMontajes(mon); setHistorialRevisiones(hist); setMedicionesActuales(medic); setMinimos(mins);
 
     /*
      * Y se le piden los kilómetros al proveedor, una vez, al elegir vehículo.
@@ -641,17 +645,32 @@ export default function RevisionVehiculo() {
             {posiciones.map((p) => {
               const m = montajePorPosicion.get(p.id);
               const d = detalles[p.id] ?? {};
-              const { ultimaProfundidad, presionRecomendada } = referenciasDePosicion(p.id);
+              const { ultimaProfundidad, presionRecomendada, medicion } = referenciasDePosicion(p.id);
+              const neu = m?.neumatico;
+              const minimo = neu ? minimoDeLaGoma(neu.medida, minimos) : null;
+              const bajoMinimo = ultimaProfundidad != null && minimo != null && ultimaProfundidad < minimo;
               return (
                 <div key={p.id} className="rounded-lg bg-slate-800 p-3">
                   <div className="mb-1 flex items-center justify-between">
                     <span className="text-[13px] font-bold text-sky-300">{p.codigo_posicion}</span>
                     {d.alerta_generada && <span className="rounded-full bg-rose-500/30 px-2 py-0.5 text-[10px] font-bold text-rose-200">Alerta</span>}
                   </div>
-                  <div className="mb-1 flex items-center justify-between gap-2 text-[11px] text-slate-400">
-                    <span>
-                      {m?.neumatico ? `${m.neumatico.numero_interno ?? m.neumatico.codigo_interno} · ${m.neumatico.marca ?? ""} ${m.neumatico.medida ?? ""}` : "Sin neumático montado"}
-                    </span>
+                  <div className="mb-1 flex items-start justify-between gap-2 text-[11px] text-slate-400">
+                    {/*
+                      * Lo que se ve de lejos es la goma: marca, modelo y medida.
+                      * El número es para buscarla, va debajo y pequeño.
+                      */}
+                    {neu ? (
+                      <div className="min-w-0">
+                        <div className="text-[16px] font-extrabold leading-tight text-slate-100">
+                          {[neu.marca, neu.modelo].filter(Boolean).join(" ") || "Sin marca"}
+                          {neu.medida && <> · <span className="text-sky-300">{neu.medida}</span></>}
+                        </div>
+                        <div className="text-[11px] tabular-nums text-slate-500">Nº {neu.numero_interno ?? neu.codigo_interno ?? neu.numero_serie ?? "—"}</div>
+                      </div>
+                    ) : (
+                      <span>Sin neumático montado</span>
+                    )}
                     {/*
                       * El parte de papel trae MEDIDA, MARCA y MODELO de cada
                       * posición, y a veces el sistema no tiene nada montado
@@ -680,9 +699,33 @@ export default function RevisionVehiculo() {
                       </button>
                     )}
                   </div>
-                  {m?.neumatico && (
-                    <div className="mb-2 text-[10px] text-slate-500">
-                      Última medición: {ultimaProfundidad != null ? `${ultimaProfundidad} mm` : "—"} · Presión recomendada: {presionRecomendada != null ? `${presionTxt(presionRecomendada)} bar` : "—"}
+                  {neu && (
+                    <div className="mb-2 border-t border-slate-700 pt-2">
+                      <div className="grid grid-cols-3 gap-2">
+                        <div>
+                          <div className="text-[10px] uppercase tracking-wide text-slate-500">Última revisión</div>
+                          <div className={`text-[13px] font-bold tabular-nums ${bajoMinimo ? "text-rose-300" : "text-slate-200"}`}>{fechaES(medicion?.medido_en)}</div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] uppercase tracking-wide text-slate-500">Profundidad</div>
+                          <div className={`text-[13px] font-bold tabular-nums ${bajoMinimo ? "text-rose-300" : "text-slate-200"}`}
+                               title={minimo != null ? `Mínimo: ${String(minimo).replace(".", ",")} mm` : undefined}>
+                            {ultimaProfundidad != null ? `${String(ultimaProfundidad).replace(".", ",")} mm` : "—"}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] uppercase tracking-wide text-slate-500">Presión recom.</div>
+                          <div className="text-[13px] font-bold tabular-nums text-slate-200">
+                            {presionRecomendada != null ? `${presionTxt(presionRecomendada)} bar` : "—"}
+                          </div>
+                        </div>
+                      </div>
+                      {/* La última lectura que no se ha dado por buena (protocolo de profundidad). */}
+                      {medicion?.pendiente_mm != null && (
+                        <div className="mt-1 text-[10px] text-amber-300/80">
+                          Última lectura sin confirmar: {String(medicion.pendiente_mm).replace(".", ",")} mm ({fechaES(medicion.pendiente_en)})
+                        </div>
+                      )}
                     </div>
                   )}
 

@@ -500,7 +500,19 @@ export default function VehiculoDetalle() {
 
       {/* Plano gráfico del vehículo */}
       <div className="mt-3 rounded-lg bg-slate-800 p-3">
-        <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Plano del vehículo</div>
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <div className="text-[11px] font-bold uppercase text-slate-400">Plano del vehículo</div>
+          {/* Revisar este vehículo sin tener que buscarlo otra vez en Revisión de vehículo. */}
+          {!esCliente && (
+            <button
+              type="button"
+              onClick={() => navigate(`/tyrecontrol/revision-vehiculo?vehiculo=${v.id}&empresa=${v.empresa_id}`)}
+              className="rounded-lg bg-emerald-600 px-4 py-2 text-[13px] font-bold text-white hover:bg-emerald-500"
+            >
+              Realizar revisión
+            </button>
+          )}
+        </div>
 
         {/*
           El plano no cuadra con la configuración. Se avisa aquí, encima del
