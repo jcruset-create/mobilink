@@ -1382,7 +1382,8 @@ export default function OperariosTVView({
                       <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-amber-800">
                         {ETIQUETA_OTF[o.status] ?? o.status}
                         {o.status === "en_curso" && o.arrivedAtBaseMs ? ` · desde ${fechaHora(o.arrivedAtBaseMs)}` : ""}
-                        {o.status === "planificada" && o.fechaProgramadaMs ? ` · ${fechaHora(o.fechaProgramadaMs)}` : ""}
+                        {/* Medianoche en punto es una OTF sin hora: no se pinta «00:00». */}
+                        {o.status === "planificada" && o.fechaProgramadaMs && fechaHora(o.fechaProgramadaMs) !== "00:00" ? ` · ${fechaHora(o.fechaProgramadaMs)}` : ""}
                       </span>
                     </div>
                     <div className="text-xl font-black leading-tight text-slate-950">{o.clientName || "Cliente"}</div>

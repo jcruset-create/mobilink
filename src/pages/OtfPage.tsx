@@ -57,10 +57,27 @@ function fechaAInput(ms: number | null | undefined) {
   const d = new Date(ms);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
-function inputAFecha(v: string): number | null {
+/**
+ * La hora va en el mismo campo que la fecha. Medianoche en punto es «sin
+ * hora»: así quedan las OTF de antes, que solo tenían día.
+ */
+function horaAInput(ms: number | null | undefined) {
+  if (ms == null) return "";
+  const d = new Date(ms);
+  if (d.getHours() === 0 && d.getMinutes() === 0) return "";
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+function inputAFecha(v: string, hora = ""): number | null {
   if (!v) return null;
   const [a, m, d] = v.split("-").map(Number);
-  return new Date(a, m - 1, d).getTime();
+  const [h, min] = hora ? hora.split(":").map(Number) : [0, 0];
+  return new Date(a, m - 1, d, h || 0, min || 0).getTime();
+}
+/** «mié 18 nov · 09:30», o solo el día si no tiene hora. */
+function fechaProgramadaTxt(ms: number) {
+  const dia = new Date(ms).toLocaleDateString("es-ES", { weekday: "short", day: "numeric", month: "short" });
+  const hora = horaAInput(ms);
+  return hora ? `${dia} · ${hora}` : dia;
 }
 
 export default function OtfPage() {
@@ -160,7 +177,7 @@ export default function OtfPage() {
                   </div>
                   <div className="mt-1 text-xs text-slate-400">
                     {o.baseName || o.direccion || "—"}
-                    {o.fechaProgramadaMs ? ` · ${new Date(o.fechaProgramadaMs).toLocaleDateString("es-ES", { weekday: "short", day: "numeric", month: "short" })}` : ""}
+                    {o.fechaProgramadaMs ? ` · ${fechaProgramadaTxt(o.fechaProgramadaMs)}` : ""}
                   </div>
                   <div className="mt-1 text-xs font-bold text-slate-300">
                     Progreso: {o.progreso?.hechos ?? 0} / {o.progreso?.total ?? 0}
@@ -230,6 +247,8 @@ function NewOtfModal({ otf, places, techs, vehicles, onPlaceCreated, onClose, on
   const [vehicleName, setVehicleName] = useState<string>(otf?.assignedVehicleName ?? "");
   const fechaInicial = fechaAInput(otf?.fechaProgramadaMs);
   const [fecha, setFecha] = useState(fechaInicial);
+  const horaInicial = horaAInput(otf?.fechaProgramadaMs);
+  const [hora, setHora] = useState(horaInicial);
   const [notas, setNotas] = useState<string>(otf?.notas ?? "");
   const [telefonoAviso, setTelefonoAviso] = useState<string>(otf?.telefonoAviso ?? "");
   const [emailInforme, setEmailInforme] = useState<string>(otf?.emailInforme ?? "");
@@ -259,7 +278,7 @@ function NewOtfModal({ otf, places, techs, vehicles, onPlaceCreated, onClose, on
           cambios.assignedVehicleName = vehicleName || null;
           cambios.webfleetVehicleId = veh?.webfleetVehicleId ?? null;
         }
-        if (fecha !== fechaInicial) cambios.fechaProgramadaMs = inputAFecha(fecha);
+        if (fecha !== fechaInicial || hora !== horaInicial) cambios.fechaProgramadaMs = inputAFecha(fecha, hora);
         if (notas.trim() !== (otf.notas ?? "").trim()) cambios.notas = notas.trim() || null;
         if (telefonoAviso.trim() !== (otf.telefonoAviso ?? "").trim()) cambios.telefonoAviso = telefonoAviso.trim() || null;
         if (emailInforme.trim() !== (otf.emailInforme ?? "").trim()) cambios.emailInforme = emailInforme.trim() || null;
@@ -277,7 +296,7 @@ function NewOtfModal({ otf, places, techs, vehicles, onPlaceCreated, onClose, on
         assignedTechName: tech || null,
         assignedVehicleName: vehicleName || null,
         webfleetVehicleId: veh?.webfleetVehicleId ?? null,
-        fechaProgramadaMs: inputAFecha(fecha),
+        fechaProgramadaMs: inputAFecha(fecha, hora),
         notas: notas.trim() || null,
         telefonoAviso: telefonoAviso.trim() || null,
         emailInforme: emailInforme.trim() || null,
@@ -326,9 +345,14 @@ function NewOtfModal({ otf, places, techs, vehicles, onPlaceCreated, onClose, on
               </select>
             </Field>
           </div>
-          <Field label="Fecha programada">
-            <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} className={inputCls} />
-          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Fecha programada">
+              <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} className={inputCls} />
+            </Field>
+            <Field label="Hora (opcional)">
+              <input type="time" value={hora} disabled={!fecha} onChange={(e) => setHora(e.target.value)} className={inputCls} />
+            </Field>
+          </div>
           <Field label="Notas">
             <textarea value={notas} onChange={(e) => setNotas(e.target.value)} rows={3} className={`${inputCls} resize-none`} placeholder="Para el operario o la oficina" />
           </Field>
