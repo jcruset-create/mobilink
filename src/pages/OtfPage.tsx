@@ -558,6 +558,27 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
   const [neumaticos, setNeumaticos] = useState<NeumaticosTrabajo | null>(null);
   const [faltaNeumaticos, setFaltaNeumaticos] = useState<string | null>(null);
   const [registrando, setRegistrando] = useState<number | null>(null);
+  // Editar un trabajo ya creado: se carga en este mismo formulario.
+  const [editando, setEditando] = useState<any | null>(null);
+  function empezarEdicion(t: any) {
+    setEditando(t);
+    setPlate(t.plate ?? "");
+    if (t.tipoVehiculo) setTipo(t.tipoVehiculo);
+    setTP(t.trabajoPlantilla ?? "");
+    // Con neumáticos, el detalle lo escribe el plano: no se arrastra el texto viejo.
+    setDetalle(t.neumaticos ? "" : t.detalleManual ?? "");
+    setObservaciones(t.observaciones ?? "");
+    setConNeumaticos(!!t.neumaticos);
+    setNeumaticos(null);
+    setErrorAlta(null);
+  }
+  // Al pasar a otra OTF no se arrastra la edición de un trabajo de la anterior.
+  useEffect(() => { setEditando(null); }, [otf.id]);
+  function limpiarFormulario() {
+    setEditando(null);
+    setPlate(""); setTP(""); setDetalle(""); setObservaciones(""); setConNeumaticos(false); setNeumaticos(null);
+    setErrorAlta(null);
+  }
   useEffect(() => {
     if (/neum[aá]tic|rueda|cubierta/i.test(trabajoPlantilla)) setConNeumaticos(true);
   }, [trabajoPlantilla]);
@@ -591,15 +612,17 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
     setAdding(true);
     setErrorAlta(null);
     try {
-      await addOtfTrabajo(otf.id, {
+      const datos = {
         plate,
         tipoVehiculo: tipo,
         trabajoPlantilla: trabajoPlantilla || (conNeumaticos ? "Cambio de neumáticos" : ""),
         detalleManual: detalle,
         observaciones: observaciones.trim() || null,
         neumaticos: conNeumaticos ? neumaticos : null,
-      });
-      setPlate(""); setTP(""); setDetalle(""); setObservaciones(""); setConNeumaticos(false); setNeumaticos(null);
+      };
+      if (editando) await updateOtfTrabajo(editando.id, datos);
+      else await addOtfTrabajo(otf.id, datos);
+      limpiarFormulario();
       onChange();
     } catch (e: any) {
       /*
@@ -798,15 +821,25 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
               <option value="finalizado">Finalizado</option>
               <option value="no_realizado">No realizado</option>
             </select>
-            <button onClick={async () => { if (confirm("¿Eliminar trabajo?")) { await deleteOtfTrabajo(t.id); onChange(); } }} className="rounded-lg border border-red-500/40 bg-red-500/15 px-2 py-1 text-xs font-black text-red-300 hover:bg-red-500/25">✕</button>
+            {(t.status === "pendiente" || t.status === "en_proceso") && (
+              <button
+                onClick={() => { empezarEdicion(t); document.getElementById("otf-form-trabajo")?.scrollIntoView({ behavior: "smooth", block: "center" }); }}
+                title="Editar trabajo"
+                className={`rounded-lg border px-2 py-1 text-xs font-black ${editando?.id === t.id ? "border-orange-400 bg-orange-500/25 text-orange-200" : "border-slate-600 bg-slate-800 text-slate-200 hover:border-orange-400"}`}
+              >✎ Editar</button>
+            )}
+            <button onClick={async () => { if (confirm("¿Eliminar trabajo?")) { await deleteOtfTrabajo(t.id); if (editando?.id === t.id) limpiarFormulario(); onChange(); } }} className="rounded-lg border border-red-500/40 bg-red-500/15 px-2 py-1 text-xs font-black text-red-300 hover:bg-red-500/25">✕</button>
           </div>
         ))}
         {(otf.trabajos ?? []).length === 0 && <div className="py-4 text-center text-sm text-slate-500">Sin trabajos. Añade el primero.</div>}
       </div>
 
       {/* Añadir trabajo (oficina) */}
-      <div className="mt-4 rounded-xl border border-slate-700 bg-slate-900/40 p-3">
-        <div className="mb-2 text-xs font-black uppercase tracking-wide text-slate-400">Añadir trabajo</div>
+      <div id="otf-form-trabajo" className={`mt-4 rounded-xl border p-3 ${editando ? "border-orange-500 bg-orange-950/20" : "border-slate-700 bg-slate-900/40"}`}>
+        <div className="mb-2 flex items-center justify-between text-xs font-black uppercase tracking-wide text-slate-400">
+          <span className={editando ? "text-orange-300" : ""}>{editando ? `Editando trabajo · ${editando.plate ?? "—"}` : "Añadir trabajo"}</span>
+          {editando && <button onClick={limpiarFormulario} className="rounded border border-slate-600 px-2 py-0.5 text-[11px] normal-case text-slate-200 hover:border-orange-400">Cancelar edición</button>}
+        </div>
         <div className="grid grid-cols-2 gap-2">
           <input placeholder="Matrícula" value={plate} onChange={(e) => setPlate(e.target.value.toUpperCase())} className={inputCls} />
           <select value={tipo} onChange={(e) => setTipo(e.target.value)} className={inputCls}>
@@ -837,8 +870,10 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
         <div className="mt-2">
           {conNeumaticos ? (
             <OtfNeumaticos
+              key={editando?.id ?? "nuevo"}
               otfId={otf.id}
               plate={plate}
+              inicial={editando?.neumaticos ?? null}
               onChange={(n, falta) => { setNeumaticos(n); setFaltaNeumaticos(falta); }}
             />
           ) : (
@@ -852,7 +887,7 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
           falta se dice antes y después de pulsar.
         */}
         <button onClick={add} disabled={adding} className="mt-2 w-full rounded-lg bg-orange-600 px-3 py-2 text-sm font-black text-white hover:bg-orange-500 disabled:opacity-50">
-          {adding ? "Añadiendo…" : "+ Añadir trabajo"}
+          {adding ? "Guardando…" : editando ? "Guardar cambios" : "+ Añadir trabajo"}
         </button>
         {(errorAlta || faltaParaAnadir) && (
           <p className={`mt-1.5 text-xs font-semibold ${errorAlta ? "text-amber-300" : "text-slate-400"}`}>
