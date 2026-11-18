@@ -79,7 +79,16 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   final Set<String> _posicionesMontadas = {}; // posiciones donde se montó un neumático en esta sesión
   final Set<String> _posicionesResueltas = {}; // reparaciones en sitio hechas en esta sesión
   final Set<String> _incidenciasResueltas = {}; // ids de incidencias ya resueltas (para no re-resolver al finalizar)
-  String? _posSeleccionada; // posición elegida en el plano para operar desde el panel
+  // Posiciones elegidas en el plano. Con UNA se opera desde su panel; con
+  // VARIAS se hace lo mismo en todas a la vez: mandarlas al almacén o a la
+  // papelera, y montar en las libres la misma rueda (del stock o sin stock).
+  // Cambiar cuatro gomas son cuatro toques en vez de dieciséis.
+  final Set<String> _seleccion = {};
+  String? get _posSeleccionada => _seleccion.length == 1 ? _seleccion.first : null;
+  set _posSeleccionada(String? id) {
+    _seleccion.clear();
+    if (id != null) _seleccion.add(id);
+  }
   // Plan de trabajo: se elige la ACCIÓN en el panel lateral y se marcan las
   // ruedas afectadas. Nada toca la BD hasta pulsar "Aplicar plan".
   String? _accionActiva; // 'mover' | 'reescultura' | 'giro' | 'pinchazo' | …
@@ -358,6 +367,43 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
       _aviso(msg, ok: destino != 'descartado');
     } catch (e) { _aviso('Error: $e', ok: false); }
     finally { if (mounted) setState(() => _trabajando = false); }
+  }
+
+  /// Varias ruedas al mismo destino. Se pregunta antes: es lo único de esta
+  /// pantalla que mueve varias gomas de un toque. La selección se queda, para
+  /// montar a continuación la sustitución en esas mismas posiciones.
+  Future<void> _desmontarVarias(List<MontajeActual> ms, String destino) async {
+    final nombre = destino == 'almacen' ? 'al almacén (usado)' : 'a la papelera de reciclaje';
+    final codigos = ms.map((m) => _codigo(m.posicionId)).join(', ');
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: Text('${ms.length} ruedas $nombre'),
+        content: Text('Se desmontan $codigos y van $nombre.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(c).pop(false), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.of(c).pop(true), child: const Text('Desmontar')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() => _trabajando = true);
+    var hechas = 0;
+    final fallos = <String>[];
+    for (final m in ms) {
+      try {
+        await TyreControlApi.desmontarNeumatico(montajeId: m.id, destino: destino, km: _km, intervencionId: _intervencionId);
+        hechas++;
+      } catch (e) {
+        fallos.add('${_codigo(m.posicionId)}: $e');
+      }
+    }
+    HapticFeedback.mediumImpact();
+    await _cargar();
+    if (mounted) setState(() => _trabajando = false);
+    _aviso(fallos.isEmpty
+        ? '$hechas ruedas $nombre. Monta ahora las de sustitución en esas posiciones.'
+        : '$hechas de ${ms.length} $nombre. No se pudo: ${fallos.join(' · ')}', ok: fallos.isEmpty);
   }
 
   /// Finalizar: da por solucionadas las incidencias de las posiciones donde se
@@ -747,6 +793,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
                     _franjaStock(),
                     Expanded(child: _zonaPlano()),
                     if (_posSel != null) _panelOperaciones(_posSel!),
+                    if (_seleccion.length > 1) _panelVarias(),
                     _barraPlanTrabajo(),
                     _barraInferior(),
                   ]),
@@ -869,13 +916,17 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         : Padding(padding: const EdgeInsets.all(8), child: _plano());
   }
 
-  Widget _zonaDestino({required IconData icono, required String label, required Color color, required void Function(MontajeActual) onAccept}) {
+  Widget _zonaDestino({required IconData icono, required String label, required Color color,
+      required void Function(MontajeActual) onAccept, int seleccionadas = 0, VoidCallback? onTap}) {
     return DragTarget<_DragMontaje>(
       onWillAcceptWithDetails: (_) => true,
       onAcceptWithDetails: (d) => onAccept(d.data.m),
       builder: (ctx, cand, rej) {
-        final activo = cand.isNotEmpty;
-        return Container(
+        // Con ruedas elegidas en el plano, tocar la zona las manda todas aquí.
+        final activo = cand.isNotEmpty || seleccionadas > 0;
+        return GestureDetector(
+          onTap: _trabajando ? null : onTap,
+          child: Container(
           height: 72,
           decoration: BoxDecoration(
             color: color.withValues(alpha: activo ? 0.28 : 0.10),
@@ -885,8 +936,10 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
           child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
             Icon(icono, color: color, size: 28),
             const SizedBox(height: 2),
-            Text(label, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w700)),
+            Text(seleccionadas > 0 ? '$label · $seleccionadas' : label,
+                style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w700)),
           ]),
+          ),
         );
       },
     );
@@ -994,8 +1047,24 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
       _tocarEnPermuta(posId);
       return;
     }
-    setState(() => _posSeleccionada = _posSeleccionada == posId ? null : posId);
+    setState(() {
+      if (!_seleccion.remove(posId)) _seleccion.add(posId);
+    });
   }
+
+  /// Las posiciones elegidas, en el orden del plano.
+  List<PosicionVehiculo> get _posicionesSel =>
+      [for (final p in _posiciones) if (_seleccion.contains(p.id)) p];
+
+  /// De las elegidas, las que no tienen rueda: ahí se monta.
+  List<PosicionVehiculo> get _vaciasSel =>
+      [for (final p in _posicionesSel) if (!_montajePorPosicion.containsKey(p.id)) p];
+
+  /// De las elegidas, las ruedas montadas: esas se mandan al almacén o a la papelera.
+  List<MontajeActual> get _montadasSel =>
+      [for (final p in _posicionesSel) if (_montajePorPosicion[p.id] != null) _montajePorPosicion[p.id]!];
+
+  String _codigos(Iterable<PosicionVehiculo> ps) => ps.map((p) => p.codigoPosicion).join(', ');
 
   /// Montaje por id, para resolver el plan (que trabaja con montajeId).
   Map<String, MontajeActual> get _montajePorId =>
@@ -1343,7 +1412,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     final resaltar = p.id == widget.posicionInicialId;
     final problemas = _problemasVigentes(p.id);
     final esA = _modoPermuta && _permutaA == p.id;
-    final sel = _posSeleccionada == p.id || esA;
+    final sel = _seleccion.contains(p.id) || esA;
     final anilloSel = sel
         ? BoxDecoration(
             borderRadius: BorderRadius.circular(13),
@@ -1585,10 +1654,9 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
 
   /// Posición vacía seleccionada: con ella, tocar una tarjeta de stock monta
   /// directamente (sin arrastrar). Lo consultan la franja y la barra inferior.
-  PosicionVehiculo? get _montarEn {
-    final p = _posSel;
-    return (p != null && !_montajePorPosicion.containsKey(p.id)) ? p : null;
-  }
+  /// Posiciones vacías elegidas: con ellas, tocar una tarjeta de stock monta
+  /// esa rueda en todas (sin arrastrar). Vacía si no hay ninguna.
+  List<PosicionVehiculo> get _montarEn => _vaciasSel;
 
   // ── Franja superior: stock del cliente ────────────────────────────────────
   // Mismo contenido que tenía el panel lateral (título, medida, aviso y las
@@ -1597,7 +1665,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     final medidaTxt = _medidasVehiculo.isEmpty ? 'todas' : _medidasVehiculo.join(' · ');
     final nuevos = _stock.where((l) => l.nuevo > 0).toList();
     final usados = _stock.where((l) => l.usado > 0).toList();
-    final montarEn = _montarEn;
+    final montarEn = _montarEn.isEmpty ? null : _montarEn;
     return Container(
       width: double.infinity,
       decoration: const BoxDecoration(
@@ -1614,7 +1682,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
           Expanded(
             child: Text(
               montarEn != null
-                  ? 'Toca una rueda para montarla en ${montarEn.codigoPosicion}.'
+                  ? 'Toca una rueda para montarla en ${_codigos(montarEn)}.'
                   : 'Arrastra una tarjeta a una posición libre.',
               textAlign: TextAlign.right,
               maxLines: 1,
@@ -1696,15 +1764,19 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
 
   // ── Barra inferior: destinos del desmontaje + montaje sin stock ───────────
   Widget _barraInferior() {
-    final montarEn = _montarEn;
+    final montadas = _montadasSel;
     final almacen = _zonaDestino(icono: Icons.warehouse, label: 'Almacén (usado)', color: AppColors.info,
-        onAccept: (m) => _desmontar(m, 'almacen'));
+        onAccept: (m) => _desmontar(m, 'almacen'),
+        seleccionadas: montadas.length,
+        onTap: montadas.isEmpty ? null : () => _desmontarVarias(montadas, 'almacen'));
     final papelera = _zonaDestino(icono: Icons.recycling, label: 'Papelera (reciclaje)', color: AppColors.danger,
-        onAccept: (m) => _desmontar(m, 'pendiente_reciclaje'));
+        onAccept: (m) => _desmontar(m, 'pendiente_reciclaje'),
+        seleccionadas: montadas.length,
+        onTap: montadas.isEmpty ? null : () => _desmontarVarias(montadas, 'pendiente_reciclaje'));
     // Montaje SIN control de stock: el botón usado ya decide el comportamiento
     // (no hay checkboxes ni preguntas de inventario).
-    final nuevo = _btnSinStock('Montar neumático NUEVO', AppColors.success, montarEn, 'nuevo');
-    final usado = _btnSinStock('Montar neumático USADO', AppColors.warning, montarEn, 'usado');
+    final nuevo = _btnSinStock('Montar neumático NUEVO', AppColors.success, _montarEn, 'nuevo');
+    final usado = _btnSinStock('Montar neumático USADO', AppColors.warning, _montarEn, 'usado');
     const rotulo = Text('SIN CONTROL DE STOCK',
         style: TextStyle(color: AppColors.textSecondary, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.4));
     return Padding(
@@ -1774,14 +1846,15 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     );
   }
 
-  Widget _btnSinStock(String label, Color color, PosicionVehiculo? montarEn, String condicion) {
+  Widget _btnSinStock(String label, Color color, List<PosicionVehiculo> montarEn, String condicion) {
     return OutlinedButton.icon(
       onPressed: _trabajando ? null : () => _montarSinStock(condicion, montarEn),
       icon: Icon(Icons.add_circle_outline, color: color),
-      label: Text(label, style: TextStyle(color: color, fontWeight: FontWeight.w700)),
+      label: Text(montarEn.length > 1 ? '$label · ${montarEn.length}' : label,
+          style: TextStyle(color: color, fontWeight: FontWeight.w700)),
       style: OutlinedButton.styleFrom(
         minimumSize: const Size.fromHeight(50),
-        side: BorderSide(color: color.withValues(alpha: montarEn != null ? 0.9 : 0.4)),
+        side: BorderSide(color: color.withValues(alpha: montarEn.isNotEmpty ? 0.9 : 0.4)),
         alignment: Alignment.centerLeft,
       ),
     );
@@ -1790,16 +1863,17 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   /// Flujo sin stock: posición vacía seleccionada → catálogo (medida ya
   /// filtrada) → elegir → montar. El botón pulsado decide nuevo/usado y que
   /// NO se toca el inventario; solo el usado pide las profundidades reales.
-  Future<void> _montarSinStock(String condicion, PosicionVehiculo? p) async {
-    if (p == null) {
-      _aviso('Toca primero una posición VACÍA en el plano y vuelve a pulsar el botón.', ok: false);
+  Future<void> _montarSinStock(String condicion, List<PosicionVehiculo> ps) async {
+    if (ps.isEmpty) {
+      _aviso('Toca primero una o varias posiciones VACÍAS en el plano y vuelve a pulsar el botón.', ok: false);
       return;
     }
+    // El catálogo se elige UNA vez: es la misma rueda en todas.
     final ref = await Navigator.of(context).push<Map<String, dynamic>>(MaterialPageRoute(
       builder: (_) => CatalogoScreen(
         medidasBase: _medidasVehiculo,
         seleccion: true,
-        subtitulo: 'Montar ${condicion.toUpperCase()} en ${p.codigoPosicion}',
+        subtitulo: 'Montar ${condicion.toUpperCase()} en ${_codigos(ps)}',
       ),
     ));
     if (ref == null || !mounted) return; // canceló
@@ -1812,48 +1886,92 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
         && await TyreControlApi.pideIdentidad(
              empresaId: _empresaId!, medida: (ref['medida'] as String?) ?? '');
     if (!mounted) return;
-    final datos = await _pedirDatosMontaje(
-      pideProfundidad: condicion == 'usado', pideIdentidad: pideIdentidad);
-    if (datos == null) return; // canceló
 
-    setState(() => _trabajando = true);
-    try {
-      Future<String?> montar() => TyreControlApi.montarDesdeCatalogo(
-            vehiculoId: widget.vehiculoId,
-            posicionId: p.id,
-            referenciaId: refId,
-            condicion: condicion,
-            profundidadUsado: datos.mm,
-            km: _km,
-            rfidEpc: datos.rfidEpc,
-            numeroSerie: datos.numeroSerie,
-            intervencionId: _intervencionId,
-          );
-      String? neuId;
+    final hechas = <String>[];
+    var reconocidas = '';
+    for (final p in ps) {
+      // Los datos son de cada goma (profundidad del usado, RFID, nº de serie):
+      // se piden posición a posición, y si no hacen falta no sale nada.
+      final datos = await _pedirDatosMontaje(
+        pideProfundidad: condicion == 'usado', pideIdentidad: pideIdentidad);
+      if (datos == null || !mounted) break; // canceló: se para aquí
+
+      setState(() => _trabajando = true);
       try {
-        neuId = await montar();
-      } on Exception catch (e) {
-        if (!'$e'.contains('IDENTIDAD_YA_MONTADA')) rethrow;
-        setState(() => _trabajando = false);
-        final resuelto = await _ofrecerRegularizar(datos);
-        if (!resuelto || !mounted) return;
-        setState(() => _trabajando = true);
-        neuId = await montar();
+        Future<String?> montar() => TyreControlApi.montarDesdeCatalogo(
+              vehiculoId: widget.vehiculoId,
+              posicionId: p.id,
+              referenciaId: refId,
+              condicion: condicion,
+              profundidadUsado: datos.mm,
+              km: _km,
+              rfidEpc: datos.rfidEpc,
+              numeroSerie: datos.numeroSerie,
+              intervencionId: _intervencionId,
+            );
+        String? neuId;
+        try {
+          neuId = await montar();
+        } on Exception catch (e) {
+          if (!'$e'.contains('IDENTIDAD_YA_MONTADA')) rethrow;
+          setState(() => _trabajando = false);
+          final resuelto = await _ofrecerRegularizar(datos);
+          if (!resuelto || !mounted) break;
+          setState(() => _trabajando = true);
+          neuId = await montar();
+        }
+        _posicionesMontadas.add(p.id);
+        hechas.add(p.codigoPosicion);
+        reconocidas += await _textoReconocimiento(neuId, datos);
+      } catch (e) {
+        final txt = '$e'.contains('MEDIDA_INCOMPATIBLE')
+            ? 'Medida no homologada para este vehículo.'
+            : 'Error al montar en ${p.codigoPosicion}: ${_mensajeError(e)}';
+        _aviso(txt, ok: false);
+        break;
+      } finally {
+        if (mounted) setState(() => _trabajando = false);
       }
-      _posicionesMontadas.add(p.id);
-      HapticFeedback.mediumImpact();
-      await _cargar();
-      if (mounted) setState(() => _posSeleccionada = null);
-      final reconocida = await _textoReconocimiento(neuId, datos);
-      _aviso('Montado ${ref['marca']} ${ref['modelo'] ?? ''} (${condicion == 'nuevo' ? 'nuevo' : 'usado'}, sin stock) en ${p.codigoPosicion}$reconocida', ok: true);
-    } catch (e) {
-      final txt = '$e'.contains('MEDIDA_INCOMPATIBLE')
-          ? 'Medida no homologada para este vehículo.'
-          : 'Error al montar: ${_mensajeError(e)}';
-      _aviso(txt, ok: false);
-    } finally {
-      if (mounted) setState(() => _trabajando = false);
     }
+    if (hechas.isEmpty) return;
+    HapticFeedback.mediumImpact();
+    await _cargar();
+    if (mounted) setState(() => _posSeleccionada = null);
+    _aviso('Montado ${ref['marca']} ${ref['modelo'] ?? ''} (${condicion == 'nuevo' ? 'nuevo' : 'usado'}, sin stock) en ${hechas.join(', ')}$reconocidas', ok: true);
+  }
+
+  /// Varias posiciones elegidas: qué se puede hacer con todas a la vez.
+  Widget _panelVarias() {
+    final montadas = _montadasSel;
+    final vacias = _vaciasSel;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+      color: AppColors.surfaceVariant,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(
+            child: Text('${_seleccion.length} POSICIONES · ${_codigos(_posicionesSel)}',
+                style: const TextStyle(color: AppColors.textSecondary, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.4)),
+          ),
+          GestureDetector(
+            onTap: () => setState(() => _posSeleccionada = null),
+            child: const Row(children: [
+              Text('Quitar selección', style: TextStyle(color: AppColors.textHint, fontSize: 11)),
+              SizedBox(width: 4),
+              Icon(Icons.close, size: 18, color: AppColors.textHint),
+            ]),
+          ),
+        ]),
+        const SizedBox(height: 6),
+        if (montadas.isNotEmpty)
+          Text('${montadas.length} con rueda: toca Almacén (usado) o Papelera (reciclaje) para desmontarlas todas.',
+              style: const TextStyle(color: AppColors.info, fontSize: 12, fontWeight: FontWeight.w700)),
+        if (vacias.isNotEmpty)
+          Text('${vacias.length} libres: toca una rueda del stock de arriba, o Montar neumático NUEVO / USADO, y se monta la misma en todas.',
+              style: const TextStyle(color: AppColors.success, fontSize: 12, fontWeight: FontWeight.w700)),
+      ]),
+    );
   }
 
   // Bloque de operaciones para la posición seleccionada, según su avería.
@@ -1965,14 +2083,25 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
     );
   }
 
-  Future<void> _montarDesdeStockTap(StockAlmacenLinea l, String condicion, PosicionVehiculo p) async {
-    await _soltarStockEnPosicion(_DragStock(l, condicion), p);
+  /// La misma rueda del stock en todas las posiciones vacías elegidas, una
+  /// detrás de otra (cada una pide sus datos si la medida los pide).
+  Future<void> _montarDesdeStockTap(StockAlmacenLinea l, String condicion, List<PosicionVehiculo> ps) async {
+    final hay = condicion == 'nuevo' ? l.nuevo : l.usado;
+    if (hay < ps.length) {
+      _aviso('Solo hay $hay de ${l.marca} ${l.medida} ($condicion) y has elegido ${ps.length} posiciones.', ok: false);
+      return;
+    }
+    for (final p in ps) {
+      if (!mounted) return;
+      await _soltarStockEnPosicion(_DragStock(l, condicion), p);
+      if (!_posicionesMontadas.contains(p.id)) break; // canceló o falló: no se sigue
+    }
     if (mounted) setState(() => _posSeleccionada = null);
   }
 
   /// Grupo de tarjetas de stock. Va en la franja superior, así que se dispone
   /// en HORIZONTAL; el arrastre y el toque para montar no cambian.
-  Widget _grupoStock(String titulo, List<StockAlmacenLinea> lineas, String condicion, Color color, PosicionVehiculo? montarEn) {
+  Widget _grupoStock(String titulo, List<StockAlmacenLinea> lineas, String condicion, Color color, List<PosicionVehiculo>? montarEn) {
     return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
       Padding(padding: const EdgeInsets.symmetric(horizontal: 8),
         child: Text(titulo.toUpperCase(), style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w800))),
