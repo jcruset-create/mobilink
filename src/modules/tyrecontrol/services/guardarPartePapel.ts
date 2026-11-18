@@ -107,3 +107,83 @@ export function estadoParaGuardar(p: {
 /** «Importada del parte en papel 20261117.pdf, hoja 3». */
 export const origenDelParte = (fichero: string, hoja: number) =>
   `Importada del parte en papel ${fichero}, hoja ${hoja}`;
+
+// ── Corregir a mano lo leído ────────────────────────────────────────────────
+//
+// Antes de guardar, quien tiene el papel delante puede corregir lo que el
+// lector haya entendido mal: matrícula, unidad, fecha y cada fila. Se edita un
+// borrador en texto (lo que se teclea) y al aplicarlo se convierte en la
+// lectura, con lo que todo lo demás —casar el vehículo, las ruedas, los
+// bloqueos— se recalcula igual que si el papel lo hubiera dicho así.
+
+export interface BorradorFila {
+  pos: string;
+  profundidad: string;
+  medida: string;
+  marca: string;
+  modelo: string;
+  serie: string;
+}
+
+export interface BorradorHoja {
+  matricula: string;
+  unidad: string;
+  fecha: string;
+  filas: BorradorFila[];
+}
+
+export const filaVacia = (pos = ""): BorradorFila =>
+  ({ pos, profundidad: "", medida: "", marca: "", modelo: "", serie: "" });
+
+export function borradorDe(
+  l: { matricula: string | null; numero_unidad: string | null; fecha: string | null },
+  filas: FilaLeidaFlotas[],
+): BorradorHoja {
+  return {
+    matricula: l.matricula ?? "",
+    unidad: l.numero_unidad ?? "",
+    fecha: l.fecha ?? "",
+    filas: filas.map((f) => ({
+      pos: f.pos != null ? String(f.pos) : "",
+      profundidad: f.profundidad_mm != null ? String(f.profundidad_mm) : "",
+      medida: f.medida ?? "",
+      marca: f.marca ?? "",
+      modelo: f.modelo ?? "",
+      serie: f.numero_serie ?? "",
+    })),
+  };
+}
+
+const oNull = (s: string) => (s.trim() === "" ? null : s.trim());
+
+/** Lo que no se entiende se queda vacío y lo bloquea `estadoParaGuardar`. */
+export function numeroDe(s: string): number | null {
+  const t = s.trim().replace(",", ".");
+  if (!/^\d+(\.\d+)?$/.test(t)) return null;
+  return Number(t);
+}
+
+/** El borrador, de vuelta en forma de lectura: cabecera y filas. */
+export function lecturaDelBorrador(b: BorradorHoja): {
+  matricula: string | null; numero_unidad: string | null; fecha: string | null; filas: FilaLeidaFlotas[];
+} {
+  return {
+    matricula: oNull(b.matricula),
+    numero_unidad: oNull(b.unidad),
+    fecha: oNull(b.fecha),
+    filas: b.filas
+      .filter((f) => [f.pos, f.profundidad, f.medida, f.marca, f.modelo, f.serie].some((x) => x.trim() !== ""))
+      .map((f) => {
+        const pos = numeroDe(f.pos);
+        return {
+          pos: pos != null && Number.isInteger(pos) ? pos : null,
+          profundidad_mm: numeroDe(f.profundidad),
+          medida: oNull(f.medida),
+          marca: oNull(f.marca),
+          modelo: oNull(f.modelo),
+          numero_serie: oNull(f.serie),
+          fecha_dot: null,
+        };
+      }),
+  };
+}
