@@ -127,11 +127,14 @@ async function leerHoraDelBarrido(empresaId: string): Promise<string | null> {
  * lo adivine.
  *
  * Se leen las CONFIGURACIONES, no los conectores: es una consulta a la base del
- * Hub y no llama a ningún proveedor. A las del Hub se les suman las heredadas
- * —el cliente de Webfleet de toda la vida—, porque para quien mira la pantalla
- * una cuenta que está barriendo es una cuenta, la haya inscrito alguien o no. Y va en su propio try: si la
- * base del Hub no contesta, la pantalla enseña lo que ya sabía en vez de caerse
- * por un dato que solo sirve para explicar.
+ * Hub y no llama a ningún proveedor.
+ *
+ * A las del Hub se les suman las heredadas —el cliente de Webfleet de toda la
+ * vida—, porque para quien mira la pantalla una cuenta que está barriendo es
+ * una cuenta, la haya inscrito alguien o no.
+ *
+ * Y va en su propio try: si la base del Hub no contesta, la pantalla enseña lo
+ * que ya sabía en vez de caerse por un dato que solo sirve para explicar.
  */
 async function cuentasDeTelematica(
   empresaId: string,
