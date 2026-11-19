@@ -68,6 +68,11 @@ export interface CuentaTelematicaBases {
   cuenta: string;
   nombre: string | null;
   activa: boolean;
+  /**
+   * `true` = no está dada de alta en el Hub y aun así barre: es un cliente de
+   * Webfleet anterior al Hub, con sus credenciales y su flota ya enlazada.
+   */
+  heredada?: boolean;
 }
 
 export interface PresenciaBases {
