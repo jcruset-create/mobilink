@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate, useLocation } from "react-router-dom";
-import { Menu, LogOut, Home, ChevronDown, ChevronRight } from "lucide-react";
+import { Menu, LogOut, Home, ChevronDown, ChevronRight, Search, X } from "lucide-react";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
-import { NAV, agruparNav, grupoDeRuta, navVisible, siempreVisibles, type GrupoKey, type NavItem } from "../config/navigation";
+import { NAV, agruparNav, buscarEnMenu, grupoDeRuta, navVisible, siempreVisibles, type GrupoKey, type NavItem } from "../config/navigation";
 import { PERFIL_CLIENTE_LABELS, ROL_LABELS, perfilClienteDe } from "../types";
 import CampanaAvisos from "../components/CampanaAvisos";
 import AsistenteChat from "../components/AsistenteChat";
@@ -23,6 +23,9 @@ export default function TyreLayout() {
   const soloInformes = perfilClienteDe(perfil) === "director";
   const items = NAV.filter((i) => navVisible(i, perfil?.rol, esSuperadmin, pantallas, soloInformes));
   const { grupos, pie } = agruparNav(items);
+  // Buscador del menú: con algo escrito, la lista plana de lo que coincide.
+  const [busqueda, setBusqueda] = useState("");
+  const encontrados = buscarEnMenu(items, busqueda);
 
   /*
    * Grupos abiertos del menú. Lo que el usuario abre o cierra se recuerda en
@@ -166,6 +169,44 @@ export default function TyreLayout() {
       <div className="mx-auto flex max-w-[1500px]">
         {/* Sidebar */}
         <aside className={`no-imprimir ${open ? "block" : "hidden"} w-52 shrink-0 border-r border-slate-700 bg-slate-900 p-2 md:block`}>
+          <div className="relative mb-2">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
+            <input
+              id="buscador-menu"
+              type="search"
+              value={busqueda}
+              onChange={(e) => setBusqueda(e.target.value)}
+              onKeyDown={(e) => {
+                // Intro abre la primera; Escape borra.
+                if (e.key === "Enter" && encontrados[0]) {
+                  navigate(`/tyrecontrol/${encontrados[0].path}`);
+                  setBusqueda("");
+                  setOpen(false);
+                }
+                if (e.key === "Escape") setBusqueda("");
+              }}
+              placeholder="Buscar pantalla…"
+              aria-label="Buscar una pantalla del menú"
+              className="w-full rounded-lg border border-slate-700 bg-slate-800 py-1.5 pl-8 pr-7 text-[13px] text-slate-100 placeholder:text-slate-500 focus:border-sky-500 focus:outline-none"
+            />
+            {busqueda && (
+              <button type="button" onClick={() => setBusqueda("")} aria-label="Borrar la búsqueda"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-400 hover:text-slate-200">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+          {busqueda.trim() ? (
+            <nav className="flex flex-col gap-0.5" aria-label="Resultados de la búsqueda">
+              {encontrados.length === 0 ? (
+                <p className="px-3 py-2 text-[12px] text-slate-500">Ninguna pantalla se llama así.</p>
+              ) : (
+                encontrados.map((item) => (
+                  <div key={item.key} onClick={() => setBusqueda("")}>{enlace(item, false)}</div>
+                ))
+              )}
+            </nav>
+          ) : (
           <nav className="flex flex-col gap-1">
             {grupos.map((g) => {
               const Icono = g.icon;
@@ -206,6 +247,7 @@ export default function TyreLayout() {
               </div>
             )}
           </nav>
+          )}
         </aside>
 
         {/* Contenido */}

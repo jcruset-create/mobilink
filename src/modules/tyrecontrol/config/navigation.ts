@@ -142,3 +142,23 @@ export function grupoDeRuta(items: NavItem[], pathname: string): GrupoKey | null
   const pantalla = pathname.split("/")[2] || "dashboard";
   return items.find((i) => i.path === pantalla)?.grupo ?? null;
 }
+
+/** Sin acentos y en minúsculas: «planificacion» encuentra «Planificación». */
+function plano(t: string): string {
+  return t.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+}
+
+/**
+ * El buscador del menú: las pantallas visibles cuyo nombre, o el de su
+ * grupo, contiene todas las palabras escritas. «bases» → Vehículos en bases;
+ * «revisiones hist» → Histórico de revisiones. Ayuda y Perfil también salen.
+ */
+export function buscarEnMenu(items: NavItem[], consulta: string): NavItem[] {
+  const palabras = plano(consulta).split(/\s+/).filter(Boolean);
+  if (palabras.length === 0) return [];
+  const nombreGrupo = new Map(GRUPOS.map((g) => [g.key as GrupoKey, g.label]));
+  return items.filter((i) => {
+    const texto = plano(`${i.label} ${nombreGrupo.get(i.grupo) ?? ""}`);
+    return palabras.every((p) => texto.includes(p));
+  });
+}

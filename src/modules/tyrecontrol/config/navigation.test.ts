@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { NAV, agruparNav, grupoDeRuta, navVisible } from "./navigation";
+import { NAV, agruparNav, buscarEnMenu, grupoDeRuta, navVisible } from "./navigation";
 
 const ver = (rol: "administrador" | "operador" | "cliente", superadmin = false) =>
   NAV.filter((i) => navVisible(i, rol, superadmin, null));
@@ -46,5 +46,15 @@ describe("menú agrupado del panel", () => {
     expect(grupoDeRuta(items, "/tyrecontrol/vehiculos-en-bases")).toBe("flota");
     expect(grupoDeRuta(items, "/tyrecontrol/etiquetas/abc/imprimir")).toBe("neumaticos");
     expect(grupoDeRuta(items, "/tyrecontrol/no-existe")).toBeNull();
+  });
+
+  it("el buscador encuentra sin acentos y por varias palabras, solo entre lo visible", () => {
+    const admin = ver("administrador");
+    expect(buscarEnMenu(admin, "bases").map((i) => i.key)).toEqual(["vehiculos-en-bases"]);
+    expect(buscarEnMenu(admin, "planificacion").map((i) => i.key)).toEqual(["planificacion"]);
+    expect(buscarEnMenu(admin, "revisiones hist").map((i) => i.key)).toEqual(["historico-revisiones"]);
+    expect(buscarEnMenu(admin, "  ")).toEqual([]);
+    // El técnico no encuentra lo que no ve.
+    expect(buscarEnMenu(ver("operador"), "usuarios")).toEqual([]);
   });
 });
