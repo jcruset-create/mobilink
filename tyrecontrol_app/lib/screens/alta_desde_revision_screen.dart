@@ -5,7 +5,8 @@ import '../models/models.dart';
 import '../services/matricula.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
-import 'alta_operativa_screen.dart';
+import 'alta_ejes_screen.dart';
+import 'alta_operativa_screen.dart' show TarjetaTipoVehiculo;
 
 /// Qué devuelve esta pantalla a «Nueva revisión».
 sealed class SalidaAltaDesdeRevision {
@@ -42,8 +43,8 @@ class AltaTerminada extends SalidaAltaDesdeRevision {
 ///   5. Qué vehículo es — el tipo, del que cuelgan las posiciones.
 ///
 /// Con eso se crea (`tc_alta_vehiculo_desde_parte`, pendiente de validar) y
-/// sigue el alta operativa por la medida y la llanta, y después el inventario
-/// inicial, que queda como su primera revisión.
+/// sigue en [AltaEjesScreen]: el uso, los ejes y después las ruedas
+/// (inventario inicial), que quedan como su primera revisión.
 class AltaDesdeRevisionScreen extends StatefulWidget {
   final String matricula;
   final List<int> dudososIa;
@@ -207,11 +208,10 @@ class _AltaDesdeRevisionScreenState extends State<AltaDesdeRevisionScreen> {
       // Con push y no pushReplacement: «Nueva revisión» espera el resultado
       // de ESTA pantalla, y pushReplacement lo completaría al instante.
       await Navigator.of(context).push<bool>(MaterialPageRoute(
-        builder: (_) => AltaOperativaScreen(
+        builder: (_) => AltaEjesScreen(
           vehiculoId: id,
           matricula: _mat,
-          tipoIdActual: _tipoId,
-          empezarEnMedida: true,
+          tipoVehiculoId: _tipoId!,
         ),
       ));
       if (mounted) Navigator.of(context).pop(const AltaTerminada());
@@ -236,8 +236,8 @@ class _AltaDesdeRevisionScreenState extends State<AltaDesdeRevisionScreen> {
       _Fase.comprobando => ('Buscando $_mat', 'En todas tus flotas, también las de baja'),
       _Fase.comprobacion => ('Buscando $_mat', 'En todas tus flotas, también las de baja'),
       _Fase.pregunta => ('Vehículo no encontrado', widget.tecleada ? 'Matrícula escrita a mano' : 'Comprobado por foto'),
-      _Fase.vehiculo => ('Alta de vehículo · $_mat', 'Paso 1 de 2 · el vehículo'),
-      _Fase.tipo => ('Alta de vehículo · $_mat', 'Paso 2 de 2 · qué vehículo es'),
+      _Fase.vehiculo => ('Alta de vehículo · $_mat', 'Paso 1 de 5 · el vehículo'),
+      _Fase.tipo => ('Alta de vehículo · $_mat', 'Paso 2 de 5 · qué vehículo es'),
     };
     final paso = switch (_fase) { _Fase.vehiculo => 1, _Fase.tipo => 2, _ => 0 };
     return Scaffold(
@@ -250,7 +250,7 @@ class _AltaDesdeRevisionScreenState extends State<AltaDesdeRevisionScreen> {
             ? null
             : PreferredSize(
                 preferredSize: const Size.fromHeight(4),
-                child: LinearProgressIndicator(value: paso / 2, minHeight: 4)),
+                child: LinearProgressIndicator(value: paso / 5, minHeight: 4)),
       ),
       body: SafeArea(
         child: Column(children: [
@@ -486,7 +486,8 @@ class _AltaDesdeRevisionScreenState extends State<AltaDesdeRevisionScreen> {
         const SizedBox(height: 12),
       ],
       const Text(
-        'Después: la medida y la llanta, y las ruedas una a una. Al terminar queda hecha su primera revisión.',
+        'Después: el uso, los ejes (medida, llanta y presión) y las ruedas una a una. '
+        'Al terminar queda hecha su primera revisión.',
         style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
       ),
     ]);

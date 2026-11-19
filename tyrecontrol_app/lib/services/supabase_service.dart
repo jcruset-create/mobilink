@@ -2119,8 +2119,12 @@ class TyreControlApi {
     String? dot,
     String? observaciones,
     String? fotoUrl,
+    /// Etiqueta RFID leída con la sonda. Solo se manda si hay: así la llamada
+    /// sigue sirviendo con la versión de la función que no la conoce.
+    String? rfidEpc,
   }) async {
     final datos = <String, dynamic>{'profundidad_mm': profundidadMm.toString()};
+    if (rfidEpc != null && rfidEpc.trim().isNotEmpty) datos['rfid_epc'] = rfidEpc.trim().toUpperCase();
     if (presionBar != null) datos['presion_bar'] = presionBar.toString();
     if (numeroSerie != null && numeroSerie.trim().isNotEmpty) datos['numero_serie'] = numeroSerie.trim();
     if (dot != null && dot.trim().isNotEmpty) datos['dot'] = dot.trim();
@@ -2133,6 +2137,34 @@ class TyreControlApi {
       'p_datos': datos,
     });
     return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// Alta en la tablet: el uso del vehículo y la configuración de cada eje
+  /// (medida, llanta, presión objetivo, direccional, motriz, elevable). La base
+  /// solo lo deja hacer mientras el vehículo se está dando de alta y aún no
+  /// tiene ruedas apuntadas.
+  static Future<Map<String, dynamic>> configurarVehiculoAlta({
+    required String vehiculoId,
+    String? uso,
+    required List<Map<String, dynamic>> ejes,
+  }) async {
+    final data = await _db.rpc('tc_alta_configurar_vehiculo', params: {
+      'p_vehiculo': vehiculoId,
+      'p_uso': uso,
+      'p_ejes': ejes,
+    });
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// Lo más montado en la flota (marca, modelo, medida, veces), para ofrecerlo
+  /// primero al apuntar ruedas. Si falla, sin favoritos: no impide nada.
+  static Future<List<Map<String, dynamic>>> referenciasFavoritas(String empresaId) async {
+    try {
+      final data = await _db.rpc('tc_referencias_favoritas', params: {'p_empresa': empresaId});
+      return [for (final e in (data as List? ?? const [])) Map<String, dynamic>.from(e as Map)];
+    } catch (_) {
+      return const [];
+    }
   }
 
   /// Cierra el inventario inicial y deja el vehículo operativo.
@@ -2499,7 +2531,7 @@ class TyreControlApi {
     try {
       final data = await _db
           .from('tc_vehiculo_ejes')
-          .select('eje, ruedas, medida_id, tipo_llanta_id')
+          .select('eje, ruedas, medida_id, tipo_llanta_id, directriz, motriz, elevable')
           .eq('vehiculo_id', vehiculoId)
           .order('eje');
       return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();

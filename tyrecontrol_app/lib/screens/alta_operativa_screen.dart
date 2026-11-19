@@ -38,16 +38,12 @@ class AltaOperativaScreen extends StatefulWidget {
   final String matricula;
   /// El tipo que ya tuviera, para saltarse los pasos ya hechos al reanudar.
   final String? tipoIdActual;
-  /// Viene del alta desde «Nueva revisión», que ya ha enseñado el vehículo y
-  /// ha elegido el tipo: se empieza por la medida y no se pregunta dos veces.
-  final bool empezarEnMedida;
 
   const AltaOperativaScreen({
     super.key,
     required this.vehiculoId,
     required this.matricula,
     this.tipoIdActual,
-    this.empezarEnMedida = false,
   });
 
   @override
@@ -85,7 +81,6 @@ class _AltaOperativaScreenState extends State<AltaOperativaScreen> {
   void initState() {
     super.initState();
     _tipoId = widget.tipoIdActual;
-    if (widget.empezarEnMedida && _tipoId != null) _paso = _Paso.medida;
     _cargar();
   }
 
