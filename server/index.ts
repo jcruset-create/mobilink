@@ -139,6 +139,7 @@ import {
 import { createTyreControlRouter } from "./tyrecontrol/router.ts";
 import { createConciliacionRouter } from "./tyrecontrol/conciliacion/router.ts";
 import { createPresenciaRouter } from "./tyrecontrol/presencia/router.ts";
+import { createSateliteRouter } from "./tyrecontrol/satelite/router.ts";
 import { createUbicacionRouter } from "./tyrecontrol/ubicacion/router.ts";
 import { createKilometrajeMensualRouter } from "./tyrecontrol/kilometrajeMensual/router.ts";
 import { createAltaOperativaRouter } from "./tyrecontrol/altaOperativa/router.ts";
@@ -23110,6 +23111,8 @@ mountTcFleetcheck(app, authenticate, requireModule("tyrecontrol"));
  */
 app.use("/api/tyrecontrol/conciliacion", createConciliacionRouter());
 app.use("/api/tyrecontrol/presencia-bases", createPresenciaRouter());
+// Satélite de Google para el mapa de una base: la clave no sale del servidor.
+app.use("/api/tyrecontrol/satelite", createSateliteRouter());
 // La tablet dice dónde está. Solo escribe: el panel lo lee por Supabase.
 app.use("/api/tyrecontrol/ubicacion", createUbicacionRouter());
 // Kilómetros mensuales: mismo motivo que la conciliación para ir ANTES del router general.

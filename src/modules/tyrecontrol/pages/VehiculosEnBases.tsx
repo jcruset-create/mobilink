@@ -31,9 +31,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { HelpCircle, MapPin, Printer, RefreshCw, Route, Truck } from "lucide-react";
+import { HelpCircle, Map as IconoMapa, MapPin, Printer, RefreshCw, Route, Truck } from "lucide-react";
 
 import { abrirPendientesEnBasePdf, listarEmpresas, listarRevisionEstado } from "../services/data";
+import MapaBaseModal from "../components/MapaBaseModal";
+import { pinesDeLaBase, posicionUtil } from "../services/mapaBase";
 import {
   ETIQUETA_PRESENCIA,
   barrerBases,
@@ -77,6 +79,8 @@ export default function VehiculosEnBases() {
   const [datos, setDatos] = useState<PresenciaBases | null>(null);
   const [revisiones, setRevisiones] = useState<Map<string, RevisionEstado>>(new Map());
   const [baseSel, setBaseSel] = useState<string | null>(null);
+  /** La base cuyo patio se está viendo en el mapa, como en la tablet. */
+  const [mapaDe, setMapaDe] = useState<string | null>(null);
   const [cargando, setCargando] = useState(false);
   const [barriendo, setBarriendo] = useState(false);
   const [imprimiendo, setImprimiendo] = useState(false);
@@ -562,11 +566,12 @@ export default function VehiculosEnBases() {
               const dentro = enBase.get(b.id)?.length ?? 0;
               const conPosicionVieja = dormidos.get(b.id) ?? 0;
               const pendientes = pendientesPorBase.get(b.id) ?? 0;
+              const conMapa = posicionUtil(b.lat, b.lng);
               return (
+                <div key={b.id} className="relative">
                 <button
-                  key={b.id}
                   onClick={() => setBaseSel(b.id)}
-                  className={`rounded-xl border px-3 py-2 text-left text-[12px] ${
+                  className={`h-full w-full rounded-xl border px-3 py-2 text-left text-[12px] ${conMapa ? "pr-11" : ""} ${
                     baseSel === b.id
                       ? "border-emerald-500 bg-emerald-500/10 text-emerald-200"
                       : "border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700"
@@ -590,12 +595,27 @@ export default function VehiculosEnBases() {
                     </div>
                   )}
                 </button>
+                {/* El mapa del patio sin tener que elegir antes la base, como
+                    en la tablet. Fuera del botón de la base: un botón dentro
+                    de otro no es HTML válido. */}
+                {conMapa && (
+                  <button
+                    onClick={() => setMapaDe(b.id)}
+                    title={`Ver ${b.nombre} en el mapa`}
+                    aria-label={`Ver ${b.nombre} en el mapa`}
+                    className="absolute right-2 top-2 rounded-lg p-1.5 text-sky-300 hover:bg-sky-500/15"
+                  >
+                    <IconoMapa size={18} />
+                  </button>
+                )}
+                </div>
               );
             })}
           </div>
 
           <div className="mb-2 flex items-center gap-2 text-[13px] text-slate-400">
             <Truck size={14} />
+            <span className="flex-1">
             {baseSel === "__sin_periodicidad__"
               ? `${lista.length} vehículo(s) en base revisados pero sin periodicidad definida`
               : baseSel === "__fuera_de_base__"
@@ -606,6 +626,16 @@ export default function VehiculosEnBases() {
                     ? `${lista.length} vehículo(s) en ${nombreBase.get(baseReal) ?? "la base"}` +
                       (pendientesEnLista > 0 ? ` · ${pendientesEnLista} con revisión pendiente, los primeros` : "")
                     : `${lista.length} vehículo(s) en base y con revisión pendiente`}
+            </span>
+            {/* Con una base elegida, la misma lista en mapa. */}
+            {baseReal && datos?.bases.some((b) => b.id === baseReal && posicionUtil(b.lat, b.lng)) && (
+              <button
+                onClick={() => setMapaDe(baseReal)}
+                className="flex items-center gap-1.5 rounded-lg border border-sky-500 px-3 py-1.5 text-[13px] font-bold text-sky-300 hover:bg-sky-500/10"
+              >
+                <IconoMapa size={16} /> Mapa
+              </button>
+            )}
           </div>
 
           {lista.length === 0 ? (
@@ -629,6 +659,21 @@ export default function VehiculosEnBases() {
           )}
         </>
       )}
+      {(() => {
+        const base = datos?.bases.find((b) => b.id === mapaDe);
+        if (!base) return null;
+        return (
+          <MapaBaseModal
+            base={base}
+            pines={pinesDeLaBase(base.id, datos?.vehiculos ?? [], revisiones)}
+            onCerrar={() => setMapaDe(null)}
+            onRevisar={(p) =>
+              navigate(`/tyrecontrol/revision-vehiculo?vehiculo=${p.v.vehiculo_id}&empresa=${empresaId}`)
+            }
+            onFicha={(p) => navigate(`/tyrecontrol/vehiculos/${p.v.vehiculo_id}`)}
+          />
+        );
+      })()}
     </div>
   );
 }
