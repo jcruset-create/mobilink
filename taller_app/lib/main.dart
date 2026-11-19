@@ -7,6 +7,7 @@ import 'screens/bloqueo_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
 import 'theme.dart';
+import 'widgets/aviso_actualizacion.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -23,6 +24,9 @@ class TallerApp extends StatelessWidget {
       title: 'WorkPlanner Taller',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.build(),
+      // Versión nueva publicada: franja arriba, en cualquier pantalla.
+      builder: (context, child) =>
+          AvisoActualizacion(app: 'taller', child: child ?? const SizedBox.shrink()),
       home: const SplashScreen(),
     );
   }

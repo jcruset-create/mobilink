@@ -248,6 +248,19 @@ export function copiasDelInforme(lineas: LineaPdf[]): LineaPdf[][] {
   return copias;
 }
 
+/**
+ * El «A1. Nº de orden» de una copia: a qué intervención pertenece. `null` si
+ * no lo trae.
+ *
+ * Se lee el A1 y nada más, igual que lo lee `leerCopia`. No se exige que la
+ * copia entera se deje leer: para saber de qué intervención es un ejemplar
+ * basta su número, y un informe al que le falte la fecha sigue teniendo
+ * ejemplar del cliente.
+ */
+export function ordenDeLaCopia(copia: LineaPdf[]): string | null {
+  return limpio(valorDe(copia, "A1"));
+}
+
 /** Hasta dónde se admite que el valor de un campo esté a la derecha, en puntos. */
 const ANCHO_COLUMNA = 260;
 

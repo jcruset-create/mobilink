@@ -67,8 +67,8 @@ export function DashboardEjecutivo({ filtros }: { filtros: FiltrosInformes }) {
           <KpiCard title="Total controlados" value={kpis.neumaticos_total} onClick={irInventario} />
           <KpiCard title="Montados" value={kpis.neumaticos_montados} tono="info" onClick={irInventario} />
           <KpiCard title="En almacén" value={kpis.neumaticos_almacen} onClick={irInventario} />
-          <KpiCard title="Bajo mínimo legal" value={kpis.neumaticos_bajo_minimo} tono={kpis.neumaticos_bajo_minimo > 0 ? "danger" : "ok"} hint="≤ 1,6 mm" onClick={irAlertas} />
-          <KpiCard title="Próximos a sustituir" value={kpis.neumaticos_proximos} tono={kpis.neumaticos_proximos > 0 ? "warn" : "ok"} hint="≤ 3,0 mm" onClick={irAlertas} />
+          <KpiCard title="En su mínimo" value={kpis.neumaticos_bajo_minimo} tono={kpis.neumaticos_bajo_minimo > 0 ? "danger" : "ok"} hint="Para cambiar" onClick={irAlertas} />
+          <KpiCard title="Próximos a sustituir" value={kpis.neumaticos_proximos} tono={kpis.neumaticos_proximos > 0 ? "warn" : "ok"} hint="A 1 mm del mínimo o por confirmar" onClick={irAlertas} />
           <KpiCard title="En reparación" value={kpis.neumaticos_reparacion} />
           <KpiCard title="Descartados" value={kpis.neumaticos_descartados} />
           {!esCliente && <KpiCard title="Técnicos activos" value={kpis.tecnicos_activos} />}

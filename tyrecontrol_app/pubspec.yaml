@@ -14,7 +14,7 @@ publish_to: 'none'
 # tienda —la APK se instala a mano— así que subir de 0.46 a 1.1 no le afecta:
 # lo único que Android exige es que el número de build crezca, y ese lo pone el
 # contador de la CI.
-version: 1.2.6+277
+version: 1.4.0+292
 
 environment:
   sdk: ^3.8.1
@@ -54,6 +54,11 @@ dependencies:
   # Entrar con Face ID / huella en vez de nombre y PIN. Misma versión que
   # lite_app (Mobilink Assist Lite), que ya lo usa: una sola que mantener.
   local_auth: ^3.0.1
+
+  # Mapa de cada base con los autobuses pendientes, sobre OpenStreetMap (sin
+  # clave). Mismas versiones que flutter_app y lite_app, que ya lo usan.
+  flutter_map: ^6.1.0
+  latlong2: ^0.9.0
 
 dev_dependencies:
   flutter_test:

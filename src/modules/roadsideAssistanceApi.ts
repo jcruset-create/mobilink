@@ -187,7 +187,7 @@ export async function updateOtfTrabajo(tid: number, body: Record<string, unknown
     headers: getAdminHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error("No se pudo actualizar el trabajo");
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? "No se pudo actualizar el trabajo");
   return res.json();
 }
 

@@ -98,52 +98,44 @@ class _VehicleLayoutImageState extends State<VehicleLayoutImage> {
     if (_aspect == null) {
       return const Center(child: CircularProgressIndicator());
     }
-    // El área es el PLANO: la imagen más su margen. Las coordenadas de las
-    // tarjetas son del plano, no de la foto (ver plano_margen.dart).
-    final aspect = aspectoPlano(_aspect!);
     return LayoutBuilder(
       builder: (context, c) {
-        // Ajustar la imagen dentro del área disponible manteniendo su aspecto:
-        // primero por ancho y, si se pasa de alto, se encoge por alto. En un
+        // El plano se ajusta al área disponible (ver `ajustePlano`). En un
         // scroll (maxHeight infinito, p.ej. la ficha) se aplica un tope propio
         // proporcional a la pantalla para que TODAS las imágenes de chasis
         // salgan con la misma medida visual, da igual su resolución o aspecto.
         final maxH = c.maxHeight.isFinite
             ? c.maxHeight
             : MediaQuery.of(context).size.height * 0.66;
-        double w = c.maxWidth;
-        double h = w / aspect;
-        if (h > maxH) {
-          h = maxH;
-          w = h * aspect;
-        }
+        final a = ajustePlano(c.maxWidth, maxH, _aspect!);
+        final w = a.w;
+        final h = a.h;
+        final ri = rectImagenEnPlano(w, h, mx: a.mx, my: a.my);
+        final cajas = _cajas(w, h, a.mx, a.my, ri);
         return Center(
           child: SizedBox(
             width: w,
             height: h,
             child: Stack(
               children: [
-                Builder(builder: (_) {
-                  final ri = rectImagenEnPlano(w, h);
-                  return Positioned(
-                    left: ri.x, top: ri.y, width: ri.w, height: ri.h,
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(14),
-                      child: Image.network(
-                        widget.imagenUrl,
-                        width: ri.w,
-                        height: ri.h,
-                        fit: BoxFit.fill, // la caja ya respeta el aspecto real
-                        errorBuilder: (_, __, ___) => Container(
-                          color: AppColors.surface,
-                          child: const Center(child: Icon(Icons.directions_car, size: 48, color: AppColors.textHint)),
-                        ),
+                Positioned(
+                  left: ri.x, top: ri.y, width: ri.w, height: ri.h,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: Image.network(
+                      widget.imagenUrl,
+                      width: ri.w,
+                      height: ri.h,
+                      fit: BoxFit.fill, // la caja ya respeta el aspecto real
+                      errorBuilder: (_, __, ___) => Container(
+                        color: AppColors.surface,
+                        child: const Center(child: Icon(Icons.directions_car, size: 48, color: AppColors.textHint)),
                       ),
                     ),
-                  );
-                }),
+                  ),
+                ),
                 for (int i = 0; i < widget.posiciones.length; i++)
-                  _cardPositioned(widget.posiciones[i], i, w, h),
+                  _cardPositioned(widget.posiciones[i], cajas[i]),
               ],
             ),
           ),
@@ -152,28 +144,121 @@ class _VehicleLayoutImageState extends State<VehicleLayoutImage> {
     );
   }
 
-  Widget _cardPositioned(PosicionVehiculo p, int i, double w, double h) {
-    final co = cajaAVista(_coords(p, i));
-    // El ancho es EXACTAMENTE su porcentaje, sin suelo en píxeles: es lo único
-    // que garantiza que dos tarjetas del mismo eje no se pisen ni invadan el
-    // chasis por estrecha que sea la pantalla. Y se ancla por el centro.
-    final cardW = co.w / 100 * w;
-    final centroX = (co.x + co.w / 2) / 100 * w;
+  /// Cuánto puede ensancharse una tarjeta respecto a su ancho calibrado…
+  static const double _crecimientoMax = 2.2;
+
+  /// …y hasta qué ancho: con esto ya caben sus textos enteros. Una tarjeta
+  /// que ya lo mide (tablet grande, apaisado) se queda como está calibrada.
+  static const double _anchoBastante = 132;
+
+  /// Dónde va cada tarjeta, en píxeles del plano.
+  ///
+  /// El ancho calibrado es un % del plano, y en una tablet estrecha no da ni
+  /// para «Hankook». Una tarjeta que está en el margen, fuera de la imagen,
+  /// tiene sitio libre hacia el borde: se ensancha hacia FUERA —el lado que da
+  /// a la rueda no se mueve— hasta el borde del plano o hasta la tarjeta que
+  /// tenga al lado (ruedas gemelas). Y su alto se limita al hueco que hay
+  /// hasta la tarjeta de debajo, para que no se pisen.
+  List<({double left, double top, double width, double maxHeight})> _cajas(
+    double w, double h, double mx, double my, ({double x, double y, double w, double h}) ri,
+  ) {
+    const aire = 3.0;
+    final n = widget.posiciones.length;
+    final izq = List<double>.filled(n, 0);
+    final der = List<double>.filled(n, 0);
+    final arriba = List<double>.filled(n, 0);
+    final abajo = List<double>.filled(n, 0);
+    for (int i = 0; i < n; i++) {
+      final co = cajaAVista(_coords(widget.posiciones[i], i), mx: mx, my: my);
+      final cardW = co.w / 100 * w;
+      final centroX = (co.x + co.w / 2) / 100 * w;
+      izq[i] = (centroX - cardW / 2).clamp(0.0, w - cardW);
+      der[i] = izq[i] + cardW;
+      arriba[i] = (co.y / 100 * h).clamp(0.0, h - 36);
+      abajo[i] = arriba[i] + co.h / 100 * h;
+    }
+    bool seSolapanEnVertical(int i, int j) => arriba[i] < abajo[j] && arriba[j] < abajo[i];
+
+    final nIzq = List<double>.from(izq);
+    final nDer = List<double>.from(der);
+    for (int i = 0; i < n; i++) {
+      final ancho = der[i] - izq[i];
+      final centro = (izq[i] + der[i]) / 2;
+      var objetivo = ancho * _crecimientoMax;
+      if (objetivo > _anchoBastante) objetivo = _anchoBastante;
+      if (objetivo < ancho) objetivo = ancho;
+      // Solo las que están en el margen: una sobre la imagen taparía la rueda.
+      if (centro < ri.x + aire) {
+        var limite = aire;
+        for (int j = 0; j < n; j++) {
+          if (j != i && seSolapanEnVertical(i, j) && der[j] <= izq[i] + 1 && der[j] + aire > limite) {
+            limite = der[j] + aire;
+          }
+        }
+        final deseado = der[i] - objetivo;
+        nIzq[i] = (deseado > limite ? deseado : limite).clamp(0.0, izq[i]);
+      } else if (centro > ri.x + ri.w - aire) {
+        var limite = w - aire;
+        for (int j = 0; j < n; j++) {
+          if (j != i && seSolapanEnVertical(i, j) && izq[j] >= der[i] - 1 && izq[j] - aire < limite) {
+            limite = izq[j] - aire;
+          }
+        }
+        final deseado = izq[i] + objetivo;
+        nDer[i] = (deseado < limite ? deseado : limite).clamp(der[i], w);
+      }
+    }
+
+    // El hueco hasta la tarjeta de debajo que comparta columna. Se usa el
+    // MENOR de todos para todas: si hay que encoger, se encogen igual y no
+    // sale una tarjeta más pequeña que su vecina.
+    var hueco = double.infinity;
+    for (int i = 0; i < n; i++) {
+      var suelo = h;
+      for (int j = 0; j < n; j++) {
+        if (j != i && arriba[j] > arriba[i] && nIzq[i] < nDer[j] && nIzq[j] < nDer[i] && arriba[j] < suelo) {
+          suelo = arriba[j];
+        }
+      }
+      if (suelo - arriba[i] - aire < hueco) hueco = suelo - arriba[i] - aire;
+    }
+    if (!hueco.isFinite || hueco < 36) hueco = 36;
+
+    return [
+      for (int i = 0; i < n; i++)
+        (left: nIzq[i], top: arriba[i], width: nDer[i] - nIzq[i], maxHeight: hueco),
+    ];
+  }
+
+  Widget _cardPositioned(PosicionVehiculo p, ({double left, double top, double width, double maxHeight}) caja) {
     return Positioned(
-      left: (centroX - cardW / 2).clamp(0.0, w - cardW),
-      top: (co.y / 100 * h).clamp(0.0, h - 36),
-      width: cardW,
-      child: _TarjetaPosicion(
-        p: p,
-        neumatico: widget.montajePorPosicion[p.id]?.neumatico,
-        draft: widget.detalles[p.id],
-        status: widget.estados[p.id] ?? TireStatus.pendiente,
-        valor: widget.valores[p.id],
-        ultima: widget.ultimas[p.id],
-        seleccionada: p.id == widget.seleccionadaId,
-        liveProf: p.id == widget.seleccionadaId ? widget.liveProf : null,
-        livePres: p.id == widget.seleccionadaId ? widget.livePres : null,
-        onTap: () => widget.onTap(p),
+      left: caja.left,
+      top: caja.top,
+      width: caja.width,
+      // Si el contenido no cabe en su hueco se encoge entero, en vez de pisar
+      // la tarjeta de debajo.
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: caja.maxHeight),
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.topCenter,
+          child: SizedBox(
+            width: caja.width,
+            child: _TarjetaPosicion(
+              ancha: caja.width >= _TarjetaPosicion.anchoParaUnaLinea,
+              p: p,
+              neumatico: widget.montajePorPosicion[p.id]?.neumatico,
+              draft: widget.detalles[p.id],
+              status: widget.estados[p.id] ?? TireStatus.pendiente,
+              valor: widget.valores[p.id],
+              ultima: widget.ultimas[p.id],
+              seleccionada: p.id == widget.seleccionadaId,
+              liveProf: p.id == widget.seleccionadaId ? widget.liveProf : null,
+              livePres: p.id == widget.seleccionadaId ? widget.livePres : null,
+              onTap: () => widget.onTap(p),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -191,7 +276,16 @@ class _TarjetaPosicion extends StatelessWidget {
   final double? livePres;
   final VoidCallback onTap;
 
+  /// Con sitio a lo ancho, marca y modelo van en una línea y el distintivo
+  /// junto al nombre de la posición: la tarjeta sale más baja, que es lo que
+  /// falta en una tablet pequeña.
+  final bool ancha;
+
+  /// A partir de este ancho caben «Hankook TH31+» y «Eje 2 izquierda REESC.».
+  static const double anchoParaUnaLinea = 96;
+
   const _TarjetaPosicion({
+    this.ancha = false,
     required this.p,
     required this.neumatico,
     required this.draft,
@@ -214,6 +308,19 @@ class _TarjetaPosicion extends StatelessWidget {
     if (u.profundidadMm != null) med.add('${u.profundidadMm!.toStringAsFixed(1)} mm');
     if (u.presionBar != null) med.add('${u.presionBar!.toStringAsFixed(1)} bar');
     return med.isEmpty ? null : med.join(' · ');
+  }
+
+  List<Widget> _distintivos(Color cTexto) {
+    final n = neumatico;
+    if (n == null) return const [];
+    return [
+      // "Nuevo" ya no se ve por el color (ahora manda la profundidad), así
+      // que se dice con todas las letras.
+      if (status == TireStatus.nuevo) EtiquetaNeu(txt: 'NEW', color: cTexto, fondo: AppColors.tireNuevo),
+      if (TyreControlApi.esMarcaRecauchutada(n.marca)) EtiquetaNeu(txt: 'RECAUCH.', color: cTexto),
+      if (n.reesculturado) EtiquetaNeu(txt: 'REESC.', color: cTexto, fondo: AppColors.reesculturado),
+      if (n.giradoEnLlanta) EtiquetaNeu(txt: 'GIRADO', color: cTexto),
+    ];
   }
 
   @override
@@ -263,30 +370,55 @@ class _TarjetaPosicion extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Text(
-                p.nombre ?? p.codigoPosicion,
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: cAcento),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              const SizedBox(height: 1),
-              if (neumatico != null) ...[
-                Text(
-                  neumatico!.marca ?? '—',
+              () {
+                final nombre = Text(
+                  p.nombre ?? p.codigoPosicion,
                   textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: cTexto),
+                  style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: cAcento),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                ),
-                if ((neumatico!.modelo ?? '').isNotEmpty)
-                  Text(
-                    neumatico!.modelo!,
+                );
+                final distintivos = _distintivos(cTexto);
+                if (!ancha || distintivos.isEmpty) return nombre;
+                return Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Flexible(child: nombre),
+                    for (final d in distintivos) Padding(padding: const EdgeInsets.only(left: 3), child: d),
+                  ],
+                );
+              }(),
+              const SizedBox(height: 1),
+              if (neumatico != null) ...[
+                if (ancha)
+                  Text.rich(
+                    TextSpan(children: [
+                      TextSpan(text: neumatico!.marca ?? '—', style: const TextStyle(fontWeight: FontWeight.w700)),
+                      if ((neumatico!.modelo ?? '').isNotEmpty)
+                        TextSpan(text: ' ${neumatico!.modelo!}', style: TextStyle(fontSize: 10, color: cSuave)),
+                    ]),
                     textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 10, color: cSuave),
+                    style: TextStyle(fontSize: 11, color: cTexto),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  )
+                else ...[
+                  Text(
+                    neumatico!.marca ?? '—',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: cTexto),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
+                  if ((neumatico!.modelo ?? '').isNotEmpty)
+                    Text(
+                      neumatico!.modelo!,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 10, color: cSuave),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                ],
                 if (medida.isNotEmpty)
                   Text(
                     medida,
@@ -297,27 +429,11 @@ class _TarjetaPosicion extends StatelessWidget {
                   ),
                 // Distintivos del propio neumático: recauchutado (lo dice la
                 // marca) y reesculturado (se le han cortado dibujos nuevos).
-                if (status == TireStatus.nuevo ||
-                    TyreControlApi.esMarcaRecauchutada(neumatico!.marca) ||
-                    neumatico!.reesculturado ||
-                    neumatico!.giradoEnLlanta)
+                // En la tarjeta ancha ya van arriba, junto a la posición.
+                if (!ancha && _distintivos(cTexto).isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 2),
-                    child: Wrap(
-                      alignment: WrapAlignment.center,
-                      spacing: 3,
-                      children: [
-                        // "Nuevo" ya no se ve por el color (ahora manda la
-                        // profundidad), así que se dice con todas las letras.
-                        if (status == TireStatus.nuevo)
-                          EtiquetaNeu(txt: 'NEW', color: cTexto, fondo: AppColors.tireNuevo),
-                        if (TyreControlApi.esMarcaRecauchutada(neumatico!.marca))
-                          EtiquetaNeu(txt: 'RECAUCH.', color: cTexto),
-                        if (neumatico!.reesculturado)
-                          EtiquetaNeu(txt: 'REESC.', color: cTexto, fondo: AppColors.reesculturado),
-                        if (neumatico!.giradoEnLlanta) EtiquetaNeu(txt: 'GIRADO', color: cTexto),
-                      ],
-                    ),
+                    child: Wrap(alignment: WrapAlignment.center, spacing: 3, children: _distintivos(cTexto)),
                   ),
               ] else
                 const Text('Sin neumático', style: TextStyle(fontSize: 10, color: AppColors.textHint)),

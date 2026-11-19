@@ -14,6 +14,7 @@ import '../theme.dart';
 import '../widgets/plate_badge.dart';
 import 'arrival_photos_screen.dart';
 import 'concepts_screen.dart';
+import 'conversacion_screen.dart';
 import 'finish_screen.dart';
 import 'photos_screen.dart';
 import 'signature_screen.dart';
@@ -21,9 +22,19 @@ import 'signature_screen.dart';
 /// Pantalla de trabajo del operario. Todo lo que necesita durante el servicio
 /// está aquí: estado, mapa, navegación, evidencias, firma y cierre.
 class AssistanceScreen extends StatefulWidget {
-  const AssistanceScreen({super.key, required this.session, required this.assistanceId});
+  const AssistanceScreen({
+    super.key,
+    required this.session,
+    required this.assistanceId,
+    this.abrirMensajes = false,
+  });
   final Session session;
   final int assistanceId;
+
+  /// Abrir el hilo con la central en cuanto cargue la ficha. Lo usa el aviso
+  /// push de mensaje: el operario ha tocado «la central te escribe», lo que
+  /// quiere ver es el mensaje, no la ficha.
+  final bool abrirMensajes;
 
   @override
   State<AssistanceScreen> createState() => _AssistanceScreenState();
@@ -45,10 +56,19 @@ class _AssistanceScreenState extends State<AssistanceScreen> {
   int? _distanceM;
   Evidencias _evidencias = Evidencias.vacio;
 
+  /// Mensajes de Central sin abrir. Lo cuenta el servidor en la propia ficha.
+  int get _sinLeer => (_a?['unreadMessages'] as num?)?.toInt() ?? 0;
+
+  /// De esos, los que ya están sonando cada 15 s: urgentes, o normales con más
+  /// de 3 min sin abrir.
+  int get _urgentes => (_a?['urgentMessages'] as num?)?.toInt() ?? 0;
+
   @override
   void initState() {
     super.initState();
-    _load();
+    _load().then((_) {
+      if (mounted && widget.abrirMensajes) _abrirConversacion();
+    });
     _timer = Timer.periodic(const Duration(seconds: 20), (_) => _load(silent: true));
     _trackerSub = _tracker.stream.listen((s) {
       if (!mounted) return;
@@ -354,41 +374,17 @@ class _AssistanceScreenState extends State<AssistanceScreen> {
     }
   }
 
-  Future<void> _mensajeRapido() async {
-    const rapidos = [
-      'Voy en camino', 'Tráfico intenso', 'No localizo el vehículo',
-      'Necesito más información', 'Necesito autorización', 'Necesito apoyo',
-      'Trabajo finalizado', 'Vehículo trasladado al taller',
-    ];
-    final elegido = await showModalBottomSheet<String>(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: ListView(shrinkWrap: true, children: [
-          const Padding(
-            padding: EdgeInsets.all(16),
-            child: Text('Mensaje a la central', style: TextStyle(fontWeight: FontWeight.bold)),
-          ),
-          for (final m in rapidos)
-            ListTile(
-              leading: const Icon(Icons.send),
-              title: Text(m),
-              onTap: () => Navigator.pop(ctx, m),
-            ),
-        ]),
+  /// El hilo con la central. Al volver se recarga: dentro se ha marcado como
+  /// leído y el contador tiene que bajar sin que el operario haga nada.
+  Future<void> _abrirConversacion() async {
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => ConversacionScreen(
+        session: widget.session,
+        assistanceId: widget.assistanceId,
+        expediente: _a?['expedientNumber']?.toString(),
       ),
-    );
-    if (elegido == null) return;
-    final actionId = OfflineQueue.newActionId();
-    try {
-      await _api.sendMessage(widget.assistanceId, elegido, actionId);
-      _aviso('Mensaje enviado a la central');
-    } on OfflineError {
-      await OfflineQueue.add(
-        kind: 'note', assistanceId: widget.assistanceId,
-        payload: {'body': elegido}, actionId: actionId,
-      );
-      _aviso('Sin conexión: el mensaje se enviará más tarde.');
-    }
+    ));
+    await _load(silent: true);
   }
 
   // ── Interfaz ─────────────────────────────────────────────────────────────
@@ -628,10 +624,15 @@ class _AssistanceScreenState extends State<AssistanceScreen> {
                           onTap: _observacion,
                         ),
                         _AccionFila(
-                          icono: Icons.forum,
-                          titulo: 'Avisar a la central',
-                          subtitulo: 'Mensajes rápidos',
-                          onTap: _mensajeRapido,
+                          icono: _urgentes > 0 ? Icons.notifications_active : Icons.forum,
+                          titulo: 'Mensajes con la central',
+                          subtitulo: _urgentes > 0
+                              ? '$_urgentes urgente${_urgentes == 1 ? '' : 's'} sin leer'
+                              : _sinLeer > 0
+                                  ? '$_sinLeer mensaje${_sinLeer == 1 ? '' : 's'} sin leer'
+                                  : 'Escribir o leer el hilo',
+                          insignia: _sinLeer,
+                          onTap: _abrirConversacion,
                         ),
                       ]),
                     ),
@@ -796,20 +797,36 @@ class _Dato extends StatelessWidget {
 class _AccionFila extends StatelessWidget {
   const _AccionFila({
     required this.icono, required this.titulo, required this.subtitulo, required this.onTap,
+    this.insignia = 0,
   });
   final IconData icono;
   final String titulo;
   final String subtitulo;
   final VoidCallback onTap;
 
+  /// Cuántos mensajes sin leer. En 0 no se pinta nada.
+  final int insignia;
+
   @override
   Widget build(BuildContext context) {
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 4),
       child: ListTile(
-        leading: Icon(icono, color: AppColors.primary, size: 28),
+        leading: insignia > 0
+            // La insignia va sobre el icono, que es donde el ojo va primero.
+            ? Badge(
+                label: Text('$insignia'),
+                backgroundColor: AppColors.danger,
+                child: Icon(icono, color: AppColors.primary, size: 28),
+              )
+            : Icon(icono, color: AppColors.primary, size: 28),
         title: Text(titulo, style: const TextStyle(fontSize: 16)),
-        subtitle: Text(subtitulo),
+        subtitle: Text(
+          subtitulo,
+          style: insignia > 0
+              ? const TextStyle(color: AppColors.danger, fontWeight: FontWeight.bold)
+              : null,
+        ),
         trailing: const Icon(Icons.chevron_right),
         onTap: onTap,
       ),

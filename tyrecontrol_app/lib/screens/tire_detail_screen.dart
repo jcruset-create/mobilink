@@ -33,6 +33,9 @@ class TireDetailScreen extends StatefulWidget {
   /// Si es true, no se puede guardar sin profundidad Y presión (salvo que la
   /// rueda esté marcada como no accesible / sin neumático).
   final bool exigirPresion;
+  /// La empresa mide las dos bandas: se piden interior y exterior y la
+  /// profundidad oficial es la menor.
+  final bool medicionDoble;
 
   const TireDetailScreen({
     super.key,
@@ -43,6 +46,7 @@ class TireDetailScreen extends StatefulWidget {
     required this.revision,
     required this.vehiculo,
     this.exigirPresion = false,
+    this.medicionDoble = false,
   });
 
   @override
@@ -56,6 +60,8 @@ class _TireDetailScreenState extends State<TireDetailScreen> {
   String? _rfidPuesto;
   String? _seriePuesta;
   late final TextEditingController _profundidad;
+  late final TextEditingController _bandaInt;
+  late final TextEditingController _bandaExt;
   late final TextEditingController _presion;
   late final TextEditingController _observaciones;
   String? _estadoVisual;
@@ -69,6 +75,10 @@ class _TireDetailScreenState extends State<TireDetailScreen> {
     super.initState();
     final d = widget.draft;
     _profundidad = TextEditingController(text: d.profundidadMm?.toString() ?? '');
+    // Si la rueda se midió en una sola cifra (antes de la medición doble),
+    // esa cifra arranca como banda interior para no perderla.
+    _bandaInt = TextEditingController(text: (d.profundidadIntMm ?? (d.profundidadExtMm == null ? d.profundidadMm : null))?.toString() ?? '');
+    _bandaExt = TextEditingController(text: d.profundidadExtMm?.toString() ?? '');
     _presion = TextEditingController(text: d.presionBar?.toStringAsFixed(1) ?? '');
     _observaciones = TextEditingController(text: d.observaciones ?? '');
     _estadoVisual = d.estadoVisual;
@@ -80,6 +90,8 @@ class _TireDetailScreenState extends State<TireDetailScreen> {
   @override
   void dispose() {
     _profundidad.dispose();
+    _bandaInt.dispose();
+    _bandaExt.dispose();
     _presion.dispose();
     _observaciones.dispose();
     super.dispose();
@@ -97,9 +109,25 @@ class _TireDetailScreenState extends State<TireDetailScreen> {
     if (foto != null) setState(() => _fotoLocalPath = foto.path);
   }
 
+  double? _num(TextEditingController c) => double.tryParse(c.text.trim().replaceAll(',', '.'));
+
+  /// La profundidad que vale: con medición doble, la menor de las bandas.
+  double? get _profundidadEfectiva =>
+      widget.medicionDoble ? menorDeBandas(_num(_bandaInt), _num(_bandaExt)) : _num(_profundidad);
+
   Future<RevisionDetalleDraft> _construirYGuardar() async {
-    final draft = widget.draft
-      ..profundidadMm = _noAccesible || _neumaticoAusente ? null : double.tryParse(_profundidad.text.replaceAll(',', '.'))
+    final sinMedida = _noAccesible || _neumaticoAusente;
+    final draft = widget.draft;
+    if (widget.medicionDoble && !sinMedida) {
+      draft.ponerBandas(_num(_bandaInt), _num(_bandaExt));
+      if (draft.profundidadIntMm == null && draft.profundidadExtMm == null) draft.profundidadMm = null;
+    } else {
+      draft
+        ..profundidadIntMm = null
+        ..profundidadExtMm = null
+        ..profundidadMm = sinMedida ? null : _num(_profundidad);
+    }
+    draft
       ..presionBar = _noAccesible || _neumaticoAusente ? null : double.tryParse(_presion.text.replaceAll(',', '.'))
       ..estadoVisual = _estadoVisual
       ..observaciones = _observaciones.text.trim().isEmpty ? null : _observaciones.text.trim()
@@ -145,7 +173,7 @@ class _TireDetailScreenState extends State<TireDetailScreen> {
     // Con "verificar presiones" activo, una rueda accesible necesita ambas
     // medidas antes de guardar y avanzar.
     if (widget.exigirPresion && !_noAccesible && !_neumaticoAusente) {
-      final prof = double.tryParse(_profundidad.text.replaceAll(',', '.'));
+      final prof = _profundidadEfectiva;
       final pres = double.tryParse(_presion.text.replaceAll(',', '.'));
       if (prof == null || pres == null) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -444,17 +472,52 @@ class _TireDetailScreenState extends State<TireDetailScreen> {
               const SizedBox(height: 8),
               Text('Medición', style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 8),
+              if (widget.medicionDoble) ...[
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _bandaInt,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        style: Theme.of(context).textTheme.displayLarge?.copyWith(fontSize: 28),
+                        decoration: const InputDecoration(labelText: 'Banda interior (mm)'),
+                        onChanged: (_) => setState(() {}),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: TextField(
+                        controller: _bandaExt,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        style: Theme.of(context).textTheme.displayLarge?.copyWith(fontSize: 28),
+                        decoration: const InputDecoration(labelText: 'Banda exterior (mm)'),
+                        onChanged: (_) => setState(() {}),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  _profundidadEfectiva == null
+                      ? 'Se guarda la menor de las dos bandas. Si una no se puede medir, déjala vacía.'
+                      : 'Se guarda ${_profundidadEfectiva!.toStringAsFixed(1).replaceAll('.', ',')} mm (la menor de las dos).',
+                  style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
+                ),
+                const SizedBox(height: 10),
+              ],
               Row(
                 children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _profundidad,
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                      style: Theme.of(context).textTheme.displayLarge?.copyWith(fontSize: 28),
-                      decoration: const InputDecoration(labelText: 'Profundidad (mm)'),
+                  if (!widget.medicionDoble) ...[
+                    Expanded(
+                      child: TextField(
+                        controller: _profundidad,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        style: Theme.of(context).textTheme.displayLarge?.copyWith(fontSize: 28),
+                        decoration: const InputDecoration(labelText: 'Profundidad (mm)'),
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 10),
+                    const SizedBox(width: 10),
+                  ],
                   Expanded(
                     child: TextField(
                       controller: _presion,

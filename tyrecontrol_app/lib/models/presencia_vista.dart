@@ -120,10 +120,21 @@ class BaseGeo {
   final String id;
   final String nombre;
 
-  const BaseGeo({required this.id, required this.nombre});
+  /// Centro y radio de la geo-zona, para pintarla en el mapa de la base. El
+  /// servidor los manda desde siempre; hasta que hubo mapa no hacían falta.
+  final double? lat;
+  final double? lng;
+  final double? radioM;
 
-  factory BaseGeo.desdeJson(Map<String, dynamic> j) =>
-      BaseGeo(id: '${j['id']}', nombre: '${j['nombre'] ?? '—'}');
+  const BaseGeo({required this.id, required this.nombre, this.lat, this.lng, this.radioM});
+
+  factory BaseGeo.desdeJson(Map<String, dynamic> j) => BaseGeo(
+        id: '${j['id']}',
+        nombre: '${j['nombre'] ?? '—'}',
+        lat: _decimal(j['lat']),
+        lng: _decimal(j['lng']),
+        radioM: _decimal(j['radioM']),
+      );
 }
 
 /// Una cuenta de telemática del cliente, tal como está dada de alta en el Hub.

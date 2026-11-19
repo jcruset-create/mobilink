@@ -272,12 +272,17 @@ function pintarRevisionConRuedas(l: Lienzo, rev: RevisionDoc, interno: boolean, 
     return;
   }
 
+  // "Prof. mm" es la oficial (con medición doble, la menor de las bandas);
+  // "Int / Ext" enseña las dos bandas cuando la rueda se midió así. Mismo
+  // ancho total que antes y la columna del neumático intacta: el hueco sale
+  // de las numéricas, que iban sobradas.
   const cols: Columna[] = [
-    { t: "Posición", x: MARGEN + 8, w: 95 },
-    { t: "Prof. mm", x: MARGEN + 106, w: 50, derecha: true },
-    { t: "Mínimo", x: MARGEN + 160, w: 45, derecha: true },
-    { t: "Presión bar", x: MARGEN + 208, w: 56, derecha: true },
-    { t: "Estado", x: MARGEN + 280, w: 70 },
+    { t: "Posición", x: MARGEN + 8, w: 84 },
+    { t: "Prof. mm", x: MARGEN + 94, w: 42, derecha: true },
+    { t: "Int / Ext", x: MARGEN + 142, w: 52 },
+    { t: "Mínimo", x: MARGEN + 196, w: 36, derecha: true },
+    { t: "Presión bar", x: MARGEN + 236, w: 50, derecha: true },
+    { t: "Estado", x: MARGEN + 292, w: 60 },
     { t: "Neumático", x: MARGEN + 354, w: 155 },
   ];
   cabeceraTabla(l, cols);
@@ -285,6 +290,7 @@ function pintarRevisionConRuedas(l: Lienzo, rev: RevisionDoc, interno: boolean, 
     fila(l, cols, [
       rd.posicion,
       { t: mm(rd.profundidad), color: COLOR_ESTADO[rd.estado], negrita: rd.estado === "bajo_minimo" },
+      { t: rd.bandas ? `${mm(rd.bandas.int)} / ${mm(rd.bandas.ext)}` : "", color: SUAVE },
       mm(rd.minimo),
       bar(rd.presion),
       {

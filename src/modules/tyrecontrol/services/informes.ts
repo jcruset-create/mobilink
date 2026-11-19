@@ -1,6 +1,10 @@
 // Servicio del módulo Informes: envuelve las RPC de agregación de Postgres.
 // Toda la lógica pesada vive en la base de datos (ver migración
 // tyrecontrol_informes_kpis.sql); aquí solo tipamos y llamamos.
+import {
+  aplicarJuicio, esParaCambiar,
+  type DetalleDeHistorial, type HistorialParaJuicio, type MontajeDeHistorial, type RevisionDeHistorial,
+} from "./alertasCreibles";
 import { supabase } from "./supabase";
 import { authHeaders } from "./data";
 import type {
@@ -87,7 +91,57 @@ export async function listarAlertas(f: FiltrosInformes): Promise<Alerta[]> {
 export async function listarAlertasPorVehiculo(f: FiltrosInformes): Promise<RuedaAlerta[]> {
   const { data, error } = await supabase.rpc("tc_informes_alertas_vehiculos", { p_empresa: f.empresaId ?? null });
   if (error) throw new Error(error.message);
-  return (data ?? []) as RuedaAlerta[];
+  const filas = (data ?? []) as RuedaAlerta[];
+  // El juicio de los kilómetros es un filtro de más: si su historial no se
+  // puede leer, las alertas salen como las da la base, no se pierden.
+  try {
+    const vehiculos = [...new Set(filas.filter(esParaCambiar).map((r) => r.vehiculo_id).filter(Boolean))] as string[];
+    if (vehiculos.length === 0) return filas;
+    return aplicarJuicio(filas, await leerHistorialParaJuicio(vehiculos));
+  } catch (e) {
+    console.warn("[alertas] no se ha podido comprobar el desgaste con los kilómetros:", e);
+    return filas;
+  }
+}
+
+/** Cuántos días de historial se miran para el ritmo de desgaste. */
+const DIAS_DE_HISTORIAL = 180;
+
+/**
+ * Las revisiones, sus mediciones y los montajes de esos vehículos.
+ *
+ * En trozos: un vehículo tiene decenas de pasadas por el arco y cada una seis
+ * u ocho filas, así que una sola consulta se quedaría en el tope de mil.
+ */
+async function leerHistorialParaJuicio(vehiculos: string[]): Promise<HistorialParaJuicio> {
+  const desde = new Date(Date.now() - DIAS_DE_HISTORIAL * 86400000).toISOString().slice(0, 10);
+  const h: HistorialParaJuicio = { revisiones: [], detalles: [], montajes: [] };
+
+  for (let i = 0; i < vehiculos.length; i += 10) {
+    const trozo = vehiculos.slice(i, i + 10);
+    for (let de = 0; ; de += 1000) {
+      const { data, error } = await supabase.from("revisiones_vehiculo")
+        .select("id, vehiculo_id, fecha_revision, km_vehiculo, tecnico_id")
+        .in("vehiculo_id", trozo).neq("estado_revision", "anulada").gte("fecha_revision", desde)
+        .order("id").range(de, de + 999);
+      if (error) throw new Error(error.message);
+      h.revisiones.push(...((data ?? []) as RevisionDeHistorial[]));
+      if ((data ?? []).length < 1000) break;
+    }
+    const { data: mons, error: e2 } = await supabase.from("tc_montajes_actuales")
+      .select("vehiculo_id, posicion_id, fecha_montaje").in("vehiculo_id", trozo);
+    if (e2) throw new Error(e2.message);
+    h.montajes.push(...((mons ?? []) as MontajeDeHistorial[]));
+  }
+
+  const ids = h.revisiones.map((r) => r.id);
+  for (let i = 0; i < ids.length; i += 80) {
+    const { data, error } = await supabase.from("revisiones_neumaticos_detalle")
+      .select("revision_id, posicion_id, profundidad_mm").in("revision_id", ids.slice(i, i + 80));
+    if (error) throw new Error(error.message);
+    h.detalles.push(...((data ?? []) as DetalleDeHistorial[]));
+  }
+  return h;
 }
 
 export async function obtenerEconomico(f: FiltrosInformes): Promise<EconomicoInformes> {

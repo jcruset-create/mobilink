@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { listarNeumaticos, crearNeumatico, actualizarNeumatico, listarEmpresas, listarProductosAlmacen, listarMarcas, listarModelos, listarMedidas, listarIndicesCarga, listarIndicesVelocidad, listarReferenciasDeModelo } from "../services/data";
+import { listarNeumaticos, crearNeumatico, actualizarNeumatico, listarEmpresas, listarProductosAlmacen, listarMarcas, listarModelos, listarMedidas, listarIndicesCarga, listarIndicesVelocidad, listarReferenciasDeModelo, registrarCombinacionDeAlta } from "../services/data";
+import { juntarIndice, partirIndice } from "../services/catalogoVinculado";
 import type { Empresa, Neumatico, NeumaticoInput, EstadoNeumatico, ProductoAlmacen, MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, ReferenciaNeumatico } from "../types";
 import { ESTADO_NEUMATICO_LABELS } from "../types";
 import { Modal, TableWrap, tdCls, thCls, inputCls, TextField, Field } from "../components/ui";
@@ -104,7 +105,23 @@ export default function Neumaticos() {
     setSaving(true);
     try {
       if (modal.id) await actualizarNeumatico(modal.id, d); else await crearNeumatico(d);
-      setModal(null); setMsg("✔ Guardado"); await cargar();
+      // La combinación (medida + índices + velocidad) y su vínculo con el
+      // modelo entran en el catálogo al dar de alta el neumático. Si falla, el
+      // neumático ya está guardado: se avisa y ya.
+      let extra = "";
+      const ic = partirIndice(d.indice_carga);
+      if (!modal.id && d.marca && d.modelo && d.medida && ic.simple) {
+        try {
+          const r = await registrarCombinacionDeAlta({
+            empresaId: d.empresa_id, marca: d.marca, modelo: d.modelo, medida: d.medida,
+            cargaSimple: ic.simple, cargaDoble: ic.doble, velocidad: d.indice_velocidad ?? "",
+          });
+          if (r.creada) extra = " · combinación añadida al catálogo";
+        } catch {
+          extra = " · la combinación no se ha podido añadir al catálogo";
+        }
+      }
+      setModal(null); setMsg("✔ Guardado" + extra); await cargar();
     } catch (e: any) {
       setMsg(/duplicate|unique/i.test(e?.message || "") ? "Ya existe un neumático con ese número de serie o RFID." : (e?.message || "Error"));
     } finally { setSaving(false); }
@@ -230,18 +247,32 @@ export default function Neumaticos() {
                 {catMedidas.map((m) => <option key={m.id} value={m.valor}>{m.valor}</option>)}
               </select>
             </Field>
-            <Field label="Índice carga">
-              <select className={inputCls} value={modal.draft.indice_carga ?? ""} onChange={(e) => set({ indice_carga: e.target.value })}>
+            {/* El neumático guarda «104/102»; el catálogo tiene cada índice por
+                separado, así que se eligen por separado y se juntan. */}
+            <Field label="Índice carga sencillo">
+              <select className={inputCls} value={partirIndice(modal.draft.indice_carga).simple}
+                onChange={(e) => set({ indice_carga: juntarIndice(e.target.value, partirIndice(modal.draft.indice_carga).doble) })}>
                 <option value="">Selecciona…</option>
-                {modal.draft.indice_carga && !catIndicesCarga.some((x) => x.valor === modal.draft.indice_carga) && <option value={modal.draft.indice_carga}>{modal.draft.indice_carga}</option>}
-                {catIndicesCarga.map((x) => <option key={x.id} value={x.valor}>{x.valor}</option>)}
+                {partirIndice(modal.draft.indice_carga).simple && !catIndicesCarga.some((x) => x.valor === partirIndice(modal.draft.indice_carga).simple)
+                  && <option value={partirIndice(modal.draft.indice_carga).simple}>{partirIndice(modal.draft.indice_carga).simple}</option>}
+                {catIndicesCarga.map((x) => <option key={x.id} value={x.valor}>{x.valor}{x.kg ? ` · ${x.kg} kg` : ""}</option>)}
+              </select>
+            </Field>
+            <Field label="Índice carga gemelo (si lo lleva)">
+              <select className={inputCls} value={partirIndice(modal.draft.indice_carga).doble}
+                disabled={!partirIndice(modal.draft.indice_carga).simple}
+                onChange={(e) => set({ indice_carga: juntarIndice(partirIndice(modal.draft.indice_carga).simple, e.target.value) })}>
+                <option value="">Sin gemelo</option>
+                {partirIndice(modal.draft.indice_carga).doble && !catIndicesCarga.some((x) => x.valor === partirIndice(modal.draft.indice_carga).doble)
+                  && <option value={partirIndice(modal.draft.indice_carga).doble}>{partirIndice(modal.draft.indice_carga).doble}</option>}
+                {catIndicesCarga.map((x) => <option key={x.id} value={x.valor}>{x.valor}{x.kg ? ` · ${x.kg} kg` : ""}</option>)}
               </select>
             </Field>
             <Field label="Índice velocidad">
               <select className={inputCls} value={modal.draft.indice_velocidad ?? ""} onChange={(e) => set({ indice_velocidad: e.target.value })}>
                 <option value="">Selecciona…</option>
                 {modal.draft.indice_velocidad && !catIndicesVelocidad.some((x) => x.valor === modal.draft.indice_velocidad) && <option value={modal.draft.indice_velocidad}>{modal.draft.indice_velocidad}</option>}
-                {catIndicesVelocidad.map((x) => <option key={x.id} value={x.valor}>{x.valor}</option>)}
+                {catIndicesVelocidad.map((x) => <option key={x.id} value={x.valor}>{x.valor}{x.km_h ? ` · ${x.km_h} km/h` : ""}</option>)}
               </select>
             </Field>
             <TextField label="Proveedor" value={modal.draft.proveedor ?? ""} onChange={(v) => set({ proveedor: v })} />

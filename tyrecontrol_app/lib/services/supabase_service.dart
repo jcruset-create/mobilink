@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 import 'fotos.dart';
+import 'offline_store.dart';
 import 'protocolo_profundidad.dart';
 import 'ultima_medicion.dart';
 import '../config.dart';
@@ -152,9 +153,14 @@ class TyreControlApi {
       throw Exception(data['error'] ?? 'Usuario o PIN incorrectos');
     }
     final email = data['email'] as String;
+    // El PIN de cuatro dígitos no llega a la longitud que pide Auth, así que
+    // el servidor lo guarda con un sufijo y, una vez comprobado, devuelve la
+    // contraseña con la que entrar. Un servidor de antes no la manda, y
+    // entonces vale el PIN tal cual, como hasta ahora.
+    final clave = (data['clave'] as String?) ?? pin;
 
     try {
-      final auth = await _db.auth.signInWithPassword(email: email, password: pin);
+      final auth = await _db.auth.signInWithPassword(email: email, password: clave);
       if (auth.user == null) throw Exception('Usuario o PIN incorrectos');
     } on AuthException {
       throw Exception('Usuario o PIN incorrectos');
@@ -487,10 +493,51 @@ class TyreControlApi {
   }
 
   static Future<void> guardarDetalleRevision(Map<String, dynamic> detalle) async {
-    await _db.from('revisiones_neumaticos_detalle').upsert(
-          detalle,
-          onConflict: 'revision_id,posicion_id',
-        );
+    try {
+      await _db.from('revisiones_neumaticos_detalle').upsert(
+            detalle,
+            onConflict: 'revision_id,posicion_id',
+          );
+    } on PostgrestException catch (e) {
+      // Base de datos sin la migración de la medición doble: no conoce las
+      // columnas de las bandas. Se guarda sin ellas —profundidad_mm ya lleva
+      // la menor— en vez de perder la medición.
+      final sinBandas = Map<String, dynamic>.from(detalle)
+        ..remove('profundidad_int_mm')
+        ..remove('profundidad_ext_mm');
+      final hablaDeBandas = e.message.contains('profundidad_int_mm') || e.message.contains('profundidad_ext_mm');
+      if (!hablaDeBandas || sinBandas.length == detalle.length) rethrow;
+      await _db.from('revisiones_neumaticos_detalle').upsert(
+            sinBandas,
+            onConflict: 'revision_id,posicion_id',
+          );
+    }
+  }
+
+  /// Cómo se mide en esta empresa: si se piden las dos bandas de cada rueda
+  /// y a partir de qué diferencia entre ellas se avisa de desgaste irregular.
+  /// Por defecto, doble medición y aviso a 2,0 mm. Con caché para trabajar
+  /// sin cobertura.
+  static Future<({bool doble, double? deltaIrregularMm})> configMedicion(String empresaId) async {
+    const porDefecto = (doble: true, deltaIrregularMm: 2.0);
+    final clave = 'config_medicion_$empresaId';
+    try {
+      final e = await _db.from('tc_config_umbrales').select().eq('empresa_id', empresaId).maybeSingle();
+      // Columnas aún sin migrar: los defaults (que no mandan bandas que la
+      // BD no sepa guardar, gracias al reintento de guardarDetalleRevision).
+      final doble = e == null ? porDefecto.doble : (e['medicion_doble'] as bool? ?? porDefecto.doble);
+      final delta = e == null || !e.containsKey('desgaste_irregular_delta_mm')
+          ? porDefecto.deltaIrregularMm
+          : (e['desgaste_irregular_delta_mm'] as num?)?.toDouble();
+      await OfflineStore.cacheJson(clave, {'doble': doble, 'delta': delta});
+      return (doble: doble, deltaIrregularMm: delta);
+    } catch (_) {
+      final c = OfflineStore.cachedJson(clave);
+      if (c is Map) {
+        return (doble: c['doble'] as bool? ?? porDefecto.doble, deltaIrregularMm: (c['delta'] as num?)?.toDouble());
+      }
+      return porDefecto;
+    }
   }
 
   /// Cierra la revisión con su cronometraje (Analítica de Productividad).
@@ -1004,6 +1051,14 @@ class TyreControlApi {
   ///
   /// Si la matrícula ya existía NO falla: devuelve la que hay con
   /// `ya_existia: true`, para que el parte siga con ella.
+  /// Antes de dar de alta: la matrícula normalizada en las flotas que ve el
+  /// técnico, también las de baja, y las que se diferencian en un carácter.
+  /// De otras flotas solo dice si existe (`en_flota_no_visible`).
+  static Future<Map<String, dynamic>> comprobarMatricula(String matricula) async {
+    final data = await _db.rpc('tc_comprobar_matricula', params: {'p_matricula': matricula});
+    return Map<String, dynamic>.from(data as Map);
+  }
+
   static Future<Map<String, dynamic>> altaVehiculoDesdeParte({
     required String empresaId,
     required String matricula,
@@ -1017,8 +1072,15 @@ class TyreControlApi {
     /// tc_vehiculo_ejes; desde la tablet no se puede escribir esa tabla a mano
     /// (tc_set_vehiculo_ejes pide administrador) y no se amplía ese permiso.
     List<Map<String, dynamic>>? ejes,
+    /// Foto de la matrícula (ruta en tc-revisiones-fotos) y si se tecleó a
+    /// mano. Solo se mandan cuando hay algo: así esta llamada sigue sirviendo
+    /// con la versión de 8 argumentos de la función.
+    String? fotoMatricula,
+    bool matriculaTecleada = false,
   }) async {
     final data = await _db.rpc('tc_alta_vehiculo_desde_parte', params: {
+      if (fotoMatricula != null) 'p_foto_matricula': fotoMatricula,
+      if (matriculaTecleada) 'p_matricula_tecleada': true,
       'p_empresa': empresaId,
       'p_matricula': matricula,
       'p_tipo': tipoVehiculoId,
@@ -2057,8 +2119,12 @@ class TyreControlApi {
     String? dot,
     String? observaciones,
     String? fotoUrl,
+    /// Etiqueta RFID leída con la sonda. Solo se manda si hay: así la llamada
+    /// sigue sirviendo con la versión de la función que no la conoce.
+    String? rfidEpc,
   }) async {
     final datos = <String, dynamic>{'profundidad_mm': profundidadMm.toString()};
+    if (rfidEpc != null && rfidEpc.trim().isNotEmpty) datos['rfid_epc'] = rfidEpc.trim().toUpperCase();
     if (presionBar != null) datos['presion_bar'] = presionBar.toString();
     if (numeroSerie != null && numeroSerie.trim().isNotEmpty) datos['numero_serie'] = numeroSerie.trim();
     if (dot != null && dot.trim().isNotEmpty) datos['dot'] = dot.trim();
@@ -2071,6 +2137,34 @@ class TyreControlApi {
       'p_datos': datos,
     });
     return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// Alta en la tablet: el uso del vehículo y la configuración de cada eje
+  /// (medida, llanta, presión objetivo, direccional, motriz, elevable). La base
+  /// solo lo deja hacer mientras el vehículo se está dando de alta y aún no
+  /// tiene ruedas apuntadas.
+  static Future<Map<String, dynamic>> configurarVehiculoAlta({
+    required String vehiculoId,
+    String? uso,
+    required List<Map<String, dynamic>> ejes,
+  }) async {
+    final data = await _db.rpc('tc_alta_configurar_vehiculo', params: {
+      'p_vehiculo': vehiculoId,
+      'p_uso': uso,
+      'p_ejes': ejes,
+    });
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// Lo más montado en la flota (marca, modelo, medida, veces), para ofrecerlo
+  /// primero al apuntar ruedas. Si falla, sin favoritos: no impide nada.
+  static Future<List<Map<String, dynamic>>> referenciasFavoritas(String empresaId) async {
+    try {
+      final data = await _db.rpc('tc_referencias_favoritas', params: {'p_empresa': empresaId});
+      return [for (final e in (data as List? ?? const [])) Map<String, dynamic>.from(e as Map)];
+    } catch (_) {
+      return const [];
+    }
   }
 
   /// Cierra el inventario inicial y deja el vehículo operativo.
@@ -2437,7 +2531,7 @@ class TyreControlApi {
     try {
       final data = await _db
           .from('tc_vehiculo_ejes')
-          .select('eje, ruedas, medida_id, tipo_llanta_id')
+          .select('eje, ruedas, medida_id, tipo_llanta_id, directriz, motriz, elevable')
           .eq('vehiculo_id', vehiculoId)
           .order('eje');
       return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
@@ -2457,7 +2551,7 @@ class TyreControlApi {
       final data = await _db
           .from('revisiones_neumaticos_detalle')
           .select('revision_id, neumatico_id, posicion_id, profundidad_mm, presion_bar, created_at, '
-              'revision:revisiones_vehiculo(fecha_revision, tecnico_id)')
+              'revision:revisiones_vehiculo(fecha_revision, tecnico_id, km_vehiculo)')
           .eq('vehiculo_id', vehiculoId)
           .order('created_at', ascending: false)
           .limit(limite);
@@ -2466,15 +2560,20 @@ class TyreControlApi {
       // de ninguna (ver ultima_medicion.dart).
       final montajes = await _db
           .from('tc_montajes_actuales')
-          .select('posicion_id, neumatico_id, fecha_montaje, neumatico:tc_neumaticos(medida)')
+          .select('empresa_id, posicion_id, neumatico_id, fecha_montaje, neumatico:tc_neumaticos(medida)')
           .eq('vehiculo_id', vehiculoId);
-      // El mínimo de cada goma montada, por su llanta: el protocolo solo entra
-      // si su última lectura lo toca (ver protocolo_profundidad.dart).
+      // El mínimo de cada goma montada —el de la empresa y, si no tiene, el de
+      // su llanta—: el protocolo solo entra si su última lectura lo toca (ver
+      // protocolo_profundidad.dart).
+      final empresaId = (montajes as List).isEmpty ? null : montajes.first['empresa_id'] as String?;
+      final umb = empresaId == null ? null : await umbralesDeEmpresa(empresaId);
       final minimos = <String, double?>{
-        for (final m in (montajes as List))
+        for (final m in montajes)
           if (m['neumatico_id'] != null)
-            m['neumatico_id'] as String: profundidadMinimaPorLlanta(
-                (m['neumatico'] is Map ? m['neumatico']['medida'] : null) as String?),
+            m['neumatico_id'] as String: minimoDeLaGoma(
+                (m['neumatico'] is Map ? m['neumatico']['medida'] : null) as String?,
+                empresa: umb?.empresa?.minimaMm,
+                porMedida: {for (final e in (umb?.porMedida ?? const {}).entries) e.key: e.value.minimaMm}),
       };
       final montado = <String, ({String neumatico, DateTime? desde})>{
         for (final m in (montajes as List))
@@ -2507,6 +2606,9 @@ class TyreControlApi {
           momento: creada,
           // Con técnico es una medición a mano; sin él, del arco.
           manual: rev is Map && rev['tecnico_id'] != null,
+          // Para el juicio de los kilómetros (desgaste_creible.dart).
+          dia: dia,
+          kmVehiculo: rev is Map ? (rev['km_vehiculo'] as num?)?.toDouble() : null,
         ));
       }
 

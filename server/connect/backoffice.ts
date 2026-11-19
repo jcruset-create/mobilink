@@ -20,6 +20,7 @@ import {
 import { requireProviderUser, requireConnectUser } from "./rbac.ts";
 import { assistanceKpis, hashPin, newPinSalt } from "./lite.ts";
 import { liteMetrics } from "./liteMetrics.ts";
+import { aMensajeTaller, conEstado } from "./liteMensajes.ts";
 import {
   WORKSHOP_INTEGRATION_TYPES, WORKSHOP_TIER, LITE_STATUS_LABELS, computeLiteKpis, statusQualityScore,
 } from "./liteRules.ts";
@@ -4579,21 +4580,38 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
       `SELECT * FROM connect_communications WHERE "assistanceId" = $1 ORDER BY id DESC LIMIT 200`,
       [Number(req.params.id)],
     );
-    res.json({ data: r.rows });
+    // En lo que va al taller, el panel enseña si esta escalado (sin leer y ya
+    // sonando cada 15 s) y cuanto lleva. La regla es la misma que usa la app:
+    // server/connect/liteMensajes.ts.
+    const ahora = Date.now();
+    res.json({
+      data: r.rows.map((row: any) =>
+        row.channel === "workshop"
+          ? { ...row, ...conEstado(aMensajeTaller(row), ahora) }
+          : row,
+      ),
+    });
   });
 
   router.post("/assistances/:id/communications", ...requireConnectRole("operator"), async (req, res) => {
     const u = req.connectUser!;
     const { channel, direction, toRef, body } = req.body ?? {};
+    // Urgente solo significa algo en lo que va al taller: alli hace que el
+    // aviso suene cada 15 s en el movil hasta que el operario lo lee. En una
+    // nota interna no habria nada que sonara.
+    const urgente = channel === "workshop" && req.body?.urgent === true;
     if (!body?.trim()) return err(res, 422, "validation_failed", "El texto es obligatorio");
     const r = await db.query(
-      `INSERT INTO connect_communications ("assistanceId", channel, direction, "toRef", body, "byUserId", "byName", "createdAtMs")
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      `INSERT INTO connect_communications ("assistanceId", channel, direction, "toRef", body, "byUserId", "byName", "createdAtMs", urgent)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
       [
         Number(req.params.id),
-        ["note","call","whatsapp","email"].includes(channel) ? channel : "note",
+        // 'workshop' es el mensaje PARA el taller Lite: es el único que le
+        // llega a su app y el único que dispara el aviso. Lo demás (notas
+        // internas, llamadas, WhatsApp al cliente) se queda en Central.
+        ["note","call","whatsapp","email","workshop"].includes(channel) ? channel : "note",
         ["internal","outbound","inbound"].includes(direction) ? direction : "internal",
-        toRef ?? null, body.trim(), u.id, u.name, Date.now(),
+        toRef ?? null, body.trim(), u.id, u.name, Date.now(), urgente,
       ],
     );
 
@@ -4602,6 +4620,10 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
     // pero la respuesta se quedaba esperando a que alguien abriera la app.
     // El aviso no lleva el texto: solo el identificador, y el operario lo lee
     // ya autenticado (misma regla de privacidad que el resto de push).
+    //
+    // Solo con channel='workshop'. Antes avisaba con CUALQUIER comunicacion,
+    // asi que una nota interna o el registro de una llamada al cliente le
+    // sonaba al taller como "Mensaje de la central".
     try {
       const a = await db.query(
         `SELECT ca.id, ca."expedientNumber", ca."liteUserId", w."integrationType"
@@ -4611,11 +4633,18 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
         [Number(req.params.id)],
       );
       const fila = a.rows[0];
-      if (fila?.integrationType === "lite" && fila.liteUserId) {
+      const paraElTaller = r.rows[0]?.channel === "workshop";
+      if (paraElTaller && fila?.integrationType === "lite" && fila.liteUserId) {
         await notifyLiteUser(Number(fila.liteUserId), {
-          title: "Mensaje de la central",
-          body: `${fila.expedientNumber ?? `#${fila.id}`} · Abre la app para leerlo`,
-          data: { type: "assistance_message", assistanceId: String(fila.id) },
+          title: urgente ? "⚠ URGENTE de la central" : "Mensaje de la central",
+          body: urgente
+            ? `${fila.expedientNumber ?? `#${fila.id}`} · Abrelo ahora`
+            : `${fila.expedientNumber ?? `#${fila.id}`} · Abre la app para leerlo`,
+          data: {
+            type: "assistance_message",
+            assistanceId: String(fila.id),
+            urgent: urgente ? "1" : "0",
+          },
         });
       }
     } catch (e: any) {

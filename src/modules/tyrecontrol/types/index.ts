@@ -75,6 +75,8 @@ export interface Perfil {
   id: string;
   empresa_id: string;
   delegacion_id?: string | null;
+  /** Solo en el rol cliente. Vacío equivale a «flota». */
+  perfil_cliente?: PerfilCliente | null;
   nombre: string;
   email: string;
   rol: Rol;
@@ -103,6 +105,30 @@ export const ROL_LABELS: Record<Rol, string> = {
   operador: "Operador",
   cliente: "Cliente",
 };
+
+/**
+ * Cómo es un usuario de cliente por dentro. No es un rol nuevo: los tres son
+ * de solo consulta. Cambia cuánto ven.
+ */
+export type PerfilCliente = "flota" | "delegacion" | "director";
+
+export const PERFIL_CLIENTE_LABELS: Record<PerfilCliente, string> = {
+  flota: "Responsable de flota",
+  delegacion: "Jefe de base",
+  director: "Director",
+};
+
+export const PERFIL_CLIENTE_AYUDA: Record<PerfilCliente, string> = {
+  flota: "Ve toda su empresa: vehículos, neumáticos, trabajos e informes.",
+  delegacion: "Ve solo los vehículos de su delegación y lo que cuelga de ellos.",
+  director: "Ve solo los informes, de toda su empresa.",
+};
+
+/** El perfil de un usuario, con «flota» cuando no tiene ninguno puesto. */
+export function perfilClienteDe(p: { rol: Rol; es_superadmin?: boolean; perfil_cliente?: PerfilCliente | null } | null | undefined): PerfilCliente | null {
+  if (!p || p.rol !== "cliente" || p.es_superadmin) return null;
+  return p.perfil_cliente ?? "flota";
+}
 
 export type EmpresaInput = Omit<Empresa, "id" | "created_at" | "updated_at">;
 export type DelegacionInput = Omit<Delegacion, "id" | "created_at" | "updated_at" | "empresa">;
@@ -481,6 +507,10 @@ export interface Vehiculo {
   // Nació en la tablet con lo mínimo (tc_alta_vehiculo_desde_parte) y le
   // faltan marca, modelo o delegación. Un administrador lo completa.
   pendiente_validar?: boolean;
+  // Del alta desde «Nueva revisión» en la tablet: la foto de la matrícula
+  // (bucket tc-revisiones-fotos) y si se tecleó porque la foto no se leía.
+  foto_matricula_path?: string | null;
+  matricula_tecleada?: boolean;
   /**
    * Si entra en el mantenimiento integral.
    *
@@ -522,6 +552,11 @@ export interface UmbralesEmpresa {
   profundidad_minima_mm: number;
   profundidad_aviso_mm: number;
   presion_tolerancia_bar: number;
+  /** La APK pide las dos bandas (interior y exterior) de cada rueda. */
+  medicion_doble?: boolean;
+  /** Diferencia entre bandas (mm) a partir de la cual se avisa de desgaste
+   *  irregular. null = sin aviso. */
+  desgaste_irregular_delta_mm?: number | null;
 }
 
 // Modo de identificación de neumáticos de una empresa.
@@ -945,7 +980,13 @@ export interface RevisionDetalle {
   vehiculo_id: string;
   neumatico_id?: string | null;
   posicion_id: string;
+  /** La profundidad OFICIAL: con medición doble, la menor de las dos bandas
+   *  (lo garantiza un trigger en la BD). Es lo que leen todos los informes. */
   profundidad_mm?: number | null;
+  /** Medición doble: banda interior y exterior de la rodadura. Solo en
+   *  revisiones medidas así; la ficha de la revisión las enseña. */
+  profundidad_int_mm?: number | null;
+  profundidad_ext_mm?: number | null;
   presion_bar?: number | null;
   temperatura?: number | null;
   metodo_profundidad?: "manual" | "bluetooth" | "importacion_excel" | null;
@@ -1085,8 +1126,10 @@ export interface UmbralCategoria {
   profundidad_minima_mm: number;
   profundidad_aviso_mm: number;
 }
-export interface IndiceCarga { id: string; valor: string; activo: boolean; }
-export interface IndiceVelocidad { id: string; valor: string; activo: boolean; }
+/** `kg`: la carga máxima del índice (tabla ETRTO). Null hasta pegar la migración del catálogo. */
+export interface IndiceCarga { id: string; valor: string; activo: boolean; kg?: number | null; }
+/** `km_h`: la velocidad máxima del código. Null hasta pegar la migración del catálogo. */
+export interface IndiceVelocidad { id: string; valor: string; activo: boolean; km_h?: number | null; }
 export interface MotivoFueraAlmacen { id: string; motivo: string; activo: boolean; }
 
 export type GravedadIncidencia = "leve" | "importante" | "critica";

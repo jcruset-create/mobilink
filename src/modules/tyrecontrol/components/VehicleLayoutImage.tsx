@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle } from "lucide-react";
-import { profundidadMinimaPorLlanta } from "../services/umbralProfundidad";
+import { minimoDeLaGoma, SIN_MINIMOS, type MinimosDeEmpresa } from "../services/umbralProfundidad";
 import { veredictoEnLaFicha } from "../services/protocoloProfundidad";
 import type { Medicion } from "../services/ultimaMedicion";
 import { profundidadVigente } from "../utils/profundidad";
@@ -9,9 +9,9 @@ import { presionTxt } from "../types";
 import {
   listarNeumaticosDisponibles, montarNeumatico, desmontarNeumatico,
   cambiarPosicion, intercambiarPosiciones, aplicarPlanTrabajo, listarMarcasRecauchutadas,
-  actualizarImagenChasis, guardarCoordenadasPosicion, guardarOrdenRevisionPosicion, listarUltimasMedicionesVehiculo, listarPresionesCatalogoPorModelo,
+  actualizarImagenChasis, guardarCoordenadasPosicion, guardarOrdenRevisionPosicion, listarUltimasMedicionesVehiculo, listarPresionesCatalogoPorModelo, leerMinimosDeEmpresa,
   listarFotosCatalogoPorModelo, claveModeloCatalogo, listarProfundidadesCatalogoPorModelo,
-  buscarNeumaticosParaCorregir, corregirMontado, listarAlertasPresionVehiculo,
+  listarAlertasPresionVehiculo,
 } from "../services/data";
 import { inputCls, Modal } from "./ui";
 import { mismaMedida } from "../services/medidas";
@@ -19,6 +19,7 @@ import ModalMontarDesdeFicha from "./ModalMontarDesdeFicha";
 import ModalMontarFueraAlmacen from "./ModalMontarFueraAlmacen";
 import ModalNeumaticosMontados from "./ModalNeumaticosMontados";
 import ModalCopiarNeumatico from "./ModalCopiarNeumatico";
+import ModalNoCoincide from "./ModalNoCoincide";
 import { supabase } from "../services/supabase";
 import { MARGEN_PLANO_X, MARGEN_PLANO_Y, aspectoPlano, coordAVista, vistaACoord } from "../../../../shared/planoMargen";
 
@@ -132,6 +133,15 @@ export default function VehicleLayoutImage({
    * avisos sería peor que un plano sin marcar.
    */
   const [posicionesConAviso, setPosicionesConAviso] = useState<Set<string>>(new Set());
+  // El mínimo que se ha puesto la empresa; mientras no llega, el de la llanta.
+  const [minimosEmpresa, setMinimosEmpresa] = useState<MinimosDeEmpresa>(SIN_MINIMOS);
+
+  useEffect(() => {
+    if (!empresaId) return;
+    let vivo = true;
+    leerMinimosDeEmpresa(empresaId).then((m) => { if (vivo) setMinimosEmpresa(m); });
+    return () => { vivo = false; };
+  }, [empresaId]);
 
   useEffect(() => {
     if (!vehiculoId) return;
@@ -189,11 +199,6 @@ export default function VehicleLayoutImage({
   // "No coincide": la goma que hay puesta no es la que Mobilink dice. Es una
   // CORRECCIÓN DE FICHA, no un trabajo: no se monta ni se desmonta nada.
   const [correccion, setCorreccion] = useState<{ montajeId: string } | null>(null);
-  const [correccionBusqueda, setCorreccionBusqueda] = useState("");
-  const [correccionOpciones, setCorreccionOpciones] = useState<Neumatico[]>([]);
-  const [correccionElegido, setCorreccionElegido] = useState("");
-  const [correccionObs, setCorreccionObs] = useState("");
-  const [correccionMsg, setCorreccionMsg] = useState("");
   const [modalFicha, setModalFicha] = useState<null | { sustitucion: boolean }>(null);
   const [modalBulk, setModalBulk] = useState(false);
   // Las gomas que el vehículo YA LLEVA. No es un montaje: ni descuenta stock
@@ -471,36 +476,6 @@ export default function VehicleLayoutImage({
     } catch (e: any) { setMsg(e?.message || "Error al montar"); } finally { setSaving(false); }
   }
 
-  // Se busca al abrir y a cada tecla, con una espera corta: el técnico teclea
-  // el número que ve en el flanco y quiere verlo aparecer, no darle a un botón.
-  useEffect(() => {
-    if (!correccion) { setCorreccionOpciones([]); return; }
-    let vivo = true;
-    const t = setTimeout(() => {
-      buscarNeumaticosParaCorregir(empresaId, correccionBusqueda)
-        .then((r) => { if (vivo) setCorreccionOpciones(r); })
-        .catch(() => { if (vivo) setCorreccionOpciones([]); });
-    }, 250);
-    return () => { vivo = false; clearTimeout(t); };
-  }, [correccion, correccionBusqueda, empresaId]);
-
-  async function confirmarCorreccion() {
-    if (!correccion || !correccionElegido) return;
-    setSaving(true); setCorreccionMsg("");
-    try {
-      await corregirMontado({
-        montajeId: correccion.montajeId,
-        neumaticoCorrectoId: correccionElegido,
-        observaciones: correccionObs.trim() || null,
-        // Desde el panel se elige una ficha que ya existe, buscándola.
-        metodo: "busqueda",
-      });
-      setCorreccion(null); setSeleccion(null); onChanged?.();
-    } catch (e: any) {
-      setCorreccionMsg(e?.message || "Error en la corrección");
-    } finally { setSaving(false); }
-  }
-
   async function confirmarDesmontar() {
     if (!montajeSeleccionado) return;
     setSaving(true); setMsg("");
@@ -733,7 +708,7 @@ export default function VehicleLayoutImage({
              * es la de `services/protocoloProfundidad.ts`, la misma del informe.
              */
             const medDe = neuDe ? medicionesActuales[neuDe.id] : undefined;
-            const juicio = veredictoEnLaFicha(profDe, medDe, profundidadMinimaPorLlanta(neuDe?.medida));
+            const juicio = veredictoEnLaFicha(profDe, medDe, minimoDeLaGoma(neuDe?.medida, minimosEmpresa));
             const paraCambiar = juicio === "cambiar";
             const porConfirmar = juicio === "por_confirmar";
             return (
@@ -790,7 +765,9 @@ export default function VehicleLayoutImage({
                       conAviso ? "Aviso de presión abierto en esta rueda" : null,
                       paraCambiar ? `Para cambiar: ${profDe} mm` : null,
                       porConfirmar
-                        ? (medDe?.pendiente_mm != null
+                        ? (medDe?.no_creible
+                          ? `Por confirmar: el arco ha leído ${medDe.pendiente_mm} mm. ${medDe.no_creible}`
+                          : medDe?.pendiente_mm != null
                           ? `Por confirmar: el arco ha leído ${medDe.pendiente_mm} mm y las anteriores decían ${profDe}. Medir con sonda`
                           : `Por confirmar: ${profDe} mm con una sola lectura. Medir con sonda`)
                         : null,
@@ -983,8 +960,6 @@ export default function VehicleLayoutImage({
                 <button
                   onClick={() => {
                     setCorreccion({ montajeId: montajeSeleccionado.id });
-                    setCorreccionBusqueda(""); setCorreccionElegido("");
-                    setCorreccionObs(""); setCorreccionMsg("");
                   }}
                   className="rounded border border-amber-500 px-2 py-1 text-[12px] font-bold text-amber-300 hover:bg-amber-500/10"
                 >
@@ -1116,85 +1091,14 @@ export default function VehicleLayoutImage({
         );
       })()}
 
-      {correccion && (() => {
-        const m = montajes.find((x) => x.id === correccion.montajeId);
-        const actual = m?.neumatico;
-        const elegido = correccionOpciones.find((n) => n.id === correccionElegido);
-        return (
-          <Modal
-            title="No coincide: corregir el neumático registrado"
-            onClose={() => setCorreccion(null)}
-            footer={
-              <div className="flex justify-end gap-2">
-                <button onClick={() => setCorreccion(null)} className="rounded border border-slate-600 px-4 py-2 text-sm text-slate-200">Cancelar</button>
-                <button onClick={confirmarCorreccion} disabled={saving || !correccionElegido}
-                        className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
-                  {saving ? "Corrigiendo…" : "Corregir el registro"}
-                </button>
-              </div>
-            }
-          >
-            <div className="space-y-3 text-sm">
-              <div className="rounded-lg border border-amber-600/40 bg-amber-500/5 p-3 text-[12px] text-amber-200">
-                Esto <b>no es un trabajo de taller</b>: no se registra montaje ni desmontaje y no
-                genera coste ni mano de obra. Solo corrige qué neumático dice Mobilink que hay en
-                esta posición, para que coincida con lo que hay de verdad.
-                <div className="mt-1">
-                  El que estaba mal registrado pasa a <b>no localizado</b>, no al almacén: que la
-                  ficha estuviera mal no significa que la goma esté en la estantería.
-                </div>
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-3">
-                  <div className="text-[11px] font-bold uppercase text-slate-500">Lo que hay registrado</div>
-                  <div className="mt-1 font-semibold text-slate-100">{actual?.numero_interno ?? actual?.codigo_interno ?? actual?.numero_serie ?? "—"}</div>
-                  <div className="text-[12px] text-slate-400">{[actual?.marca, actual?.modelo, actual?.medida].filter(Boolean).join(" · ") || "—"}</div>
-                </div>
-                <div className="rounded-lg border border-emerald-700/50 bg-emerald-500/5 p-3">
-                  <div className="text-[11px] font-bold uppercase text-emerald-500">Lo que hay de verdad</div>
-                  <div className="mt-1 font-semibold text-slate-100">{elegido ? (elegido.numero_interno ?? elegido.codigo_interno ?? elegido.numero_serie ?? "—") : "Elígelo abajo"}</div>
-                  <div className="text-[12px] text-slate-400">{elegido ? [elegido.marca, elegido.modelo, elegido.medida].filter(Boolean).join(" · ") : "—"}</div>
-                </div>
-              </div>
-
-              <div>
-                <label className="text-[11px] font-bold uppercase text-slate-400">Buscar la ficha</label>
-                <input className={inputCls} placeholder="Nº interno, nº de serie, RFID o DOT"
-                       value={correccionBusqueda} onChange={(e) => { setCorreccionBusqueda(e.target.value); setCorreccionElegido(""); }} />
-                {/* No salen las montadas: ofrecer una que ya rueda en otro
-                    vehículo solo sirve para que la base de datos lo rechace
-                    después. Sí salen las no localizadas y las usadas, que es
-                    donde suele estar la goma cuando el registro estaba mal. */}
-                <select className={`${inputCls} mt-2`} size={8} value={correccionElegido}
-                        onChange={(e) => setCorreccionElegido(e.target.value)}>
-                  {correccionOpciones.map((n) => (
-                    <option key={n.id} value={n.id}>
-                      {(n.numero_interno ?? n.codigo_interno ?? n.numero_serie ?? n.id.slice(0, 8))}
-                      {" · "}{[n.marca, n.medida].filter(Boolean).join(" ")}
-                      {" · "}{n.estado}
-                    </option>
-                  ))}
-                </select>
-                {correccionOpciones.length === 0 && (
-                  <div className="mt-1 text-[11px] text-amber-300">
-                    No hay ninguna ficha libre que encaje. Si la goma que has encontrado no está
-                    dada de alta, créala primero desde el catálogo de neumáticos.
-                  </div>
-                )}
-              </div>
-
-              <div>
-                <label className="text-[11px] font-bold uppercase text-slate-400">Por qué se corrige</label>
-                <input className={inputCls} placeholder="P. ej.: revisión en papel del 01/09, la rueda no era la fichada"
-                       value={correccionObs} onChange={(e) => setCorreccionObs(e.target.value)} />
-              </div>
-
-              {correccionMsg && <div className="text-[12px] text-red-300">{correccionMsg}</div>}
-            </div>
-          </Modal>
-        );
-      })()}
+      {correccion && montajes.find((x) => x.id === correccion.montajeId) && (
+        <ModalNoCoincide
+          montaje={montajes.find((x) => x.id === correccion.montajeId)!}
+          empresaId={empresaId}
+          onClose={() => setCorreccion(null)}
+          onCorregido={() => { setCorreccion(null); setSeleccion(null); onChanged?.(); }}
+        />
+      )}
 
       {modalAplicar && (
         <Modal title={`Aplicar plan (${totalPlan} acción${totalPlan === 1 ? "" : "es"})`} onClose={() => setModalAplicar(false)}

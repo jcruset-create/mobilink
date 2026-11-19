@@ -4,6 +4,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../config.dart';
 import '../services/api.dart';
 import '../services/file_queue.dart';
+import '../services/mensajes_central.dart';
 import '../services/push.dart';
 import '../services/queue.dart';
 import '../services/session.dart';
@@ -56,6 +57,9 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
     _push = Push.events.listen(_alRecibirAviso);
     _registrarDispositivo();
     _mirarUbicacion();
+    // Los avisos de la central: su propio sondeo de 15 s, porque un urgente no
+    // puede esperar a la siguiente vuelta de la bandeja (hasta 2 min con push).
+    MensajesCentral.instancia.iniciar(_api);
   }
 
   /// El permiso puede caerse mucho después de concederse: basta con que
@@ -98,9 +102,38 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
         builder: (_) => AssistanceScreen(
           session: widget.session,
           assistanceId: e.assistanceId!,
+          abrirMensajes: e.type == 'assistance_message',
         ),
       ));
       _load();
+      return;
+    }
+    // Con la app abierta no se navega, pero un mensaje de la central no puede
+    // pasar desapercibido: se avisa y se deja el atajo a un toque.
+    if (e.type == 'assistance_message') {
+      // El push adelanta el sondeo: el aviso suena al instante en vez de
+      // esperar hasta 15 s.
+      MensajesCentral.instancia.consultar();
+    }
+    if (e.type == 'assistance_message' && e.assistanceId != null) {
+      final id = e.assistanceId!;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text('La central te ha escrito'),
+        duration: const Duration(seconds: 8),
+        action: SnackBarAction(
+          label: 'ABRIR',
+          onPressed: () async {
+            await Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => AssistanceScreen(
+                session: widget.session,
+                assistanceId: id,
+                abrirMensajes: true,
+              ),
+            ));
+            _load();
+          },
+        ),
+      ));
     }
   }
 
@@ -109,6 +142,8 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
     _push?.cancel();
+    // El servicio es único y sigue vivo mientras haya sesión; aquí solo se
+    // suelta si esta bandeja se cierra de verdad (salir de la sesión).
     super.dispose();
   }
 
@@ -145,6 +180,7 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
     } on ApiError catch (e) {
       if (!mounted) return;
       if (e.isAuth) {
+        await MensajesCentral.instancia.detener();
         await Session.clear();
         if (!mounted) return;
         Navigator.of(context).pushAndRemoveUntil(
@@ -337,6 +373,10 @@ class _AssistanceCard extends StatelessWidget {
     final st = statusStyle(row['status']?.toString() ?? '');
     final vehicle = (row['vehicle'] as Map?)?.cast<String, dynamic>() ?? const {};
     final urgent = row['priority'] == 'urgente';
+    final sinLeer = (row['unreadMessages'] as num?)?.toInt() ?? 0;
+    // De esos, los que ya están sonando: urgentes, o normales con más de
+    // 3 min sin abrir. Lo decide el servidor.
+    final urgentes = (row['urgentMessages'] as num?)?.toInt() ?? 0;
     final sla = row['slaDeadlineAtMs'] as num?;
     final restMin = sla != null
         ? ((sla.toInt() - DateTime.now().millisecondsSinceEpoch) / 60000).round()
@@ -360,6 +400,26 @@ class _AssistanceCard extends StatelessWidget {
                     style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
                   ),
                 ),
+                if (sinLeer > 0) ...[
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: AppColors.danger.withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(children: [
+                      Icon(urgentes > 0 ? Icons.notifications_active : Icons.forum,
+                          size: 13, color: AppColors.danger),
+                      const SizedBox(width: 4),
+                      Text('$sinLeer',
+                          style: const TextStyle(
+                              color: AppColors.danger,
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold)),
+                    ]),
+                  ),
+                  const SizedBox(width: 6),
+                ],
                 if (urgent)
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),

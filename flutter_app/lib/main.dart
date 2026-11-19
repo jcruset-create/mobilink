@@ -13,6 +13,7 @@ import 'services/sesion_segura.dart';
 import 'theme/app_theme.dart';
 import 'navegacion.dart';
 import 'widgets/aviso_mensajes.dart';
+import 'widgets/aviso_actualizacion.dart';
 
 // Notifier global accesible desde cualquier pantalla
 final exteriorMode = ValueNotifier<bool>(false);
@@ -49,7 +50,11 @@ class SeaApp extends StatelessWidget {
           theme: AppTheme.build(exterior: exterior),
           // Los mensajes de la oficina, encima de cualquier pantalla.
           navigatorKey: navegadorApp,
-          builder: (context, child) => AvisoMensajes(child: child ?? const SizedBox.shrink()),
+          // Y la franja de versión nueva publicada, arriba del todo.
+          builder: (context, child) => AvisoActualizacion(
+            app: 'assist',
+            child: AvisoMensajes(child: child ?? const SizedBox.shrink()),
+          ),
           home: const SplashScreen(),
         );
       },

@@ -28,6 +28,9 @@ import {
   hitLimit, limitKey, newLimitStore, pruneLimitStore, LITE_LIMITS, type LimitName,
 } from "./liteLimits.ts";
 import {
+  aMensajeTaller, conEstado, REPETICION_MS, RESPUESTAS_RAPIDAS, umbralEscalado,
+} from "./liteMensajes.ts";
+import {
   DEFAULT_FINISH_RULES, DEFAULT_GEOFENCE, EVIDENCE_CATEGORIES, EVIDENCE_CATEGORY_LABELS,
   LITE_STATUS_LABELS, SERVICE_RESULTS, SERVICE_RESULT_LABELS, canLiteTransition, computeLiteKpis,
   dedupePoints, estimateEtaMinutes, geofenceHint, haversineMeters, isValidPoint, nextLiteStatus,
@@ -300,12 +303,19 @@ async function requireLite(req: Request, res: Response, next: NextFunction) {
 async function loadAssistance(session: LiteSession, id: number, opts: { ownOnly?: boolean } = {}) {
   const r = await db.query(
     `SELECT ca.*, w.name AS "workshopName", w.latitude AS "workshopLat", w.longitude AS "workshopLng",
-            w."liteSettings", w.features, cl.name AS "clientDisplayName"
+            w."liteSettings", w.features, cl.name AS "clientDisplayName",
+            (SELECT COUNT(*) FROM connect_communications cc
+              WHERE cc."assistanceId" = ca.id
+                AND cc.channel = 'workshop' AND cc."readAtMs" IS NULL) AS "unreadMessages",
+            (SELECT COUNT(*) FROM connect_communications cc
+              WHERE cc."assistanceId" = ca.id
+                AND cc.channel = 'workshop' AND cc."readAtMs" IS NULL
+                AND (cc.urgent OR cc."createdAtMs" <= $3)) AS "urgentMessages"
        FROM connect_assistances ca
        JOIN connect_workshops w ON w.id = ca."workshopId"
        LEFT JOIN connect_clients cl ON cl.id = ca."clientId"
       WHERE ca.id = $1 AND ca."workshopId" = $2`,
-    [id, session.workshopId],
+    [id, session.workshopId, umbralEscalado()],
   );
   const a = r.rows[0];
   if (!a) return null;
@@ -340,6 +350,12 @@ function publicAssistance(a: any, opts: { detail?: boolean } = {}) {
     updatedAtMs: Number(a.updatedAtMs),
     liteUserId: a.liteUserId,
     liteUserName: a.liteUserName,
+    // Mensajes de Central que el operario aún no ha abierto. Va en la lista y
+    // en la ficha para poder pintar la insignia sin pedir el hilo entero.
+    unreadMessages: Number(a.unreadMessages ?? 0),
+    // De esos, los que piden atención ya: urgentes, o normales que llevan más
+    // de 3 min sin leer. La bandeja los pinta en rojo con el icono de alarma.
+    urgentMessages: Number(a.urgentMessages ?? 0),
     vehicle: {
       type: vehicle.type ?? null, make: vehicle.make ?? null, model: vehicle.model ?? null,
       plate: vehicle.plate ?? null, trailer: !!vehicle.trailer, dangerousGoods: !!vehicle.dangerousGoods,
@@ -639,7 +655,14 @@ export function createConnectLiteRouter(): Router {
     const onlyMine = s.role === "operator";
 
     const r = await db.query(
-      `SELECT ca.*, cl.name AS "clientDisplayName"
+      `SELECT ca.*, cl.name AS "clientDisplayName",
+              (SELECT COUNT(*) FROM connect_communications cc
+                WHERE cc."assistanceId" = ca.id
+                  AND cc.channel = 'workshop' AND cc."readAtMs" IS NULL) AS "unreadMessages",
+              (SELECT COUNT(*) FROM connect_communications cc
+                WHERE cc."assistanceId" = ca.id
+                  AND cc.channel = 'workshop' AND cc."readAtMs" IS NULL
+                  AND (cc.urgent OR cc."createdAtMs" <= $8)) AS "urgentMessages"
          FROM connect_assistances ca
          LEFT JOIN connect_clients cl ON cl.id = ca."clientId"
         WHERE ca."workshopId" = $1
@@ -650,7 +673,7 @@ export function createConnectLiteRouter(): Router {
         LIMIT $7`,
       [
         s.workshopId, statuses.length ? statuses : null, onlyMine, s.userId,
-        scope, Date.now() - 30 * 24 * 3600_000, limit,
+        scope, Date.now() - 30 * 24 * 3600_000, limit, umbralEscalado(),
       ],
     );
     res.json({ data: r.rows.map((a: any) => publicAssistance(a)) });
@@ -952,16 +975,105 @@ export function createConnectLiteRouter(): Router {
     res.status(201).json(payload);
   });
 
+  /*
+   * El hilo con la central, tal y como lo ve el taller.
+   *
+   * Filtra a propósito: `connect_communications` guarda TAMBIEN las notas
+   * internas de Central y el registro de llamadas o WhatsApp al cliente, y un
+   * taller colaborador no tiene por qué leer nada de eso. Solo salen los
+   * mensajes escritos PARA el taller (channel='workshop') y los que el propio
+   * taller ha escrito (direction='inbound').
+   *
+   * Orden ascendente, que es como se lee una conversación; el DESC de antes
+   * era para una lista de últimas comunicaciones, no para un chat.
+   */
   router.get("/assistances/:id/messages", async (req, res) => {
     const s = req.liteSession!;
     const a = await loadAssistance(s, Number(req.params.id));
     if (!a) return err(res, 404, "not_found", "Asistencia no encontrada");
     const r = await db.query(
-      `SELECT id, channel, direction, body, "byName", "createdAtMs"
-         FROM connect_communications WHERE "assistanceId" = $1 ORDER BY id DESC LIMIT 100`,
+      `SELECT id, channel, direction, body, "byName", "createdAtMs", "readAtMs", urgent
+         FROM connect_communications
+        WHERE "assistanceId" = $1
+          AND (channel = 'workshop' OR direction = 'inbound')
+        ORDER BY id ASC LIMIT 200`,
       [a.id],
     );
-    res.json({ data: r.rows });
+    // La urgencia solo tiene sentido en lo que manda Central; lo que escribe
+    // el propio taller sale tal cual.
+    const ahora = Date.now();
+    res.json({
+      data: r.rows.map((row: any) =>
+        row.channel === "workshop"
+          ? { ...row, ...conEstado(aMensajeTaller(row), ahora) }
+          : row,
+      ),
+    });
+  });
+
+  /*
+   * Lo que la app pregunta cada 15 s: los avisos de Central sin leer de las
+   * asistencias abiertas de este operario.
+   *
+   * Es el equivalente de `pendientesDeOperario` de Assist Pro. La app lo usa
+   * para hacer sonar el aviso a pantalla completa y repetirlo mientras siga
+   * sin leer: quien decide si repite es el servidor (`repetirSonido`), no el
+   * móvil, para que la regla viva en un solo sitio.
+   *
+   * No marca nada como leído: leído es «el operario lo ha visto y ha pulsado
+   * Entendido o ha contestado», no «el móvil lo ha descargado».
+   */
+  router.get("/messages/pending", async (req, res) => {
+    const s = req.liteSession!;
+    const onlyMine = s.role === "operator";
+    const r = await db.query(
+      `SELECT cc.id, cc.body, cc."byName", cc."createdAtMs", cc."readAtMs", cc.urgent,
+              ca.id AS "assistanceId", ca."expedientNumber", ca.status
+         FROM connect_communications cc
+         JOIN connect_assistances ca ON ca.id = cc."assistanceId"
+        WHERE ca."workshopId" = $1
+          AND (NOT $2::boolean OR ca."liteUserId" = $3)
+          AND ca.status <> ALL($4::text[])
+          AND cc.channel = 'workshop' AND cc."readAtMs" IS NULL
+        ORDER BY cc.id ASC LIMIT 50`,
+      [s.workshopId, onlyMine, s.userId, ["at_workshop", "cancelled"]],
+    );
+    const ahora = Date.now();
+    res.json({
+      data: {
+        mensajes: r.rows.map((row: any) => ({
+          ...conEstado(aMensajeTaller(row), ahora),
+          assistanceId: Number(row.assistanceId),
+          expedientNumber: row.expedientNumber ?? null,
+        })),
+        respuestasRapidas: RESPUESTAS_RAPIDAS,
+        repeticionMs: REPETICION_MS,
+      },
+    });
+  });
+
+  /*
+   * Acuse de lectura: el operario ha abierto el hilo.
+   *
+   * Marca lo que venía de Central y aún no estaba leído. Central lo enseña en
+   * su pestaña, que es lo que permite distinguir "no ha contestado" de "no se
+   * ha enterado": lo segundo se arregla llamando por teléfono.
+   */
+  router.post("/assistances/:id/messages/read", async (req, res) => {
+    const s = req.liteSession!;
+    const a = await loadAssistance(s, Number(req.params.id));
+    if (!a) return err(res, 404, "not_found", "Asistencia no encontrada");
+    // Con `messageId` marca solo ese: es el «Entendido» del aviso a pantalla
+    // completa, que va de uno en uno. Sin él, todo el hilo: es abrirlo.
+    const uno = Number(req.body?.messageId);
+    const r = await db.query(
+      `UPDATE connect_communications SET "readAtMs" = $2
+        WHERE "assistanceId" = $1 AND channel = 'workshop' AND "readAtMs" IS NULL
+          AND ($3::int IS NULL OR id = $3)
+        RETURNING id`,
+      [a.id, Date.now(), Number.isFinite(uno) && uno > 0 ? uno : null],
+    );
+    res.json({ data: { marked: r.rowCount ?? 0 } });
   });
 
   router.post("/assistances/:id/messages", limitar("messages"), async (req, res) => {

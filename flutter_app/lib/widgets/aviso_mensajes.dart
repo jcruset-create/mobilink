@@ -308,7 +308,10 @@ class _AvisoOtf extends StatelessWidget {
     final d = DateTime.fromMillisecondsSinceEpoch(ms);
     const dias = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo'];
     const meses = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
-    return '${dias[d.weekday - 1]} ${d.day} ${meses[d.month - 1]}';
+    final hora = d.hour == 0 && d.minute == 0
+        ? ''
+        : ' a las ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+    return '${dias[d.weekday - 1]} ${d.day} ${meses[d.month - 1]}$hora';
   }
 
   @override

@@ -212,7 +212,12 @@ class LecturaSonda {
   final String? texto;   // EPC del RFID o valor de info
   final String? clave;   // clave de info: modelo/version/bateria
   final String raw;
-  LecturaSonda(this.tipo, {this.valor, this.texto, this.clave, required this.raw});
+
+  /// Número de orden de una lectura de profundidad, que pone [ProbeSession]
+  /// al recibirla. Sirve para confirmar con un pitido que ESA lectura ha
+  /// quedado registrada, sin pitar dos veces por la misma.
+  final int? n;
+  LecturaSonda(this.tipo, {this.valor, this.texto, this.clave, required this.raw, this.n});
 }
 
 LecturaSonda parsearLinea(String line) {

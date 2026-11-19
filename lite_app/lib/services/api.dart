@@ -207,6 +207,20 @@ class Api {
       (await _post('/assistances/$id/messages', {'body': body, 'clientActionId': actionId}) as Map)
           .cast<String, dynamic>();
 
+  /// Acuse de lectura: el operario ha abierto el hilo. Central lo ve y así
+  /// distingue "no ha contestado" de "no se ha enterado".
+  ///
+  /// Con `messageId` marca solo ese mensaje: es el «Entendido» del aviso a
+  /// pantalla completa, que va de uno en uno.
+  Future<void> markMessagesRead(int id, {int? messageId}) =>
+      _post('/assistances/$id/messages/read',
+          messageId == null ? const {} : {'messageId': messageId});
+
+  /// Los avisos de la central sin leer de las asistencias abiertas de este
+  /// operario, con su estado de urgencia ya decidido por el servidor.
+  Future<Map<String, dynamic>> pendingMessages() async =>
+      ((await _get('/messages/pending') as Map)['data'] as Map).cast<String, dynamic>();
+
   Future<Map<String, dynamic>> files(int id) async =>
       (await _get('/assistances/$id/files') as Map).cast<String, dynamic>();
 

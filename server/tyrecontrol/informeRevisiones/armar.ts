@@ -39,6 +39,11 @@ export interface MedicionFila {
   marca: string | null;
   medida: string | null;
   codigo_interno: string | null;
+  /** Medición doble: banda interior y exterior. profundidad_mm es ya la
+   *  menor de las dos (lo garantiza la BD). Ausentes en revisiones de una
+   *  sola medición. */
+  profundidad_int_mm?: number | null;
+  profundidad_ext_mm?: number | null;
 }
 
 /** Una revisión, tal como sale de la base. */
@@ -84,6 +89,8 @@ export interface OpcionesInforme {
 export interface RuedaDoc {
   posicion: string;
   profundidad: number | null;
+  /** Las dos bandas, solo si la rueda se midió así. */
+  bandas: { int: number | null; ext: number | null } | null;
   presion: number | null;
   minimo: number | null;
   estado: "ok" | "aviso" | "bajo_minimo" | "sin_medir";
@@ -208,6 +215,9 @@ export function armarInforme(
         .map<RuedaDoc>((m) => ({
           posicion: m.posicion ?? "—",
           profundidad: m.profundidad_mm,
+          bandas: m.profundidad_int_mm != null || m.profundidad_ext_mm != null
+            ? { int: m.profundidad_int_mm ?? null, ext: m.profundidad_ext_mm ?? null }
+            : null,
           presion: m.presion_bar,
           minimo: m.minimo_mm ?? MINIMO_POR_DEFECTO,
           estado: estadoRueda(m),

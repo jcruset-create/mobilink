@@ -61,6 +61,64 @@ export async function puedeVerEmpresa(ctx: ContextoAcceso, empresaId: string): P
     .eq("id", userId).maybeSingle();
   if (error || !u || u.activo === false) return false;
   if (u.es_superadmin) return true;
+  // Un jefe de base no ve la empresa ENTERA, y esta pregunta es por la
+  // empresa entera: las rutas que la hacen sacan datos de toda la flota.
+  // Hasta que cada una sepa filtrar por delegación, se le dice que no.
+  if (u.rol === "cliente" && (await esJefeDeBase(userId))) return false;
+  if (u.empresa_id === empresaId) return true;
+
+  const { data: asignado } = await supabase
+    .from("tc_operador_empresas").select("empresa_id")
+    .eq("usuario_id", userId).eq("empresa_id", empresaId).maybeSingle();
+  return !!asignado;
+}
+
+/**
+ * ¿Es un usuario de cliente con perfil «jefe de base» (solo su delegación)?
+ *
+ * En la base de datos lo acota la regla `cliente_por_delegacion` de cada
+ * tabla. El servidor se la salta (`service_role`), así que aquí hay que
+ * saberlo para no darle la flota entera.
+ *
+ * Se pregunta aparte y no en la consulta del usuario a propósito: la columna
+ * `perfil_cliente` llega con la migración de la fase 2, y si todavía no está
+ * aplicada la consulta falla. Ese fallo significa «no hay jefes de base» y
+ * no puede dejar sin acceso a todos los demás.
+ */
+export async function esJefeDeBase(userId: string | undefined): Promise<boolean> {
+  if (!userId) return false;
+  const { data, error } = await supabase
+    .from("tc_usuarios").select("rol, es_superadmin, perfil_cliente")
+    .eq("id", userId).maybeSingle();
+  if (error || !data) return false;
+  const u = data as { rol?: string; es_superadmin?: boolean; perfil_cliente?: string | null };
+  return u.rol === "cliente" && !u.es_superadmin && u.perfil_cliente === "delegacion";
+}
+
+/**
+ * ¿El usuario del contexto puede ESCRIBIR en los datos de `empresaId`?
+ *
+ * Lo mismo que `puedeVerEmpresa`, menos el rol `cliente`: un usuario de cliente
+ * ve su empresa pero no cambia nada en ella. Es la regla de las políticas de
+ * escritura de la base (`tc_is_admin() and empresa propia`, o empresa
+ * asignada), que aquí hay que repetir a mano porque `service_role` se las
+ * salta.
+ *
+ * Igual que la otra, ante la duda responde que no.
+ */
+export async function puedeOperarEnEmpresa(ctx: ContextoAcceso, empresaId: string): Promise<boolean> {
+  const userId = ctx?.userId;
+  if (!userId || !empresaId) return false;
+  if (ctx?.esSuperadmin === true) return true;
+
+  const { data: u, error } = await supabase
+    .from("tc_usuarios").select("rol, empresa_id, es_superadmin, activo")
+    .eq("id", userId).maybeSingle();
+  if (error || !u || u.activo === false) return false;
+  if (u.es_superadmin) return true;
+  // Se mira el rol ANTES que la empresa: un cliente con empresas asignadas
+  // por error en tc_operador_empresas tampoco escribe.
+  if (u.rol !== "administrador" && u.rol !== "operador") return false;
   if (u.empresa_id === empresaId) return true;
 
   const { data: asignado } = await supabase

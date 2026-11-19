@@ -94,7 +94,11 @@ export default function TyreControlApp() {
             <Route path="operaciones" element={<Operaciones />} />
             <Route path="intervenciones" element={<Intervenciones />} />
             <Route path="intervenciones/:id" element={<InformeIntervencion />} />
-            <Route path="revision-vehiculo" element={<RevisionVehiculo />} />
+            {/* Hacer una revisión es trabajo, no consulta: fuera del rol
+                cliente, que antes llegaba aquí tecleando la dirección. */}
+            <Route element={<RoleRoute roles={["administrador", "operador"]} />}>
+              <Route path="revision-vehiculo" element={<RevisionVehiculo />} />
+            </Route>
 
             {/* Informes: admin y cliente (RLS acota los datos por empresa) */}
             <Route path="informes" element={<InformesLayout />}>

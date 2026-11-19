@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import {
-  listarUsuarios, crearUsuario, actualizarUsuario, listarEmpresas,
-  listarEmpresasDeUsuario, guardarEmpresasUsuario, eliminarUsuario, cambiarPasswordUsuario,
+  listarUsuarios, crearUsuario, actualizarUsuario, listarEmpresas, listarDelegaciones,
+  listarEmpresasDeUsuario, guardarEmpresasUsuario, eliminarUsuario, cambiarPasswordUsuario, cambiarDatosUsuario,
   generarEnlaceAcceso, ultimosAccesos, obtenerPantallasUsuario, guardarPantallasUsuario,
   ultimasPosicionesTablet,
 } from "../services/data";
@@ -11,7 +11,10 @@ import {
 } from "../services/ubicacionOperario";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 import { Modal, inputCls } from "../components/ui";
-import { ROL_LABELS, type Empresa, type Perfil, type Rol } from "../types";
+import {
+  PERFIL_CLIENTE_AYUDA, PERFIL_CLIENTE_LABELS, ROL_LABELS, perfilClienteDe,
+  type Delegacion, type Empresa, type Perfil, type PerfilCliente, type Rol,
+} from "../types";
 import { NAV } from "../config/navigation";
 
 /** Hace legible un "hace cuánto" sin traer una librería de fechas. */
@@ -25,13 +28,19 @@ function haceCuanto(iso: string | null | undefined): { txt: string; frio: boolea
   return { txt: meses === 1 ? "hace 1 mes" : `hace ${meses} meses`, frio: true };
 }
 
-const EMPTY = { nombre: "", email: "", password: "", rol: "cliente" as Rol, acceso_apk: false, acceso_panel: true, empresa_id: "" };
+const EMPTY = {
+  nombre: "", email: "", password: "", rol: "cliente" as Rol, acceso_apk: false, acceso_panel: true, empresa_id: "",
+  perfil_cliente: "flota" as PerfilCliente, delegacion_id: "",
+};
+
+const PERFILES = Object.keys(PERFIL_CLIENTE_LABELS) as PerfilCliente[];
 
 export default function Usuarios() {
   const { perfil } = useTyreAuth();
   const esSuper = Boolean(perfil?.es_superadmin);
   const [items, setItems] = useState<Perfil[]>([]);
   const [empresas, setEmpresas] = useState<Empresa[]>([]);
+  const [delegaciones, setDelegaciones] = useState<Delegacion[]>([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
   const [form, setForm] = useState({ ...EMPTY });
@@ -53,6 +62,8 @@ export default function Usuarios() {
     try {
       setItems(await listarUsuarios());
       if (esSuper) setEmpresas(await listarEmpresas());
+      // Para el perfil «jefe de base». Si no cargan, el resto sigue.
+      listarDelegaciones().then(setDelegaciones).catch(() => setDelegaciones([]));
       // El último acceso es informativo: si falla, la pantalla sigue siendo
       // útil, así que no se propaga el error.
       ultimosAccesos().then(setAccesos).catch(() => setAccesos({}));
@@ -72,12 +83,17 @@ export default function Usuarios() {
     // email, así que a un cliente no se le inventa ninguna contraseña.
     if (form.acceso_apk && form.password.trim().length < 4) { setMsg("Un usuario de APK necesita un PIN de al menos 4 caracteres"); return; }
     if (esSuper && !form.empresa_id) { setMsg("Selecciona una empresa"); return; }
+    const jefeDeBase = form.rol === "cliente" && form.perfil_cliente === "delegacion";
+    if (jefeDeBase && !form.delegacion_id) { setMsg("Un jefe de base necesita una delegación"); return; }
     try {
       await crearUsuario({
         nombre: form.nombre, email: form.email,
         password: form.acceso_apk ? form.password : undefined,
-        rol: form.rol, acceso_apk: form.acceso_apk, acceso_panel: form.acceso_panel,
+        rol: form.rol, acceso_apk: form.rol === "cliente" ? false : form.acceso_apk, acceso_panel: form.acceso_panel,
         empresa_id: esSuper ? form.empresa_id : undefined,
+        ...(form.rol === "cliente" && form.perfil_cliente !== "flota"
+          ? { perfil_cliente: form.perfil_cliente, delegacion_id: jefeDeBase ? form.delegacion_id : null }
+          : {}),
       });
       setForm({ ...EMPTY });
       setMsg("✔ Usuario creado. Ábrelo y pulsa «Enlace de acceso» para invitarle.");
@@ -127,16 +143,34 @@ export default function Usuarios() {
             {(Object.keys(ROL_LABELS) as Rol[]).map((r) => <option key={r} value={r}>{ROL_LABELS[r]}</option>)}
           </select>
           {esSuper && (
-            <select className={inp} value={form.empresa_id} onChange={(e) => setForm({ ...form, empresa_id: e.target.value })}>
+            <select className={inp} value={form.empresa_id} onChange={(e) => setForm({ ...form, empresa_id: e.target.value, delegacion_id: "" })}>
               <option value="">Empresa…</option>
               {empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}
             </select>
           )}
+          {form.rol === "cliente" && (
+            <select id="alta-perfil-cliente" aria-label="Perfil del cliente" className={inp} value={form.perfil_cliente}
+              onChange={(e) => setForm({ ...form, perfil_cliente: e.target.value as PerfilCliente, delegacion_id: "" })}>
+              {PERFILES.map((p) => <option key={p} value={p}>{PERFIL_CLIENTE_LABELS[p]}</option>)}
+            </select>
+          )}
+          {form.rol === "cliente" && form.perfil_cliente === "delegacion" && (
+            <select id="alta-delegacion" aria-label="Delegación del jefe de base" className={inp} value={form.delegacion_id}
+              onChange={(e) => setForm({ ...form, delegacion_id: e.target.value })}>
+              <option value="">Delegación…</option>
+              {delegaciones
+                .filter((d) => d.empresa_id === (esSuper ? form.empresa_id : perfil?.empresa_id))
+                .map((d) => <option key={d.id} value={d.id}>{d.nombre}</option>)}
+            </select>
+          )}
           <div className="flex items-center gap-3 text-sm text-slate-300">
             <label className="flex items-center gap-1"><input type="checkbox" checked={form.acceso_panel} onChange={(e) => setForm({ ...form, acceso_panel: e.target.checked })} /> Panel</label>
-            <label className="flex items-center gap-1"><input type="checkbox" checked={form.acceso_apk} onChange={(e) => setForm({ ...form, acceso_apk: e.target.checked })} /> APK</label>
+            {form.rol !== "cliente" && <label className="flex items-center gap-1"><input type="checkbox" checked={form.acceso_apk} onChange={(e) => setForm({ ...form, acceso_apk: e.target.checked })} /> APK</label>}
           </div>
         </div>
+        {form.rol === "cliente" && (
+          <p className="mt-2 text-[11px] text-slate-500">{PERFIL_CLIENTE_LABELS[form.perfil_cliente]}: {PERFIL_CLIENTE_AYUDA[form.perfil_cliente]} Solo consulta.</p>
+        )}
         <button onClick={crear} className="mt-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-500">Crear usuario</button>
       </div>
 
@@ -190,7 +224,14 @@ export default function Usuarios() {
               <tr key={u.id} className="border-t border-slate-700/60">
                 <td className="px-4 py-2 font-semibold">{u.nombre}{u.es_superadmin ? " ⭐" : ""}</td>
                 <td className="px-4 py-2 text-slate-400">{u.email}</td>
-                <td className="px-4 py-2">{ROL_LABELS[u.rol]}</td>
+                <td className="px-4 py-2">
+                  {ROL_LABELS[u.rol]}
+                  {perfilClienteDe(u) && perfilClienteDe(u) !== "flota" && (
+                    <span className="ml-1 rounded bg-slate-700 px-1.5 py-0.5 text-[10px] font-bold text-slate-200">
+                      {PERFIL_CLIENTE_LABELS[perfilClienteDe(u)!]}{perfilClienteDe(u) === "delegacion" && u.delegacion?.nombre ? ` · ${u.delegacion.nombre}` : ""}
+                    </span>
+                  )}
+                </td>
                 {esSuper && <td className="px-4 py-2 text-slate-400">{u.empresa?.nombre ?? "—"}{u.empresas_manual ? <span className="ml-1 rounded bg-sky-500/20 px-1.5 py-0.5 text-[10px] font-bold text-sky-300" title="Empresas visibles asignadas a mano">+manual</span> : null}</td>}
                 <td className="px-4 py-2 text-[11px] text-slate-400">{u.acceso_panel ? "Panel " : ""}{u.acceso_apk ? "APK" : ""}</td>
                 <td className="px-4 py-2 text-[11px]" title={accesos[u.id] ?? "Sin registro de acceso"}>
@@ -261,6 +302,7 @@ export default function Usuarios() {
         <FichaUsuario
           usuario={ficha}
           empresas={empresas}
+          delegaciones={delegaciones}
           esSuper={esSuper}
           onClose={() => setFicha(null)}
           onDone={async (texto) => { setFicha(null); setMsg(texto); await cargar(); }}
@@ -271,14 +313,18 @@ export default function Usuarios() {
 }
 
 // ── Ficha de usuario: editar datos + empresas visibles ─────────
-function FichaUsuario({ usuario, empresas, esSuper, onClose, onDone }: {
-  usuario: Perfil; empresas: Empresa[]; esSuper: boolean;
+function FichaUsuario({ usuario, empresas, delegaciones, esSuper, onClose, onDone }: {
+  usuario: Perfil; empresas: Empresa[]; delegaciones: Delegacion[]; esSuper: boolean;
   onClose: () => void; onDone: (msg: string) => void;
 }) {
   const [nombre, setNombre] = useState(usuario.nombre);
   const [rol, setRol] = useState<Rol>(usuario.rol);
   const [accesoPanel, setAccesoPanel] = useState(usuario.acceso_panel);
   const [accesoApk, setAccesoApk] = useState(usuario.acceso_apk);
+  const [email, setEmail] = useState(usuario.email ?? "");
+  const [empresaId, setEmpresaId] = useState(usuario.empresa_id ?? "");
+  const [perfilCliente, setPerfilCliente] = useState<PerfilCliente>(usuario.perfil_cliente ?? "flota");
+  const [delegacionId, setDelegacionId] = useState(usuario.delegacion_id ?? "");
   const [modo, setModo] = useState<"todas" | "manual">(usuario.empresas_manual ? "manual" : "todas");
   const [seleccion, setSeleccion] = useState<Set<string>>(new Set());
   const [cargandoEmpresas, setCargandoEmpresas] = useState(true);
@@ -320,7 +366,7 @@ function FichaUsuario({ usuario, empresas, esSuper, onClose, onDone }: {
     setCambiandoPin(true); setPinMsg("");
     try {
       await cambiarPasswordUsuario(usuario.id, nuevoPin.trim());
-      setNuevoPin(""); setPinMsg("✔ Contraseña actualizada");
+      setNuevoPin(""); setPinMsg("✔ PIN cambiado");
     } catch (e: any) { setPinMsg(e?.message || "Error"); }
     finally { setCambiandoPin(false); }
   }
@@ -359,12 +405,40 @@ function FichaUsuario({ usuario, empresas, esSuper, onClose, onDone }: {
   async function guardar() {
     if (!nombre.trim()) { setMsg("El nombre es obligatorio"); return; }
     if (modo === "manual" && seleccion.size === 0) { setMsg("Selecciona al menos una empresa (o marca «Todas»)"); return; }
+    if (!email.trim()) { setMsg("El correo es obligatorio"); return; }
+    const jefeDeBase = rol === "cliente" && perfilCliente === "delegacion";
+    if (jefeDeBase && !delegacionId) { setMsg("Un jefe de base necesita una delegación"); return; }
+    // El perfil solo se manda si hay algo que cambiar: así la ficha se sigue
+    // guardando aunque la base todavía no tenga la columna.
+    const perfilAntes = usuario.perfil_cliente ?? "flota";
+    const tocaPerfil = rol === "cliente"
+      ? perfilCliente !== perfilAntes || (jefeDeBase && delegacionId !== (usuario.delegacion_id ?? ""))
+      : usuario.rol === "cliente" && perfilAntes !== "flota";
     setSaving(true); setMsg("");
     try {
+      // Primero el correo y la empresa: es lo que el servidor puede rechazar
+      // (correo ya usado, usuario del acceso común). Si falla, no se ha
+      // guardado nada todavía y la ficha sigue abierta con el aviso.
+      const cambiaEmail = email.trim().toLowerCase() !== String(usuario.email ?? "").toLowerCase();
+      const cambiaEmpresa = esSuper && !!empresaId && empresaId !== usuario.empresa_id;
+      if (cambiaEmail || cambiaEmpresa) {
+        await cambiarDatosUsuario(usuario.id, {
+          ...(cambiaEmail ? { email: email.trim() } : {}),
+          ...(cambiaEmpresa ? { empresa_id: empresaId } : {}),
+        });
+      }
       await actualizarUsuario(usuario.id, {
-        nombre: nombre.trim(), rol, acceso_panel: accesoPanel, acceso_apk: accesoApk,
+        nombre: nombre.trim(), rol, acceso_panel: accesoPanel, acceso_apk: rol === "cliente" ? false : accesoApk,
+        ...(tocaPerfil
+          ? {
+              perfil_cliente: rol === "cliente" ? perfilCliente : null,
+              ...(jefeDeBase ? { delegacion_id: delegacionId } : {}),
+            }
+          : {}),
       });
-      if (esSuper) {
+      // A un usuario de cliente no se le asignan empresas: eso da permiso
+      // para trabajar en ellas, y él solo consulta la suya.
+      if (esSuper && rol !== "cliente") {
         await guardarEmpresasUsuario(usuario.id, modo === "todas" ? null : [...seleccion]);
       }
       onDone(`✔ Usuario "${nombre.trim()}" actualizado`);
@@ -395,10 +469,54 @@ function FichaUsuario({ usuario, empresas, esSuper, onClose, onDone }: {
             </select>
           </label>
         </div>
-        <div className="text-[12px] text-slate-400">Email: <span className="text-slate-300">{usuario.email}</span></div>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <label className="text-[12px] text-slate-400">Correo
+            <input id="ficha-usuario-correo" type="email" className={`${inputCls} mt-1`} value={email} onChange={(e) => setEmail(e.target.value)} />
+          </label>
+          {/* Mover a alguien de empresa cambia todo lo que ve: solo el
+              superadministrador, y nunca a otro superadministrador. */}
+          {esSuper && (
+            <label className="text-[12px] text-slate-400">Empresa
+              <select id="ficha-usuario-empresa" className={`${inputCls} mt-1`} value={empresaId} onChange={(e) => setEmpresaId(e.target.value)} disabled={usuario.es_superadmin}>
+                {empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}
+              </select>
+            </label>
+          )}
+        </div>
+        <p className="text-[11px] text-slate-500">
+          El correo es con el que entra al panel: si lo cambias, el enlace de acceso se envía al nuevo.
+          {esSuper ? " Al cambiar la empresa, pasa a ver los datos de la nueva." : ""}
+        </p>
+        {/* Qué ve un usuario de cliente. Los tres perfiles son de consulta. */}
+        {rol === "cliente" && !usuario.es_superadmin && (
+          <div className="rounded-lg bg-slate-800 p-3">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <label className="text-[12px] text-slate-400">Perfil del cliente
+                <select id="ficha-perfil-cliente" className={`${inputCls} mt-1`} value={perfilCliente}
+                  onChange={(e) => setPerfilCliente(e.target.value as PerfilCliente)}>
+                  {PERFILES.map((p) => <option key={p} value={p}>{PERFIL_CLIENTE_LABELS[p]}</option>)}
+                </select>
+              </label>
+              {perfilCliente === "delegacion" && (
+                <label className="text-[12px] text-slate-400">Delegación
+                  <select id="ficha-delegacion" className={`${inputCls} mt-1`} value={delegacionId}
+                    onChange={(e) => setDelegacionId(e.target.value)}>
+                    <option value="">Elige una…</option>
+                    {delegaciones.filter((d) => d.empresa_id === (empresaId || usuario.empresa_id))
+                      .map((d) => <option key={d.id} value={d.id}>{d.nombre}</option>)}
+                  </select>
+                </label>
+              )}
+            </div>
+            <p className="mt-2 text-[11px] text-slate-500">
+              {PERFIL_CLIENTE_AYUDA[perfilCliente]}
+              {perfilCliente === "delegacion" ? " Los vehículos sin delegación asignada no los verá." : ""}
+            </p>
+          </div>
+        )}
         <div className="flex items-center gap-4 text-sm text-slate-300">
           <label className="flex items-center gap-1"><input type="checkbox" checked={accesoPanel} onChange={(e) => setAccesoPanel(e.target.checked)} /> Panel</label>
-          <label className="flex items-center gap-1"><input type="checkbox" checked={accesoApk} onChange={(e) => setAccesoApk(e.target.checked)} /> APK</label>
+          {rol !== "cliente" && <label className="flex items-center gap-1"><input type="checkbox" checked={accesoApk} onChange={(e) => setAccesoApk(e.target.checked)} /> APK</label>}
         </div>
 
         {/* Invitación al panel: enlace de un solo uso */}
@@ -444,7 +562,7 @@ function FichaUsuario({ usuario, empresas, esSuper, onClose, onDone }: {
         <div className="rounded-lg bg-slate-800 p-3">
           <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">PIN de la APK</div>
           <div className="mb-2 text-[11px] text-slate-500">
-            Es el PIN con el que este usuario entra en la APK. Escribe el nuevo y pulsa cambiar.
+            Es el PIN con el que este usuario entra en la APK: 4 dígitos, que son las casillas de la tablet. Escribe el nuevo y pulsa cambiar.
           </div>
           <div className="flex items-center gap-2">
             <input

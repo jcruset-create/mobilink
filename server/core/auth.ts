@@ -34,6 +34,13 @@ export type AuthContext = {
    * decide quién gestiona usuarios (de la suya, salvo el superadmin).
    */
   esAdmin: boolean;
+  /**
+   * Usuario que solo existe en `tc_usuarios` (técnico de la APK o usuario de
+   * un cliente de TyreControl) y entra por el puente de más abajo. Su
+   * `empresaId` es la de por defecto, no la suya, así que no puede valer para
+   * comprobar licencias de otros módulos: ver `moduloAlAlcance`.
+   */
+  soloTyreControl?: boolean;
 };
 
 declare module "express-serve-static-core" {
@@ -110,6 +117,7 @@ export async function resolveAuthContext(token: string): Promise<AuthContext | n
         esSuperadmin: Boolean(t.es_superadmin),
         // Un operario de tc_usuarios no administra nada salvo que sea superadmin.
         esAdmin: Boolean(t.es_superadmin),
+        soloTyreControl: !t.es_superadmin,
       };
     }
   }
@@ -148,11 +156,32 @@ export async function licenciaActiva(empresaId: string, modulo: string): Promise
   return activa;
 }
 
+/**
+ * ¿Este usuario puede siquiera optar al módulo, antes de mirar la licencia?
+ *
+ * Quien entra por el puente de `tc_usuarios` lleva como empresa la de por
+ * defecto (SEA), que tiene licencia de todo. Sin esto, la sesión de un técnico
+ * de la tablet —o la de un usuario de un cliente de TyreControl— pasaba
+ * `requireModule("administracion")` y llegaba a los pagos y al recobro por
+ * WhatsApp. Ese usuario es de TyreControl y de nada más.
+ */
+export function moduloAlAlcance(
+  ctx: Pick<AuthContext, "esSuperadmin" | "soloTyreControl">,
+  modulo: string,
+): boolean {
+  if (ctx.esSuperadmin) return true;
+  if (ctx.soloTyreControl) return modulo === "tyrecontrol";
+  return true;
+}
+
 export function requireModule(modulo: string): RequestHandler {
   return async (req: Request, res: Response, next: NextFunction) => {
     const ctx = req.authCtx;
     if (!ctx) return res.status(401).json({ error: "Sesión requerida" });
     if (ctx.esSuperadmin) return next();
+    if (!moduloAlAlcance(ctx, modulo)) {
+      return res.status(403).json({ error: "Tu usuario no tiene acceso a este módulo", modulo });
+    }
     try {
       if (!(await licenciaActiva(ctx.empresaId, modulo))) {
         return res.status(403).json({

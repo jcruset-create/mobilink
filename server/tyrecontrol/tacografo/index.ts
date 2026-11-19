@@ -42,7 +42,7 @@ import * as XLSX from "xlsx";
 
 import { createHash } from "node:crypto";
 
-import { empresaDelInforme } from "../informes/alcance.ts";
+import { empresaDelInforme, empresaParaOperar } from "../informes/alcance.ts";
 import { normalizarMatricula } from "../matricula.ts";
 import {
   SISTEMA_ORIGEN, contarInformesDeLote, leerBases, leerBloqueadasDeLote, leerCatalogoMedidas,
@@ -59,7 +59,7 @@ import type { EstadoTacografo } from "./vencimiento.ts";
 import { evaluar } from "./deshacer.ts";
 import {
   aplicarPropuesta, borrarLote, cerrarLote, completarDePdf, crearLote, guardarBloqueadas,
-  guardarInformePdf, insertarFilas, insertarIntervencionDePdf, insertarPropuestas,
+  almacenDeInformes, guardarInformePdf, insertarFilas, insertarIntervencionDePdf, insertarPropuestas,
   rechazarPropuesta, urlFirmadaDeInforme, vincularIntervencion,
 } from "./escribir.ts";
 import {
@@ -69,6 +69,8 @@ import {
 import { aFilaInsert, parcheParaCompletar, preparar } from "./importar.ts";
 import { ErrorFichero, leerHoja, type Lectura } from "./parser.ts";
 import { simular } from "./simular.ts";
+import { pdfParaAdjuntar } from "./ejemplarCliente.ts";
+import { recortarAdjuntos } from "./recortarAdjuntos.ts";
 import { decidirInforme, pareceOtroCliente } from "./informes.ts";
 import type { Generacion } from "./generacion.ts";
 import { leerInformePdf, leerInformesDelPdf, lineasDeInforme } from "./informePdf.ts";
@@ -210,7 +212,7 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
   app.post("/api/tyrecontrol/tacografo/simular", ...guards, subida.single("archivo"),
     async (req, res) => {
       try {
-        const alcance = await empresaDelInforme(req, req.query.empresa ?? req.body?.empresa);
+        const alcance = await empresaParaOperar(req, req.query.empresa ?? req.body?.empresa);
         if (!alcance.empresa) return res.status(alcance.estado!).json({ error: alcance.error });
         const empresa = alcance.empresa;
 
@@ -259,7 +261,7 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
   app.post("/api/tyrecontrol/tacografo/importar", ...guards, subida.single("archivo"),
     async (req, res) => {
       try {
-        const alcance = await empresaDelInforme(req, req.query.empresa ?? (req as any).body?.empresa);
+        const alcance = await empresaParaOperar(req, req.query.empresa ?? (req as any).body?.empresa);
         if (!alcance.empresa) return res.status(alcance.estado!).json({ error: alcance.error });
         const empresa = alcance.empresa;
 
@@ -462,7 +464,7 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
   app.post("/api/tyrecontrol/tacografo/informe-pdf", ...guards, subida.single("archivo"),
     async (req, res) => {
       try {
-        const alcance = await empresaDelInforme(req, req.query.empresa ?? (req as any).body?.empresa);
+        const alcance = await empresaParaOperar(req, req.query.empresa ?? (req as any).body?.empresa);
         if (!alcance.empresa) return res.status(alcance.estado!).json({ error: alcance.error });
         const empresa = alcance.empresa;
         const vehiculoId = String(req.query.vehiculo ?? (req as any).body?.vehiculo ?? "");
@@ -526,10 +528,15 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
           await vincularIntervencion(intervencionId, vehiculoId, usuarioId);
         }
 
+        // Se guarda solo el ejemplar del cliente. El `sha` sigue siendo el
+        // del fichero que se subió: es con el que se reconoce «este informe
+        // ya está» si alguien vuelve a subir el mismo.
+        const adjunto = await pdfParaAdjuntar(archivo.buffer, lineas, fila.idOrigen, lectura.paginas || null);
+        if (adjunto.aviso) decision.avisos.push(adjunto.aviso);
         const doc = await guardarInformePdf({
           empresa, vehiculoId, intervencionId: intervencionId!,
-          pdf: archivo.buffer, nombreOriginal: archivo.originalname, sha256: sha,
-          paginas: lectura.paginas || null,
+          pdf: adjunto.pdf, nombreOriginal: archivo.originalname, sha256: sha,
+          paginas: adjunto.paginas,
           idOrigen: fila.idOrigen, usuarioId,
         });
 
@@ -569,7 +576,7 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
   app.post("/api/tyrecontrol/tacografo/informes-pdf", ...guards, subidaPdfs.array("archivos", 20),
     async (req, res) => {
       try {
-        const alcance = await empresaDelInforme(req, req.query.empresa ?? (req as any).body?.empresa);
+        const alcance = await empresaParaOperar(req, req.query.empresa ?? (req as any).body?.empresa);
         if (!alcance.empresa) return res.status(alcance.estado!).json({ error: alcance.error });
         const empresa = alcance.empresa;
         const usuarioId = usuarioDe(req);
@@ -590,7 +597,7 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
          * se reconoce NINGUNA, no se escribe una sola fila. Ver
          * `pareceOtroCliente()`: pasó el primer día que se usó esto.
          */
-        const leidos: Array<{ nombre: string; sha: string; informes: any[]; error?: string }> = [];
+        const leidos: Array<{ nombre: string; sha: string; informes: any[]; lineas?: Awaited<ReturnType<typeof lineasDeInforme>>; error?: string }> = [];
         for (const archivo of archivos) {
           const nombre = archivo.originalname;
           if (!archivo.buffer?.length || archivo.buffer.subarray(0, 5).toString("latin1") !== "%PDF-") {
@@ -599,7 +606,8 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
           }
           const sha = createHash("sha256").update(archivo.buffer).digest("hex");
           try {
-            leidos.push({ nombre, sha, informes: leerInformesDelPdf(await lineasDeInforme(archivo.buffer)) });
+            const lineas = await lineasDeInforme(archivo.buffer);
+            leidos.push({ nombre, sha, informes: leerInformesDelPdf(lineas), lineas });
           } catch (e: any) {
             leidos.push({ nombre, sha, informes: [], error: `No se ha podido leer el PDF: ${e?.message ?? e}` });
           }
@@ -687,10 +695,15 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
              * todavía no está dado de alta se guarda igual y aparece en su
              * ficha el día que exista.
              */
+            // Solo el ejemplar del cliente de ESTA intervención: de un PDF
+            // con el mes entero, cada una se queda con sus páginas y no con
+            // las de las demás.
+            const adjunto = await pdfParaAdjuntar(archivo.buffer, leido.lineas ?? [], fila!.idOrigen, lectura.paginas || null);
+            if (adjunto.aviso) decision.avisos.push(adjunto.aviso);
             const doc = await guardarInformePdf({
               empresa, vehiculoId: decision.vehiculoDelInforme ?? null, intervencionId: intervencionId!,
-              pdf: archivo.buffer, nombreOriginal: nombre, sha256: sha,
-              paginas: lectura.paginas || null,
+              pdf: adjunto.pdf, nombreOriginal: nombre, sha256: sha,
+              paginas: adjunto.paginas,
               idOrigen: fila!.idOrigen, usuarioId,
             });
 
@@ -764,6 +777,41 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
     }
   });
 
+  /**
+   * Dejar solo el ejemplar del cliente en los informes que ya estaban
+   * adjuntos. Con `?simular=1` no escribe: cuenta lo que haría.
+   *
+   * Es una tarea de una vez, para lo subido antes de que el adjunto se
+   * recortara al entrar. Repetirla no hace daño: lo ya recortado se reconoce
+   * y no se toca.
+   */
+  app.post("/api/tyrecontrol/tacografo/informes-pdf/recortar", ...guards, async (req, res) => {
+    try {
+      const alcance = await empresaParaOperar(req, req.query.empresa ?? req.body?.empresa);
+      if (!alcance.empresa) return res.status(alcance.estado!).json({ error: alcance.error });
+      const simular = String(req.query.simular ?? req.body?.simular ?? "") === "1";
+
+      const resultados = await recortarAdjuntos(almacenDeInformes(alcance.empresa), simular);
+      const cuenta = (a: string) => resultados.filter((r) => r.accion === a).length;
+      res.json({
+        ok: true,
+        simulado: simular,
+        resumen: {
+          total: resultados.length,
+          recortados: cuenta("recortado"),
+          seRecortarian: cuenta("se_recortaria"),
+          yaEstaban: cuenta("ya_estaba"),
+          noSePuede: cuenta("no_se_puede"),
+        },
+        resultados,
+      });
+    } catch (e) {
+      const mensaje = e instanceof Error ? e.message : String(e);
+      console.error("[tacografo-recortar] error:", mensaje);
+      res.status(500).json({ error: mensaje || "No se han podido recortar los informes" });
+    }
+  });
+
   /** Una URL nueva para un informe, porque la firmada caduca en una hora. */
   app.get("/api/tyrecontrol/tacografo/informes/:id", ...guards, async (req, res) => {
     try {
@@ -820,7 +868,7 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
    */
   app.post("/api/tyrecontrol/tacografo/lotes/:id/deshacer", ...guards, async (req, res) => {
     try {
-      const alcance = await empresaDelInforme(req, req.query.empresa ?? (req as any).body?.empresa);
+      const alcance = await empresaParaOperar(req, req.query.empresa ?? (req as any).body?.empresa);
       if (!alcance.empresa) return res.status(alcance.estado!).json({ error: alcance.error });
       const empresa = alcance.empresa;
       const loteId = String(req.params.id);
@@ -919,7 +967,7 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
    */
   app.post("/api/tyrecontrol/tacografo/propuestas/:id", ...guards, async (req, res) => {
     try {
-      const alcance = await empresaDelInforme(req, req.query.empresa ?? (req as any).body?.empresa);
+      const alcance = await empresaParaOperar(req, req.query.empresa ?? (req as any).body?.empresa);
       if (!alcance.empresa) return res.status(alcance.estado!).json({ error: alcance.error });
       const empresa = alcance.empresa;
 
@@ -979,7 +1027,7 @@ export function mountTcTacografo(app: Express, ...guards: RequestHandler[]): voi
    */
   app.post("/api/tyrecontrol/tacografo/propuestas-bloque", ...guards, async (req, res) => {
     try {
-      const alcance = await empresaDelInforme(req, req.query.empresa ?? (req as any).body?.empresa);
+      const alcance = await empresaParaOperar(req, req.query.empresa ?? (req as any).body?.empresa);
       if (!alcance.empresa) return res.status(alcance.estado!).json({ error: alcance.error });
       const empresa = alcance.empresa;
 
