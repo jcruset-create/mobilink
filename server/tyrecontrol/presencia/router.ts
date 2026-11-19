@@ -127,13 +127,15 @@ async function leerHoraDelBarrido(empresaId: string): Promise<string | null> {
  * lo adivine.
  *
  * Se leen las CONFIGURACIONES, no los conectores: es una consulta a la base del
- * Hub y no resuelve credenciales ni llama a nadie. Y va en su propio try: si la
+ * Hub y no llama a ningún proveedor. A las del Hub se les suman las heredadas
+ * —el cliente de Webfleet de toda la vida—, porque para quien mira la pantalla
+ * una cuenta que está barriendo es una cuenta, la haya inscrito alguien o no. Y va en su propio try: si la
  * base del Hub no contesta, la pantalla enseña lo que ya sabía en vez de caerse
  * por un dato que solo sirve para explicar.
  */
 async function cuentasDeTelematica(
   empresaId: string,
-): Promise<Array<{ proveedor: string; cuenta: string; nombre: string | null; activa: boolean }>> {
+): Promise<Array<{ proveedor: string; cuenta: string; nombre: string | null; activa: boolean; heredada?: boolean }>> {
   try {
     const { listConnectorConfigs } = await import(
       "../../integration-hub/infrastructure/repositories.ts"
@@ -143,14 +145,29 @@ async function cuentasDeTelematica(
     );
     const claves = new Set(knownTelematicsConnectorKeys());
     const configs = await listConnectorConfigs(empresaId);
-    return (configs ?? [])
+    const delHub = (configs ?? [])
       .filter((c: any) => claves.has(String(c.connector_key)))
       .map((c: any) => ({
         proveedor: String(c.connector_key),
         cuenta: String(c.account_key ?? "default"),
         nombre: c.name ?? null,
         activa: c.enabled === true,
+        heredada: false,
       }));
+
+    // Las heredadas también se enseñan. Sin esto la pantalla saldría con los
+    // números del barrido Y con el aviso de «no tiene ninguna cuenta» debajo,
+    // que es peor que el problema que se acaba de arreglar.
+    const { cuentasHeredadasDe } = await import("./heredadas.ts");
+    const heredadas = (await cuentasHeredadasDe(empresaId)).map((h) => ({
+      proveedor: h.key,
+      cuenta: h.accountKey,
+      nombre: h.nombre,
+      activa: true,
+      heredada: true,
+    }));
+
+    return [...delHub, ...heredadas];
   } catch (e) {
     console.warn("[presencia-bases] no se pudieron leer las cuentas:", (e as any)?.message ?? e);
     return [];

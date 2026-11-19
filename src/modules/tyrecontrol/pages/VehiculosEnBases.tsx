@@ -451,6 +451,14 @@ export default function VehiculosEnBases() {
           integraciones, eligiendo esta empresa y su proveedor (Webfleet o Movertis).
         </div>
       )}
+      {datos && (datos.cuentas ?? []).some((c) => c.heredada) && (
+        <div className="mb-4 rounded-xl border border-sky-500/30 bg-sky-500/5 p-3 text-[13px] text-sky-200">
+          Esta empresa se barre con sus credenciales de Webfleet de siempre, sin tener la cuenta
+          dada de alta en el Hub. Funciona, y no hay que hacer nada. Si algún día quieres además
+          conciliación de flota o kilometraje mensual, hay que darla de alta en el panel de
+          integraciones.
+        </div>
+      )}
       {datos && (datos.cuentas ?? []).length > 0 && datos.cuentas.every((c) => !c.activa) && (
         <div className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-[13px] text-amber-200">
           Las cuentas de telemática de esta empresa (
