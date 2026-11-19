@@ -24,12 +24,26 @@ class AltaEjesScreen extends StatefulWidget {
   final String vehiculoId;
   final String matricula;
   final String tipoVehiculoId;
+  /// Número del paso «uso» y total de pasos del recorrido: en el alta por foto
+  /// son el 3 de 5; en la primera revisión de un vehículo sin tipo, el 2 de 4.
+  final int pasoUso;
+  final int totalPasos;
+  /// Km de hoy ya pedidos, que pasan al inventario para no repetirlos.
+  final num? kmIniciales;
+  final String origenKm;
+  /// Texto del título: «Alta de vehículo» o «Primera revisión».
+  final String titulo;
 
   const AltaEjesScreen({
     super.key,
     required this.vehiculoId,
     required this.matricula,
     required this.tipoVehiculoId,
+    this.pasoUso = 3,
+    this.totalPasos = 5,
+    this.kmIniciales,
+    this.origenKm = 'manual',
+    this.titulo = 'Alta de vehículo',
   });
 
   @override
@@ -45,6 +59,7 @@ class _AltaEjesScreenState extends State<AltaEjesScreen> {
   List<Map<String, dynamic>> _favoritos = const [];
   bool _cargando = true;
   bool _guardando = false;
+  bool _medidaDeFicha = false;
   String? _error;
 
   @override
@@ -60,17 +75,20 @@ class _AltaEjesScreenState extends State<AltaEjesScreen> {
         TyreControlApi.listarPosiciones(widget.tipoVehiculoId),
         TyreControlApi.listarMedidasVehiculo(),
         TyreControlApi.tiposLlantaParaAlta(),
-        TyreControlApi.obtenerVehiculo(widget.vehiculoId),
+        TyreControlApi.obtenerVehiculoCompleto(widget.vehiculoId),
       ]);
       final posiciones = r[0] as List;
-      final v = r[3];
-      final empresa = (v as dynamic)?.empresaId as String?;
+      final v = r[3] as Map<String, dynamic>?;
+      final empresa = v?['empresa_id'] as String?;
       final favoritos = empresa == null
           ? const <Map<String, dynamic>>[]
           : await TyreControlApi.referenciasFavoritas(empresa);
       if (!mounted) return;
+      final ejes = ejesDesdePosiciones(posiciones.map((p) => (p as dynamic).eje as int?));
+      // Si la ficha ya tiene medida (26 de los 64 de Plana), sale puesta.
+      _medidaDeFicha = precargarMedida(ejes, v?['medida_id'] as String?) > 0;
       setState(() {
-        _ejes = ejesDesdePosiciones(posiciones.map((p) => (p as dynamic).eje as int?));
+        _ejes = ejes;
         _medidas = (r[1] as List).cast<Map<String, dynamic>>();
         _llantas = (r[2] as List).cast<Map<String, dynamic>>();
         _favoritos = favoritos;
@@ -134,6 +152,8 @@ class _AltaEjesScreenState extends State<AltaEjesScreen> {
           vehiculoId: widget.vehiculoId,
           matricula: widget.matricula,
           tipoVehiculoId: widget.tipoVehiculoId,
+          kmIniciales: widget.kmIniciales,
+          origenKmInicial: widget.origenKm,
         ),
       ));
       if (mounted) Navigator.of(context).pop(terminado ?? false);
@@ -146,17 +166,17 @@ class _AltaEjesScreenState extends State<AltaEjesScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final paso = _enUso ? 3 : 4;
+    final paso = _enUso ? widget.pasoUso : widget.pasoUso + 1;
     return Scaffold(
       appBar: AppBar(
         title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Alta de vehículo · ${widget.matricula}'),
-          Text(_enUso ? 'Paso 3 de 5 · uso' : 'Paso 4 de 5 · ejes',
+          Text('${widget.titulo} · ${widget.matricula}'),
+          Text(_enUso ? 'Paso $paso de ${widget.totalPasos} · uso' : 'Paso $paso de ${widget.totalPasos} · ejes',
               style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
         ]),
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(4),
-          child: LinearProgressIndicator(value: paso / 5, minHeight: 4),
+          child: LinearProgressIndicator(value: paso / widget.totalPasos, minHeight: 4),
         ),
       ),
       body: SafeArea(
@@ -220,7 +240,7 @@ class _AltaEjesScreenState extends State<AltaEjesScreen> {
       if (comun != null)
         Column(children: [
           Text(comun, style: const TextStyle(fontSize: 34, fontWeight: FontWeight.w900, color: AppColors.textPrimary)),
-          const Text('MEDIDA DE TODOS LOS EJES',
+          Text(_medidaDeFicha ? 'MEDIDA DE TODOS LOS EJES · DE SU FICHA' : 'MEDIDA DE TODOS LOS EJES',
               style: TextStyle(fontSize: 11, letterSpacing: 1.2, color: AppColors.textSecondary)),
           const SizedBox(height: 14),
         ])

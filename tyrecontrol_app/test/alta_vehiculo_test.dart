@@ -64,4 +64,23 @@ void main() {
     // Sin medida salen todas.
     expect(ordenarReferencias(catalogo).length, 4);
   });
+
+  test('los tipos más usados en la flota salen primero', () {
+    final tipos = [
+      {'id': 'furgo', 'descripcion': 'Furgoneta 2x2'},
+      {'id': 'bus', 'descripcion': 'Autobús 2x4'},
+      {'id': 'midi', 'descripcion': 'Midibús 2x4'},
+      {'id': 'tres', 'descripcion': 'Autobús 3 ejes'},
+    ];
+    final orden = ordenarTiposPorUso(tipos, {'bus': 596, 'furgo': 12, 'midi': 12});
+    expect(orden.map((t) => t['id']), ['bus', 'furgo', 'midi', 'tres']);
+  });
+
+  test('la medida de la ficha se pone en los ejes sin medida', () {
+    final ejes = ejesDesdePosiciones([1, 1, 2, 2, 2, 2]);
+    ejes[1].medidaId = 'otra';
+    expect(precargarMedida(ejes, 'ficha'), 1);
+    expect(ejes.map((e) => e.medidaId), ['ficha', 'otra']);
+    expect(precargarMedida(ejes, null), 0);
+  });
 }

@@ -2156,6 +2156,28 @@ class TyreControlApi {
     return Map<String, dynamic>.from(data as Map);
   }
 
+  /// Cuántos vehículos de la flota llevan cada tipo, para ofrecer primero los
+  /// más usados al elegir el tipo. Si falla, sin orden: no impide nada.
+  static Future<Map<String, int>> vehiculosPorTipo(String empresaId) async {
+    try {
+      final data = await _db
+          .from('tc_vehiculos')
+          .select('tipo_vehiculo_id')
+          .eq('empresa_id', empresaId)
+          .eq('activo', true)
+          .not('tipo_vehiculo_id', 'is', null)
+          .limit(5000);
+      final out = <String, int>{};
+      for (final e in (data as List)) {
+        final t = (e as Map)['tipo_vehiculo_id'] as String?;
+        if (t != null) out[t] = (out[t] ?? 0) + 1;
+      }
+      return out;
+    } catch (_) {
+      return const {};
+    }
+  }
+
   /// Lo más montado en la flota (marca, modelo, medida, veces), para ofrecerlo
   /// primero al apuntar ruedas. Si falla, sin favoritos: no impide nada.
   static Future<List<Map<String, dynamic>>> referenciasFavoritas(String empresaId) async {
