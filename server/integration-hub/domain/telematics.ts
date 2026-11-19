@@ -269,6 +269,43 @@ export interface IFleetPositionProvider {
   getFleetPositions(ctx: OperationContext): Promise<VehicleTelemetry[]>;
 }
 
+/**
+ * Una cuenta que existe de verdad aunque nadie la haya inscrito en el Hub.
+ *
+ * Son los clientes de un proveedor anterior al Hub —hoy, Webfleet—: tienen
+ * credenciales y flota enlazada desde antes de que esto existiera. Quién cumple
+ * eso lo decide TyreControl (`server/tyrecontrol/presencia/heredadas.ts`); el
+ * Hub solo las recibe ya construidas.
+ */
+export interface CuentaHeredada {
+  /** Clave del conector: `webfleet`. */
+  key: string;
+  accountKey: string;
+  nombre: string | null;
+  /** Ya construido por quien llama, con las credenciales que ya tenía. */
+  connector: unknown;
+}
+
+/**
+ * De las heredadas, las de proveedores que el Hub no conoce.
+ *
+ * **El Hub manda**: si el cliente tiene su Webfleet dado de alta, se usa el
+ * suyo y la heredada no entra. Y la precedencia es por PROVEEDOR, no por
+ * cuenta — mezclar las dos preguntaría dos veces a la misma cuenta y contaría
+ * sus vehículos por duplicado.
+ *
+ * Vive aquí, y no en cada servicio, porque la usan el barrido de presencia y
+ * la conciliación de flota: dos copias de una regla de precedencia acabarían
+ * divergiendo, y entonces una pantalla diría una cosa y la otra, otra.
+ */
+export function heredadasQueFaltan(
+  delHub: Array<{ key: string }>,
+  heredadas: CuentaHeredada[] = [],
+): CuentaHeredada[] {
+  const proveedores = new Set(delHub.map((c) => c.key));
+  return heredadas.filter((h) => !proveedores.has(h.key));
+}
+
 /** Comprueba en tiempo de ejecución si un conector sabe barrer la flota. */
 export function sabeDarPosicionesDeFlota(c: unknown): c is IFleetPositionProvider {
   return !!c && typeof (c as IFleetPositionProvider).getFleetPositions === "function";

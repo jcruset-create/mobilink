@@ -196,14 +196,33 @@ export function createConciliacionRouter(): Router {
       const { resolveTelematicsConnectors } = await import(
         "../../integration-hub/connectors/ConnectorRegistry.ts"
       );
-      const cuentas = await resolveTelematicsConnectors(empresaId);
+      const { heredadasQueFaltan } = await import(
+        "../../integration-hub/domain/telematics.ts"
+      );
+      const { cuentasHeredadasDe } = await import("../presencia/heredadas.ts");
+
+      // Las heredadas también se ofrecen: un cliente de Webfleet anterior al
+      // Hub tiene que poder conciliar su flota sin inscribirse antes, que es
+      // justo lo que vendría a hacer aquí si le faltaran enlaces.
+      const delHub = await resolveTelematicsConnectors(empresaId);
+      const heredadas = heredadasQueFaltan(delHub, await cuentasHeredadasDe(empresaId));
+
       res.json({
         empresaId,
-        cuentas: cuentas.map((c) => ({
-          connectorKey: c.key,
-          accountKey: c.accountKey,
-          nombre: c.nombre,
-        })),
+        cuentas: [
+          ...delHub.map((c) => ({
+            connectorKey: c.key,
+            accountKey: c.accountKey,
+            nombre: c.nombre,
+            heredada: false,
+          })),
+          ...heredadas.map((h) => ({
+            connectorKey: h.key,
+            accountKey: h.accountKey,
+            nombre: h.nombre,
+            heredada: true,
+          })),
+        ],
       });
     } catch (e) {
       fallo(res, e);
@@ -283,9 +302,16 @@ export function createConciliacionRouter(): Router {
       const connectorKey = req.query.connector ? String(req.query.connector) : undefined;
       const accountKey = req.query.cuenta ? String(req.query.cuenta) : undefined;
 
+      const { cuentasHeredadasDe } = await import("../presencia/heredadas.ts");
       const resultado = await conciliarFlota(
         { tenantId: empresaId, correlationId: await nextCorrelationId() },
-        { connectorKey, accountKey, leerFlotaInterna, normalizarMatricula },
+        {
+          connectorKey,
+          accountKey,
+          leerFlotaInterna,
+          normalizarMatricula,
+          cuentasHeredadas: await cuentasHeredadasDe(empresaId),
+        },
       );
 
       // Los ignorados no salen en los cuadrantes, pero la pantalla tiene que

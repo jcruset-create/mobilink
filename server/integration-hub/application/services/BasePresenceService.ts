@@ -33,7 +33,8 @@
 
 import type { OperationContext } from "../../domain/identifiers.ts";
 import type { VehicleTelemetry } from "../../domain/telematics.ts";
-import { sabeDarPosicionesDeFlota } from "../../domain/telematics.ts";
+import { heredadasQueFaltan, sabeDarPosicionesDeFlota } from "../../domain/telematics.ts";
+import type { CuentaHeredada } from "../../domain/telematics.ts";
 import {
   ESTADOS_PRESENCIA,
   evaluarPresencia,
@@ -110,16 +111,6 @@ export interface FilaPresencia extends Presencia {
    */
   motivo?: "sin_enlace" | "proveedor_sin_dato";
   calculadoAt: Date;
-}
-
-/** Una cuenta que existe de verdad aunque no esté inscrita en el Hub. */
-export interface CuentaHeredada {
-  /** Clave del conector: `webfleet`. */
-  key: string;
-  accountKey: string;
-  nombre: string | null;
-  /** Ya construido por quien llama, con las credenciales que ya tenía. */
-  connector: unknown;
 }
 
 export interface OpcionesBarrido {
@@ -250,13 +241,9 @@ export async function barrerPresenciaBases(
 
   const delHub = await resolveTelematicsConnectors(ctx.tenantId);
 
-  // Las heredadas se añaden solo para los proveedores de los que el Hub no
-  // sabe nada. El filtro por `connectorKey`/`accountKey` se aplica DESPUÉS de
-  // juntarlas, para que «barrer solo esta cuenta» siga valiendo también para
-  // una heredada.
-  const proveedoresDelHub = new Set(delHub.map((c) => c.key));
-  const heredadas = (opciones.cuentasHeredadas ?? [])
-    .filter((h) => !proveedoresDelHub.has(h.key))
+  // El filtro por `connectorKey`/`accountKey` se aplica DESPUÉS de juntarlas,
+  // para que «barrer solo esta cuenta» siga valiendo también para una heredada.
+  const heredadas = heredadasQueFaltan(delHub, opciones.cuentasHeredadas)
     .map((h) => ({
       key: h.key,
       accountKey: h.accountKey,

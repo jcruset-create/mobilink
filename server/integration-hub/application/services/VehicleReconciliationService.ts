@@ -42,6 +42,7 @@ import {
   type MappingRow,
 } from "../../infrastructure/repositories.ts";
 import { resolveTelematicsConnectors } from "../../connectors/ConnectorRegistry.ts";
+import { heredadasQueFaltan, type CuentaHeredada } from "../../domain/telematics.ts";
 
 /** Trae los vehículos de TyreControl de la empresa. Lo implementa TyreControl. */
 export type LectorFlotaInterna = (tenantId: string) => Promise<VehiculoInterno[]>;
@@ -58,6 +59,17 @@ export interface OpcionesConciliacion {
   leerFlotaInterna: LectorFlotaInterna;
   /** Cómo normalizar una matrícula antes de compararla. */
   normalizarMatricula: NormalizadorMatricula;
+  /**
+   * Cuentas que NO están dadas de alta en el Hub y aun así existen.
+   *
+   * El cliente de Webfleet anterior al Hub. Sin esto, esta pantalla le salía
+   * vacía exactamente igual que «Vehículos en bases», y además era la pantalla
+   * donde habría tenido que arreglar los enlaces que le faltaran: la
+   * herramienta para salir del agujero estaba dentro del agujero.
+   *
+   * La precedencia la decide `heredadasQueFaltan`: el Hub manda.
+   */
+  cuentasHeredadas?: CuentaHeredada[];
   /**
    * Si se puede escribir `last_seen_at` de los vehículos vistos.
    *
@@ -156,7 +168,19 @@ export async function conciliarFlota(
 ): Promise<ResultadoConciliacion> {
   const startedAt = new Date();
 
-  let cuentas = await resolveTelematicsConnectors(ctx.tenantId);
+  const delHub = await resolveTelematicsConnectors(ctx.tenantId);
+  const heredadas = heredadasQueFaltan(delHub, opciones.cuentasHeredadas).map((h) => ({
+    key: h.key,
+    accountKey: h.accountKey,
+    nombre: h.nombre,
+    connector: h.connector as (typeof delHub)[number]["connector"],
+    usingDefault: false,
+    config: {} as Record<string, unknown>,
+  }));
+
+  // Se filtra DESPUÉS de juntarlas, para que pedir una cuenta concreta valga
+  // también para una heredada: es la cuenta que la pantalla va a pedir.
+  let cuentas = [...delHub, ...heredadas];
   if (opciones.connectorKey) cuentas = cuentas.filter((c) => c.key === opciones.connectorKey);
   if (opciones.accountKey) cuentas = cuentas.filter((c) => c.accountKey === opciones.accountKey);
 
