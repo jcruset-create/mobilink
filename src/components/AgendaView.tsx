@@ -76,6 +76,7 @@ import {
   isWorkingTimeForDate as cfgIsWorkingTimeForDate,
   type AgendaConfig,
 } from "../modules/agendaConfig";
+import { bloqueoQueChoca, bloqueosDelDia, textoDeBloqueo } from "../modules/bloqueosDeArea";
 import { loadAgendaConfig } from "../modules/agendaConfigApi";
 
 import CaducidadTacografoModal from "./CaducidadTacografoModal";
@@ -1679,6 +1680,31 @@ function getEstimatedMinutesWithIncludedTasks(
       return;
     }
 
+    // Bloqueo por área (Configuración → Bloqueos por área): esa franja no
+    // admite citas de esa área, ni nuevas ni movidas hasta ahí.
+    {
+      const v2 = buildScheduledJobV2FieldsFromTemplate({
+        template,
+        quantity: draft.quantity,
+        includedTasks: getIncludedTasksByIds(
+          draft.includedTaskIds,
+          buildSelectableIncludedTasks(template.area, quickTemplates, customExtraTasks, template.key)
+        ),
+      });
+      const mins = minutosDeLaCita(draft.estimatedMinutes, v2.estimatedMinutes, DEFAULT_ESTIMATED_MINUTES);
+      const choque = bloqueoQueChoca(
+        activeAgendaConfig.areaBlocks ?? [],
+        template.area,
+        selectedSlot.date,
+        selectedSlot.startTime,
+        addMinutesToTime(selectedSlot.startTime, mins)
+      );
+      if (choque) {
+        alert(`No se pueden dar citas de esa área en esa franja. ${textoDeBloqueo(choque)}.`);
+        return;
+      }
+    }
+
     const availableTasksForSave = buildSelectableIncludedTasks(
       template.area,
       quickTemplates,
@@ -2530,6 +2556,31 @@ appendLog(
                       />
                     );
                   })}
+
+                  {/* Bloqueos por área: franja rayada con el área y el motivo */}
+                  {!closed &&
+                    bloqueosDelDia(activeAgendaConfig.areaBlocks ?? [], day.date).map((b) => {
+                      const ini = Math.max(timeToMinutes(b.start) ?? dayStart, dayStart);
+                      const fin = Math.min(timeToMinutes(b.end) ?? ini, getDayEnd(day.index, day.date));
+                      if (fin <= ini) return null;
+                      return (
+                        <div
+                          key={`bloqueo-${b.area}-${b.start}`}
+                          title={textoDeBloqueo(b)}
+                          className="pointer-events-none absolute left-0 right-0 z-10 flex items-start justify-center overflow-hidden border-y-2 border-red-500/70 px-1 pt-1"
+                          style={{
+                            top: ((ini - dayStart) / SLOT_MINUTES) * SLOT_HEIGHT,
+                            height: ((fin - ini) / SLOT_MINUTES) * SLOT_HEIGHT,
+                            backgroundImage:
+                              "repeating-linear-gradient(135deg, rgba(239,68,68,0.22) 0 8px, transparent 8px 16px)",
+                          }}
+                        >
+                          <span className="rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-black uppercase tracking-wide text-white">
+                            {textoDeBloqueo(b)}
+                          </span>
+                        </div>
+                      );
+                    })}
 
                   {showNowLine && (
                     <div
