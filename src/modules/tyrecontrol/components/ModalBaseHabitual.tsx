@@ -88,7 +88,8 @@ export default function ModalBaseHabitual({ empresas, empresaInicial, onClose, o
       <p className="mb-3 text-xs text-slate-400">
         Se suma el tiempo que cada vehículo ha pasado en cada base según el barrido de presencia. Gana la base con más horas;
         se considera <span className="text-emerald-300">clara</span> cuando se lleva al menos el 60 % del tiempo en base y suma 24 h o más.
-        Las <span className="text-amber-300">dudosas</span> se enseñan con la segunda opción al lado, pero no se asignan solas.
+        Cuenta también el tiempo aparcado dentro de la base sin emitir (motor apagado). Las <span className="text-amber-300">dudosas</span> se
+        enseñan con la segunda opción al lado, pero no se asignan solas; sin horas todavía, se propone la base de su última posición.
       </p>
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <select className={`${inputCls} max-w-[260px]`} value={empresaId} onChange={(e) => setEmpresaId(e.target.value)}>
@@ -123,7 +124,10 @@ export default function ModalBaseHabitual({ empresas, empresaInicial, onClose, o
                 <td className={`${tdCls} tabular-nums`}>{pct(f.cuota)}</td>
                 <td className={`${tdCls} tabular-nums`}>{f.estancias ?? "—"}</td>
                 <td className={tdCls}>{f.segunda ? `${f.segunda} (${h(f.horas_segunda)})` : "—"}</td>
-                <td className={`${tdCls} ${colorDecision[f.decision]}`}>{textoDecision[f.decision]}</td>
+                <td className={`${tdCls} ${colorDecision[f.decision]}`}>
+                  {/* Sin horas pero con propuesta: es la base de su última posición. */}
+                  {f.decision === "dudosa" && f.horas == null ? "Por última posición" : textoDecision[f.decision]}
+                </td>
                 <td className={`${tdCls} text-xs`}>
                   {cambiaria(f) ? <span className="text-emerald-300">→ se asigna</span>
                     : f.decision === "clara" && f.base_propuesta_id === f.base_actual_id ? "ya la tiene"

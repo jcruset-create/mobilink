@@ -73,4 +73,10 @@ describe("motivoSinBase", () => {
     expect(m.texto).toBe("Se le puede poner Reus (60 %)");
     expect(m.detalle).toContain("24 h");
   });
+
+  it("sin horas pero con base en su última posición: la propone como probable", () => {
+    const m = motivoSinBase(fila({ decision: "dudosa", base_propuesta_id: "t", base_propuesta: "TARRAGONA" }))!;
+    expect(m.texto).toBe("Base probable: TARRAGONA (última posición)");
+    expect(m.clase).toBe("dudosa");
+  });
 });

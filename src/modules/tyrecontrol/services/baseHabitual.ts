@@ -69,6 +69,17 @@ export function motivoSinBase(fila: BaseHabitual | undefined): MotivoSinBase | n
       clase: "sin_datos",
     };
   }
+  // Sin horas medidas: es la base de su última posición (empresa recién
+  // conectada a la telemática, todavía sin histórico).
+  if (fila.horas == null) {
+    return {
+      texto: `Base probable: ${primera} (última posición)`,
+      detalle:
+        `Su última posición cae dentro de ${primera}, pero aún no hay horas de presencia ` +
+        "que contar. Se asigna sola cuando sume 24 h; hasta entonces la decide una persona.",
+      clase: "dudosa",
+    };
+  }
   const p1 = pct(fila.cuota);
   const reparto = fila.horas_en_bases && fila.horas_segunda
     ? pct(fila.horas_segunda / fila.horas_en_bases)
