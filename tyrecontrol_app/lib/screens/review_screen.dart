@@ -19,6 +19,7 @@ import '../widgets/vehicle_layout_image.dart';
 import 'alta_operativa_screen.dart';
 import 'incidencia_flow_screen.dart';
 import 'tire_detail_screen.dart';
+import 'primera_revision_screen.dart';
 
 /// Pantalla 4: revision. Modo asistente automatico: el tecnico no
 /// decide que rueda toca ahora, simplemente avanza. Con la sonda TLGX3
@@ -912,10 +913,56 @@ class _ReviewScreenState extends State<ReviewScreen> {
     await _cargar();
   }
 
+  /// Los km de hoy que ya trae la pantalla anterior, y de dónde salieron.
+  ({num? km, String origen}) get _kmPrevios {
+    final lectura = widget.lecturaKm;
+    final kmTel = lecturaSigueValiendo(lectura) ? (lectura!['km'] as num?) : null;
+    if (kmTel != null) return (km: kmTel, origen: 'telematica');
+    return (km: widget.kmManual, origen: 'manual');
+  }
+
+  /// Primera revisión de un vehículo sin tipo: tipo, uso, ejes y las ruedas
+  /// que lleva. Al terminar ya tiene su primera revisión y aquí no queda nada
+  /// que hacer, así que se cierra esta pantalla también.
+  Future<void> _empezarPrimeraRevision() async {
+    final km = _kmPrevios;
+    final hecha = await Navigator.of(context).push<bool>(MaterialPageRoute(
+      builder: (_) => PrimeraRevisionTipoScreen(
+        vehiculoId: widget.vehiculo.id,
+        matricula: widget.vehiculo.matricula,
+        empresaId: widget.vehiculo.empresaId,
+        km: km.km,
+        origenKm: km.origen,
+      ),
+    ));
+    if (!mounted) return;
+    if (hecha == true) {
+      Navigator.of(context).pop(true);
+      return;
+    }
+    // Se quedó a medias: si ya tiene tipo, al recargar sale lo que haya.
+    try {
+      final v = await TyreControlApi.obtenerVehiculoCompleto(widget.vehiculo.id);
+      _tipoId = v?['tipo_vehiculo_id'] as String?;
+    } catch (_) {}
+    if (mounted) await _cargar();
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_cargando) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    // Sin tipo no hay plano: en vez de un error, su primera revisión.
+    if (_error != null && _faltaFicha && _tipoId == null) {
+      return AvisoPrimeraRevision(
+        matricula: widget.vehiculo.matricula,
+        numeroUnidad: widget.vehiculo.numeroUnidad,
+        empresa: widget.vehiculo.empresa?.nombre,
+        km: _kmPrevios.km,
+        onEmpezar: _empezarPrimeraRevision,
+        onAhoraNo: () => Navigator.of(context).pop(),
+      );
     }
     if (_error != null) {
       return Scaffold(
