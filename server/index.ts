@@ -191,6 +191,7 @@ import { proponerVinculos, type EmpleadoCore } from "./core/vinculoTecnicos.ts";
 import { resolverRolDelPanel, type RolResuelto } from "./core/rolDelPanel.ts";
 import { TIPO_SALIDA, esMotivoDeSalida, pasoDeSalida, validarSalida, RADIO_DESTINO_M } from "../src/modules/salidasTaller.ts";
 import { pasoDeOtfGps, otfSigueEnCurso } from "../src/modules/seguimientoOtf.ts";
+import { normalizarBloqueos } from "../src/modules/bloqueosDeArea.ts";
 import { siguienteReferencia } from "./cobros/referencias.ts";
 import { saveCaptureAnalysis, reconcileCaptureAiStatus } from "./core/whatsappCapture.ts";
 import { aE164, clienteTwilio, numeroWhatsAppEmisor } from "./core/twilio.ts";
@@ -5376,6 +5377,8 @@ app.put("/api/agenda-config", requireSupervisorRole, async (req, res) => {
       holidays,
       specialDays,
       closedSaturdaysInAugust: body.closedSaturdaysInAugust !== false,
+      // Bloqueos por área (p. ej. tacógrafo el 26/11 por la mañana).
+      areaBlocks: normalizarBloqueos(body.areaBlocks),
     });
 
     await db.query(

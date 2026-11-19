@@ -14,6 +14,14 @@ import {
   suggestHolidaysWithAI,
   type FestivoSugerido,
 } from "../modules/agendaConfigApi";
+import {
+  AREAS_BLOQUEABLES,
+  ETIQUETA_AREA,
+  textoDeBloqueo,
+  validarBloqueo,
+  type AreaBloqueable,
+  type BloqueoArea,
+} from "../modules/bloqueosDeArea";
 
 type Props = {
   open: boolean;
@@ -52,6 +60,41 @@ export default function AgendaConfigModal({
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+
+  // Bloqueo por área nuevo: «tacógrafo el jueves 26/11 de 8:30 a 13:30».
+  const [newBlock, setNewBlock] = useState<{ area: AreaBloqueable; date: string; start: string; end: string; label: string }>({
+    area: "tacografo",
+    date: "",
+    start: "08:30",
+    end: "13:30",
+    label: "",
+  });
+
+  function addAreaBlock() {
+    const fallo = validarBloqueo(newBlock);
+    if (fallo) {
+      setError(fallo);
+      return;
+    }
+    const bloque: BloqueoArea = { ...newBlock, label: newBlock.label.trim() };
+    setError("");
+    setDraft((prev) => ({
+      ...prev,
+      areaBlocks: [...(prev.areaBlocks ?? []), bloque].sort(
+        (a, b) => a.date.localeCompare(b.date) || a.start.localeCompare(b.start)
+      ),
+    }));
+    setNewBlock((p) => ({ ...p, label: "" }));
+  }
+
+  function removeAreaBlock(b: BloqueoArea) {
+    setDraft((prev) => ({
+      ...prev,
+      areaBlocks: (prev.areaBlocks ?? []).filter(
+        (x) => !(x.area === b.area && x.date === b.date && x.start === b.start && x.end === b.end)
+      ),
+    }));
+  }
 
   // Generador de festivos con IA
   const [aiCity, setAiCity] = useState("Tarragona");
@@ -607,6 +650,105 @@ export default function AgendaConfigModal({
                           className={timeClass}
                         />
                       </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section>
+            <h4 className={`mb-2 text-sm font-black uppercase tracking-wide ${th.sectionTitle}`}>
+              Bloqueos por área
+            </h4>
+            <p className={`mb-2 text-xs ${th.hint}`}>
+              Franjas en las que no se dan citas de un área, por ejemplo tacógrafo el
+              jueves 26/11 por la mañana. El resto de áreas sigue igual. La agenda lo
+              pinta en la columna del día y no deja guardar una cita de esa área dentro.
+            </p>
+
+            <div className={`rounded-2xl border p-3 ${th.card}`}>
+              <div className="grid gap-2 md:grid-cols-[150px_170px_110px_110px_1fr]">
+                <div>
+                  <label className={labelClass}>Área</label>
+                  <select
+                    value={newBlock.area}
+                    onChange={(e) => setNewBlock((p) => ({ ...p, area: e.target.value as AreaBloqueable }))}
+                    className={`w-full rounded-2xl border px-3 py-3 ${th.input}`}
+                  >
+                    {AREAS_BLOQUEABLES.map((a) => (
+                      <option key={a} value={a}>{ETIQUETA_AREA[a]}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className={labelClass}>Día</label>
+                  <input
+                    type="date"
+                    value={newBlock.date}
+                    onChange={(e) => setNewBlock((p) => ({ ...p, date: e.target.value }))}
+                    className={`w-full rounded-2xl border px-3 py-3 ${th.input}`}
+                  />
+                </div>
+                <div>
+                  <label className={labelClass}>Desde</label>
+                  <input
+                    type="time"
+                    value={newBlock.start}
+                    onChange={(e) => setNewBlock((p) => ({ ...p, start: e.target.value }))}
+                    className={`w-full rounded-2xl border px-3 py-3 ${th.input}`}
+                  />
+                </div>
+                <div>
+                  <label className={labelClass}>Hasta</label>
+                  <input
+                    type="time"
+                    value={newBlock.end}
+                    onChange={(e) => setNewBlock((p) => ({ ...p, end: e.target.value }))}
+                    className={`w-full rounded-2xl border px-3 py-3 ${th.input}`}
+                  />
+                </div>
+                <div>
+                  <label className={labelClass}>Motivo</label>
+                  <input
+                    value={newBlock.label}
+                    onChange={(e) => setNewBlock((p) => ({ ...p, label: e.target.value }))}
+                    placeholder="p. ej. Formación del técnico"
+                    className={`w-full rounded-2xl border px-3 py-3 ${th.input}`}
+                  />
+                </div>
+              </div>
+              <div className="mt-2 flex justify-end">
+                <button
+                  type="button"
+                  onClick={addAreaBlock}
+                  className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-bold text-white hover:bg-black dark:bg-slate-700"
+                >
+                  Añadir bloqueo
+                </button>
+              </div>
+            </div>
+
+            {(draft.areaBlocks ?? []).length === 0 ? (
+              <p className={`mt-3 text-sm ${th.faint}`}>No hay ningún bloqueo por área.</p>
+            ) : (
+              <div className="mt-3 space-y-2">
+                {draft.areaBlocks.map((b) => (
+                  <div
+                    key={`${b.area}-${b.date}-${b.start}-${b.end}`}
+                    className={`rounded-2xl border px-3 py-2 ${th.amberCard}`}
+                  >
+                    <div className={`flex flex-wrap items-center gap-3 text-sm ${th.amberText}`}>
+                      <span className="font-semibold">{formatSpanishDateKey(b.date)}</span>
+                      <span className="flex-1 truncate">{textoDeBloqueo(b)}</span>
+                      <button
+                        type="button"
+                        onClick={() => removeAreaBlock(b)}
+                        className="font-black"
+                        title="Quitar bloqueo"
+                      >
+                        ✕
+                      </button>
                     </div>
                   </div>
                 ))}
