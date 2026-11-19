@@ -18,6 +18,11 @@ export interface CuentaTelematica {
   connectorKey: string;
   accountKey: string;
   nombre?: string | null;
+  /**
+   * `true` = no está dada de alta en el Hub y aun así se puede conciliar con
+   * ella: es un cliente de Webfleet anterior al Hub, con credenciales puestas.
+   */
+  heredada?: boolean;
 }
 
 export interface VehiculoInterno {

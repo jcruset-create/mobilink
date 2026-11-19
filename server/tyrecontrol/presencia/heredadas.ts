@@ -148,8 +148,9 @@ export async function cuentasHeredadasDe(empresaId: string): Promise<
     key: PROVEEDOR_HEREDADO,
     accountKey: CUENTA_HEREDADA,
     // Se dice en el nombre para que en la pantalla no parezca una cuenta que
-    // alguien dio de alta y nadie recuerda.
-    nombre: "Webfleet (heredada, sin alta en el Hub)",
+    // alguien dio de alta y nadie recuerda. Sin repetir el proveedor: las dos
+    // pantallas lo pintan al lado («webfleet · Cuenta heredada…»).
+    nombre: "Cuenta heredada (sin alta en el Hub)",
     connector: await buildTelematicsConnector(empresaId, PROVEEDOR_HEREDADO, CUENTA_HEREDADA),
   }];
 }

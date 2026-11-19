@@ -293,3 +293,60 @@ describe("msDeBigint()", () => {
     }
   });
 });
+
+/**
+ * Cuentas heredadas: el cliente de Webfleet anterior al Hub.
+ *
+ * Sin esto, esta pantalla le salía vacía igual que «Vehículos en bases», y era
+ * además la pantalla donde tendría que arreglar los enlaces que le faltaran:
+ * la herramienta para salir del agujero estaba dentro del agujero.
+ */
+describe("conciliarFlota() con cuentas heredadas", () => {
+  const internos = [{ id: "v1", matricula: "1234ABC", activo: true, neumaticosMontados: 0 }];
+
+  it("sin cuenta en el Hub, concilia con la heredada", async () => {
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([] as any);
+    const heredada = cuenta("webfleet", "default", [{ providerVehicleId: "WF-1", plate: "1234ABC" }]);
+
+    const r = await conciliarFlota(CTX, {
+      ...opciones(internos),
+      cuentasHeredadas: [heredada],
+    } as any);
+
+    expect(r.resumen.status).toBe("complete");
+    expect(r.resumen.providerVehicleCount).toBe(1);
+    expect(r.soloProveedor[0].propuesta?.id).toBe("v1");
+  });
+
+  it("si el Hub ya tiene ese proveedor, manda el Hub y a la heredada no se le llama", async () => {
+    const delHub = cuenta("webfleet", "la-suya", [{ providerVehicleId: "WF-9", plate: "1234ABC" }]);
+    const heredada = cuenta("webfleet", "default", [{ providerVehicleId: "WF-1", plate: "1234ABC" }]);
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([delHub] as any);
+
+    const r = await conciliarFlota(CTX, {
+      ...opciones(internos),
+      cuentasHeredadas: [heredada],
+    } as any);
+
+    expect(r.resumen.providerVehicleCount).toBe(1);
+    expect(heredada.connector.listVehicles).not.toHaveBeenCalled();
+  });
+
+  it("pedir la cuenta heredada por su nombre funciona: es la que pide la pantalla", async () => {
+    // La pantalla concilia SIEMPRE con una cuenta concreta elegida en el
+    // desplegable. Si el filtro se aplicara antes de juntar las heredadas,
+    // elegir la heredada daría «sin cuentas» y la pantalla seguiría vacía.
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([] as any);
+    const heredada = cuenta("webfleet", "default", [{ providerVehicleId: "WF-1", plate: "1234ABC" }]);
+
+    const r = await conciliarFlota(CTX, {
+      ...opciones(internos),
+      connectorKey: "webfleet",
+      accountKey: "default",
+      cuentasHeredadas: [heredada],
+    } as any);
+
+    expect(r.resumen.status).toBe("complete");
+    expect(r.resumen.providerVehicleCount).toBe(1);
+  });
+});
