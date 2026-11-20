@@ -143,9 +143,9 @@ function fallo(res: Response, e: unknown) {
  * pasando: alguien lo está enlazando a mano.
  */
 function metodoPedido(valor: unknown): MetodoVinculo {
-  return valor === METODOS_VINCULO.MATRICULA_EXACTA
-    ? METODOS_VINCULO.MATRICULA_EXACTA
-    : METODOS_VINCULO.MANUAL;
+  if (valor === METODOS_VINCULO.MATRICULA_EXACTA) return METODOS_VINCULO.MATRICULA_EXACTA;
+  if (valor === METODOS_VINCULO.ID_WEBFLEET_ANTIGUO) return METODOS_VINCULO.ID_WEBFLEET_ANTIGUO;
+  return METODOS_VINCULO.MANUAL;
 }
 
 /** Ámbito común a todas las acciones, ya validado. */

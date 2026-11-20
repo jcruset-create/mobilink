@@ -16,7 +16,7 @@ import { supabase } from "../../supabase.ts";
 import type { VehiculoInterno } from "../../integration-hub/domain/reconciliation.ts";
 
 /** Lista blanca: `tc_vehiculos` tiene muchas más columnas y no hacen falta. */
-const CAMPOS = "id, matricula, numero_unidad, bastidor, marca, modelo, activo";
+const CAMPOS = "id, matricula, numero_unidad, bastidor, marca, modelo, activo, webfleet_vehicle_id";
 
 /**
  * Cuántos neumáticos lleva montados cada vehículo de la empresa.
@@ -68,6 +68,9 @@ export async function leerFlotaInterna(empresaId: string): Promise<VehiculoInter
     modelo: f.modelo ?? null,
     activo: f.activo !== false,
     neumaticosMontados: montajes.get(String(f.id)) ?? 0,
+    // El enlace de la sincronización de Webfleet de siempre: con él se
+    // propone el enlace en el Hub, donde Webfleet no da matrícula.
+    idWebfleetAntiguo: f.webfleet_vehicle_id ? String(f.webfleet_vehicle_id).trim() : null,
   }));
 }
 
