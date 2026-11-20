@@ -67,3 +67,66 @@ export function esperarSesion(maxMs = 3000): Promise<void> {
     new Promise<void>((resolver) => setTimeout(resolver, maxMs)),
   ]);
 }
+
+/*
+ * ── El token caducado ───────────────────────────────────────────────────────
+ *
+ * El token dura una hora y Supabase lo renueva solo con un temporizador. Pero
+ * el navegador frena los temporizadores de una pestaña que lleva tiempo en
+ * segundo plano: al volver a ella, el valor guardado aquí puede estar ya
+ * caducado, y la primera petición salía con él. El servidor contestaba 401 y
+ * la pantalla enseñaba «No autorizado» a alguien que tenía la sesión abierta.
+ * Pasó al crear una OTF en una pestaña abierta desde hacía dos días.
+ *
+ * Así que antes de enviar se mira la caducidad, y si toca se pide uno nuevo a
+ * quien tiene el cliente de Supabase (se registra desde `apiFetch.ts`, para
+ * que este módulo siga sin importar nada).
+ */
+
+/** Pide a Supabase la sesión vigente; con `forzar`, la renueva aunque no haya caducado. */
+type Renovador = (forzar: boolean) => Promise<string | null>;
+let renovador: Renovador | null = null;
+let renovando: Promise<string | null> | null = null;
+
+export function registrarRenovador(fn: Renovador | null): void {
+  renovador = fn;
+}
+
+/** Cuándo caduca un JWT, en ms; null si no se puede leer. */
+export function caducidadMs(token: string | null): number | null {
+  try {
+    const cuerpo = String(token ?? "").split(".")[1];
+    if (!cuerpo) return null;
+    const exp = JSON.parse(atob(cuerpo.replace(/-/g, "+").replace(/_/g, "/"))).exp;
+    return typeof exp === "number" ? exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Con medio minuto de margen: uno que caduca mientras viaja también falla. */
+export function tokenCaducado(token: string | null, ahoraMs = Date.now()): boolean {
+  const exp = caducidadMs(token);
+  return exp != null && exp - ahoraMs < 30_000;
+}
+
+/** Renueva la sesión. Varias peticiones a la vez comparten una sola renovación. */
+export function renovarSesion(forzar = false): Promise<string | null> {
+  if (!renovador) return Promise.resolve(accessToken);
+  if (!renovando) {
+    renovando = renovador(forzar)
+      .then((t) => {
+        if (t) accessToken = t;
+        return accessToken;
+      })
+      .catch(() => accessToken)
+      .finally(() => { renovando = null; });
+  }
+  return renovando;
+}
+
+/** El token para enviar AHORA: el guardado, o uno nuevo si ese ha caducado. */
+export async function tokenSesionVigente(): Promise<string | null> {
+  if (accessToken && tokenCaducado(accessToken)) return renovarSesion(false);
+  return accessToken;
+}
