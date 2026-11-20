@@ -15,6 +15,7 @@ import {
   objetoALectura,
   objetoAVehiculo,
   matriculaDeFicha,
+  resumenesDeViajes,
   odometroKm,
   viajeALectura,
   type OpcionesMapeo,
@@ -217,5 +218,31 @@ describe("masCercana()", () => {
   it("devuelve null si nada cae dentro", () => {
     const r = masCercana([lectura("2026-07-15T06:00:00Z", 100)], new Date("2026-07-15T09:40:00Z"), 15);
     expect(r).toBeNull();
+  });
+});
+
+describe("resumenesDeViajes() — showTripSummaryReportExtern", () => {
+  const op = { provider: "webfleet", accountKey: "default" };
+  const octubre = { from: new Date("2026-10-01T00:00:00Z"), to: new Date("2026-11-01T00:00:00Z") };
+
+  it("suma los días del mes en km y cuenta los viajes, solo de los pedidos", () => {
+    const r = resumenesDeViajes([
+      { objectno: "001", distance: 120500, tours: 4 },
+      { objectno: "001", distance: "80000", tours: 2 },
+      { objectno: "002", distance: 0, tours: 0 },
+      { objectno: "099", distance: 50000 },
+    ], ["001", "002", "003"], octubre, op);
+    const por = new Map(r.map((x) => [x.providerVehicleId, x]));
+    expect(por.get("001")).toMatchObject({ distanceKm: 200.5, trips: 6, provider: "webfleet", accountKey: "default" });
+    // Parado todo el mes: 0 km es un dato.
+    expect(por.get("002")?.distanceKm).toBe(0);
+    // Sin filas: no sale (sin datos). Y lo no pedido tampoco.
+    expect(por.has("003")).toBe(false);
+    expect(por.has("099")).toBe(false);
+  });
+
+  it("descarta una distancia imposible para la ventana", () => {
+    const r = resumenesDeViajes([{ objectno: "001", distance: 900_000_000 }], ["001"], octubre, op);
+    expect(r).toEqual([]);
   });
 });

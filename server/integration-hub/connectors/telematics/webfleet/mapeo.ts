@@ -46,6 +46,8 @@
 import {
   esPosicionValida,
   type ProviderVehicle,
+  type TelemetryWindow,
+  type TripSummary,
   type VehicleTelemetry,
 } from "../../../domain/telematics.ts";
 
@@ -296,4 +298,61 @@ export function masCercana(
     }
   }
   return mejor;
+}
+
+/**
+ * Filas de `showTripSummaryReportExtern` → un resumen por vehículo.
+ *
+ * Webfleet da el resumen POR DÍA (una fila por objeto y día con actividad), así
+ * que el mes es la suma de sus días. `distance` viene en METROS, como en
+ * `showTripReportExtern` (es lo que ya suma `/webfleet/conduccion`). `tours`
+ * son los viajes del día.
+ *
+ * Un vehículo sin ninguna fila no sale: «sin datos en la ventana», y quien
+ * llama decide. Uno con filas pero distancia 0 sí sale con 0 km: estuvo
+ * parado, y eso es un dato.
+ *
+ * Una distancia imposible para la ventana (más de 150 km/h de media las 24 h)
+ * se descarta en vez de guardarse: es un dato roto, no un vehículo veloz.
+ */
+export function resumenesDeViajes(
+  filas: Record<string, unknown>[],
+  ids: string[],
+  window: TelemetryWindow,
+  opciones: OpcionesMapeo,
+): TripSummary[] {
+  const pedidos = new Set(ids.map(String));
+  const acc = new Map<string, { metros: number; viajes: number; filas: number }>();
+  for (const f of filas) {
+    const id = f.objectno == null ? "" : String(f.objectno);
+    if (!id || !pedidos.has(id)) continue;
+    const a = acc.get(id) ?? { metros: 0, viajes: 0, filas: 0 };
+    const m = numero(f.distance);
+    if (m !== undefined && m > 0) a.metros += m;
+    const t = numero(f.tours);
+    if (t !== undefined && t > 0) a.viajes += t;
+    a.filas += 1;
+    acc.set(id, a);
+  }
+
+  const horas = Math.max(1, (window.to.getTime() - window.from.getTime()) / 3_600_000);
+  const maximoKm = horas * 150;
+  const salida: TripSummary[] = [];
+  for (const [id, a] of acc) {
+    const distanceKm = a.metros / 1000;
+    if (distanceKm > maximoKm) {
+      console.warn(`[webfleet] distancia imposible descartada: ${id} ${Math.round(distanceKm)} km en ${Math.round(horas)} h`);
+      continue;
+    }
+    salida.push({
+      provider: opciones.provider,
+      accountKey: opciones.accountKey,
+      providerVehicleId: id,
+      window,
+      distanceKm,
+      trips: a.viajes,
+      raw: { dias: a.filas, metros: a.metros },
+    });
+  }
+  return salida;
 }
