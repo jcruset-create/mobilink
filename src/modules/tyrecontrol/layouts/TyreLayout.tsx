@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useNavigate, useLocation } from "react-router-dom";
 import { Menu, LogOut, Home, ChevronDown, ChevronRight, Search, X } from "lucide-react";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
@@ -18,6 +18,9 @@ export default function TyreLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const [open, setOpen] = useState(false);
+  // El menú y el contenido tienen cada uno su scroll (ver el `return`).
+  const menuRef = useRef<HTMLDivElement>(null);
+  const contenidoRef = useRef<HTMLElement>(null);
 
   const esSuperadmin = Boolean(perfil?.es_superadmin);
   const soloInformes = perfilClienteDe(perfil) === "director";
@@ -118,15 +121,34 @@ export default function TyreLayout() {
     );
   }
 
+  /*
+   * Con el scroll dentro de <main> y no en la ventana, al cambiar de pantalla
+   * hay que volver arriba a mano (antes lo hacía la ventana al navegar). Y la
+   * opción activa del menú se trae a la vista dentro del propio menú, sin
+   * mover la página: `block: "nearest"` no hace nada si ya se ve.
+   */
+  useEffect(() => {
+    contenidoRef.current?.scrollTo({ top: 0 });
+    const activo = menuRef.current?.querySelector<HTMLElement>('[aria-current="page"]');
+    activo?.scrollIntoView({ block: "nearest" });
+  }, [location.pathname]);
+
   async function handleSignOut() {
     await signOut();
     navigate("/tyrecontrol/login", { replace: true });
   }
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100">
+    /*
+     * Layout de alto fijo: cabecera arriba y, debajo, menú y contenido con un
+     * scroll CADA UNO. Antes la que hacía scroll era la ventana y el menú se
+     * iba con la página. `h-screen` es el respaldo de `h-dvh` (alto visible
+     * de verdad en Safari de iPhone, sin la barra que aparece y desaparece).
+     * Al imprimir se deshace (estilos/impresion.css: .tc-layout).
+     */
+    <div className="tc-layout flex h-screen h-dvh flex-col overflow-hidden bg-slate-900 text-slate-100">
       {/* Topbar */}
-      <header className="no-imprimir sticky top-0 z-30 flex items-center justify-between border-b border-slate-700 bg-slate-900/95 px-3 py-2 backdrop-blur">
+      <header className="no-imprimir z-30 flex shrink-0 items-center justify-between border-b border-slate-700 bg-slate-900/95 px-3 py-2 backdrop-blur">
         <div className="flex items-center gap-2 md:gap-3">
           <button className="rounded-lg p-1.5 hover:bg-slate-800 md:hidden" onClick={() => setOpen((v) => !v)}>
             <Menu className="h-5 w-5" />
@@ -166,10 +188,13 @@ export default function TyreLayout() {
         </div>
       </header>
 
-      <div className="mx-auto flex max-w-[1500px]">
-        {/* Sidebar */}
-        <aside className={`no-imprimir ${open ? "block" : "hidden"} w-52 shrink-0 border-r border-slate-700 bg-slate-900 p-2 md:block`}>
-          <div className="relative mb-2">
+      <div className="mx-auto flex min-h-0 w-full max-w-[1500px] flex-1">
+        {/* Sidebar: el buscador fijo arriba y, debajo, el menú con su scroll.
+            `overscroll-contain` impide que al llegar al final arrastre la
+            página; el relleno inferior salva la barra de Safari en el iPhone. */}
+        <aside className={`no-imprimir ${open ? "flex" : "hidden"} h-full w-52 shrink-0 flex-col overflow-hidden border-r border-slate-700 bg-slate-900 md:flex`}>
+          <div className="shrink-0 p-2 pb-0">
+          <div className="relative">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
             <input
               id="buscador-menu"
@@ -196,6 +221,12 @@ export default function TyreLayout() {
               </button>
             )}
           </div>
+          </div>
+          <div
+            ref={menuRef}
+            className="mt-2 min-h-0 flex-1 overflow-y-auto overscroll-contain px-2"
+            style={{ WebkitOverflowScrolling: "touch", paddingBottom: "calc(0.5rem + env(safe-area-inset-bottom, 0px))" }}
+          >
           {busqueda.trim() ? (
             <nav className="flex flex-col gap-0.5" aria-label="Resultados de la búsqueda">
               {encontrados.length === 0 ? (
@@ -248,11 +279,16 @@ export default function TyreLayout() {
             )}
           </nav>
           )}
+          </div>
         </aside>
 
         {/* Contenido */}
         {/* `zona-impresion` es lo ÚNICO que sale en papel. Ver estilos/impresion.css. */}
-        <main className="zona-impresion min-w-0 flex-1 p-3">
+        <main
+          ref={contenidoRef}
+          className="zona-impresion min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain p-3"
+          style={{ paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom, 0px))" }}
+        >
           {bloqueada ? (
             <div className="max-w-md rounded-2xl border border-amber-500/40 bg-amber-500/10 p-6 text-sm text-amber-300">
               No tienes acceso a esta pantalla. Contacta con un administrador.
