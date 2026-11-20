@@ -82,7 +82,8 @@ export interface Conciliacion {
     /** Las matrículas difieren, y difieren desde que se creó el vínculo. */
     diferenciaAceptada?: boolean;
   }>;
-  soloProveedor: Array<{ externo: VehiculoProveedor; propuesta?: VehiculoInterno }>;
+  /** `porIdAntiguo`: la propuesta sale del nº de Webfleet de la ficha, no de la matrícula. */
+  soloProveedor: Array<{ externo: VehiculoProveedor; propuesta?: VehiculoInterno; porIdAntiguo?: boolean }>;
   soloTyreControl: Array<{
     interno: VehiculoInterno;
     ultimaVezVistoMs?: number | null;

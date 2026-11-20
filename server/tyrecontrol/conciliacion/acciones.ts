@@ -748,9 +748,9 @@ export async function vincularLote(
           await vincular(ambito, {
             tcVehicleId,
             externalVehicleId,
-            matchMethod: datos.automatico
-              ? METODOS_VINCULO.MATRICULA_EXACTA_AUTO
-              : METODOS_VINCULO.MATRICULA_EXACTA,
+            matchMethod: f.porIdAntiguo
+              ? (datos.automatico ? METODOS_VINCULO.ID_WEBFLEET_ANTIGUO_AUTO : METODOS_VINCULO.ID_WEBFLEET_ANTIGUO)
+              : (datos.automatico ? METODOS_VINCULO.MATRICULA_EXACTA_AUTO : METODOS_VINCULO.MATRICULA_EXACTA),
             externalPlate: f.externo.plate ?? null,
             externalName: f.externo.name ?? null,
           }, preparada);

@@ -456,8 +456,9 @@ export default function ConciliacionTelematica() {
               {propuestas > 0 && (
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-sky-700 bg-sky-500/10 p-4">
                   <div className="text-sm">
-                    <b>{propuestas}</b> de estos vehículos coinciden por matrícula exacta con uno de
-                    TyreControl.
+                    <b>{propuestas}</b> de estos vehículos coinciden con uno de TyreControl: por
+                    matrícula exacta o, si el proveedor no da matrícula, por el nº de Webfleet que
+                    ya tenía la ficha.
                     <div className="text-xs text-slate-400">
                       Se puede deshacer: desvincular conserva el enlace desactivado.
                     </div>
@@ -572,6 +573,11 @@ export default function ConciliacionTelematica() {
                           {f.propuesta.matricula}
                           {f.propuesta.numeroUnidad ? ` · Flota ${f.propuesta.numeroUnidad}` : ""}
                         </div>
+                        {f.porIdAntiguo && (
+                          <div className="text-slate-400">
+                            Por su nº de Webfleet ({f.externo.providerVehicleId}), el de la ficha
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <span className="text-slate-500">
@@ -590,7 +596,7 @@ export default function ConciliacionTelematica() {
                                 ...base,
                                 tcVehicleId: f.propuesta!.id,
                                 externalVehicleId: f.externo.providerVehicleId,
-                                matchMethod: "plate_exact",
+                                matchMethod: f.porIdAntiguo ? "legacy_webfleet_id" : "plate_exact",
                                 externalPlate: f.externo.plate ?? null,
                                 externalName: f.externo.name ?? null,
                               }),

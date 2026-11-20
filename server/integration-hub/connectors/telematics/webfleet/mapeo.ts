@@ -110,8 +110,24 @@ function posicionDeObjeto(o: Record<string, unknown>): { lat: number; lng: numbe
   return esPosicionValida(lat, lng) ? { lat: lat as number, lng: lng as number } : null;
 }
 
+/**
+ * Matrícula de una fila de `showVehicleReportExtern`, normalizada como la
+ * guarda TyreControl (sin espacios ni guiones, en mayúsculas).
+ *
+ * `showObjectReportExtern` —la acción de posiciones— no trae matrícula; la
+ * ficha del vehículo sí, en `licenseplatenumber`, que es lo que se rellena en
+ * Webfleet en «Vehículos → Matrícula». Si está vacía no se inventa: se queda
+ * sin matrícula y la conciliación cae al nº de equipo de la ficha.
+ */
+export function matriculaDeFicha(f: Record<string, unknown>): string | undefined {
+  const v = f.licenseplatenumber ?? f.licenseplate ?? f.licenceplatenumber;
+  if (v === undefined || v === null) return undefined;
+  const limpia = String(v).replace(/[\s-]+/g, "").toUpperCase();
+  return limpia || undefined;
+}
+
 /** Un objeto de `showObjectReportExtern` → ficha de vehículo del proveedor. */
-export function objetoAVehiculo(o: Record<string, unknown>): ProviderVehicle | null {
+export function objetoAVehiculo(o: Record<string, unknown>, matricula?: string): ProviderVehicle | null {
   const id = o.objectno;
   if (id === undefined || id === null || id === "") return null;
 
@@ -121,11 +137,10 @@ export function objetoAVehiculo(o: Record<string, unknown>): ProviderVehicle | n
   return {
     providerVehicleId: String(id),
     name: texto(o.objectname) ?? String(id),
-    // Webfleet no expone matrícula en esta acción: los equipos se identifican
-    // por `objectno` y se nombran con `objectname`, que a menudo ES la
-    // matrícula pero no está garantizado. No se afirma lo que no se sabe, así
-    // que la vinculación con el vehículo de TyreControl sigue siendo manual.
-    plate: undefined,
+    // Esta acción no trae matrícula, y `objectname` a menudo lo es pero no
+    // está garantizado, así que no se deduce de ahí. La da la ficha del
+    // vehículo (`showVehicleReportExtern`), que el conector cruza por objectno.
+    plate: matricula,
     lastContactAt: fecha(o.pos_time),
   };
 }

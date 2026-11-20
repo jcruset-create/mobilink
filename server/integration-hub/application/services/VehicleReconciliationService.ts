@@ -232,6 +232,11 @@ export async function conciliarFlota(
 
   const ignorados = new Set(porCuenta.flatMap((p) => p.ignorados.map((i) => i.external_code)));
   const externos = lecturas.flatMap((l) => l.vehiculos);
+  // Los de Webfleet, para proponerles enlace por el número de equipo que ya
+  // tenía la ficha: Webfleet no da matrícula en el Hub.
+  const externosWebfleet = new Set(
+    lecturas.filter((l) => l.connectorKey === "webfleet").flatMap((l) => l.vehiculos.map((v) => v.providerVehicleId)),
+  );
 
   // ── Lo que pertenece a una cuenta caída se aparta, no se clasifica ────────
   //
@@ -286,6 +291,7 @@ export async function conciliarFlota(
     ignorados,
     puedeAfirmarAusencias: todasRespondieron,
     normalizarMatricula: opciones.normalizarMatricula,
+    externosWebfleet,
   });
 
   const resultadoCuentas: ResultadoCuenta[] = lecturas.map((l) => ({
