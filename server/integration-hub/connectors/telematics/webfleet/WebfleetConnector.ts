@@ -47,6 +47,7 @@ import {
 import {
   filasDe,
   masCercana,
+  matriculaDeFicha,
   objetoALectura,
   objetoAVehiculo,
   viajeALectura,
@@ -182,9 +183,31 @@ export class WebfleetConnector implements ITelematicsConnector, IFleetPositionPr
 
   async listVehicles(ctx: OperationContext): Promise<ProviderVehicle[]> {
     const filas = await this.llamar(ctx, "showObjectReportExtern");
+    const matriculas = await this.matriculasPorObjeto(ctx);
     return filas
-      .map((f) => objetoAVehiculo(f))
+      .map((f) => objetoAVehiculo(f, matriculas.get(String(f.objectno))))
       .filter((v): v is ProviderVehicle => v !== null);
+  }
+
+  /**
+   * objectno → matrícula, de la ficha de vehículos (`showVehicleReportExtern`,
+   * campo `licenseplatenumber`). Es lo que permite conciliar por matrícula.
+   *
+   * Si la cuenta no tiene esa acción o falla, no se tumba el listado: los
+   * vehículos salen sin matrícula como antes y la conciliación cae al nº de
+   * equipo guardado en la ficha de TyreControl.
+   */
+  private async matriculasPorObjeto(ctx: OperationContext): Promise<Map<string, string>> {
+    const mapa = new Map<string, string>();
+    try {
+      for (const f of await this.llamar(ctx, "showVehicleReportExtern")) {
+        const m = matriculaDeFicha(f);
+        if (f.objectno != null && m) mapa.set(String(f.objectno), m);
+      }
+    } catch (e) {
+      if (e instanceof IntegrationError && e.kind === "AUTH") throw e;
+    }
+    return mapa;
   }
 
   /**

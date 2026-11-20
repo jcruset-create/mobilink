@@ -14,6 +14,7 @@ import {
   masCercana,
   objetoALectura,
   objetoAVehiculo,
+  matriculaDeFicha,
   odometroKm,
   viajeALectura,
   type OpcionesMapeo,
@@ -57,6 +58,14 @@ describe("objetoAVehiculo()", () => {
     const v = objetoAVehiculo({ objectno: "2321HZT", objectname: "Bus 14", pos_time: "2026-07-15T09:40:00Z" });
     expect(v).toMatchObject({ providerVehicleId: "2321HZT", name: "Bus 14" });
     expect(v?.lastContactAt?.toISOString()).toBe("2026-07-15T09:40:00.000Z");
+  });
+
+  it("la matrícula sale de la ficha (showVehicleReportExtern), normalizada", () => {
+    expect(matriculaDeFicha({ objectno: "003", licenseplatenumber: " 2321-HZT " })).toBe("2321HZT");
+    expect(matriculaDeFicha({ objectno: "003", licenseplatenumber: "6133 lxf" })).toBe("6133LXF");
+    expect(matriculaDeFicha({ objectno: "003", licenseplatenumber: "" })).toBeUndefined();
+    expect(matriculaDeFicha({ objectno: "003" })).toBeUndefined();
+    expect(objetoAVehiculo({ objectno: "003", objectname: "Furgo" }, "2321HZT")?.plate).toBe("2321HZT");
   });
 
   it("no afirma matrícula que Webfleet no da", () => {
