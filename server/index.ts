@@ -16,7 +16,7 @@ import { fallaAlFirmar, firmarEnFilas, firmarUrls } from "./core/fotosFirmadas.t
 import { descargarMedioTwilio, rescatarMedioDeTwilio } from "./core/medioTwilio.ts";
 import { elegirPosicion, horaWebfleet, type PosicionElegida } from "./core/posicionDoble.ts";
 import { crearCacheEta, ESTADOS_ETA_ESTIMADA, type EtaEstimada } from "./core/etaEstimada.ts";
-import { sqlActualizarOtf, sqlEstadoTrabajo } from "./otf/actualizar.ts";
+import { sqlActualizarOtf, sqlContactoDeBase, sqlEstadoTrabajo } from "./otf/actualizar.ts";
 import {
   codigoMaterial,
   emailValido,
@@ -18742,6 +18742,10 @@ function normalizeKnownPlace(row: any) {
     clientId: row.clientId != null ? Number(row.clientId) : null,
     clientName: row.clientName ?? null,
     notas: row.notas ?? null,
+    // La persona de contacto de la base: se propone al crear una OTF aquí.
+    contactoNombre: row.contactoNombre ?? null,
+    contactoTelefono: row.contactoTelefono ?? null,
+    contactoCargo: row.contactoCargo ?? null,
     active: row.active !== false,
     createdAtMs: row.createdAtMs != null ? Number(row.createdAtMs) : null,
   };
@@ -18988,6 +18992,9 @@ function normalizeOtf(row: any) {
     // Aviso al responsable de la base al llegar y correo del informe.
     telefonoAviso: row.telefonoAviso ?? null,
     emailInforme: row.emailInforme ?? null,
+    contactoNombre: row.contactoNombre ?? null,
+    contactoTelefono: row.contactoTelefono ?? null,
+    contactoCargo: row.contactoCargo ?? null,
     avisoLlegadaAtMs: row.avisoLlegadaAtMs != null ? Number(row.avisoLlegadaAtMs) : null,
     avisoLlegadaResultado: row.avisoLlegadaResultado ?? null,
     informeEnviadoAtMs: row.informeEnviadoAtMs != null ? Number(row.informeEnviadoAtMs) : null,
@@ -19464,13 +19471,18 @@ app.post("/api/otf", requireSupervisorRole, async (req, res) => {
         b.webfleetVehicleId ?? null, b.notas ?? null, now, disp.esperaAsistenciaId ?? null,
       ]
     );
-    // Teléfono de aviso y correo del informe (columnas añadidas después).
-    if (b.telefonoAviso !== undefined || b.emailInforme !== undefined) {
-      const u = sqlActualizarOtf(Number(r.rows[0].id), {
-        ...(b.telefonoAviso !== undefined ? { telefonoAviso: b.telefonoAviso } : {}),
-        ...(b.emailInforme !== undefined ? { emailInforme: b.emailInforme } : {}),
-      }, now);
+    // Teléfono de aviso, correo del informe y persona de contacto (columnas añadidas después).
+    {
+      const extra: Record<string, unknown> = {};
+      for (const c of ["telefonoAviso", "emailInforme", "contactoNombre", "contactoTelefono", "contactoCargo"]) {
+        if (b[c] !== undefined) extra[c] = b[c];
+      }
+      const u = sqlActualizarOtf(Number(r.rows[0].id), extra, now);
       if (u) await db.query(u.sql, u.params);
+      if (b.guardarContactoEnBase === true) {
+        const c = sqlContactoDeBase(b.knownPlaceId, extra, now);
+        if (c) await db.query(c.sql, c.params);
+      }
     }
     res.json({ ...normalizeOtf((await db.query(`SELECT * FROM otf WHERE id = $1`, [r.rows[0].id])).rows[0]), enEspera: disp.esperaAsistenciaId != null });
   } catch (e) {
@@ -19532,6 +19544,12 @@ app.put("/api/otf/:id", requireSupervisorRole, async (req, res) => {
     // Solo los campos que llegan: ver otf/actualizar.ts.
     const update = sqlActualizarOtf(id, b, Date.now());
     if (update) await db.query(update.sql, update.params);
+    // El contacto, también en la base (la que llega, o la que ya tenía la OTF).
+    if (b.guardarContactoEnBase === true) {
+      const base = Object.prototype.hasOwnProperty.call(b, "knownPlaceId") ? b.knownPlaceId : actual.rows[0].knownPlaceId;
+      const c = sqlContactoDeBase(base, b, Date.now());
+      if (c) await db.query(c.sql, c.params);
+    }
     // Otro operario: para él es una OTF nueva, y su tablet tiene que avisarle.
     if (
       Object.prototype.hasOwnProperty.call(b, "assignedTechName") &&

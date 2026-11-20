@@ -953,6 +953,14 @@ export async function initDb() {
     -- Aviso al responsable de la base al llegar, y correo del informe.
     ALTER TABLE otf ADD COLUMN IF NOT EXISTS "telefonoAviso" TEXT;
     ALTER TABLE otf ADD COLUMN IF NOT EXISTS "emailInforme" TEXT;
+    -- Persona de contacto en la base: la tablet la muestra con «Llamar» y
+    -- «WhatsApp». También se guarda en la base, para la siguiente OTF.
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "contactoNombre" TEXT;
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "contactoTelefono" TEXT;
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "contactoCargo" TEXT;
+    ALTER TABLE roadside_known_places ADD COLUMN IF NOT EXISTS "contactoNombre" TEXT;
+    ALTER TABLE roadside_known_places ADD COLUMN IF NOT EXISTS "contactoTelefono" TEXT;
+    ALTER TABLE roadside_known_places ADD COLUMN IF NOT EXISTS "contactoCargo" TEXT;
     ALTER TABLE otf ADD COLUMN IF NOT EXISTS "avisoLlegadaAtMs" BIGINT;
     ALTER TABLE otf ADD COLUMN IF NOT EXISTS "avisoLlegadaResultado" TEXT;
     ALTER TABLE otf ADD COLUMN IF NOT EXISTS "informeEnviadoAtMs" BIGINT;
