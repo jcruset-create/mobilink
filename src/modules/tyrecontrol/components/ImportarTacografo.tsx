@@ -4,10 +4,10 @@ import {
 } from "lucide-react";
 
 import {
-  bloqueadasDeLoteTacografo, importarInformesPdf, importarTacografo, listarEmpresas,
+  bloqueadasDeLoteTacografo, importarInformesPdf, importarTacografo, listarEmpresas, recortarInformesAdjuntos,
   listarLotesTacografo, deshacerLoteTacografo, simularTacografo,
   type AccionInformePdf, type LoteTacografo, type RespuestaSimulacionTacografo,
-  type ResultadoImportTacografo, type ResultadoImportarInformesPdf,
+  type ResultadoImportTacografo, type ResultadoImportarInformesPdf, type ResultadoRecorteInformes,
 } from "../services/data";
 import type { Empresa } from "../types";
 import { TableWrap, tdCls, thCls } from "./ui";
@@ -84,6 +84,9 @@ export default function ImportarTacografo() {
   const [pdfs, setPdfs] = useState<File[]>([]);
   const [subiendoPdfs, setSubiendoPdfs] = useState(false);
   const [resPdf, setResPdf] = useState<ResultadoImportarInformesPdf | null>(null);
+  // Los informes subidos antes de que el adjunto se recortara al entrar.
+  const [resRecorte, setResRecorte] = useState<ResultadoRecorteInformes | null>(null);
+  const [recortando, setRecortando] = useState(false);
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
 
@@ -135,6 +138,24 @@ export default function ImportarTacografo() {
     } catch (e: any) {
       setError(e?.message || "No se ha podido importar");
     } finally { setImportando(false); }
+  }
+
+  /**
+   * Dejar solo el ejemplar del cliente en los informes ya adjuntos. Primero se
+   * mira (no escribe) y después, con la cuenta delante, se confirma: el
+   * fichero entero se borra y no se puede recuperar.
+   */
+  async function recortarAdjuntos(simular: boolean) {
+    if (!empresaId) return;
+    if (!simular && !window.confirm(
+      `Vas a dejar solo el ejemplar del cliente en ${resRecorte?.resumen.seRecortarian ?? 0} informe(s) de:\n\n    ${nombreCliente}\n\n`
+      + "El PDF entero de cada uno, con el ejemplar del taller, se borra y no se puede recuperar. ¿Continuar?")) return;
+    setRecortando(true); setError("");
+    try {
+      setResRecorte(await recortarInformesAdjuntos(empresaId, simular));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se han podido recortar los informes");
+    } finally { setRecortando(false); }
   }
 
   /**
@@ -346,6 +367,61 @@ export default function ImportarTacografo() {
             </TableWrap>
           </div>
         )}
+
+        {/*
+          Tarea de una vez: lo que se subió antes de que el adjunto se
+          recortara al entrar. Va al final y pequeña a propósito.
+        */}
+        <div className="mt-4 border-t border-slate-700 pt-3">
+          <p className="text-xs text-slate-400">
+            Desde ahora cada informe se adjunta solo con el <b className="text-slate-200">ejemplar del cliente</b>.
+            Los que se subieron antes siguen guardados enteros, con el ejemplar del taller.
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button id="recorte-mirar" onClick={() => void recortarAdjuntos(true)} disabled={!empresaId || recortando}
+              className="rounded-lg border border-slate-600 px-3 py-1.5 text-xs font-bold text-slate-200 disabled:opacity-40">
+              {recortando ? "Mirando…" : "Ver cuántos hay que recortar"}
+            </button>
+            {resRecorte?.simulado && resRecorte.resumen.seRecortarian > 0 && (
+              <button id="recorte-hacer" onClick={() => void recortarAdjuntos(false)} disabled={recortando}
+                className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-40">
+                Recortar {resRecorte.resumen.seRecortarian} informe(s)
+              </button>
+            )}
+          </div>
+          {resRecorte && (
+            <div className="mt-3">
+              <div className="mb-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <Cifra n={resRecorte.simulado ? resRecorte.resumen.seRecortarian : resRecorte.resumen.recortados}
+                       de={resRecorte.simulado ? "se recortarían" : "recortados"} tono="text-emerald-300" />
+                <Cifra n={resRecorte.resumen.yaEstaban} de="ya eran solo del cliente" tono="text-slate-400" />
+                <Cifra n={resRecorte.resumen.noSePuede} de="no se pueden recortar"
+                       tono={resRecorte.resumen.noSePuede ? "text-rose-300" : ""} />
+                <Cifra n={resRecorte.resumen.total} de="informes adjuntos" />
+              </div>
+              {resRecorte.resultados.some((r) => r.accion === "no_se_puede" || r.aviso) && (
+                <TableWrap>
+                  <thead><tr>
+                    <th className={thCls}>Nº de orden</th>
+                    <th className={thCls}>Matrícula</th>
+                    <th className={thCls}>Fichero</th>
+                    <th className={thCls}>Qué ha pasado</th>
+                  </tr></thead>
+                  <tbody>
+                    {resRecorte.resultados.filter((r) => r.accion === "no_se_puede" || r.aviso).map((r) => (
+                      <tr key={r.id}>
+                        <td className={`${tdCls} font-semibold`}>{r.idOrigen ?? "—"}</td>
+                        <td className={tdCls}>{r.matricula ?? "—"}</td>
+                        <td className={`${tdCls} text-[11px] text-slate-500`}>{r.nombre}</td>
+                        <td className={`${tdCls} text-amber-200`}>{r.motivo ?? r.aviso}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </TableWrap>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {error && <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 text-sm text-rose-200">{error}</div>}

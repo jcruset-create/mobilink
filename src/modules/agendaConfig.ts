@@ -1,6 +1,8 @@
 // Configuración de la agenda: horario semanal, festivos y cierres especiales.
 // Lógica pura (sin React ni red) para poder probarla de forma aislada.
 
+import { normalizarBloqueos, type BloqueoArea } from "./bloqueosDeArea";
+
 export type AgendaDaySchedule = {
   /** Día cerrado por completo (no editable en la agenda). */
   closed: boolean;
@@ -37,6 +39,8 @@ export type AgendaConfig = {
   specialDays: AgendaSpecialDay[];
   /** Cierre recurrente de los sábados de agosto. */
   closedSaturdaysInAugust: boolean;
+  /** Franjas en las que no se dan citas de un área (ver bloqueosDeArea.ts). */
+  areaBlocks: BloqueoArea[];
 };
 
 export const AGENDA_DAY_LABELS = [
@@ -61,6 +65,7 @@ export const DEFAULT_AGENDA_CONFIG: AgendaConfig = {
   holidays: [],
   specialDays: [],
   closedSaturdaysInAugust: true,
+  areaBlocks: [],
 };
 
 export function timeToMinutes(time: string): number | null {
@@ -167,6 +172,7 @@ export function normalizeAgendaConfig(raw: any): AgendaConfig {
     holidays,
     specialDays,
     closedSaturdaysInAugust: raw?.closedSaturdaysInAugust !== false,
+    areaBlocks: normalizarBloqueos(raw?.areaBlocks),
   };
 }
 

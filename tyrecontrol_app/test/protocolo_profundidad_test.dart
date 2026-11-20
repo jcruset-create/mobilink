@@ -152,6 +152,22 @@ void main() {
     });
   });
 
+  group('minimoDeLaGoma', () {
+    test('sin mínimos de empresa, el de la llanta', () {
+      expect(minimoDeLaGoma('295/80R22.5'), 4);
+    });
+    test('con el general de la empresa, ese', () {
+      expect(minimoDeLaGoma('295/80R22.5', empresa: 3), 3);
+    });
+    test('el de la medida gana al general, se escriba como se escriba', () {
+      expect(minimoDeLaGoma('315/80 r22.5', empresa: 3, porMedida: {'315/80R22.5': 3.5}), 3.5);
+    });
+    test('la empresa lo pone también para la goma sin llanta reconocible', () {
+      expect(minimoDeLaGoma(null, empresa: 3), 3);
+      expect(minimoDeLaGoma(null), isNull);
+    });
+  });
+
   group('profundidadMinimaPorLlanta', () {
     test('22.5 → 4 · 19.5 y 17.5 → 3 · 16 o menos → 2', () {
       expect(profundidadMinimaPorLlanta('295/80R22.5'), 4);

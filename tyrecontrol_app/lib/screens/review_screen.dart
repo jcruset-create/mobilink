@@ -19,6 +19,7 @@ import '../widgets/vehicle_layout_image.dart';
 import 'alta_operativa_screen.dart';
 import 'incidencia_flow_screen.dart';
 import 'tire_detail_screen.dart';
+import 'primera_revision_screen.dart';
 
 /// Pantalla 4: revision. Modo asistente automatico: el tecnico no
 /// decide que rueda toca ahora, simplemente avanza. Con la sonda TLGX3
@@ -38,7 +39,11 @@ class ReviewScreen extends StatefulWidget {
   /// Se reutiliza mientras siga vigente para no gastar dos veces el cupo del
   /// proveedor en la misma revisión. Si ha caducado, se vuelve a preguntar.
   final Map<String, dynamic>? lecturaKm;
-  const ReviewScreen({super.key, required this.vehiculo, this.revisionExistente, this.verificarPresiones = false, this.kmManual, this.lecturaKm});
+  /// Revisión que cierra un trabajo de taller (pantalla «Cambiar»): no se
+  /// puede salir ni finalizar hasta tener todas las ruedas medidas o marcadas
+  /// «No accesible». Después de cualquier operación hay que revisarlas todas.
+  final bool obligatoria;
+  const ReviewScreen({super.key, required this.vehiculo, this.revisionExistente, this.verificarPresiones = false, this.kmManual, this.lecturaKm, this.obligatoria = false});
 
   @override
   State<ReviewScreen> createState() => _ReviewScreenState();
@@ -82,7 +87,18 @@ class _ReviewScreenState extends State<ReviewScreen> {
   Timer? _commitTimer;
   bool _modoRuta = true;
   double? _liveProf; // medida en curso para la rueda activa
+  int? _liveProfN; // su número de orden en la sonda, para el pitido
   double? _livePres;
+
+  // ── Medición doble (banda interior + exterior) ───────────────
+  /// La empresa pide las dos bandas de cada rueda (tc_config_umbrales).
+  bool _doble = true;
+  /// Diferencia entre bandas a partir de la cual se avisa de desgaste
+  /// irregular. null = sin aviso.
+  double? _deltaIrregular = 2.0;
+  /// Primer apoyo de la rueda activa (banda interior), a la espera del
+  /// segundo. Vive solo en memoria: la rueda se guarda con las dos.
+  double? _liveInt;
 
   @override
   void initState() {
@@ -253,6 +269,9 @@ class _ReviewScreenState extends State<ReviewScreen> {
       final umb = await TyreControlApi.umbralesDeEmpresa(widget.vehiculo.empresaId);
       _umbralEmpresa = umb.empresa;
       _umbralPorMedida = umb.porMedida;
+      final cm = await TyreControlApi.configMedicion(widget.vehiculo.empresaId);
+      _doble = cm.doble;
+      _deltaIrregular = cm.deltaIrregularMm;
 
       // Fotos de modelo del catálogo, con caché para trabajar sin cobertura.
       // Si falla no bloquea la revisión: simplemente no se muestra foto.
@@ -349,7 +368,21 @@ class _ReviewScreenState extends State<ReviewScreen> {
 
     bool nuevaProfundidad = false;
     if (r.tipo == LecturaTipo.profundidad && r.valor != null) {
+      // Ráfaga de medición doble: el primer apoyo es la banda interior y se
+      // queda en memoria; el segundo (exterior) es el que cierra la rueda.
+      // Pita en cada apoyo para que el técnico no tenga que mirar.
+      if (_ruedaEnRafaga && _liveInt == null) {
+        _commitTimer?.cancel();
+        _liveInt = r.valor;
+        _liveProf = null;
+        _liveProfN = null;
+        _sonda.confirmarProfundidadN(r.n);
+        HapticFeedback.selectionClick();
+        setState(() {});
+        return;
+      }
       _liveProf = r.valor;
+      _liveProfN = r.n;
       nuevaProfundidad = true;
     } else if (r.tipo == LecturaTipo.presion && r.valor != null) {
       _livePres = r.valor; // ya en bar
@@ -381,35 +414,76 @@ class _ReviewScreenState extends State<ReviewScreen> {
     if (idx < 0 || idx == _index) return;
 
     // Cambiamos de rueda: descartamos cualquier medida en curso de la anterior.
+    HapticFeedback.selectionClick();
+    _irA(idx);
+  }
+
+  /// ¿La medición de la rueda activa va por la ráfaga de dos bandas?
+  bool get _ruedaEnRafaga => _doble && _modoRuta && _sonda.conectada;
+
+  /// Cambia de rueda descartando lo que estuviera a medias en la anterior
+  /// (una banda interior sin su exterior no se guarda sola por accidente).
+  void _irA(int idx) {
     _commitTimer?.cancel();
     _liveProf = null;
+    _liveProfN = null;
     _livePres = null;
-    HapticFeedback.selectionClick();
+    _liveInt = null;
     setState(() => _index = idx);
   }
 
-  Future<void> _commitActiva(PosicionVehiculo p) async {
+  /// "Saltar banda": la exterior no se puede medir (gemela de dentro, mal
+  /// acceso). La rueda se cierra con la banda que hay, que vale como mínima.
+  Future<void> _cerrarConUnaBanda() async {
+    final activa = _posiciones.elementAtOrNull(_index);
+    if (activa == null || _liveInt == null) return;
+    _commitTimer?.cancel();
+    await _commitActiva(activa, soloUnaBanda: true);
+  }
+
+  Future<void> _commitActiva(PosicionVehiculo p, {bool soloUnaBanda = false}) async {
     final draft = _detalles[p.id];
     if (draft == null) return;
     final prof = _liveProf;
+    final profN = _liveProfN;
     final pres = _livePres;
-    if (prof == null && pres == null) return;
+    final interior = _liveInt;
+    final conBandas = interior != null && (prof != null || soloUnaBanda);
+    if (prof == null && pres == null && !conBandas) return;
 
+    if (conBandas) {
+      // Medición doble: se guardan las dos bandas y la oficial es la menor.
+      draft
+        ..ponerBandas(interior, soloUnaBanda ? null : prof)
+        ..metodoProfundidad = 'sonda';
+    } else {
+      draft
+        ..profundidadMm = prof ?? draft.profundidadMm
+        ..metodoProfundidad = prof != null ? 'sonda' : draft.metodoProfundidad;
+    }
     draft
-      ..profundidadMm = prof ?? draft.profundidadMm
       ..presionBar = pres ?? draft.presionBar
-      ..metodoProfundidad = prof != null ? 'sonda' : draft.metodoProfundidad
       ..metodoPresion = pres != null ? 'sonda' : draft.metodoPresion;
     _liveProf = null;
+    _liveProfN = null;
     _livePres = null;
+    _liveInt = null;
 
-    await _guardarDraft(p, draft);
+    final registrada = await _guardarDraft(p, draft);
+    // La sonda pita cuando la profundidad YA está registrada —guardada o en
+    // la cola sin cobertura—, no al recibirla. Ni por una presión sola, ni si
+    // el servidor ha rechazado el dato.
+    if (registrada && prof != null) _sonda.confirmarProfundidadN(profN);
     if (!mounted) return;
     await _autoIncidenciaSiBajoMinimo(p, draft);
     if (!mounted) return;
 
     final obj = p.eje == null ? null : _objetivosPresion[p.eje];
-    final anomalia = _umbralDe(p).esAnomalia(draft, presionObjetivo: obj?.presion, margenPresion: obj?.margen);
+    // En la ráfaga de medición doble una anomalía NO para al técnico: sigue
+    // midiendo y la ve en el resultado final. Solo para si falta un dato
+    // obligatorio (la presión con "verificar presiones").
+    final anomalia = !conBandas &&
+        _umbralDe(p).esAnomalia(draft, presionObjetivo: obj?.presion, margenPresion: obj?.margen);
     if (!_completo(draft) || anomalia) {
       // Falta algún dato (p. ej. la presión con "verificar" activo) o hay
       // anomalía: se abre la ficha para completar/confirmar. No avanza.
@@ -423,7 +497,9 @@ class _ReviewScreenState extends State<ReviewScreen> {
     }
   }
 
-  Future<void> _guardarDraft(PosicionVehiculo p, RevisionDetalleDraft draft) async {
+  /// Guarda la medición. Devuelve si ha quedado registrada: en el servidor o,
+  /// sin cobertura, en la cola. Es falso si el servidor la ha rechazado.
+  Future<bool> _guardarDraft(PosicionVehiculo p, RevisionDetalleDraft draft) async {
     final payload = draft.toJson(
       revisionId: _revision!.id,
       empresaId: widget.vehiculo.empresaId,
@@ -433,14 +509,17 @@ class _ReviewScreenState extends State<ReviewScreen> {
       // Online primero: si hay cobertura, se guarda directo en el servidor.
       await TyreControlApi.guardarDetalleRevision(payload);
       OfflineStore.offline.value = false;
+      return true;
     } on PostgrestException catch (e) {
       // El servidor respondió y rechazó el dato (no es falta de cobertura):
       // se aparta al buzón de errores para no bloquear y seguimos online.
       await OfflineStore.parkFailed({'type': 'detalle', 'payload': payload}, e.message);
+      return false;
     } catch (_) {
       // Sin cobertura: a la cola, se enviará solo al recuperar la conexión.
       OfflineStore.offline.value = true;
       await OfflineStore.enqueueDetalle(payload);
+      return true;
     }
   }
 
@@ -462,11 +541,50 @@ class _ReviewScreenState extends State<ReviewScreen> {
     if (next == null && _todoRevisado) {
       if (!_finalOfrecidoYa) {
         _finalOfrecidoYa = true;
-        _ofrecerFinalizar();
+        _doble ? _mostrarResultado() : _ofrecerFinalizar();
       }
     } else {
       _finalOfrecidoYa = false;
     }
+  }
+
+  /// Resultado de la medición doble: todas las ruedas juntas, por eje, con
+  /// sus dos bandas y la mínima en color. Es donde el técnico ve de un
+  /// vistazo lo que la ráfaga no le ha enseñado rueda a rueda. Tocar una
+  /// rueda la vuelve a medir.
+  Future<void> _mostrarResultado() async {
+    if (_ofreciendoFinal || _finalizando || !mounted) return;
+    _ofreciendoFinal = true;
+    HapticFeedback.mediumImpact();
+    final res = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.background,
+      builder: (ctx) => _ResultadoMedicion(
+        posiciones: _posiciones,
+        detalles: _detalles,
+        deltaIrregular: _deltaIrregular,
+        estadoDe: (p) {
+          final d = _detalles[p.id];
+          if (!_completo(d)) return TireStatus.pendiente;
+          final obj = p.eje == null ? null : _objetivosPresion[p.eje];
+          return _umbralDe(p).evaluar(d!, presionObjetivo: obj?.presion, margenPresion: obj?.margen);
+        },
+      ),
+    );
+    _ofreciendoFinal = false;
+    if (!mounted || res == null) return;
+    if (res.startsWith('remedir:')) {
+      final idx = _posiciones.indexWhere((p) => p.id == res.substring(8));
+      if (idx >= 0) {
+        // Se rearma el ofrecimiento: al terminar de remedir vuelve a salir.
+        _finalOfrecidoYa = false;
+        _irA(idx);
+      }
+      return;
+    }
+    if (res == 'finalizar') await _finalizarConAviso();
+    if (res == 'incidencia') await _abrirIncidencias();
   }
 
   /// (A) Diálogo automático al completar todas las ruedas. Dos cierres:
@@ -504,6 +622,20 @@ class _ReviewScreenState extends State<ReviewScreen> {
   /// confirmación antes de cerrar (repuesto, sin neumático, saltadas…).
   Future<void> _finalizarConAviso() async {
     final pendientes = _posiciones.where((p) => !_completo(_detalles[p.id])).toList();
+    if (pendientes.isNotEmpty && widget.obligatoria) {
+      final nombres = pendientes.map((p) => p.nombre ?? p.codigoPosicion).join(', ');
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Faltan ruedas por revisar'),
+          content: Text('Después de un trabajo hay que revisar todas las ruedas: profundidad y presión.\n\n'
+              'Faltan ${pendientes.length} de ${_posiciones.length}: $nombres.\n\n'
+              'Mídelas, o márcalas «No accesible» si no se pueden medir.'),
+          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Seguir revisando'))],
+        ),
+      );
+      return;
+    }
     if (pendientes.isNotEmpty) {
       final nombres = pendientes.map((p) => p.nombre ?? p.codigoPosicion).join(', ');
       final ok = await showDialog<bool>(
@@ -546,14 +678,12 @@ class _ReviewScreenState extends State<ReviewScreen> {
   }
 
   void _saltar() {
-    setState(() {
-      if (_index < _posiciones.length - 1) _index++;
-    });
+    if (_index < _posiciones.length - 1) _irA(_index + 1);
   }
 
   Future<void> _abrirNeumatico(PosicionVehiculo p) async {
     final idx = _posiciones.indexOf(p);
-    setState(() => _index = idx);
+    _irA(idx);
     final montaje = _montajePorPosicion[p.id];
     final draft = _detalles[p.id]!;
     final resultado = await Navigator.of(context).push<RevisionDetalleDraft>(
@@ -566,6 +696,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
           revision: _revision!,
           vehiculo: widget.vehiculo,
           exigirPresion: widget.verificarPresiones,
+          medicionDoble: _doble,
         ),
       ),
     );
@@ -782,10 +913,56 @@ class _ReviewScreenState extends State<ReviewScreen> {
     await _cargar();
   }
 
+  /// Los km de hoy que ya trae la pantalla anterior, y de dónde salieron.
+  ({num? km, String origen}) get _kmPrevios {
+    final lectura = widget.lecturaKm;
+    final kmTel = lecturaSigueValiendo(lectura) ? (lectura!['km'] as num?) : null;
+    if (kmTel != null) return (km: kmTel, origen: 'telematica');
+    return (km: widget.kmManual, origen: 'manual');
+  }
+
+  /// Primera revisión de un vehículo sin tipo: tipo, uso, ejes y las ruedas
+  /// que lleva. Al terminar ya tiene su primera revisión y aquí no queda nada
+  /// que hacer, así que se cierra esta pantalla también.
+  Future<void> _empezarPrimeraRevision() async {
+    final km = _kmPrevios;
+    final hecha = await Navigator.of(context).push<bool>(MaterialPageRoute(
+      builder: (_) => PrimeraRevisionTipoScreen(
+        vehiculoId: widget.vehiculo.id,
+        matricula: widget.vehiculo.matricula,
+        empresaId: widget.vehiculo.empresaId,
+        km: km.km,
+        origenKm: km.origen,
+      ),
+    ));
+    if (!mounted) return;
+    if (hecha == true) {
+      Navigator.of(context).pop(true);
+      return;
+    }
+    // Se quedó a medias: si ya tiene tipo, al recargar sale lo que haya.
+    try {
+      final v = await TyreControlApi.obtenerVehiculoCompleto(widget.vehiculo.id);
+      _tipoId = v?['tipo_vehiculo_id'] as String?;
+    } catch (_) {}
+    if (mounted) await _cargar();
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_cargando) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    // Sin tipo no hay plano: en vez de un error, su primera revisión.
+    if (_error != null && _faltaFicha && _tipoId == null) {
+      return AvisoPrimeraRevision(
+        matricula: widget.vehiculo.matricula,
+        numeroUnidad: widget.vehiculo.numeroUnidad,
+        empresa: widget.vehiculo.empresa?.nombre,
+        km: _kmPrevios.km,
+        onEmpezar: _empezarPrimeraRevision,
+        onAhoraNo: () => Navigator.of(context).pop(),
+      );
     }
     if (_error != null) {
       return Scaffold(
@@ -825,7 +1002,15 @@ class _ReviewScreenState extends State<ReviewScreen> {
     final estados = {for (final p in _posiciones) p.id: _statusDe(p)};
     final actual = _posiciones.isEmpty ? null : _posiciones[_index];
 
-    return Scaffold(
+    // Obligatoria: el botón de atrás no la abandona. Sale al finalizarla.
+    return PopScope(
+      canPop: !widget.obligatoria,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Termina la revisión de todas las ruedas para cerrar el trabajo.')));
+      },
+      child: Scaffold(
       appBar: AppBar(
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -863,7 +1048,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
           Expanded(
             child: _imagenChasis != null
                 ? Padding(
-                    padding: const EdgeInsets.all(10),
+                    padding: const EdgeInsets.all(6),
                     child: VehicleLayoutImage(
                       imagenUrl: _imagenChasis!,
                       posiciones: _posiciones,
@@ -896,15 +1081,20 @@ class _ReviewScreenState extends State<ReviewScreen> {
             livePres: _livePres,
             pendientes: _posiciones.where((p) => !_completo(_detalles[p.id])).length,
             finalizando: _finalizando,
-            onAnterior: _index > 0 ? () => setState(() => _index--) : null,
+            onAnterior: _index > 0 ? () => _irA(_index - 1) : null,
             onSaltar: _index < _posiciones.length - 1 ? _saltar : null,
             onRevisar: actual == null ? null : () => _abrirNeumatico(actual),
-            onFinalizar: _finalizarConAviso,
+            // Con medición doble, "Finalizar" enseña antes el resultado de
+            // todas las ruedas; desde ahí se cierra.
+            onFinalizar: _doble ? _mostrarResultado : _finalizarConAviso,
+            doble: _ruedaEnRafaga,
+            bandaInterior: _liveInt,
+            onSaltarBanda: _liveInt != null ? _cerrarConUnaBanda : null,
             onIncidencia: _abrirIncidencias,
           ),
         ],
       )),
-    );
+    ));
   }
 
   /// Cubre el body con el overlay de pausa cuando el trabajo está pausado.
@@ -987,6 +1177,11 @@ class _PanelInferior extends StatelessWidget {
   final VoidCallback? onRevisar;
   final VoidCallback onFinalizar;
   final VoidCallback onIncidencia;
+  /// Ráfaga de medición doble activa (sonda + ruta + empresa con doble).
+  final bool doble;
+  /// Banda interior ya leída de la rueda activa (esperando la exterior).
+  final double? bandaInterior;
+  final VoidCallback? onSaltarBanda;
 
   const _PanelInferior({
     required this.actual,
@@ -1002,18 +1197,46 @@ class _PanelInferior extends StatelessWidget {
     required this.onRevisar,
     required this.onFinalizar,
     required this.onIncidencia,
+    this.doble = false,
+    this.bandaInterior,
+    this.onSaltarBanda,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
+    // En una pantalla baja cada punto que ocupan los botones se lo quitan al
+    // plano: el aviso de lo que queda va en la misma línea que la posición y
+    // el relleno se queda en lo justo.
+    // SafeArea: con la barra de Android a la vista (tablets Samsung), los
+    // botones de «Finalizar» quedaban debajo de ella.
+    return SafeArea(
+      top: false,
+      child: Container(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
       decoration: const BoxDecoration(border: Border(top: BorderSide(color: AppColors.cardBorder))),
       child: Column(
         children: [
           if (actual != null)
-            Text('${actual!.nombre ?? actual!.codigoPosicion} (${index + 1} de $total)',
-                style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+            Text.rich(
+              TextSpan(children: [
+                TextSpan(text: '${actual!.nombre ?? actual!.codigoPosicion} (${index + 1} de $total)'),
+                if (pendientes > 0)
+                  TextSpan(
+                    text: '  ·  ${pendientes == 1 ? 'queda 1' : 'quedan $pendientes'} sin medir',
+                    style: const TextStyle(color: AppColors.warning, fontWeight: FontWeight.w600),
+                  ),
+              ]),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: AppColors.textSecondary, fontSize: 13),
+            )
+          else if (pendientes > 0)
+            Text(
+              'Quedan $pendientes ${pendientes == 1 ? 'posición' : 'posiciones'} sin medir',
+              style: const TextStyle(color: AppColors.warning, fontSize: 12, fontWeight: FontWeight.w600),
+              textAlign: TextAlign.center,
+            ),
           if (sondaLista) ...[
             const SizedBox(height: 8),
             Container(
@@ -1023,18 +1246,51 @@ class _PanelInferior extends StatelessWidget {
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: AppColors.cardBorder),
               ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  _LiveValor(icon: Icons.straighten, label: 'Profundidad', valor: liveProf != null ? '${liveProf!.toStringAsFixed(1)} mm' : '— mm'),
-                  _LiveValor(icon: Icons.speed, label: 'Presión', valor: livePres != null ? '${livePres!.toStringAsFixed(1)} bar' : '— bar'),
-                ],
-              ),
+              child: doble
+                  ? Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: [
+                        _LiveValor(
+                          icon: bandaInterior == null ? Icons.radio_button_checked : Icons.check_circle,
+                          label: 'Banda interior',
+                          valor: bandaInterior != null ? '${bandaInterior!.toStringAsFixed(1)} mm' : '— mm',
+                        ),
+                        _LiveValor(
+                          icon: bandaInterior == null ? Icons.radio_button_unchecked : Icons.radio_button_checked,
+                          label: 'Banda exterior',
+                          valor: bandaInterior != null && liveProf != null ? '${liveProf!.toStringAsFixed(1)} mm' : '— mm',
+                        ),
+                        _LiveValor(icon: Icons.speed, label: 'Presión', valor: livePres != null ? '${livePres!.toStringAsFixed(1)} bar' : '— bar'),
+                      ],
+                    )
+                  : Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: [
+                        _LiveValor(icon: Icons.straighten, label: 'Profundidad', valor: liveProf != null ? '${liveProf!.toStringAsFixed(1)} mm' : '— mm'),
+                        _LiveValor(icon: Icons.speed, label: 'Presión', valor: livePres != null ? '${livePres!.toStringAsFixed(1)} bar' : '— bar'),
+                      ],
+                    ),
             ),
             const SizedBox(height: 6),
-            const Text('Apoya la sonda: si la rueda lleva RFID, se selecciona sola.', style: TextStyle(color: AppColors.textHint, fontSize: 12)),
+            if (doble)
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      bandaInterior == null
+                          ? '▶ Apoya la sonda en la banda INTERIOR'
+                          : '▶ Ahora la banda EXTERIOR (dos pitidos = rueda hecha)',
+                      style: const TextStyle(color: AppColors.primary, fontSize: 13, fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                  if (onSaltarBanda != null)
+                    TextButton(onPressed: onSaltarBanda, child: const Text('Saltar banda')),
+                ],
+              )
+            else
+              const Text('Apoya la sonda: si la rueda lleva RFID, se selecciona sola.', style: TextStyle(color: AppColors.textHint, fontSize: 12)),
           ],
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
           Row(
             children: [
               Expanded(
@@ -1064,16 +1320,7 @@ class _PanelInferior extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 10),
-          if (pendientes > 0)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: Text(
-                'Quedan $pendientes ${pendientes == 1 ? 'posición' : 'posiciones'} sin medir',
-                style: const TextStyle(color: AppColors.warning, fontSize: 12, fontWeight: FontWeight.w600),
-                textAlign: TextAlign.center,
-              ),
-            ),
+          const SizedBox(height: 8),
           Row(
             children: [
               Expanded(
@@ -1107,6 +1354,7 @@ class _PanelInferior extends StatelessWidget {
           ),
         ],
       ),
+      ),
     );
   }
 }
@@ -1132,6 +1380,236 @@ class _LiveValor extends StatelessWidget {
         const SizedBox(height: 2),
         Text(valor, style: const TextStyle(color: AppColors.textPrimary, fontSize: 20, fontWeight: FontWeight.bold)),
       ],
+    );
+  }
+}
+
+// ── Resultado de la medición doble: todas las ruedas de un vistazo ──
+//
+// Devuelve 'finalizar', 'incidencia', 'remedir:<posicionId>' o null (seguir).
+class _ResultadoMedicion extends StatelessWidget {
+  final List<PosicionVehiculo> posiciones;
+  final Map<String, RevisionDetalleDraft> detalles;
+  final double? deltaIrregular;
+  final TireStatus Function(PosicionVehiculo) estadoDe;
+
+  const _ResultadoMedicion({
+    required this.posiciones,
+    required this.detalles,
+    required this.deltaIrregular,
+    required this.estadoDe,
+  });
+
+  static String _mm(double? v) => v == null ? '—' : v.toStringAsFixed(1).replaceAll('.', ',');
+
+  @override
+  Widget build(BuildContext context) {
+    // Agrupadas por eje (los sin eje, al final), y dentro de cada eje en el
+    // orden del plano.
+    final porEje = <int?, List<PosicionVehiculo>>{};
+    for (final p in posiciones) {
+      porEje.putIfAbsent(p.eje, () => []).add(p);
+    }
+    final ejes = porEje.keys.toList()
+      ..sort((a, b) => (a ?? 999).compareTo(b ?? 999));
+    for (final l in porEje.values) {
+      l.sort((a, b) => a.ordenVisual.compareTo(b.ordenVisual));
+    }
+
+    final medidas = posiciones.where((p) => estadoDe(p) != TireStatus.pendiente).length;
+    final graves = posiciones.where((p) => estadoDe(p) == TireStatus.grave).length;
+
+    return SafeArea(
+      child: DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.92,
+        maxChildSize: 0.95,
+        builder: (ctx, scroll) => Column(
+          children: [
+            const SizedBox(height: 8),
+            Container(width: 40, height: 4, decoration: BoxDecoration(color: AppColors.cardBorder, borderRadius: BorderRadius.circular(2))),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: Row(
+                children: [
+                  const Expanded(
+                    child: Text('Resultado de la revisión', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
+                  ),
+                  Text('$medidas de ${posiciones.length} medidas',
+                      style: TextStyle(fontSize: 13, color: medidas < posiciones.length ? AppColors.warning : AppColors.textSecondary)),
+                ],
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16),
+              child: Text('La cifra grande es la mínima de las dos bandas: la que manda. Toca una rueda para volver a medirla.',
+                  style: TextStyle(fontSize: 12, color: AppColors.textHint)),
+            ),
+            Expanded(
+              child: ListView(
+                controller: scroll,
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                children: [
+                  for (final eje in ejes) ...[
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(4, 10, 4, 6),
+                      child: Text(eje == null ? 'OTRAS POSICIONES' : 'EJE $eje',
+                          style: const TextStyle(fontSize: 11, letterSpacing: 1.2, fontWeight: FontWeight.w700, color: AppColors.textSecondary)),
+                    ),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        for (final p in porEje[eje]!)
+                          _TarjetaRueda(
+                            posicion: p,
+                            draft: detalles[p.id],
+                            estado: estadoDe(p),
+                            irregular: detalles[p.id]?.desgasteIrregular(deltaIrregular) ?? false,
+                            mm: _mm,
+                            onTap: () => Navigator.pop(context, 'remedir:${p.id}'),
+                          ),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Seguir midiendo'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(foregroundColor: AppColors.warning),
+                          onPressed: () => Navigator.pop(context, 'incidencia'),
+                          child: Text(graves > 0 ? '⚠ Con incidencia ($graves)' : '⚠ Con incidencia'),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.success,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                      ),
+                      onPressed: () => Navigator.pop(context, 'finalizar'),
+                      icon: const Icon(Icons.check_circle),
+                      label: const Text('Finalizar revisión'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TarjetaRueda extends StatelessWidget {
+  final PosicionVehiculo posicion;
+  final RevisionDetalleDraft? draft;
+  final TireStatus estado;
+  final bool irregular;
+  final String Function(double?) mm;
+  final VoidCallback onTap;
+
+  const _TarjetaRueda({
+    required this.posicion,
+    required this.draft,
+    required this.estado,
+    required this.irregular,
+    required this.mm,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final d = draft;
+    final color = tireStatusColor(estado);
+    final sinMedir = estado == TireStatus.pendiente;
+    final noAcc = d != null && (d.noAccesible || d.neumaticoAusente);
+    final hayBandas = d?.profundidadIntMm != null || d?.profundidadExtMm != null;
+
+    String? aviso;
+    Color avisoColor = AppColors.warning;
+    if (estado == TireStatus.grave) {
+      aviso = '⛔ Bajo mínimo';
+      avisoColor = AppColors.danger;
+    } else if (irregular) {
+      aviso = '⚠ Desgaste irregular · Δ ${mm(d?.deltaBandas)} mm';
+    } else if (hayBandas && (d?.profundidadIntMm == null || d?.profundidadExtMm == null)) {
+      aviso = 'Una sola banda';
+      avisoColor = AppColors.textHint;
+    }
+
+    return SizedBox(
+      width: (MediaQuery.of(context).size.width - 24 - 8) / 2,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: AppColors.surfaceVariant,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: sinMedir ? AppColors.cardBorder : color.withValues(alpha: 0.7), width: sinMedir ? 1 : 1.5),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(posicion.nombre ?? posicion.codigoPosicion,
+                  maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+              const SizedBox(height: 4),
+              if (sinMedir)
+                const Text('Sin medir', style: TextStyle(fontSize: 15, color: AppColors.warning, fontWeight: FontWeight.w700))
+              else if (noAcc)
+                Text(d.neumaticoAusente ? 'Sin neumático' : 'No accesible',
+                    style: const TextStyle(fontSize: 14, color: AppColors.textSecondary))
+              else
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    if (hayBandas)
+                      Expanded(
+                        child: Text('INT ${mm(d?.profundidadIntMm)}\nEXT ${mm(d?.profundidadExtMm)}',
+                            style: const TextStyle(fontSize: 11.5, height: 1.35, color: AppColors.textSecondary)),
+                      )
+                    else
+                      const Spacer(),
+                    Text(mm(d?.profundidadMm),
+                        style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: color)),
+                    const Text(' mm', style: TextStyle(fontSize: 11, color: AppColors.textSecondary)),
+                  ],
+                ),
+              if (!sinMedir && !noAcc && d?.presionBar != null)
+                Text('${d!.presionBar!.toStringAsFixed(1).replaceAll('.', ',')} bar',
+                    style: const TextStyle(fontSize: 11, color: AppColors.textSecondary)),
+              if (aviso != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 3),
+                  child: Text(aviso, style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: avisoColor)),
+                ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
+import CeldaProfundidad from "../components/CeldaProfundidad";
+import { umbralDesgasteIrregular } from "../services/data";
 import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones, listarIntervenciones, listarIntervalosReconstruidos, revisarIntervalo, cargarCoberturaRecorridos, imagenChasisDeMarca, generarPosicionesDeTipo, cotejarPlanoDeTipo, type CotejoPlano, type IntervaloReconstruido, type CoberturaRecorridos } from "../services/data";
 import type { Intervencion } from "../services/data";
 import { resumenMontajes, textoPorCondicion } from "../../../../shared/condicionNeumatico";
@@ -78,6 +80,7 @@ export default function VehiculoDetalle() {
   const [revisiones, setRevisiones] = useState<RevisionVehiculoT[]>([]);
   const [fichaRevision, setFichaRevision] = useState<RevisionVehiculoT | null>(null);
   const [fichaDetalle, setFichaDetalle] = useState<RevisionDetalle[]>([]);
+  const [deltaIrregular, setDeltaIrregular] = useState<number | null>(null);
   const [cargandoFicha, setCargandoFicha] = useState(false);
   const [operaciones, setOperaciones] = useState<OperacionNeumatico[]>([]);
   const [intervalos, setIntervalos] = useState<IntervaloReconstruido[]>([]);
@@ -211,7 +214,11 @@ export default function VehiculoDetalle() {
 
   async function verFichaRevision(r: RevisionVehiculoT) {
     setFichaRevision(r); setCargandoFicha(true);
-    try { setFichaDetalle(await listarDetalleRevision(r.id)); } finally { setCargandoFicha(false); }
+    try {
+      const det = await listarDetalleRevision(r.id);
+      setFichaDetalle(det);
+      setDeltaIrregular(det[0]?.empresa_id ? await umbralDesgasteIrregular(det[0].empresa_id) : null);
+    } finally { setCargandoFicha(false); }
   }
   useEffect(() => { void cargar(); /* eslint-disable-next-line */ }, [id]);
 
@@ -493,7 +500,19 @@ export default function VehiculoDetalle() {
 
       {/* Plano gráfico del vehículo */}
       <div className="mt-3 rounded-lg bg-slate-800 p-3">
-        <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Plano del vehículo</div>
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <div className="text-[11px] font-bold uppercase text-slate-400">Plano del vehículo</div>
+          {/* Revisar este vehículo sin tener que buscarlo otra vez en Revisión de vehículo. */}
+          {!esCliente && (
+            <button
+              type="button"
+              onClick={() => navigate(`/tyrecontrol/revision-vehiculo?vehiculo=${v.id}&empresa=${v.empresa_id}`)}
+              className="rounded-lg bg-emerald-600 px-4 py-2 text-[13px] font-bold text-white hover:bg-emerald-500"
+            >
+              Realizar revisión
+            </button>
+          )}
+        </div>
 
         {/*
           El plano no cuadra con la configuración. Se avisa aquí, encima del
@@ -933,7 +952,7 @@ export default function VehiculoDetalle() {
                 <tr key={d.id} className="border-t border-slate-700/60">
                   <td className={tdCls + " font-semibold"}>{d.posicion?.codigo_posicion ?? "—"}</td>
                   <td className={tdCls + " text-slate-400"}>{d.neumatico ? (d.neumatico.numero_interno ?? d.neumatico.codigo_interno) : (d.neumatico_ausente ? "Ausente" : "—")}</td>
-                  <td className={tdCls + " text-slate-400"}>{d.no_accesible ? "No accesible" : d.profundidad_mm != null ? `${d.profundidad_mm} mm` : "—"}</td>
+                  <td className={tdCls + " text-slate-400"}><CeldaProfundidad d={d} deltaUmbralMm={deltaIrregular} /></td>
                   <td className={tdCls + " text-slate-400"}>{d.no_accesible ? "—" : d.presion_bar != null ? `${presionTxt(d.presion_bar)} bar` : "—"}</td>
                   <td className={tdCls + " text-slate-400"}>{d.estado_visual ?? "—"}</td>
                   <td className={tdCls + " text-slate-400"}>{d.observaciones ?? "—"}</td>

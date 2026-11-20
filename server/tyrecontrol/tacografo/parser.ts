@@ -241,6 +241,24 @@ function buscarCabecera(hoja: unknown[][]): number {
     const etiquetas = (hoja[i] ?? []).map(clave);
     if (buscadas.every((b) => etiquetas.includes(b))) return i;
   }
+  // La extranet tiene DOS exportaciones. La que se importa aquí es el
+  // «Registro de intervenciones entre fechas», de 52 columnas. La otra, el
+  // «informe de intervenciones» corto, llama a sus columnas «Fecha» e «Id.
+  // intervención» y no trae ni el resultado ni los kilómetros: sin el
+  // resultado no se puede saber si el plazo del tacógrafo se reinicia. Se
+  // reconoce para decirlo con su nombre, en vez de un «no se encuentra la
+  // cabecera» que no ayuda a nadie.
+  const corta = ["Id. intervención", "Fecha", "Matrícula"].map(clave);
+  for (let i = 0; i < Math.min(hoja.length, 20); i += 1) {
+    const etiquetas = (hoja[i] ?? []).map(clave);
+    if (corta.every((b) => etiquetas.includes(b))) {
+      throw new ErrorFichero(
+        "Este fichero es el «informe de intervenciones» corto de la extranet, que no trae el "
+        + "resultado (favorable o desfavorable) ni los kilómetros, y sin ellos no se puede importar. "
+        + "Hay dos maneras: exportar el «Registro de intervenciones entre fechas», que sí los "
+        + "trae, o subir los informes en PDF en el apartado de abajo.");
+    }
+  }
   throw new ErrorFichero(
     `No se encuentra la cabecera del informe. Tiene que haber una fila con ${
       OBLIGATORIAS.map((o) => `«${o}»`).join(", ")}.`);

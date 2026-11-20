@@ -76,9 +76,37 @@ class FichaVehiculoEnBase extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      v.matricula,
-                      style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w900),
+                    // El número de bus va pintado en la carrocería: delante de
+                    // una fila de autobuses se busca por él antes que por la
+                    // matrícula.
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Flexible(
+                          child: Text(
+                            v.matricula,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w900),
+                          ),
+                        ),
+                        if ((v.numeroUnidad ?? '').trim().isNotEmpty) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            key: Key('unidad-${v.matricula}'),
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: AppColors.surfaceVariant,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: AppColors.cardBorder),
+                            ),
+                            child: Text(
+                              'Nº ${v.numeroUnidad!.trim()}',
+                              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                     const SizedBox(height: 1),
                     Text(

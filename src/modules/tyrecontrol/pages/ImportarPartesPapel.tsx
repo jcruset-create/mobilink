@@ -8,21 +8,25 @@ import {
   discrepanciaDeCroquis, filasConDatos, numeracionDelParteFlotas, pareceNota,
 } from "../services/parteFlotas";
 import { inputCls, TableWrap, tdCls, thCls } from "../components/ui";
+import {
+  borradorDe, estadoParaGuardar, filaVacia, lecturaDelBorrador, origenDelParte, type BorradorHoja,
+} from "../services/guardarPartePapel";
+import { importRevisiones, type ReporteRev } from "../services/importRevisiones";
 
 /**
  * Importar los partes de revisión en papel.
  *
- * ── Esta pantalla todavía NO guarda nada ───────────────────────────────────
+ * ── Lee, enseña y, hoja a hoja, guarda ──────────────────────────────────────
  *
  * Lee el PDF y enseña lo que ha entendido, al lado del vehículo con el que lo
- * ha casado. Nada más. Es deliberado y es el primer paso: el lector se ha
- * escrito mirando catorce partes reales pero no se ha podido ejecutar ni una
- * vez contra ellos, así que lo primero que tiene que pasar es que alguien
- * compare esta pantalla con los papeles y diga si acierta.
+ * ha casado. Cada hoja tiene su botón «Guardar revisión»: crea la revisión del
+ * día del parte con la profundidad de cada rueda, medida a mano.
  *
- * Cuando acierte, se añade el botón de guardar y se engancha con la pantalla
- * de Revisión de vehículo, que desde hace poco sabe fechar la revisión en el
- * día del parte y montar gomas en posiciones vacías.
+ * Guarda con `importRevisiones`, como el Fleetcheck: solo en ruedas que ya
+ * tienen neumático (no crea neumáticos ni montajes), y si el vehículo ya tiene
+ * revisión ese día no la toca. Qué bloquea una hoja y qué hay que confirmar
+ * antes está en `services/guardarPartePapel.ts`. Jordi comprobó la lectura
+ * contra los papeles antes de dejarle guardar (17/11/2026).
  *
  * ── Lo que se enseña y por qué ─────────────────────────────────────────────
  *
@@ -139,6 +143,22 @@ export default function ImportarPartesPapel() {
     return { veh: null, aviso: "No se ha reconocido el vehículo." };
   }
 
+  /** Lo corregido a mano pasa a ser la lectura: todo se recalcula con ello. */
+  function corregir(i: number, c: ReturnType<typeof lecturaDelBorrador>) {
+    setEstados((p) => p.map((e, j) => (j !== i || e.fase !== "leida" ? e : {
+      fase: "leida",
+      lectura: {
+        ...e.lectura,
+        matricula: c.matricula, numero_unidad: c.numero_unidad, fecha: c.fecha,
+        filas: c.filas.map((f) => ({
+          ...f, recauchutado: null, reestriado: null, llanta_ha: null, llanta_cd: null, llanta_gp: null,
+        })),
+        // La duda de la lectura la ha resuelto quien tiene el papel delante.
+        aviso: null,
+      },
+    })));
+  }
+
   async function posicionesDe(v: Vehiculo): Promise<PosicionVehiculo[]> {
     if (!v.tipo_vehiculo_id) return [];
     const ya = posicionesPorTipo[v.tipo_vehiculo_id];
@@ -153,8 +173,9 @@ export default function ImportarPartesPapel() {
       <h1 className="mb-1 text-lg font-black">Importar partes en papel</h1>
       <p className="mb-3 max-w-3xl text-[12px] text-slate-400">
         Sube el PDF escaneado de los partes de Grupo Soledad. Se lee una hoja por vehículo
-        y se enseña lo que ha entendido. <b className="text-amber-300">Todavía no guarda nada</b>:
-        esta pantalla es para comprobar que lo lee bien antes de dejarle escribir.
+        y se enseña lo que ha entendido. Compara cada hoja con el papel y pulsa <b>Guardar revisión</b>:
+        se crea la revisión del día del parte en las ruedas que ya tienen neumático. Un vehículo que ya
+        tiene revisión ese día no se toca.
       </p>
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
@@ -173,8 +194,9 @@ export default function ImportarPartesPapel() {
       <div className="flex flex-col gap-3">
         {estados.map((e, i) => (
           <Hoja
-            key={i} numero={i + 1} estado={e}
+            key={i} numero={i + 1} estado={e} fichero={nombre}
             casar={casar} posicionesDe={posicionesDe}
+            onCorregir={(c) => corregir(i, c)}
           />
         ))}
       </div>
@@ -182,9 +204,11 @@ export default function ImportarPartesPapel() {
   );
 }
 
-function Hoja({ numero, estado, casar, posicionesDe }: {
+function Hoja({ numero, estado, fichero, casar, posicionesDe, onCorregir }: {
   numero: number;
   estado: EstadoHoja;
+  fichero: string;
+  onCorregir: (c: ReturnType<typeof lecturaDelBorrador>) => void;
   casar: (l: HojaPapel) => { veh: Vehiculo | null; aviso: string | null };
   posicionesDe: (v: Vehiculo) => Promise<PosicionVehiculo[]>;
 }) {
@@ -212,6 +236,59 @@ function Hoja({ numero, estado, casar, posicionesDe }: {
     () => (posiciones && posiciones.length > 0 ? numeracionDelParteFlotas(posiciones) : null),
     [posiciones],
   );
+
+  // ── Guardar ────────────────────────────────────────────────────────────────
+  const [confirmado, setConfirmado] = useState(false);
+  const [guardando, setGuardando] = useState(false);
+  const [resultado, setResultado] = useState<ReporteRev | null>(null);
+  const [errorGuardar, setErrorGuardar] = useState("");
+
+  const lectura = estado.fase === "leida" ? estado.lectura : null;
+  const guardado = useMemo(() => {
+    if (!lectura || !casado || (veh && posiciones === null)) return null;
+    const discrepancia = posiciones ? discrepanciaDeCroquis(posiciones, lectura.croquis) : null;
+    return estadoParaGuardar({
+      matricula: veh?.matricula ?? null,
+      fechaLeida: lectura.fecha,
+      filas: filasConDatos(lectura.filas),
+      ruedaDe: (pos) => (pos != null ? numeracion?.get(pos)?.codigo_posicion ?? null : null),
+      sinPlano: !!veh && !!posiciones && posiciones.length === 0,
+      avisosDeLectura: [casado.aviso, lectura.aviso, discrepancia].filter((x): x is string => !!x),
+      hoy: new Date().toISOString().slice(0, 10),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lectura, vehId, posiciones, numeracion]);
+
+  // ── Corregir a mano ───────────────────────────────────────────────────────
+  const [borrador, setBorrador] = useState<BorradorHoja | null>(null);
+  const [editada, setEditada] = useState(false);
+  function editar() {
+    if (!lectura) return;
+    setBorrador(borradorDe(lectura, filasConDatos(lectura.filas)));
+  }
+  function aplicarEdicion() {
+    if (!borrador) return;
+    onCorregir(lecturaDelBorrador(borrador));
+    setBorrador(null); setEditada(true); setConfirmado(false);
+  }
+  const cambiaFila = (j: number, campo: keyof BorradorHoja["filas"][number], v: string) =>
+    setBorrador((b) => (b ? { ...b, filas: b.filas.map((f, k) => (k === j ? { ...f, [campo]: v } : f)) } : b));
+
+  async function guardar() {
+    if (!guardado || guardado.filas.length === 0) return;
+    setGuardando(true); setErrorGuardar("");
+    try {
+      setResultado(await importRevisiones(guardado.filas, true, {
+        origen: "manual",
+        soloMontados: true,
+        respetarExistentes: true,
+        tipoRevision: "solo_profundidades",
+        observaciones: origenDelParte(fichero, numero),
+      }));
+    } catch (e: unknown) {
+      setErrorGuardar((e as Error)?.message ?? "No se ha podido guardar");
+    } finally { setGuardando(false); }
+  }
 
   return (
     <div className="rounded-lg bg-slate-800 p-3">
@@ -242,9 +319,25 @@ function Hoja({ numero, estado, casar, posicionesDe }: {
                 confianza {Math.round(estado.lectura.confianza * 100)} %
               </span>
             )}
+            {editada && (
+              <span className="rounded bg-sky-500/20 px-1.5 py-0.5 text-[11px] font-bold text-sky-300">corregida a mano</span>
+            )}
+            {!borrador && !resultado && (
+              <button type="button" onClick={editar}
+                className="ml-auto rounded border border-sky-600 px-3 py-1 text-[12px] font-bold text-sky-300 hover:bg-sky-600/10">
+                ✎ Editar
+              </button>
+            )}
           </>
         )}
       </div>
+
+      {borrador && (
+        <EditorHoja
+          borrador={borrador} onCambia={setBorrador} onCambiaFila={cambiaFila}
+          onAplicar={aplicarEdicion} onCancelar={() => setBorrador(null)}
+        />
+      )}
 
       {estado.fase === "leida" && (
         <Avisos
@@ -253,7 +346,7 @@ function Hoja({ numero, estado, casar, posicionesDe }: {
         />
       )}
 
-      {estado.fase === "leida" && (
+      {estado.fase === "leida" && !borrador && (
         <TableWrap>
           <thead className="bg-slate-900"><tr>
             <th className={thCls}>POS</th>
@@ -294,6 +387,140 @@ function Hoja({ numero, estado, casar, posicionesDe }: {
           </tbody>
         </TableWrap>
       )}
+
+      {guardado && !borrador && (
+        <BarraGuardar
+          guardado={guardado} confirmado={confirmado} onConfirmar={setConfirmado}
+          guardando={guardando} resultado={resultado} error={errorGuardar}
+          onGuardar={() => void guardar()}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Corregir a mano la cabecera y las filas de una hoja antes de guardarla. */
+function EditorHoja({ borrador, onCambia, onCambiaFila, onAplicar, onCancelar }: {
+  borrador: BorradorHoja;
+  onCambia: (b: BorradorHoja) => void;
+  onCambiaFila: (j: number, campo: keyof BorradorHoja["filas"][number], v: string) => void;
+  onAplicar: () => void;
+  onCancelar: () => void;
+}) {
+  const celda = "w-full rounded border border-slate-600 bg-slate-900 px-2 py-1 text-[13px] text-slate-100";
+  const columnas: [keyof BorradorHoja["filas"][number], string, string][] = [
+    ["pos", "Pos", "w-14"], ["profundidad", "Profundidad (mm)", "w-24"], ["medida", "Medida", ""],
+    ["marca", "Marca", ""], ["modelo", "Modelo", ""], ["serie", "Serie / nota", ""],
+  ];
+  return (
+    <div className="mb-2 flex flex-col gap-2 rounded border border-sky-700/60 bg-slate-900/60 p-3">
+      <div className="text-[12px] text-sky-200">
+        Corrige lo que no cuadre con el papel. La unidad es la que elige el vehículo; la posición (1, 2, 3…) es la
+        del papel y decide la rueda.
+      </div>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+        {([["matricula", "Matrícula"], ["unidad", "Unidad"], ["fecha", "Fecha (dd-mm-aaaa)"]] as const).map(([k, l]) => (
+          <label key={k} className="flex flex-col gap-1 text-[11px] font-bold uppercase text-slate-400">
+            {l}
+            <input className={celda} value={borrador[k]} onChange={(e) => onCambia({ ...borrador, [k]: e.target.value })} />
+          </label>
+        ))}
+      </div>
+      <TableWrap>
+        <thead className="bg-slate-900"><tr>
+          {columnas.map(([, l]) => <th key={l} className={thCls}>{l}</th>)}
+          <th className={thCls}></th>
+        </tr></thead>
+        <tbody>
+          {borrador.filas.map((f, j) => (
+            <tr key={j} className="border-t border-slate-700/60">
+              {columnas.map(([k, l, ancho]) => (
+                <td key={k} className={tdCls}>
+                  <input aria-label={`${l} fila ${j + 1}`} className={`${celda} ${ancho}`} value={f[k]}
+                    inputMode={k === "pos" || k === "profundidad" ? "decimal" : undefined}
+                    onChange={(e) => onCambiaFila(j, k, e.target.value)} />
+                </td>
+              ))}
+              <td className={tdCls}>
+                <button type="button" title="Quitar la fila"
+                  onClick={() => onCambia({ ...borrador, filas: borrador.filas.filter((_, k) => k !== j) })}
+                  className="rounded px-2 py-1 text-rose-300 hover:bg-rose-500/10">✕</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </TableWrap>
+      <div className="flex flex-wrap gap-2">
+        <button type="button"
+          onClick={() => {
+            const ultima = borrador.filas[borrador.filas.length - 1];
+            const sig = ultima && /^\d+$/.test(ultima.pos.trim()) ? String(Number(ultima.pos) + 1) : "";
+            onCambia({ ...borrador, filas: [...borrador.filas, { ...filaVacia(sig), medida: ultima?.medida ?? "", marca: ultima?.marca ?? "", modelo: ultima?.modelo ?? "" }] });
+          }}
+          className="rounded border border-slate-600 px-3 py-1.5 text-[12px] text-slate-200">+ Fila</button>
+        <span className="flex-1" />
+        <button type="button" onClick={onCancelar} className="rounded border border-slate-600 px-3 py-1.5 text-[12px] text-slate-200">Cancelar</button>
+        <button type="button" onClick={onAplicar} className="rounded bg-sky-600 px-4 py-1.5 text-[12px] font-bold text-white">Aplicar cambios</button>
+      </div>
+    </div>
+  );
+}
+
+/** El botón de guardar de una hoja, con lo que lo impide y lo que ha hecho. */
+function BarraGuardar({ guardado, confirmado, onConfirmar, guardando, resultado, error, onGuardar }: {
+  guardado: ReturnType<typeof estadoParaGuardar>;
+  confirmado: boolean;
+  onConfirmar: (v: boolean) => void;
+  guardando: boolean;
+  resultado: ReporteRev | null;
+  error: string;
+  onGuardar: () => void;
+}) {
+  if (resultado) {
+    const ya = resultado.yaRevisados?.length ?? 0;
+    const sinNeu = resultado.sinNeumatico?.flatMap((s) => s.posiciones) ?? [];
+    return (
+      <div className="mt-2 rounded border border-emerald-600/40 bg-emerald-500/10 px-3 py-2 text-[12px] text-emerald-200">
+        {ya > 0
+          ? "Este vehículo ya tenía revisión ese día: no se ha tocado."
+          : `✔ Revisión guardada: ${resultado.resumen.detalles} rueda(s) medida(s).`}
+        {sinNeu.length > 0 && (
+          <div className="text-amber-200">
+            Sin guardar, porque en TyreControl no tienen neumático montado: {sinNeu.join(", ")}.
+          </div>
+        )}
+        {resultado.avisos.map((a, i) => <div key={i} className="text-amber-200">{a}</div>)}
+      </div>
+    );
+  }
+  const hayAvisos = guardado.avisos.length > 0;
+  const puede = guardado.bloqueos.length === 0 && (!hayAvisos || confirmado) && !guardando;
+  return (
+    <div className="mt-2 flex flex-col gap-2 rounded border border-slate-700 bg-slate-900/60 px-3 py-2">
+      {guardado.bloqueos.length > 0 && (
+        <div className="text-[12px] text-rose-300">
+          <b>No se puede guardar todavía:</b>
+          {guardado.bloqueos.map((b, i) => <div key={i}>· {b}</div>)}
+        </div>
+      )}
+      {guardado.bloqueos.length === 0 && hayAvisos && (
+        <label className="flex items-start gap-2 text-[12px] text-amber-200">
+          <input type="checkbox" className="mt-0.5" checked={confirmado} onChange={(e) => onConfirmar(e.target.checked)} />
+          <span>He mirado el papel: el vehículo y las medidas son estos, aunque haya avisos arriba.</span>
+        </label>
+      )}
+      <div className="flex flex-wrap items-center gap-3">
+        <button type="button" onClick={onGuardar} disabled={!puede}
+          className="rounded bg-emerald-600 px-4 py-2 text-[13px] font-bold text-white disabled:opacity-40">
+          {guardando ? "Guardando…" : "Guardar revisión"}
+        </button>
+        {guardado.bloqueos.length === 0 && (
+          <span className="text-[12px] text-slate-400">
+            {guardado.filas.length} rueda(s) · revisión del {guardado.fecha?.split("-").reverse().join("/")} · medida a mano
+          </span>
+        )}
+      </div>
+      {error && <div className="text-[12px] text-rose-300">{error}</div>}
     </div>
   );
 }

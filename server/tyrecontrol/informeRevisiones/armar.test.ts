@@ -287,3 +287,28 @@ describe("armarInforme · truncado", () => {
     expect(d.advertencias).toEqual([]);
   });
 });
+
+describe("armarInforme · medición doble", () => {
+  it("con dos bandas, la rueda las lleva y el estado se decide con la menor", () => {
+    // profundidad_mm ya llega como la menor (la BD lo garantiza).
+    const d = armarInforme([rev({ id: "a" })], [
+      med({ revision_id: "a", profundidad_mm: 1.4, profundidad_int_mm: 1.4, profundidad_ext_mm: 2.1 }),
+    ], op());
+    const r = d.revisiones[0].ruedas[0];
+    expect(r.bandas).toEqual({ int: 1.4, ext: 2.1 });
+    expect(r.profundidad).toBe(1.4);
+    expect(r.estado).toBe("bajo_minimo");
+  });
+
+  it("una sola banda medida (gemela inaccesible) se enseña sin inventar la otra", () => {
+    const d = armarInforme([rev({ id: "a" })], [
+      med({ revision_id: "a", profundidad_mm: 6.9, profundidad_int_mm: 6.9, profundidad_ext_mm: null }),
+    ], op());
+    expect(d.revisiones[0].ruedas[0].bandas).toEqual({ int: 6.9, ext: null });
+  });
+
+  it("una revisión de una sola medición queda exactamente como antes", () => {
+    const d = armarInforme([rev({ id: "a" })], [med({ revision_id: "a", profundidad_mm: 8 })], op());
+    expect(d.revisiones[0].ruedas[0].bandas).toBeNull();
+  });
+});

@@ -111,6 +111,7 @@ import { hasRealValue, normalizarValor } from "../src/modules/tyrecontrol/servic
 import { resumenOperaciones } from "../src/modules/tyrecontrol/services/resumenOperaciones.ts";
 import { calcularConfiguracion, avisosCoherencia } from "./tyrecontrol/ficha-tecnica/axleMapper.ts";
 import { rasterizarPdf } from "./tyrecontrol/ficha-tecnica/pdfRasterizer.ts";
+import { claveDePin, clavesPosibles, LONGITUD_MINIMA_PIN } from "./tyrecontrol/pinApk.ts";
 import { cotejarPlano, generarPosiciones } from "./tyrecontrol/posicionesDesdeConfig.ts";
 import { initConnect, mountConnect, startConnectWorker } from "./connect/index.ts";
 import { createDispatchRouter, initDispatch, startDispatchWorker } from "./dispatch/index.ts";
@@ -138,6 +139,7 @@ import {
 import { createTyreControlRouter } from "./tyrecontrol/router.ts";
 import { createConciliacionRouter } from "./tyrecontrol/conciliacion/router.ts";
 import { createPresenciaRouter } from "./tyrecontrol/presencia/router.ts";
+import { createSateliteRouter } from "./tyrecontrol/satelite/router.ts";
 import { createUbicacionRouter } from "./tyrecontrol/ubicacion/router.ts";
 import { createKilometrajeMensualRouter } from "./tyrecontrol/kilometrajeMensual/router.ts";
 import { createAltaOperativaRouter } from "./tyrecontrol/altaOperativa/router.ts";
@@ -184,6 +186,7 @@ import { mountInformeRevisiones } from "./tyrecontrol/informeRevisiones/index.ts
 import { mountInformePendientes } from "./tyrecontrol/informePendientes/index.ts";
 import { mountInformeMensual } from "./tyrecontrol/informeMensual/index.ts";
 import { mountTcTacografo } from "./tyrecontrol/tacografo/index.ts";
+import { mountTcFleetcheck } from "./tyrecontrol/fleetcheck.ts";
 import { masNuevaPrimero } from "./apkVersion.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
@@ -193,6 +196,7 @@ import { proponerVinculos, type EmpleadoCore } from "./core/vinculoTecnicos.ts";
 import { resolverRolDelPanel, type RolResuelto } from "./core/rolDelPanel.ts";
 import { TIPO_SALIDA, esMotivoDeSalida, pasoDeSalida, validarSalida, RADIO_DESTINO_M } from "../src/modules/salidasTaller.ts";
 import { pasoDeOtfGps, otfSigueEnCurso } from "../src/modules/seguimientoOtf.ts";
+import { normalizarBloqueos } from "../src/modules/bloqueosDeArea.ts";
 import { siguienteReferencia } from "./cobros/referencias.ts";
 import { saveCaptureAnalysis, reconcileCaptureAiStatus } from "./core/whatsappCapture.ts";
 import { aE164, clienteTwilio, numeroWhatsAppEmisor } from "./core/twilio.ts";
@@ -5378,6 +5382,8 @@ app.put("/api/agenda-config", requireSupervisorRole, async (req, res) => {
       holidays,
       specialDays,
       closedSaturdaysInAugust: body.closedSaturdaysInAugust !== false,
+      // Bloqueos por área (p. ej. tacógrafo el 26/11 por la mañana).
+      areaBlocks: normalizarBloqueos(body.areaBlocks),
     });
 
     await db.query(
@@ -9949,6 +9955,57 @@ async function detectPlateFromImage(
   } catch (error) {
     console.error("detectPlateFromImage error:", error);
     return null;
+  }
+}
+
+/**
+ * Como detectPlateFromImage, pero diciendo además qué caracteres ha leído con
+ * duda (0/O, 8/B, 1/I, 5/S, 2/Z, una letra tapada por barro…). Lo usa el alta
+ * de vehículos de la tablet: antes de crear un camión nuevo hay que estar
+ * seguros de la matrícula, y una duda se resuelve repitiendo la foto.
+ *
+ * `dudosos` son posiciones (desde 0) sobre la matrícula ya normalizada.
+ */
+async function detectarMatriculaConDudas(
+  imageUrl: string
+): Promise<{ plate: string | null; dudosos: number[] }> {
+  try {
+    const r = await pedirIA<{ matricula: string | null; dudosos: number[] }>({
+      operacion: "tyrecontrol.detectarMatricula",
+      proposito: "documento",
+      prompt:
+        "Esta es una foto de la matrícula de un vehículo español. " +
+        "En España la matrícula BLANCA es la del CAMIÓN/vehículo y la ROJA la del REMOLQUE. " +
+        "Si aparecen las dos, devuelve SOLO la BLANCA. " +
+        "Devuelve la matrícula sin espacios ni guiones, o null si no se puede leer. " +
+        "En `dudosos` pon las posiciones (empezando en 0, sobre la matrícula sin espacios) de los " +
+        "caracteres de los que NO estés seguro: confusiones como 0/O, 8/B, 1/I, 5/S, 2/Z, o letras " +
+        "tapadas, borrosas o cortadas. Lista vacía si la lees entera con seguridad.",
+      imagenes: [{ url: imageUrl }],
+      maxTokens: 2000,
+      esquema: {
+        nombre: "matricula_con_dudas",
+        schema: {
+          type: "object", additionalProperties: false,
+          required: ["matricula", "dudosos"],
+          properties: {
+            matricula: { type: ["string", "null"] },
+            dudosos: { type: "array", items: { type: "integer" } },
+          },
+        },
+      },
+    });
+    const datos: Partial<{ matricula: unknown; dudosos: unknown }> = r.datos ?? {};
+    const plate = normalizePlateText(datos.matricula);
+    if (!plate || plate === "NONE" || plate.length < 5) return { plate: null, dudosos: [] };
+    const posiciones: unknown[] = Array.isArray(datos.dudosos) ? datos.dudosos : [];
+    const dudosos = [...new Set(
+      posiciones.filter((i): i is number => Number.isInteger(i) && (i as number) >= 0 && (i as number) < plate.length)
+    )].sort((a, b) => a - b);
+    return { plate, dudosos };
+  } catch (error) {
+    console.error("detectarMatriculaConDudas error:", error);
+    return { plate: null, dudosos: [] };
   }
 }
 
@@ -19575,19 +19632,60 @@ app.put("/api/otf/trabajos/:tid", requireSupervisorRole, async (req, res) => {
   try {
     const tid = Number(req.params.tid);
     const b = req.body ?? {};
-    const trabajo = b.trabajoPlantilla != null || b.detalleManual != null
-      ? combineTrabajo(b.trabajoPlantilla, b.detalleManual) : null;
+    /*
+     * Solo cambia lo que llega. Antes la plantilla y el detalle se pisaban
+     * siempre: cambiar el estado desde el desplegable (que solo manda
+     * «status») los dejaba en nulo.
+     */
+    const tocaTexto = b.trabajoPlantilla !== undefined || b.detalleManual !== undefined || b.neumaticos !== undefined;
+    // Cambio de neumáticos: undefined no toca, null lo quita, un objeto lo sustituye.
+    let neumaticos: NeumaticosTrabajo | null = null;
+    if (b.neumaticos) {
+      try {
+        neumaticos = limpiarNeumaticos(b.neumaticos);
+      } catch (e) {
+        if (e instanceof ErrorNeumaticos) return res.status(400).json({ error: e.message });
+        throw e;
+      }
+    }
+    const previo = (await db.query(`SELECT * FROM otf_trabajos WHERE id = $1`, [tid])).rows[0];
+    if (!previo) return res.status(404).json({ error: "Trabajo no encontrado" });
+    // Un trabajo ya registrado en TyreControl no cambia de ruedas: allí ya están montadas.
+    if (b.neumaticos !== undefined && previo.tcMontaje?.estado === "hecho") {
+      return res.status(409).json({ error: "El montaje ya está registrado en TyreControl: no se pueden cambiar las ruedas" });
+    }
+    const plantilla = b.trabajoPlantilla !== undefined ? (String(b.trabajoPlantilla ?? "").trim() || null) : previo.trabajoPlantilla;
+    const detalle = tocaTexto
+      ? (String(b.detalleManual ?? "").trim() || (neumaticos ? textoNeumaticos(neumaticos) : "")) || null
+      : previo.detalleManual;
+    const trabajo = tocaTexto ? combineTrabajo(plantilla, detalle) : previo.trabajo;
+    const ahora = Date.now();
     const r = await db.query(
       `UPDATE otf_trabajos SET
          plate = COALESCE($2,plate), "plateRemolque" = COALESCE($3,"plateRemolque"), "tipoVehiculo" = COALESCE($4,"tipoVehiculo"),
-         "trabajoPlantilla" = $5, "detalleManual" = $6, trabajo = COALESCE($7,trabajo),
-         status = COALESCE($8,status), observaciones = COALESCE($9,observaciones), "updatedAtMs" = $10
+         "trabajoPlantilla" = $5, "detalleManual" = $6, trabajo = $7,
+         status = COALESCE($8,status),
+         observaciones = CASE WHEN $9::boolean THEN $10::text ELSE observaciones END,
+         neumaticos = CASE WHEN $11::boolean THEN $12::jsonb ELSE neumaticos END,
+         "updatedAtMs" = $13
        WHERE id = $1 RETURNING *`,
       [tid, b.plate != null ? String(b.plate).toUpperCase().trim() : null, b.plateRemolque ?? null,
-       b.tipoVehiculo ?? null, b.trabajoPlantilla ?? null, b.detalleManual ?? null, trabajo,
-       b.status ?? null, b.observaciones ?? null, Date.now()]
+       b.tipoVehiculo ?? null, plantilla, detalle, trabajo, b.status ?? null,
+       b.observaciones !== undefined, String(b.observaciones ?? "").trim() || null,
+       b.neumaticos !== undefined, neumaticos ? JSON.stringify(neumaticos) : null, ahora]
     );
-    if (!r.rows[0]) return res.status(404).json({ error: "Trabajo no encontrado" });
+    // El neumático que puso la oficina como material sigue al trabajo.
+    if (b.neumaticos !== undefined) {
+      await db.query(`DELETE FROM otf_trabajo_material WHERE "trabajoId" = $1 AND "creadoPor" = 'oficina' AND tipo = 'neumatico'`, [tid]);
+      if (neumaticos) {
+        await db.query(
+          `INSERT INTO otf_trabajo_material ("trabajoId","otfId",tipo,descripcion,marca,estado,cantidad,"creadoPor","createdAtMs")
+           VALUES ($1,$2,'neumatico',$3,$4,$5,$6,'oficina',$7)`,
+          [tid, previo.otfId, neumaticos.medida, [neumaticos.marca, neumaticos.modelo].filter(Boolean).join(" ") || null,
+           neumaticos.condicion, neumaticos.seleccion.length, ahora],
+        );
+      }
+    }
     res.json(normalizeOtfTrabajo(r.rows[0]));
   } catch (e) {
     console.error("PUT /api/otf/trabajos/:tid error:", e);
@@ -20401,11 +20499,22 @@ app.post("/api/tyrecontrol/login-operario", async (req, res) => {
       return res.status(401).json({ error: "Usuario o PIN incorrectos" });
     }
 
-    const comprobacion = await supabaseAnonAuth.auth.signInWithPassword({
-      email: user.email,
-      password: code,
-    });
-    if (comprobacion.error || !comprobacion.data?.user) {
+    // El PIN puede estar guardado tal cual (los operarios de antes) o, si es
+    // corto, con el sufijo que lo lleva a la longitud que pide Auth: ver
+    // tyrecontrol/pinApk.ts. Se devuelve la que ha valido para que la tablet
+    // inicie su sesión con ella.
+    let clave: string | null = null;
+    for (const posible of clavesPosibles(code)) {
+      const comprobacion = await supabaseAnonAuth.auth.signInWithPassword({
+        email: user.email,
+        password: posible,
+      });
+      if (!comprobacion.error && comprobacion.data?.user) {
+        clave = posible;
+        break;
+      }
+    }
+    if (!clave) {
       registrarFalloIntento(limite);
       return res.status(401).json({ error: "Usuario o PIN incorrectos" });
     }
@@ -20426,7 +20535,7 @@ app.post("/api/tyrecontrol/login-operario", async (req, res) => {
       }
     }
 
-    res.json({ ok: true, email: user.email, techName: user.nombre });
+    res.json({ ok: true, email: user.email, techName: user.nombre, clave });
   } catch (error: any) {
     console.error("POST /api/tyrecontrol/login-operario error:", error);
     res.status(500).json({ error: error?.message || "Error iniciando sesión" });
@@ -20493,8 +20602,10 @@ app.post("/api/tyrecontrol/usuarios/:id/password", async (req, res) => {
     }
 
     const nueva = String(req.body?.password ?? "");
-    if (nueva.length < 4) return res.status(400).json({ error: "La contraseña debe tener al menos 4 caracteres" });
-    const { error } = await supabase.auth.admin.updateUserById(objetivoId, { password: nueva });
+    if (nueva.length < LONGITUD_MINIMA_PIN) return res.status(400).json({ error: "El PIN debe tener al menos 4 caracteres" });
+    // Un PIN de cuatro dígitos —las casillas de la tablet— no llega a lo que
+    // pide Auth: se guarda con sufijo (tyrecontrol/pinApk.ts).
+    const { error } = await supabase.auth.admin.updateUserById(objetivoId, { password: claveDePin(nueva) });
     if (error) return res.status(400).json({ error: error.message });
     console.log(
       `[tyrecontrol] contraseña restablecida por ${userData.user.id} sobre ${objetivoId}`
@@ -20616,6 +20727,18 @@ app.post("/api/tyrecontrol/usuarios", async (req, res) => {
     if (!nombre || !email) return res.status(400).json({ error: "Nombre y email son obligatorios" });
     if (!["administrador", "operador", "cliente"].includes(rol)) return res.status(400).json({ error: "Rol no válido" });
 
+    // El perfil solo existe en el rol cliente. Sin perfil es «responsable de
+    // flota», que es lo que había. La base de datos comprueba además que la
+    // delegación sea de la empresa del usuario.
+    const perfilCliente = rol === "cliente" ? String(b.perfil_cliente ?? "").trim() : "";
+    const delegacionId = perfilCliente === "delegacion" ? String(b.delegacion_id ?? "").trim() : "";
+    if (perfilCliente && !["flota", "delegacion", "director"].includes(perfilCliente)) {
+      return res.status(400).json({ error: "Perfil de cliente no válido" });
+    }
+    if (perfilCliente === "delegacion" && !delegacionId) {
+      return res.status(400).json({ error: "Un jefe de base necesita una delegación" });
+    }
+
     // La contraseña solo hace falta para entrar en la APK (allí es el PIN). En
     // el panel se entra con enlace por email, así que obligar a un admin a
     // inventar una contraseña para un cliente creaba una credencial que nadie
@@ -20625,7 +20748,7 @@ app.post("/api/tyrecontrol/usuarios", async (req, res) => {
     if (accesoApk && passwordPedida.length < 4) {
       return res.status(400).json({ error: "Un usuario con acceso a la APK necesita un PIN de al menos 4 caracteres" });
     }
-    const password = passwordPedida || crypto.randomBytes(24).toString("base64url");
+    const password = passwordPedida ? claveDePin(passwordPedida) : crypto.randomBytes(24).toString("base64url");
 
     const { data: created, error: createErr } = await supabase.auth.admin.createUser({ email, password, email_confirm: true });
     if (createErr || !created.user) return res.status(400).json({ error: mensajeDeCorreo(createErr?.message ?? "No se pudo crear el usuario") });
@@ -20640,6 +20763,11 @@ app.post("/api/tyrecontrol/usuarios", async (req, res) => {
       acceso_panel: accesoPanel,
       es_superadmin: false,
       activo: true,
+      // Solo se mandan si hay perfil: así crear usuarios sigue funcionando
+      // aunque la migración de los perfiles aún no esté aplicada.
+      ...(perfilCliente && perfilCliente !== "flota"
+        ? { perfil_cliente: perfilCliente, ...(delegacionId ? { delegacion_id: delegacionId } : {}) }
+        : {}),
     });
     if (insErr) {
       // rollback del usuario de auth si falla el perfil
@@ -20915,8 +21043,12 @@ app.post(
       if (upErr) throw new Error(upErr.message);
       const { data: pub } = supabase.storage.from("tc-revisiones-fotos").getPublicUrl(storagePath);
 
-      const plate = await detectPlateFromImage(pub.publicUrl);
-      return res.json({ plate });
+      // Además de la matrícula se devuelve dónde ha quedado la foto (el alta
+      // desde la tablet la guarda en el vehículo como prueba) y qué caracteres
+      // ha leído con duda la IA, para pedir otra foto en vez de dar de alta
+      // un camión con la matrícula mal leída. Las APK antiguas solo leen `plate`.
+      const lectura = await detectarMatriculaConDudas(pub.publicUrl);
+      return res.json({ plate: lectura.plate, dudosos: lectura.dudosos, fotoPath: storagePath });
     } catch (e: any) {
       console.error("POST /api/tyrecontrol/scan-plate error:", e);
       res.status(500).json({ error: e?.message || "Error escaneando matrícula" });
@@ -22963,6 +23095,10 @@ mountInformeMensual(app, authenticate, requireModule("tyrecontrol"));
 // y no tiene nada que ver con esto.
 mountTcTacografo(app, authenticate, requireModule("tyrecontrol"));
 
+// El «Fleetcheck Report» de TIRETASK: el servidor solo abre el PDF y devuelve
+// lo que trae; importar lo hace el panel con la sesión de quien importa.
+mountTcFleetcheck(app, authenticate, requireModule("tyrecontrol"));
+
 /*
  * Lectura de TyreControl desde Assist. Solo lectura: en esta fase el módulo no
  * escribe nada en TC. Va con el guarda del back-office porque es información
@@ -22979,6 +23115,8 @@ mountTcTacografo(app, authenticate, requireModule("tyrecontrol"));
  */
 app.use("/api/tyrecontrol/conciliacion", createConciliacionRouter());
 app.use("/api/tyrecontrol/presencia-bases", createPresenciaRouter());
+// Satélite de Google para el mapa de una base: la clave no sale del servidor.
+app.use("/api/tyrecontrol/satelite", createSateliteRouter());
 // La tablet dice dónde está. Solo escribe: el panel lo lee por Supabase.
 app.use("/api/tyrecontrol/ubicacion", createUbicacionRouter());
 // Kilómetros mensuales: mismo motivo que la conciliación para ir ANTES del router general.

@@ -185,3 +185,22 @@ describe("Escribir es más estrecho que ver", () => {
     expect(await puedeOperarEnEmpresa({ userId: "u1" }, "emp-1")).toBe(false);
   });
 });
+
+describe("Jefe de base: solo su delegación", () => {
+  it("no ve la empresa entera, aunque sea la suya", async () => {
+    usuario = { rol: "cliente", empresa_id: "emp-1", es_superadmin: false, activo: true, perfil_cliente: "delegacion" };
+    expect(await puedeVerEmpresa({ userId: "u1" }, "emp-1")).toBe(false);
+  });
+
+  it("el responsable de flota y el director sí la ven", async () => {
+    for (const perfil of [null, "flota", "director"]) {
+      usuario = { rol: "cliente", empresa_id: "emp-1", es_superadmin: false, activo: true, perfil_cliente: perfil };
+      expect(await puedeVerEmpresa({ userId: "u1" }, "emp-1")).toBe(true);
+    }
+  });
+
+  it("un técnico con ese perfil escrito por error no pierde nada", async () => {
+    usuario = { rol: "operador", empresa_id: "emp-1", es_superadmin: false, activo: true, perfil_cliente: "delegacion" };
+    expect(await puedeVerEmpresa({ userId: "u1" }, "emp-1")).toBe(true);
+  });
+});

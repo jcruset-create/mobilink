@@ -67,6 +67,12 @@ export async function barrerBases(
     const { nextCorrelationId } = await import(
       "../../integration-hub/infrastructure/repositories.ts"
     );
+    const { cuentasHeredadasDe } = await import("./heredadas.ts");
+
+    // Los clientes de Webfleet anteriores al Hub entran por aquí: tienen
+    // credenciales y flota enlazada, pero nadie les dio de alta una cuenta.
+    // Si el Hub ya sabe de su Webfleet, esto devuelve [] y manda el Hub.
+    const cuentasHeredadas = await cuentasHeredadasDe(empresaId);
 
     const r = await servicio.barrerPresenciaBases(
       { tenantId: empresaId, correlationId: await nextCorrelationId() },
@@ -75,6 +81,7 @@ export async function barrerBases(
         leerFlota,
         guardar: opciones.guardar === false ? undefined : guardarPresencia,
         distanciaMetros: haversineMeters,
+        cuentasHeredadas,
         connectorKey: opciones.connectorKey,
         accountKey: opciones.accountKey,
       },

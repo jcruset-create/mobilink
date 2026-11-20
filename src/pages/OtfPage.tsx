@@ -57,10 +57,27 @@ function fechaAInput(ms: number | null | undefined) {
   const d = new Date(ms);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
-function inputAFecha(v: string): number | null {
+/**
+ * La hora va en el mismo campo que la fecha. Medianoche en punto es «sin
+ * hora»: así quedan las OTF de antes, que solo tenían día.
+ */
+function horaAInput(ms: number | null | undefined) {
+  if (ms == null) return "";
+  const d = new Date(ms);
+  if (d.getHours() === 0 && d.getMinutes() === 0) return "";
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+function inputAFecha(v: string, hora = ""): number | null {
   if (!v) return null;
   const [a, m, d] = v.split("-").map(Number);
-  return new Date(a, m - 1, d).getTime();
+  const [h, min] = hora ? hora.split(":").map(Number) : [0, 0];
+  return new Date(a, m - 1, d, h || 0, min || 0).getTime();
+}
+/** «mié 18 nov · 09:30», o solo el día si no tiene hora. */
+function fechaProgramadaTxt(ms: number) {
+  const dia = new Date(ms).toLocaleDateString("es-ES", { weekday: "short", day: "numeric", month: "short" });
+  const hora = horaAInput(ms);
+  return hora ? `${dia} · ${hora}` : dia;
 }
 
 export default function OtfPage() {
@@ -160,7 +177,7 @@ export default function OtfPage() {
                   </div>
                   <div className="mt-1 text-xs text-slate-400">
                     {o.baseName || o.direccion || "—"}
-                    {o.fechaProgramadaMs ? ` · ${new Date(o.fechaProgramadaMs).toLocaleDateString("es-ES", { weekday: "short", day: "numeric", month: "short" })}` : ""}
+                    {o.fechaProgramadaMs ? ` · ${fechaProgramadaTxt(o.fechaProgramadaMs)}` : ""}
                   </div>
                   <div className="mt-1 text-xs font-bold text-slate-300">
                     Progreso: {o.progreso?.hechos ?? 0} / {o.progreso?.total ?? 0}
@@ -230,6 +247,8 @@ function NewOtfModal({ otf, places, techs, vehicles, onPlaceCreated, onClose, on
   const [vehicleName, setVehicleName] = useState<string>(otf?.assignedVehicleName ?? "");
   const fechaInicial = fechaAInput(otf?.fechaProgramadaMs);
   const [fecha, setFecha] = useState(fechaInicial);
+  const horaInicial = horaAInput(otf?.fechaProgramadaMs);
+  const [hora, setHora] = useState(horaInicial);
   const [notas, setNotas] = useState<string>(otf?.notas ?? "");
   const [telefonoAviso, setTelefonoAviso] = useState<string>(otf?.telefonoAviso ?? "");
   const [emailInforme, setEmailInforme] = useState<string>(otf?.emailInforme ?? "");
@@ -259,7 +278,7 @@ function NewOtfModal({ otf, places, techs, vehicles, onPlaceCreated, onClose, on
           cambios.assignedVehicleName = vehicleName || null;
           cambios.webfleetVehicleId = veh?.webfleetVehicleId ?? null;
         }
-        if (fecha !== fechaInicial) cambios.fechaProgramadaMs = inputAFecha(fecha);
+        if (fecha !== fechaInicial || hora !== horaInicial) cambios.fechaProgramadaMs = inputAFecha(fecha, hora);
         if (notas.trim() !== (otf.notas ?? "").trim()) cambios.notas = notas.trim() || null;
         if (telefonoAviso.trim() !== (otf.telefonoAviso ?? "").trim()) cambios.telefonoAviso = telefonoAviso.trim() || null;
         if (emailInforme.trim() !== (otf.emailInforme ?? "").trim()) cambios.emailInforme = emailInforme.trim() || null;
@@ -277,7 +296,7 @@ function NewOtfModal({ otf, places, techs, vehicles, onPlaceCreated, onClose, on
         assignedTechName: tech || null,
         assignedVehicleName: vehicleName || null,
         webfleetVehicleId: veh?.webfleetVehicleId ?? null,
-        fechaProgramadaMs: inputAFecha(fecha),
+        fechaProgramadaMs: inputAFecha(fecha, hora),
         notas: notas.trim() || null,
         telefonoAviso: telefonoAviso.trim() || null,
         emailInforme: emailInforme.trim() || null,
@@ -326,9 +345,14 @@ function NewOtfModal({ otf, places, techs, vehicles, onPlaceCreated, onClose, on
               </select>
             </Field>
           </div>
-          <Field label="Fecha programada">
-            <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} className={inputCls} />
-          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Fecha programada">
+              <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} className={inputCls} />
+            </Field>
+            <Field label="Hora (opcional)">
+              <input type="time" value={hora} disabled={!fecha} onChange={(e) => setHora(e.target.value)} className={inputCls} />
+            </Field>
+          </div>
           <Field label="Notas">
             <textarea value={notas} onChange={(e) => setNotas(e.target.value)} rows={3} className={`${inputCls} resize-none`} placeholder="Para el operario o la oficina" />
           </Field>
@@ -534,6 +558,27 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
   const [neumaticos, setNeumaticos] = useState<NeumaticosTrabajo | null>(null);
   const [faltaNeumaticos, setFaltaNeumaticos] = useState<string | null>(null);
   const [registrando, setRegistrando] = useState<number | null>(null);
+  // Editar un trabajo ya creado: se carga en este mismo formulario.
+  const [editando, setEditando] = useState<any | null>(null);
+  function empezarEdicion(t: any) {
+    setEditando(t);
+    setPlate(t.plate ?? "");
+    if (t.tipoVehiculo) setTipo(t.tipoVehiculo);
+    setTP(t.trabajoPlantilla ?? "");
+    // Con neumáticos, el detalle lo escribe el plano: no se arrastra el texto viejo.
+    setDetalle(t.neumaticos ? "" : t.detalleManual ?? "");
+    setObservaciones(t.observaciones ?? "");
+    setConNeumaticos(!!t.neumaticos);
+    setNeumaticos(null);
+    setErrorAlta(null);
+  }
+  // Al pasar a otra OTF no se arrastra la edición de un trabajo de la anterior.
+  useEffect(() => { setEditando(null); }, [otf.id]);
+  function limpiarFormulario() {
+    setEditando(null);
+    setPlate(""); setTP(""); setDetalle(""); setObservaciones(""); setConNeumaticos(false); setNeumaticos(null);
+    setErrorAlta(null);
+  }
   useEffect(() => {
     if (/neum[aá]tic|rueda|cubierta/i.test(trabajoPlantilla)) setConNeumaticos(true);
   }, [trabajoPlantilla]);
@@ -567,15 +612,17 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
     setAdding(true);
     setErrorAlta(null);
     try {
-      await addOtfTrabajo(otf.id, {
+      const datos = {
         plate,
         tipoVehiculo: tipo,
         trabajoPlantilla: trabajoPlantilla || (conNeumaticos ? "Cambio de neumáticos" : ""),
         detalleManual: detalle,
         observaciones: observaciones.trim() || null,
         neumaticos: conNeumaticos ? neumaticos : null,
-      });
-      setPlate(""); setTP(""); setDetalle(""); setObservaciones(""); setConNeumaticos(false); setNeumaticos(null);
+      };
+      if (editando) await updateOtfTrabajo(editando.id, datos);
+      else await addOtfTrabajo(otf.id, datos);
+      limpiarFormulario();
       onChange();
     } catch (e: any) {
       /*
@@ -774,15 +821,25 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
               <option value="finalizado">Finalizado</option>
               <option value="no_realizado">No realizado</option>
             </select>
-            <button onClick={async () => { if (confirm("¿Eliminar trabajo?")) { await deleteOtfTrabajo(t.id); onChange(); } }} className="rounded-lg border border-red-500/40 bg-red-500/15 px-2 py-1 text-xs font-black text-red-300 hover:bg-red-500/25">✕</button>
+            {(t.status === "pendiente" || t.status === "en_proceso") && (
+              <button
+                onClick={() => { empezarEdicion(t); document.getElementById("otf-form-trabajo")?.scrollIntoView({ behavior: "smooth", block: "center" }); }}
+                title="Editar trabajo"
+                className={`rounded-lg border px-2 py-1 text-xs font-black ${editando?.id === t.id ? "border-orange-400 bg-orange-500/25 text-orange-200" : "border-slate-600 bg-slate-800 text-slate-200 hover:border-orange-400"}`}
+              >✎ Editar</button>
+            )}
+            <button onClick={async () => { if (confirm("¿Eliminar trabajo?")) { await deleteOtfTrabajo(t.id); if (editando?.id === t.id) limpiarFormulario(); onChange(); } }} className="rounded-lg border border-red-500/40 bg-red-500/15 px-2 py-1 text-xs font-black text-red-300 hover:bg-red-500/25">✕</button>
           </div>
         ))}
         {(otf.trabajos ?? []).length === 0 && <div className="py-4 text-center text-sm text-slate-500">Sin trabajos. Añade el primero.</div>}
       </div>
 
       {/* Añadir trabajo (oficina) */}
-      <div className="mt-4 rounded-xl border border-slate-700 bg-slate-900/40 p-3">
-        <div className="mb-2 text-xs font-black uppercase tracking-wide text-slate-400">Añadir trabajo</div>
+      <div id="otf-form-trabajo" className={`mt-4 rounded-xl border p-3 ${editando ? "border-orange-500 bg-orange-950/20" : "border-slate-700 bg-slate-900/40"}`}>
+        <div className="mb-2 flex items-center justify-between text-xs font-black uppercase tracking-wide text-slate-400">
+          <span className={editando ? "text-orange-300" : ""}>{editando ? `Editando trabajo · ${editando.plate ?? "—"}` : "Añadir trabajo"}</span>
+          {editando && <button onClick={limpiarFormulario} className="rounded border border-slate-600 px-2 py-0.5 text-[11px] normal-case text-slate-200 hover:border-orange-400">Cancelar edición</button>}
+        </div>
         <div className="grid grid-cols-2 gap-2">
           <input placeholder="Matrícula" value={plate} onChange={(e) => setPlate(e.target.value.toUpperCase())} className={inputCls} />
           <select value={tipo} onChange={(e) => setTipo(e.target.value)} className={inputCls}>
@@ -813,8 +870,10 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
         <div className="mt-2">
           {conNeumaticos ? (
             <OtfNeumaticos
+              key={editando?.id ?? "nuevo"}
               otfId={otf.id}
               plate={plate}
+              inicial={editando?.neumaticos ?? null}
               onChange={(n, falta) => { setNeumaticos(n); setFaltaNeumaticos(falta); }}
             />
           ) : (
@@ -828,7 +887,7 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
           falta se dice antes y después de pulsar.
         */}
         <button onClick={add} disabled={adding} className="mt-2 w-full rounded-lg bg-orange-600 px-3 py-2 text-sm font-black text-white hover:bg-orange-500 disabled:opacity-50">
-          {adding ? "Añadiendo…" : "+ Añadir trabajo"}
+          {adding ? "Guardando…" : editando ? "Guardar cambios" : "+ Añadir trabajo"}
         </button>
         {(errorAlta || faltaParaAnadir) && (
           <p className={`mt-1.5 text-xs font-semibold ${errorAlta ? "text-amber-300" : "text-slate-400"}`}>

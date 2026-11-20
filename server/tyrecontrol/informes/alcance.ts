@@ -28,7 +28,7 @@
 
 import type { Request } from "express";
 
-import { puedeOperarEnEmpresa, puedeVerEmpresaDeRequest } from "../empresaAcceso.ts";
+import { esJefeDeBase, puedeOperarEnEmpresa, puedeVerEmpresaDeRequest } from "../empresaAcceso.ts";
 
 /**
  * El resultado, en una sola forma y no en una unión con discriminante: el
@@ -55,6 +55,13 @@ export interface Alcance {
 export async function empresaDelInforme(req: Request, pedida: unknown): Promise<Alcance> {
   const ctx = req.authCtx;
   if (!ctx) return { empresa: null, estado: 401, error: "Sesión requerida" };
+
+  // Estos informes son de la empresa entera y todavía no saben quedarse en
+  // una delegación. A un jefe de base no se le da el de toda la flota: se le
+  // dice que no, también cuando pide «el suyo», que es el atajo de abajo.
+  if (!ctx.esSuperadmin && (await esJefeDeBase(ctx.userId))) {
+    return { empresa: null, estado: 403, error: "Este informe todavía no está disponible por delegación" };
+  }
 
   const p = String(pedida ?? "").trim();
   if (!p) {

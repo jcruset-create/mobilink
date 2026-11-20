@@ -50,6 +50,7 @@
 /// mismo: si cambia una, cambian las tres.
 library;
 
+import 'desgaste_creible.dart';
 import 'protocolo_profundidad.dart';
 
 /// Una fila de `revisiones_neumaticos_detalle`, con lo justo para repartir.
@@ -72,6 +73,12 @@ class FilaMedicion {
   /// importa con el protocolo: la medición a mano no espera confirmación.
   final bool manual;
 
+  /// El DÍA de la revisión y los km del vehículo ese día. Solo los usa el
+  /// juicio de los kilómetros (`desgaste_creible.dart`); sin ellos no se
+  /// juzga y todo sigue como estaba.
+  final DateTime? dia;
+  final double? kmVehiculo;
+
   const FilaMedicion({
     required this.revisionId,
     required this.clave,
@@ -80,6 +87,8 @@ class FilaMedicion {
     this.momento,
     this.claveHeredada,
     this.manual = false,
+    this.dia,
+    this.kmVehiculo,
   });
 }
 
@@ -115,6 +124,10 @@ class MedicionVigente {
   /// La última lectura, cuando NO es la que se ha dado por buena.
   double? pendienteMm;
   DateTime? pendienteEn;
+
+  /// La cuenta que dice que la lectura baja no cabe en los kilómetros hechos.
+  /// Con ella, [pendienteMm] es esa lectura.
+  String? noCreible;
 }
 
 /// Las revisiones cuyas filas traen TODAS profundidad.
@@ -159,6 +172,13 @@ Map<String, MedicionVigente> repartirUltimasMediciones(
 
   final out = <String, MedicionVigente>{};
   final series = <String, List<LecturaDeSerie>>{};
+  // Las mismas lecturas, TODAS y con sus km: dicen a qué ritmo se gasta la
+  // goma y si una bajada cabe en lo que ha rodado.
+  final largas = <String, List<LecturaConKm>>{};
+  final puntos = <PuntoKm>[
+    for (final f in filas)
+      if (f.dia != null && f.kmVehiculo != null && f.kmVehiculo! > 0) PuntoKm(f.dia!, f.kmVehiculo!),
+  ];
   for (final f in filas) {
     final deCompleta = f.revisionId != null && completas.contains(f.revisionId);
     final aportaProfundidad = f.profundidadMm != null && deCompleta;
@@ -173,6 +193,12 @@ Map<String, MedicionVigente> repartirUltimasMediciones(
     for (final clave in destinatarios) {
       final m = out.putIfAbsent(clave, MedicionVigente.new);
       if (aportaProfundidad && protocolo) {
+        largas.putIfAbsent(clave, () => []).add(LecturaConKm(
+              f.profundidadMm!,
+              fecha: f.dia ?? f.momento,
+              km: (f.kmVehiculo != null && f.kmVehiculo! > 0) ? f.kmVehiculo : kmEnFecha(puntos, f.dia),
+              manual: f.manual,
+            ));
         final serie = series.putIfAbsent(clave, () => []);
         if (serie.length < 3) {
           serie.add(LecturaDeSerie(f.profundidadMm!, manual: f.manual, fecha: f.momento));
@@ -197,6 +223,24 @@ Map<String, MedicionVigente> repartirUltimasMediciones(
     m.confirmada = valor.confirmada;
     m.pendienteMm = valor.pendienteMm;
     m.pendienteEn = valor.pendienteEn;
+
+    // Un «cambiar» confirmado todavía tiene que caber en los kilómetros: dos
+    // malas lecturas del arco seguidas se confirman entre ellas.
+    final v = veredicto(mm: valor.mm, confirmada: valor.confirmada, pendienteMm: valor.pendienteMm, minimo: minimos[e.key]);
+    if (v != Veredicto.cambiar) continue;
+    final reserva = ritmoMedio([
+      for (final otra in largas.entries)
+        if (otra.key != e.key) ritmoDeLaGoma(otra.value),
+    ]);
+    final juicio = juzgarDesgaste(largas[e.key] ?? const [], reserva);
+    if (juicio.creible == false && juicio.base != null) {
+      m.pendienteMm = valor.mm;
+      m.pendienteEn = valor.fecha;
+      m.profundidadMm = juicio.base!.mm;
+      m.medidoEn = juicio.base!.fecha;
+      m.confirmada = true;
+      m.noCreible = juicio.explicacion;
+    }
   }
   return out;
 }

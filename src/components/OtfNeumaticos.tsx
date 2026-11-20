@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import { API_BASE, getAdminHeaders } from "../modules/workshopApi";
+import { API_BASE, fetchWithTimeout, getAdminHeaders } from "../modules/workshopApi";
 import { MARGEN_PLANO_X, MARGEN_PLANO_Y, aspectoPlano, coordAVista } from "../../shared/planoMargen";
 
 /**
@@ -39,7 +39,8 @@ export type NeumaticosTrabajo = {
 };
 
 async function leer<T>(ruta: string): Promise<T> {
-  const r = await fetch(`${API_BASE}${ruta}`, { headers: getAdminHeaders() });
+  // fetchWithTimeout renueva la sesión si ha caducado; TyreControl puede tardar.
+  const r = await fetchWithTimeout(`${API_BASE}${ruta}`, { headers: getAdminHeaders() }, 20000);
   if (!r.ok) throw new Error((await r.json().catch(() => null))?.error ?? "No se ha podido consultar TyreControl");
   return r.json();
 }
@@ -118,8 +119,12 @@ export function PlanoRuedas({
 }
 
 export default function OtfNeumaticos({
-  otfId, plate, onChange,
-}: { otfId: number; plate: string; onChange: (n: NeumaticosTrabajo | null, falta: string | null) => void }) {
+  otfId, plate, onChange, inicial,
+}: {
+  otfId: number; plate: string; onChange: (n: NeumaticosTrabajo | null, falta: string | null) => void;
+  /** Al editar un trabajo: lo que tenía marcado. Se aplica una vez, cuando llega su plano. */
+  inicial?: NeumaticosTrabajo | null;
+}) {
   const [veh, setVeh] = useState<Vehiculo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tipoId, setTipoId] = useState("");
@@ -131,6 +136,28 @@ export default function OtfNeumaticos({
   const [ref, setRef] = useState<Referencia | null>(null);
   const [condicion, setCondicion] = useState<"nuevo" | "usado">("nuevo");
   const [destino, setDestino] = useState<"descartado" | "almacen" | "reparacion">("descartado");
+  const porAplicar = useRef<NeumaticosTrabajo | null>(inicial ?? null);
+
+  // Editando: en cuanto está el plano del mismo tipo, se recupera lo marcado.
+  useEffect(() => {
+    const ini = porAplicar.current;
+    if (!ini || !plano) return;
+    if (plano.tipo.id !== ini.tcTipoVehiculoId) return;
+    porAplicar.current = null;
+    const codigos = new Set(plano.posiciones.map((p) => p.codigo));
+    setSeleccion(ini.seleccion.filter((c) => codigos.has(c)));
+    setMedida(ini.medida);
+    setCondicion(ini.condicion);
+    setDestino(ini.destinoRetirado);
+    if (ini.referenciaId) {
+      setRef({
+        id: ini.referenciaId, marca: ini.marca ?? "", modelo: ini.modelo ?? "", medida: ini.medida, eje: null,
+        texto: [ini.marca, ini.modelo, ini.medida].filter(Boolean).join(" "),
+      });
+    } else if (ini.modelo) {
+      setBusca(ini.modelo);
+    }
+  }, [plano]);
 
   // La matrícula: ¿está en TyreControl? Con antirrebote, mientras se escribe.
   const limpia = plate.toUpperCase().replace(/\s+/g, "");
@@ -144,7 +171,8 @@ export default function OtfNeumaticos({
           if (!vivo) return;
           setVeh(v);
           if (v.plano) { setPlano(v.plano); setTipoId(v.plano.tipo.id); }
-          if (v.vehiculo?.medida) setMedida(v.vehiculo.medida);
+          else if (porAplicar.current) setTipoId(porAplicar.current.tcTipoVehiculoId);
+          if (v.vehiculo?.medida && !porAplicar.current) setMedida(v.vehiculo.medida);
         })
         .catch((e) => vivo && setError(e.message));
     }, 500);
@@ -162,7 +190,9 @@ export default function OtfNeumaticos({
 
   // El catálogo de la medida.
   useEffect(() => {
-    setRef(null);
+    // El elegido se conserva mientras siga siendo de esa medida (al editar llega ya elegido).
+    const norm = (m: string) => m.replace(/\s/g, "").toUpperCase();
+    setRef((r) => (r && norm(r.medida) === norm(medida) ? r : null));
     if (medida.replace(/\s/g, "").length < 7) { setRefs([]); return; }
     let vivo = true;
     const t = setTimeout(() => {

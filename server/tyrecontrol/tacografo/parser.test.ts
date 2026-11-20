@@ -48,6 +48,16 @@ describe("la cabecera se BUSCA, no se da por hecha", () => {
     expect(l.filas[0].idOrigen).toBe("E943009001596K");
   });
 
+  it("el informe corto de la extranet se reconoce y se dice cuál hay que subir", () => {
+    const corto = [
+      ["INTERVENCIÓN", null, "MEDICIÓN"],
+      ["Fecha", "Id. intervención", "Orden trabajo", "Tipo operación", "L", "W", "K", "Neumáticos", "Matrícula"],
+      [new Date("2026-11-02"), "E943009005396O", null, "Revisión periódica", 3196, 15701, 15701, "295/80R22.5", "7555JNT"],
+    ];
+    expect(() => leerHoja(corto)).toThrow(/informe de intervenciones» corto/);
+    expect(() => leerHoja(corto)).toThrow(/Registro de intervenciones entre fechas/);
+  });
+
   it("sin cabecera, se dice qué falta en vez de devolver cero filas", () => {
     expect(() => leerHoja([["cualquier cosa"], ["otra"]]))
       .toThrow(ErrorFichero);

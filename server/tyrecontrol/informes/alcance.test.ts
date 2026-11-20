@@ -11,7 +11,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const puedeVer = vi.fn();
 const puedeOperar = vi.fn();
+const jefeDeBase = vi.fn();
 vi.mock("../empresaAcceso.ts", () => ({
+  esJefeDeBase: (...a: unknown[]) => jefeDeBase(...a),
   puedeVerEmpresaDeRequest: (...a: unknown[]) => puedeVer(...a),
   puedeOperarEnEmpresa: (...a: unknown[]) => puedeOperar(...a),
 }));
@@ -23,12 +25,28 @@ const req = (authCtx: Record<string, unknown> | undefined) => ({ authCtx }) as a
 const PROPIA = "11111111-1111-4111-8111-111111111111";
 const AJENA = "22222222-2222-4222-8222-222222222222";
 
-beforeEach(() => { puedeVer.mockReset(); puedeOperar.mockReset(); });
+beforeEach(() => { puedeVer.mockReset(); puedeOperar.mockReset(); jefeDeBase.mockReset(); jefeDeBase.mockResolvedValue(false); });
 
 describe("empresaDelInforme", () => {
   it("sin sesión no hay informe", async () => {
     expect(await empresaDelInforme(req(undefined), PROPIA))
       .toEqual({ empresa: null, estado: 401, error: "Sesión requerida" });
+  });
+
+  it("a un jefe de base no se le da el informe de toda la flota, ni el «suyo»", async () => {
+    jefeDeBase.mockResolvedValue(true);
+    for (const pedida of ["", PROPIA, AJENA]) {
+      const r = await empresaDelInforme(req({ userId: "u", empresaId: PROPIA }), pedida);
+      expect(r.empresa).toBeNull();
+      expect(r.estado).toBe(403);
+    }
+    expect(puedeVer).not.toHaveBeenCalled();
+  });
+
+  it("el superadministrador no pasa por esa pregunta", async () => {
+    jefeDeBase.mockResolvedValue(true);
+    expect(await empresaDelInforme(req({ userId: "u", empresaId: PROPIA, esSuperadmin: true }), PROPIA))
+      .toEqual({ empresa: PROPIA });
   });
 
   it("sin pedir empresa, la de quien pide", async () => {

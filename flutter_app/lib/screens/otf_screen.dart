@@ -37,8 +37,13 @@ String? _fechaCorta(Object? ms) {
   if (ms is! int) return null;
   final d = DateTime.fromMillisecondsSinceEpoch(ms);
   const dias = ['lun', 'mar', 'mié', 'jue', 'vie', 'sáb', 'dom'];
-  return '${dias[d.weekday - 1]} ${d.day}/${d.month}';
+  return '${dias[d.weekday - 1]} ${d.day}/${d.month}${horaProgramada(d)}';
 }
+
+/// « · 09:30», o nada si la OTF solo tiene día (medianoche en punto).
+String horaProgramada(DateTime d) => d.hour == 0 && d.minute == 0
+    ? ''
+    : ' · ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
 
 String? _duracion(Map<String, dynamic> t) {
   final a = t['iniciadoAtMs'], b = t['finalizadoAtMs'];

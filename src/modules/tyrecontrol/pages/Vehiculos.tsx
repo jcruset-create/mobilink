@@ -4,7 +4,7 @@ import {
   listarVehiculos, actualizarVehiculo, listarEmpresas, listarDelegaciones, listarTiposVehiculo,
   listarMedidas,
   listarEstadoWebfleet, listarPresenciaEnBases, sincronizarWebfleet, listarRevisionEstado,
-  listarVehiculosPendientes, validarVehiculo, eliminarVehiculo,
+  listarVehiculosPendientes, validarVehiculo, eliminarVehiculo, urlFotoMatricula,
   calcularBaseHabitual, type BaseHabitual,
 } from "../services/data";
 import { motivoSinBase } from "../services/baseHabitual";
@@ -517,6 +517,27 @@ export default function Vehiculos() {
             {pendientesOrdenados.map((v) => (
               <div key={v.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded border border-slate-700 bg-slate-900/40 px-3 py-2">
                 <span className="font-mono text-sm font-bold text-slate-100">{v.matricula}</span>
+                {/* La prueba de la matrícula: la foto que hizo la tablet al
+                    darlo de alta. Al validar se compara con lo escrito. */}
+                {urlFotoMatricula(v.foto_matricula_path) && (
+                  <a
+                    href={urlFotoMatricula(v.foto_matricula_path)!}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="rounded bg-sky-500/15 px-1.5 py-0.5 text-[11px] font-bold text-sky-300 hover:bg-sky-500/25"
+                    title="Foto de la matrícula hecha en la tablet al darlo de alta"
+                  >
+                    📷 foto de la matrícula
+                  </a>
+                )}
+                {v.matricula_tecleada && (
+                  <span
+                    className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-bold text-amber-300"
+                    title="La foto no se pudo leer y el técnico la escribió a mano: compruébala antes de validar"
+                  >
+                    ⚠ matrícula tecleada
+                  </span>
+                )}
                 {/* El número de unidad es como se llama al camión por radio;
                     la matrícula es como lo llama Tráfico. Quien sale a
                     buscarlo usa el primero, así que va pegado al segundo. Si

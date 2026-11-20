@@ -3,7 +3,9 @@ import { codigoDeUso } from "../catalogo/usos";
 import { hasRealValue, normalizarValor, type TipoDatoItv } from "./itvValores";
 import { medidaCanonica } from "./medidas";
 import { recorrerPaginas } from "./paginacion";
-import { profundidadMinimaPorLlanta } from "./umbralProfundidad";
+import type { CombinacionCat, ReferenciaCat } from "./catalogoVinculado";
+import { claveModelo, kgDeIndice, kmhDeCodigo, medidaDeCatalogo, partesDeMedida, type PlanImportacion } from "./importarCatalogo";
+import { claveDeMedida, minimoDeLaGoma, SIN_MINIMOS, type MinimosDeEmpresa } from "./umbralProfundidad";
 import { mapaUltimasMediciones, type Medicion } from "./ultimaMedicion";
 import type { PosicionOperario } from "./ubicacionOperario";
 import type { LecturaParteProveedor } from "./parteProveedor";
@@ -24,6 +26,7 @@ import type {
   OperacionMantenimiento, PlanMantenimiento, PlanMantenimientoInput, PlanEstado, MantenimientoRealizada,
   PlantillaMantenimiento, PlantillaItem, LoteRevision, LoteVehiculo,
   CatTipoOperacion, CatMotivo, CatDestino, CatTipoReparacion, CatResultadoReparacion, OperacionAdjunto, ReservaNeumatico, OperacionMovimiento,
+  PerfilCliente,
 } from "../types";
 
 function clean<T extends Record<string, any>>(obj: T): T {
@@ -134,6 +137,7 @@ export type NuevoUsuario = {
   acceso_panel: boolean;
   empresa_id?: string;
   delegacion_id?: string | null;
+  perfil_cliente?: PerfilCliente | null;
 };
 
 export async function crearUsuario(input: NuevoUsuario): Promise<void> {
@@ -299,6 +303,9 @@ export async function actualizarUsuario(id: string, patch: Partial<Perfil>): Pro
       acceso_apk: patch.acceso_apk,
       acceso_panel: patch.acceso_panel,
       delegacion_id: patch.delegacion_id,
+      // Sin valor no se manda: la columna llega con la migración de los
+      // perfiles, y guardar una ficha no puede depender de ella.
+      perfil_cliente: patch.perfil_cliente,
       updated_at: new Date().toISOString(),
     })
     .eq("id", id);
@@ -615,7 +622,7 @@ export async function listarUltimasMedicionesVehiculo(vehiculoId: string): Promi
   const { data: revs, error: e1 } = await supabase.from("revisiones_vehiculo")
     // created_at viaja porque hace falta saber si la medición es anterior a la
     // profundidad del propio neumático (ver utils/profundidad.ts).
-    .select("id, created_at, fecha_revision, tecnico_id").eq("vehiculo_id", vehiculoId).neq("estado_revision", "anulada")
+    .select("id, created_at, fecha_revision, tecnico_id, km_vehiculo").eq("vehiculo_id", vehiculoId).neq("estado_revision", "anulada")
     .order("fecha_revision", { ascending: false }).order("created_at", { ascending: false });
   if (e1) throw new Error(e1.message);
   const ids = (revs ?? []).map((r) => r.id);
@@ -629,7 +636,7 @@ export async function listarUltimasMedicionesVehiculo(vehiculoId: string): Promi
   // posición posteriores a su montaje son suyas, estén a nombre de la goma
   // anterior o de ninguna.
   const { data: mons } = await supabase.from("tc_montajes_actuales")
-    .select("posicion_id, neumatico_id, fecha_montaje, neumatico:tc_neumaticos(medida)").eq("vehiculo_id", vehiculoId);
+    .select("empresa_id, posicion_id, neumatico_id, fecha_montaje, neumatico:tc_neumaticos(medida)").eq("vehiculo_id", vehiculoId);
   const montajePorPosicion = new Map((mons ?? []).map((m) => [
     m.posicion_id as string,
     { neumatico_id: m.neumatico_id as string, fecha_montaje: (m.fecha_montaje ?? null) as string | null },
@@ -638,13 +645,15 @@ export async function listarUltimasMedicionesVehiculo(vehiculoId: string): Promi
   // El reparto vive en services/ultimaMedicion.ts, con pruebas: la profundidad
   // solo de revisiones que midieron todas sus ruedas, y las lecturas siguiendo
   // a la posición desde el montaje.
-  // El mínimo de cada goma montada, por su llanta: el protocolo solo entra si
-  // su última lectura lo toca. Una goma que ya no está montada no sale en la
+  // El mínimo de cada goma montada —el de la empresa y, si no tiene, el de su
+  // llanta—: el protocolo solo entra si su última lectura lo toca. Una goma que ya no está montada no sale en la
   // ficha, así que se queda sin mínimo y vale su última lectura.
+  const empresaId = ((mons ?? [])[0]?.empresa_id ?? null) as string | null;
+  const deEmpresa = empresaId ? await leerMinimosDeEmpresa(empresaId) : SIN_MINIMOS;
   const minimos = new Map((mons ?? []).map((m) => {
     const neu = m.neumatico as unknown as { medida?: string | null } | { medida?: string | null }[] | null;
     const medida = Array.isArray(neu) ? neu[0]?.medida : neu?.medida;
-    return [m.neumatico_id as string, profundidadMinimaPorLlanta(medida ?? null)];
+    return [m.neumatico_id as string, minimoDeLaGoma(medida ?? null, deEmpresa)];
   }));
   return mapaUltimasMediciones(revs ?? [], dets ?? [], montajePorPosicion, (id) => minimos.get(id) ?? null);
 }
@@ -835,6 +844,39 @@ export async function corregirMontadoNuevaFicha(params: {
   });
   if (error) throw new Error(error.message);
   return data as { neumatico_id: string; operacion_id: string };
+}
+
+/**
+ * «No coincide» con una goma que no tiene ficha: se da de alta eligiéndola del
+ * catálogo. Usa tc_corregir_montado_nueva_ficha (la misma que la APK: nace ya
+ * montada y la que estaba registrada pasa a no localizada) y después le pone
+ * el índice de carga y el código de velocidad de la referencia, que esa
+ * función no recibe.
+ */
+export async function corregirConReferencia(params: {
+  montajeId: string; referencia: ReferenciaNeumatico;
+  dot?: string | null; numeroSerie?: string | null; observaciones?: string | null;
+}): Promise<{ neumatico_id: string; operacion_id: string }> {
+  const r = params.referencia;
+  const marca = r.modelo?.marca?.nombre ?? "";
+  const medida = r.tyre_size?.medida ?? "";
+  if (!marca || !medida) throw new Error("La referencia no tiene marca o medida: complétala en el catálogo");
+  const hecho = await corregirMontadoNuevaFicha({
+    montajeId: params.montajeId, marca, modelo: r.modelo?.nombre ?? null, medida,
+    dot: params.dot, numeroSerie: params.numeroSerie, observaciones: params.observaciones,
+    metodo: "catalogo",
+  });
+  const ts = r.tyre_size;
+  const ic = ts?.indice_carga_simple
+    ? `${ts.indice_carga_simple}${ts.indice_carga_doble ? `/${ts.indice_carga_doble}` : ""}` : null;
+  if (ic || ts?.codigo_velocidad) {
+    // Si esto falla, la corrección ya está hecha y es lo importante: se avisa.
+    const { error } = await supabase.from("tc_neumaticos")
+      .update({ indice_carga: ic, indice_velocidad: ts?.codigo_velocidad ?? null })
+      .eq("id", hecho.neumatico_id);
+    if (error) throw new Error(`Corregido, pero no se ha podido apuntar el IC/CV: ${error.message}`);
+  }
+  return hecho;
 }
 
 /**
@@ -1699,6 +1741,14 @@ export async function cambiarFechaRevision(id: string, fecha: string): Promise<v
   if (error) throw new Error(error.message);
 }
 
+/** Corrige los km de una revisión en borrador. Los tecleados son «manual». */
+export async function cambiarKmRevision(id: string, km: number | null, origenKm: "telematica" | "manual" = "manual"): Promise<void> {
+  const { error } = await supabase.from("revisiones_vehiculo")
+    .update({ km_vehiculo: km, origen_km: origenKm, updated_at: new Date().toISOString() })
+    .eq("id", id).eq("estado_revision", "borrador");
+  if (error) throw new Error(error.message);
+}
+
 export async function eliminarRevision(id: string): Promise<void> {
   const { error } = await supabase.from("revisiones_vehiculo").delete().eq("id", id);
   if (error) throw new Error(error.message);
@@ -2408,18 +2458,67 @@ export async function desactivarConfigEjes(id: string): Promise<void> {
 }
 
 // ── Umbrales de profundidad por empresa ──────────────────────
+
+/*
+ * Los mínimos de la empresa, para la ficha del vehículo. Se guardan mientras
+ * dure la sesión —la ficha los pide dos y tres veces por vehículo— y se tiran
+ * en cuanto alguien toca la pantalla de umbrales.
+ *
+ * Si no se pueden leer, la ficha no se queda sin abrir: juzga con el mínimo de
+ * la llanta, que es lo que hacía antes.
+ */
+const minimosPorEmpresa = new Map<string, Promise<MinimosDeEmpresa>>();
+
+export function leerMinimosDeEmpresa(empresaId: string): Promise<MinimosDeEmpresa> {
+  const guardado = minimosPorEmpresa.get(empresaId);
+  if (guardado) return guardado;
+  const pedido = (async (): Promise<MinimosDeEmpresa> => {
+    const [general, medidas] = await Promise.all([
+      supabase.from("tc_config_umbrales").select("profundidad_minima_mm").eq("empresa_id", empresaId).maybeSingle(),
+      supabase.from("tc_config_umbrales_medida").select("medida, profundidad_minima_mm").eq("empresa_id", empresaId),
+    ]);
+    if (general.error || medidas.error) throw new Error((general.error ?? medidas.error)!.message);
+    const porMedida: Record<string, number> = {};
+    for (const m of medidas.data ?? []) {
+      if (m.medida && m.profundidad_minima_mm != null) porMedida[claveDeMedida(m.medida as string)] = Number(m.profundidad_minima_mm);
+    }
+    const minimo = general.data?.profundidad_minima_mm;
+    return { empresa: minimo != null ? Number(minimo) : null, porMedida };
+  })().catch(() => {
+    minimosPorEmpresa.delete(empresaId);
+    return SIN_MINIMOS;
+  });
+  minimosPorEmpresa.set(empresaId, pedido);
+  return pedido;
+}
+
 export async function obtenerUmbralesEmpresa(empresaId: string): Promise<UmbralesEmpresa | null> {
   const { data, error } = await supabase.from("tc_config_umbrales").select("*").eq("empresa_id", empresaId).maybeSingle();
   if (error) throw new Error(error.message);
   return (data as UmbralesEmpresa) ?? null;
 }
 
+/** Umbral de desgaste irregular (diferencia entre bandas) de una empresa,
+ *  con la misma regla que la APK: sin configuración → 2,0 mm; configurado a
+ *  vacío → sin aviso. Si falla la lectura, sin aviso (nunca inventarlo). */
+export async function umbralDesgasteIrregular(empresaId: string): Promise<number | null> {
+  try {
+    const u = await obtenerUmbralesEmpresa(empresaId);
+    if (!u || u.desgaste_irregular_delta_mm === undefined) return 2.0;
+    return u.desgaste_irregular_delta_mm == null ? null : Number(u.desgaste_irregular_delta_mm);
+  } catch {
+    return null;
+  }
+}
+
 export async function guardarUmbralesEmpresa(empresaId: string, patch: {
   profundidad_minima_mm: number; profundidad_aviso_mm: number; presion_tolerancia_bar: number;
+  medicion_doble?: boolean; desgaste_irregular_delta_mm?: number | null;
 }): Promise<void> {
   const { error } = await supabase.from("tc_config_umbrales")
     .upsert({ empresa_id: empresaId, ...patch, updated_at: new Date().toISOString() }, { onConflict: "empresa_id" });
   if (error) throw new Error(error.message);
+  minimosPorEmpresa.delete(empresaId);
 }
 
 // Overrides de umbrales por medida dentro de una empresa
@@ -2435,11 +2534,13 @@ export async function guardarUmbralMedida(empresaId: string, medida: string, pat
   const { error } = await supabase.from("tc_config_umbrales_medida")
     .upsert({ empresa_id: empresaId, medida, ...patch, updated_at: new Date().toISOString() }, { onConflict: "empresa_id,medida" });
   if (error) throw new Error(error.message);
+  minimosPorEmpresa.delete(empresaId);
 }
 
 export async function eliminarUmbralMedida(empresaId: string, medida: string): Promise<void> {
   const { error } = await supabase.from("tc_config_umbrales_medida").delete().eq("empresa_id", empresaId).eq("medida", medida);
   if (error) throw new Error(error.message);
+  minimosPorEmpresa.delete(empresaId);
 }
 
 // ── Política de identificación (genérico / identificado / mixto) ─────────────
@@ -3180,8 +3281,14 @@ export async function listarIndicesCarga(): Promise<IndiceCarga[]> {
   if (error) throw new Error(error.message);
   return (data ?? []) as IndiceCarga[];
 }
-export async function crearIndiceCarga(valor: string): Promise<void> {
-  const { error } = await supabase.from("tc_cat_indices_carga").insert({ valor: valor.trim() });
+export async function crearIndiceCarga(valor: string, kg?: number | null): Promise<void> {
+  const fila: Record<string, unknown> = { valor: valor.trim() };
+  if (kg != null) fila.kg = kg;
+  const { error } = await supabase.from("tc_cat_indices_carga").insert(fila);
+  if (error) throw new Error(error.message);
+}
+export async function actualizarKgIndiceCarga(id: string, kg: number | null): Promise<void> {
+  const { error } = await supabase.from("tc_cat_indices_carga").update({ kg }).eq("id", id);
   if (error) throw new Error(error.message);
 }
 
@@ -3190,9 +3297,171 @@ export async function listarIndicesVelocidad(): Promise<IndiceVelocidad[]> {
   if (error) throw new Error(error.message);
   return (data ?? []) as IndiceVelocidad[];
 }
-export async function crearIndiceVelocidad(valor: string): Promise<void> {
-  const { error } = await supabase.from("tc_cat_indices_velocidad").insert({ valor: valor.trim() });
+export async function crearIndiceVelocidad(valor: string, kmh?: number | null): Promise<void> {
+  const fila: Record<string, unknown> = { valor: valor.trim().toUpperCase() };
+  if (kmh != null) fila.km_h = kmh;
+  const { error } = await supabase.from("tc_cat_indices_velocidad").insert(fila);
   if (error) throw new Error(error.message);
+}
+export async function actualizarKmhVelocidad(id: string, kmh: number | null): Promise<void> {
+  const { error } = await supabase.from("tc_cat_indices_velocidad").update({ km_h: kmh }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+/**
+ * Las combinaciones (medida + índices + velocidad) y en qué modelos está cada
+ * una, para ver el catálogo vinculado en Configuración. Son cientos, no miles:
+ * caben en una lectura.
+ */
+export async function leerCombinacionesYReferencias(): Promise<{
+  combos: CombinacionCat[];
+  refs: ReferenciaCat[];
+}> {
+  const [c, r] = await Promise.all([
+    supabase.from("tyre_sizes")
+      .select("id, medida_id, medida, indice_carga_simple, indice_carga_doble, codigo_velocidad")
+      .eq("activo", true).limit(5000),
+    supabase.from("tc_referencias_neumatico")
+      .select("id, modelo_id, tyre_size_id, modelo:tc_cat_modelos_neumatico(id, nombre, marca:tc_cat_marcas_neumatico(nombre))")
+      .eq("activo", true).limit(5000),
+  ]);
+  if (c.error) throw new Error(c.error.message);
+  if (r.error) throw new Error(r.error.message);
+  return { combos: (c.data ?? []) as never, refs: (r.data ?? []) as never };
+}
+
+/**
+ * Escribe en el catálogo lo que falta de un Excel de fabricante (ver
+ * `importarCatalogo.ts`). Por orden: marcas, índices, velocidades, medidas y
+ * modelos, cada uno sin pisar lo que ya haya (`ignoreDuplicates`). Solo un
+ * superadministrador puede escribir en estas tablas.
+ */
+export async function aplicarImportacionCatalogo(
+  plan: PlanImportacion,
+  tipo: "furgoneta" | "camion" | "turismo",
+): Promise<{ marcas: number; indices: number; velocidades: number; medidas: number; modelos: number; oferta: number }> {
+  const comprobar = (r: { error: { message: string } | null }) => { if (r.error) throw new Error(r.error.message); };
+
+  if (plan.marcas.length) {
+    comprobar(await supabase.from("tc_cat_marcas_neumatico")
+      .upsert(plan.marcas.map((nombre) => ({ nombre, activo: true })), { onConflict: "nombre", ignoreDuplicates: true }));
+  }
+  if (plan.indices.length) {
+    comprobar(await supabase.from("tc_cat_indices_carga")
+      .upsert(plan.indices.map((valor) => ({ valor, kg: kgDeIndice(valor) })), { onConflict: "valor", ignoreDuplicates: true }));
+  }
+  if (plan.velocidades.length) {
+    comprobar(await supabase.from("tc_cat_indices_velocidad")
+      .upsert(plan.velocidades.map((valor) => ({ valor, km_h: kmhDeCodigo(valor) })), { onConflict: "valor", ignoreDuplicates: true }));
+  }
+  if (plan.medidas.length) {
+    comprobar(await supabase.from("tc_cat_medidas_neumatico")
+      .upsert(plan.medidas.map((valor) => ({ valor, activo: true, categoria: tipo, ...partesDeMedida(valor) })),
+        { onConflict: "valor", ignoreDuplicates: true }));
+  }
+  if (plan.modelos.length) {
+    // Los ids de las marcas, ya con las que se acaban de crear.
+    const { data: marcas, error } = await supabase.from("tc_cat_marcas_neumatico").select("id, nombre");
+    if (error) throw new Error(error.message);
+    const id = new Map((marcas ?? []).map((m) => [String(m.nombre).toUpperCase(), m.id as string]));
+    const filas = plan.modelos
+      .filter((m) => id.has(m.marca.toUpperCase()))
+      .map((m) => ({
+        marca_id: id.get(m.marca.toUpperCase()), nombre: m.nombre, activo: true,
+        tipo_vehiculo: tipo, aplicacion: m.temporada, eje_recomendado: m.eje, gama: m.gama ?? null,
+      }));
+    comprobar(await supabase.from("tc_cat_modelos_neumatico")
+      .upsert(filas, { onConflict: "marca_id,nombre", ignoreDuplicates: true }));
+  }
+  // Nombre comercial de modelos que ya estaban sin él («RA18» → «Vantra LT»).
+  // Solo donde estaba vacío: lo que alguien haya escrito a mano no se pisa.
+  if (plan.gamas.length) {
+    const { data: marcas, error } = await supabase.from("tc_cat_marcas_neumatico").select("id, nombre");
+    if (error) throw new Error(error.message);
+    const id = new Map((marcas ?? []).map((m) => [String(m.nombre).toUpperCase(), m.id as string]));
+    for (const g of plan.gamas) {
+      const marcaId = id.get(g.marca.toUpperCase());
+      if (!marcaId) continue;
+      comprobar(await supabase.from("tc_cat_modelos_neumatico").update({ gama: g.gama })
+        .eq("marca_id", marcaId).eq("nombre", g.nombre).or("gama.is.null,gama.eq."));
+    }
+  }
+  // La oferta del fabricante: cada fila con el id de su modelo y de su medida,
+  // ya con los que se acaban de crear. Se escribe toda; la clave única de la
+  // tabla hace que lo que ya estaba no se duplique.
+  let oferta = 0;
+  if (plan.oferta.length) {
+    const [ma, mo, me] = await Promise.all([
+      supabase.from("tc_cat_marcas_neumatico").select("id, nombre"),
+      supabase.from("tc_cat_modelos_neumatico").select("id, marca_id, nombre").limit(5000),
+      supabase.from("tc_cat_medidas_neumatico").select("id, valor").limit(5000),
+    ]);
+    for (const r of [ma, mo, me]) comprobar(r);
+    const idMarca = new Map((ma.data ?? []).map((m) => [String(m.nombre).toUpperCase(), m.id as string]));
+    const idModelo = new Map((mo.data ?? []).map((m) => [`${m.marca_id}|${claveModelo(String(m.nombre))}`, m.id as string]));
+    const idMedida = new Map((me.data ?? []).map((m) => [medidaDeCatalogo(String(m.valor)), m.id as string]));
+    const filas = plan.oferta.flatMap((o) => {
+      const modelo_id = idModelo.get(`${idMarca.get(o.marca.toUpperCase())}|${claveModelo(o.modelo)}`);
+      const medida_id = idMedida.get(medidaDeCatalogo(o.medida));
+      return modelo_id && medida_id ? [{
+        modelo_id, medida_id,
+        indice_carga_simple: o.simple, indice_carga_doble: o.doble, codigo_velocidad: o.cv,
+      }] : [];
+    });
+    for (let i = 0; i < filas.length; i += 500) {
+      comprobar(await supabase.from("tc_cat_oferta_fabricante").upsert(filas.slice(i, i + 500), {
+        onConflict: "modelo_id,medida_id,indice_carga_simple,indice_carga_doble,codigo_velocidad", ignoreDuplicates: true,
+      }));
+    }
+    oferta = plan.ofertaNueva;
+  }
+  return {
+    marcas: plan.marcas.length, indices: plan.indices.length, velocidades: plan.velocidades.length,
+    medidas: plan.medidas.length, modelos: plan.modelos.length, oferta,
+  };
+}
+
+/** Una fila de la oferta del fabricante, con la medida en texto. */
+export interface OfertaFabricante { modelo_id: string; medida: string; simple: string; doble: string; cv: string }
+
+/**
+ * Toda la oferta del fabricante, a páginas de mil (el límite del servidor).
+ * Si la tabla aún no existe —la migración sin pegar— devuelve vacío: el
+ * formulario sigue enseñando todo, como antes.
+ */
+export async function leerOfertaFabricante(): Promise<OfertaFabricante[]> {
+  const salida: OfertaFabricante[] = [];
+  for (let desde = 0; ; desde += 1000) {
+    const { data, error } = await supabase.from("tc_cat_oferta_fabricante")
+      .select("modelo_id, indice_carga_simple, indice_carga_doble, codigo_velocidad, medida:tc_cat_medidas_neumatico(valor)")
+      .order("id").range(desde, desde + 999);
+    if (error) return salida;
+    for (const r of (data ?? []) as unknown as {
+      modelo_id: string; indice_carga_simple: string; indice_carga_doble: string; codigo_velocidad: string;
+      medida: { valor: string } | null;
+    }[]) {
+      if (r.medida) salida.push({ modelo_id: r.modelo_id, medida: r.medida.valor, simple: r.indice_carga_simple, doble: r.indice_carga_doble, cv: r.codigo_velocidad });
+    }
+    if ((data ?? []).length < 1000) return salida;
+  }
+}
+
+/**
+ * Al dar de alta un neumático, su combinación (medida + índices + velocidad) y
+ * su vínculo con el modelo entran en el catálogo si no estaban. Es la misma
+ * función que usa la tablet; lo nuevo queda «pendiente de validar».
+ */
+export async function registrarCombinacionDeAlta(p: {
+  empresaId: string; marca: string; modelo: string; medida: string;
+  cargaSimple: string; cargaDoble: string; velocidad: string;
+}): Promise<{ creada: boolean }> {
+  const { data, error } = await supabase.rpc("tc_crear_referencia_provisional", {
+    p_empresa: p.empresaId, p_marca: p.marca, p_modelo: p.modelo, p_medida: p.medida,
+    p_carga_simple: p.cargaSimple, p_carga_doble: p.cargaDoble || null, p_velocidad: p.velocidad || null,
+  });
+  if (error) throw new Error(error.message);
+  const creado = (data as { creado?: { medida?: boolean; referencia?: boolean } } | null)?.creado;
+  return { creada: !!(creado?.medida || creado?.referencia) };
 }
 
 export async function listarMotivosFueraAlmacen(): Promise<MotivoFueraAlmacen[]> {
@@ -3418,6 +3687,12 @@ export async function contarSinSeguimiento(empresaId?: string | null): Promise<n
   const { count, error } = await q;
   if (error) return 0;   // un aviso que falla no puede tumbar la pantalla
   return count ?? 0;
+}
+
+/** La foto de la matrícula que hizo la tablet al dar de alta el vehículo. */
+export function urlFotoMatricula(path: string | null | undefined): string | null {
+  if (!path) return null;
+  return supabase.storage.from("tc-revisiones-fotos").getPublicUrl(path).data.publicUrl;
 }
 
 /** Da por bueno un vehículo dado de alta desde la tablet. Solo administradores. */
@@ -4566,6 +4841,31 @@ export async function importarInformesPdf(
   return tcg<ResultadoImportarInformesPdf>(
     `/api/tyrecontrol/tacografo/informes-pdf?empresa=${encodeURIComponent(empresaId)}`,
     { method: "POST", body: fd });
+}
+
+export interface ResultadoRecorteInformes {
+  ok: true;
+  simulado: boolean;
+  resumen: { total: number; recortados: number; seRecortarian: number; yaEstaban: number; noSePuede: number };
+  resultados: Array<{
+    id: string; nombre: string; idOrigen: string | null; matricula: string | null;
+    accion: "recortado" | "se_recortaria" | "ya_estaba" | "no_se_puede";
+    motivo?: string; aviso?: string; paginas?: number; bytesAntes?: number; bytesDespues?: number;
+  }>;
+}
+
+/**
+ * Deja solo el ejemplar del cliente en los informes que ya estaban adjuntos.
+ *
+ * Con `simular` no escribe nada: cuenta lo que haría. Sin él, sustituye cada
+ * PDF por el recortado y borra el fichero entero, que no se puede recuperar.
+ */
+export async function recortarInformesAdjuntos(
+  empresaId: string, simular: boolean,
+): Promise<ResultadoRecorteInformes> {
+  return tcg<ResultadoRecorteInformes>(
+    `/api/tyrecontrol/tacografo/informes-pdf/recortar?empresa=${encodeURIComponent(empresaId)}${simular ? "&simular=1" : ""}`,
+    { method: "POST" });
 }
 
 /**

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../services/alta_vehiculo.dart';
 import '../services/fotos.dart';
+import '../services/probe_session.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/km_telematica.dart';
@@ -16,16 +18,27 @@ import '../widgets/km_telematica.dart';
 /// Una posición por vez, y al guardar salta sola a la siguiente pendiente: de
 /// pie junto al camión, volver a la lista entre rueda y rueda es lo que hace
 /// que se abandonen los inventarios a medias.
+///
+/// «Guardar y copiar» guarda la rueda y vuelve al plano para marcar con ✓ las
+/// que llevan la misma goma: a esas se les pone la misma referencia (marca,
+/// modelo y medida) y solo queda medirlas. La profundidad, la presión, el
+/// RFID, la serie y el DOT son de cada goma y nunca se copian.
 class InventarioInicialScreen extends StatefulWidget {
   final String vehiculoId;
   final String matricula;
   final String tipoVehiculoId;
+  /// Los km de hoy si ya se pidieron antes (la primera revisión los trae de la
+  /// pantalla de confirmación): así no se vuelven a preguntar.
+  final num? kmIniciales;
+  final String origenKmInicial;
 
   const InventarioInicialScreen({
     super.key,
     required this.vehiculoId,
     required this.matricula,
     required this.tipoVehiculoId,
+    this.kmIniciales,
+    this.origenKmInicial = 'manual',
   });
 
   @override
@@ -57,9 +70,19 @@ class _InventarioInicialScreenState extends State<InventarioInicialScreen> {
   String? _error;
   /// La última referencia usada, para poder copiarla a la siguiente rueda.
   Map<String, dynamic>? _ultimaReferencia;
+  /// Medida de cada eje (texto, «315/80R22.5»), de la configuración del alta.
+  /// Con ella la ficha ofrece solo las gomas de esa medida.
+  Map<int, String> _medidaEje = const {};
+  /// Lo más montado en la flota de esta empresa, para ofrecerlo primero.
+  List<Map<String, dynamic>> _favoritos = const [];
+  /// Referencia puesta con «Guardar y copiar» a ruedas aún sin medir.
+  final Map<String, Map<String, dynamic>> _preasignada = {};
+  /// Mientras se eligen ruedas para copiar: la referencia y las marcadas.
+  Map<String, dynamic>? _copiando;
+  final Set<String> _seleccion = {};
   /// Los km que se guardarán con la revisión inicial, y de dónde salieron.
-  num? _km;
-  String _origenKm = 'manual';
+  late num? _km = widget.kmIniciales;
+  late String _origenKm = widget.origenKmInicial;
 
   @override
   void initState() {
@@ -75,8 +98,18 @@ class _InventarioInicialScreenState extends State<InventarioInicialScreen> {
         TyreControlApi.listarCatalogoReferencias(),
         TyreControlApi.listarMontajesVehiculo(widget.vehiculoId),
         TyreControlApi.ultimasMedicionesPorPosicion(widget.vehiculoId),
+        TyreControlApi.listarEjesDeVehiculo(widget.vehiculoId),
+        TyreControlApi.listarMedidasVehiculo(),
       ]);
       if (!mounted) return;
+      final valorMedida = {
+        for (final m in (r[5] as List)) (m as Map)['id']: m['valor'] as String?,
+      };
+      _medidaEje = {
+        for (final e in (r[4] as List))
+          if ((e as Map)['eje'] is int && valorMedida[e['medida_id']] != null)
+            e['eje'] as int: valorMedida[e['medida_id']]!,
+      };
       final posiciones = (r[0] as List)
           .map((p) => {'id': p.id, 'codigo': p.codigoPosicion, 'eje': p.eje, 'lado': p.lado,
                        'interior': p.interiorExterior})
@@ -128,6 +161,10 @@ class _InventarioInicialScreenState extends State<InventarioInicialScreen> {
       final v = await TyreControlApi.obtenerVehiculo(widget.vehiculoId);
       final empresa = v?.empresaId;
       if (empresa == null) return;
+      if (_favoritos.isEmpty) {
+        final f = await TyreControlApi.referenciasFavoritas(empresa);
+        if (mounted) setState(() => _favoritos = f);
+      }
       final u = await TyreControlApi.umbralesDeEmpresa(empresa);
       if (mounted) setState(() => _minimoMm = u.empresa?.minimaMm);
     } catch (_) { /* sin umbral se avisa menos, no se rompe nada */ }
@@ -136,31 +173,69 @@ class _InventarioInicialScreenState extends State<InventarioInicialScreen> {
   int get _hechas => _posiciones.where((p) => (_estado[p['id']] ?? const _Estado()).hecha).length;
   int get _total => _posiciones.length;
 
-  Map<String, dynamic>? get _siguientePendiente {
-    for (final p in _posiciones) {
-      if (!(_estado[p['id']] ?? const _Estado()).hecha) return p;
-    }
-    return null;
-  }
-
-  Future<void> _abrir(Map<String, dynamic> posicion) async {
-    final guardado = await Navigator.of(context).push<bool>(MaterialPageRoute(
+  Future<_Salida?> _ficha(Map<String, dynamic> posicion) {
+    return Navigator.of(context).push<_Salida>(MaterialPageRoute(
       builder: (_) => _FichaPosicion(
         vehiculoId: widget.vehiculoId,
         posicion: posicion,
         catalogo: _catalogo,
         minimoMm: _minimoMm,
         referenciaSugerida: _ultimaReferencia,
+        referenciaInicial: _preasignada[posicion['id']],
+        medidaEje: _medidaEje[posicion['eje']],
+        favoritos: _favoritos,
+        puedeCopiar: _pendientesSin(posicion['id'] as String).isNotEmpty,
         yaInformada: (_estado[posicion['id']] ?? const _Estado()).hecha,
         onReferenciaUsada: (ref) => _ultimaReferencia = ref,
       ),
     ));
-    if (guardado != true) return;
+  }
+
+  /// Las ruedas aún sin apuntar, quitando [excepto].
+  List<Map<String, dynamic>> _pendientesSin(String excepto) => _posiciones
+      .where((p) => p['id'] != excepto && !(_estado[p['id']] ?? const _Estado()).hecha)
+      .toList();
+
+  Future<void> _abrir(Map<String, dynamic> posicion) async {
+    final salida = await _ficha(posicion);
+    if (salida == null) return;
+    _preasignada.remove(posicion['id']);
     await _cargar();
     if (!mounted) return;
+    if (salida.copiar) {
+      // Al plano a marcar con ✓ las ruedas que llevan la misma goma.
+      setState(() { _copiando = salida.referencia; _seleccion.clear(); });
+      return;
+    }
     // Saltar sola a la siguiente: es lo que evita los inventarios a medias.
     final siguiente = _siguientePendiente;
     if (siguiente != null) _abrir(siguiente);
+  }
+
+  void _aplicarCopia() {
+    final ref = _copiando;
+    if (ref == null) return;
+    setState(() {
+      for (final id in _seleccion) {
+        _preasignada[id] = ref;
+      }
+      _copiando = null;
+      _seleccion.clear();
+    });
+    final siguiente = _siguientePendiente;
+    if (siguiente != null) _abrir(siguiente);
+  }
+
+  /// Primero las que ya tienen goma copiada (solo falta medirlas), después el
+  /// resto en el orden del plano.
+  Map<String, dynamic>? get _siguientePendiente {
+    Map<String, dynamic>? primera;
+    for (final p in _posiciones) {
+      if ((_estado[p['id']] ?? const _Estado()).hecha) continue;
+      if (_preasignada.containsKey(p['id'])) return p;
+      primera ??= p;
+    }
+    return primera;
   }
 
   /*
@@ -189,18 +264,11 @@ class _InventarioInicialScreenState extends State<InventarioInicialScreen> {
   /// Abrir UNA rueda desde el resumen: al guardar se vuelve al resumen, no se
   /// encadena a la siguiente como en el recorrido normal.
   Future<void> _abrirSolo(Map<String, dynamic> posicion) async {
-    final guardado = await Navigator.of(context).push<bool>(MaterialPageRoute(
-      builder: (_) => _FichaPosicion(
-        vehiculoId: widget.vehiculoId,
-        posicion: posicion,
-        catalogo: _catalogo,
-        minimoMm: _minimoMm,
-        referenciaSugerida: _ultimaReferencia,
-        yaInformada: (_estado[posicion['id']] ?? const _Estado()).hecha,
-        onReferenciaUsada: (ref) => _ultimaReferencia = ref,
-      ),
-    ));
-    if (guardado == true) await _cargar();
+    final salida = await _ficha(posicion);
+    if (salida != null) {
+      _preasignada.remove(posicion['id']);
+      await _cargar();
+    }
   }
 
   Future<void> _finalizar() async {
@@ -275,10 +343,40 @@ class _InventarioInicialScreenState extends State<InventarioInicialScreen> {
       ejes.putIfAbsent((p['eje'] as int?) ?? 0, () => []).add(p);
     }
     final numeros = ejes.keys.toList()..sort();
+    final medidas = _medidaEje.values.toSet();
+    final comun = medidas.length == 1 && _medidaEje.length == numeros.length ? medidas.first : null;
     return Column(children: [
+      if (_copiando != null)
+        Container(
+          width: double.infinity,
+          margin: const EdgeInsets.only(bottom: 14),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: AppColors.tireSeleccionado.withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppColors.tireSeleccionado),
+          ),
+          child: Text(
+            'Marca con ✓ las ruedas que llevan ${_copiando!['marca']} ${_copiando!['modelo']} '
+            '${_copiando!['medida']}. Se les pone la misma goma; después solo hay que medirlas.',
+            style: const TextStyle(fontSize: 15),
+          ),
+        ),
+      if (comun != null) ...[
+        Text(comun, style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w900, color: AppColors.textPrimary)),
+        const SizedBox(height: 8),
+      ],
       const Text('DELANTE', style: TextStyle(color: AppColors.textHint, fontSize: 11, letterSpacing: 1.5)),
       const SizedBox(height: 10),
       for (final n in numeros) ...[
+        if (comun == null && _medidaEje[n] != null)
+          Padding(
+            padding: const EdgeInsets.only(left: 46, bottom: 4),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(_medidaEje[n]!, style: const TextStyle(fontWeight: FontWeight.w800, color: Color(0xFFCFE0FF))),
+            ),
+          ),
         Row(children: [
           SizedBox(width: 46, child: Text('Eje $n',
               style: const TextStyle(color: AppColors.textSecondary, fontSize: 13))),
@@ -288,7 +386,18 @@ class _InventarioInicialScreenState extends State<InventarioInicialScreen> {
                 posicion: p,
                 estado: _estado[p['id']] ?? const _Estado(),
                 minimoMm: _minimoMm,
-                onTap: () => _abrir(p),
+                copiada: _preasignada[p['id']],
+                // Copiando: solo se marcan las que no tienen goma todavía.
+                copiando: _copiando != null,
+                seleccionada: _seleccion.contains(p['id']),
+                onTap: _copiando != null
+                    ? () {
+                        if ((_estado[p['id']] ?? const _Estado()).hecha) return;
+                        setState(() => _seleccion.contains(p['id'])
+                            ? _seleccion.remove(p['id'])
+                            : _seleccion.add(p['id'] as String));
+                      }
+                    : () => _abrir(p),
               ),
             ]),
           ),
@@ -303,16 +412,44 @@ class _InventarioInicialScreenState extends State<InventarioInicialScreen> {
       // no hay, el técnico los teclea. No impiden terminar el alta: un camión
       // sin telemática y sin nadie que mire el cuadro se puede inventariar
       // igual, y sus gomas se siguen midiendo.
-      KmTelematica(
-        vehiculoId: widget.vehiculoId,
-        matricula: widget.matricula,
-        onConfirmado: (km, origen) => setState(() { _km = km; _origenKm = origen; }),
-      ),
+      if (widget.kmIniciales != null)
+        Text('Km de hoy: ${widget.kmIniciales}',
+            style: const TextStyle(color: AppColors.textSecondary, fontSize: 14))
+      else
+        KmTelematica(
+          vehiculoId: widget.vehiculoId,
+          matricula: widget.matricula,
+          onConfirmado: (km, origen) => setState(() { _km = km; _origenKm = origen; }),
+        ),
     ]);
   }
 
   Widget _barraInferior(bool completo) {
     final siguiente = _siguientePendiente;
+    if (_copiando != null) {
+      return SafeArea(
+        top: false,
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+          decoration: const BoxDecoration(
+            color: AppColors.surface,
+            border: Border(top: BorderSide(color: AppColors.cardBorder)),
+          ),
+          child: Row(children: [
+            Expanded(child: SizedBox(height: 56, child: OutlinedButton(
+              onPressed: () => setState(() { _copiando = null; _seleccion.clear(); }),
+              child: const Text('No copiar', style: TextStyle(fontSize: 16))))),
+            const SizedBox(width: 12),
+            Expanded(flex: 2, child: SizedBox(height: 56, child: FilledButton(
+              onPressed: _seleccion.isEmpty ? null : _aplicarCopia,
+              child: Text(_seleccion.isEmpty
+                  ? 'Marca las ruedas'
+                  : 'Copiar a ${_seleccion.length} ${_seleccion.length == 1 ? 'rueda' : 'ruedas'}',
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700))))),
+          ]),
+        ),
+      );
+    }
     return SafeArea(
       top: false,
       child: Container(
@@ -344,8 +481,20 @@ class _Casilla extends StatelessWidget {
   final Map<String, dynamic> posicion;
   final _Estado estado;
   final double? minimoMm;
+  /// Referencia puesta con «Guardar y copiar»: tiene goma, falta medirla.
+  final Map<String, dynamic>? copiada;
+  final bool copiando;
+  final bool seleccionada;
   final VoidCallback onTap;
-  const _Casilla({required this.posicion, required this.estado, required this.minimoMm, required this.onTap});
+  const _Casilla({
+    required this.posicion,
+    required this.estado,
+    required this.minimoMm,
+    required this.onTap,
+    this.copiada,
+    this.copiando = false,
+    this.seleccionada = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -353,37 +502,66 @@ class _Casilla extends StatelessWidget {
     // configurado · amarillo hecha pero sin presión, que es información que
     // falta sin ser un problema.
     final bajoMinimo = estado.profundidad != null && minimoMm != null && estado.profundidad! <= minimoMm!;
+    final azul = !estado.hecha && copiada != null;
     final color = !estado.hecha
-        ? AppColors.surfaceVariant
+        ? (azul ? AppColors.tireSeleccionado : AppColors.surfaceVariant)
         : bajoMinimo
             ? AppColors.danger
             : estado.presionMedida
                 ? AppColors.success
                 : AppColors.warning;
-    final tinta = estado.hecha ? AppColors.onPrimary : AppColors.textSecondary;
+    final tinta = estado.hecha ? AppColors.onPrimary : (azul ? Colors.white : AppColors.textSecondary);
 
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(10),
+    final casilla = Opacity(
+      // Copiando, las que ya tienen goma no se pueden marcar: se apagan.
+      opacity: copiando && estado.hecha ? 0.45 : 1,
       child: Container(
-        width: 96, height: 76,
+        width: 112, height: 84,
         decoration: BoxDecoration(
           color: color,
           borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: AppColors.cardBorder),
+          border: Border.all(
+              color: seleccionada ? AppColors.success : AppColors.cardBorder,
+              width: seleccionada ? 3 : 1),
         ),
         child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
           Text(posicion['codigo'] as String? ?? '',
               style: TextStyle(fontWeight: FontWeight.w800, color: tinta, fontSize: 13)),
           const SizedBox(height: 2),
-          Text(
-            estado.profundidad != null ? '${estado.profundidad} mm' : 'sin informar',
-            style: TextStyle(color: tinta, fontSize: 12),
-          ),
+          if (azul) ...[
+            Text('${copiada!['marca']} ${copiada!['modelo']}',
+                maxLines: 1, overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: tinta, fontSize: 11, fontWeight: FontWeight.w700)),
+            Text('falta medir', style: TextStyle(color: tinta, fontSize: 11)),
+          ] else
+            Text(
+              estado.profundidad != null ? '${estado.profundidad} mm' : 'sin informar',
+              style: TextStyle(color: tinta, fontSize: 12),
+            ),
           if (estado.hecha && !estado.presionMedida)
             Text('sin presión', style: TextStyle(color: tinta, fontSize: 10)),
         ]),
       ),
+    );
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Stack(clipBehavior: Clip.none, children: [
+        casilla,
+        if (seleccionada)
+          Positioned(
+            top: -8, right: -8,
+            child: Container(
+              width: 26, height: 26,
+              decoration: BoxDecoration(
+                color: AppColors.success, shape: BoxShape.circle,
+                border: Border.all(color: Colors.white, width: 2),
+              ),
+              child: const Icon(Icons.check, size: 16, color: Colors.white),
+            ),
+          ),
+      ]),
     );
   }
 }
@@ -407,6 +585,15 @@ class _Leyenda extends StatelessWidget {
   }
 }
 
+/// Cómo se ha cerrado la ficha de una rueda.
+class _Salida {
+  /// La referencia guardada (para copiarla a otras ruedas).
+  final Map<String, dynamic> referencia;
+  /// «Guardar y copiar»: volver al plano a marcar las ruedas iguales.
+  final bool copiar;
+  const _Salida(this.referencia, {this.copiar = false});
+}
+
 /// La ficha de una rueda: lo mínimo para dejarla apuntada.
 class _FichaPosicion extends StatefulWidget {
   final String vehiculoId;
@@ -414,6 +601,13 @@ class _FichaPosicion extends StatefulWidget {
   final List<Map<String, dynamic>> catalogo;
   final double? minimoMm;
   final Map<String, dynamic>? referenciaSugerida;
+  /// La goma ya elegida con «Guardar y copiar»: solo falta medirla.
+  final Map<String, dynamic>? referenciaInicial;
+  /// La medida de su eje («315/80R22.5»), si se configuró en el alta.
+  final String? medidaEje;
+  final List<Map<String, dynamic>> favoritos;
+  /// Hay otras ruedas pendientes a las que copiar.
+  final bool puedeCopiar;
   final bool yaInformada;
   final void Function(Map<String, dynamic>) onReferenciaUsada;
 
@@ -425,6 +619,10 @@ class _FichaPosicion extends StatefulWidget {
     required this.referenciaSugerida,
     required this.yaInformada,
     required this.onReferenciaUsada,
+    this.referenciaInicial,
+    this.medidaEje,
+    this.favoritos = const [],
+    this.puedeCopiar = false,
   });
 
   @override
@@ -432,7 +630,13 @@ class _FichaPosicion extends StatefulWidget {
 }
 
 class _FichaPosicionState extends State<_FichaPosicion> {
-  Map<String, dynamic>? _referencia;
+  late Map<String, dynamic>? _referencia = widget.referenciaInicial;
+  /// Marca elegida en el paso marca → dibujo.
+  String? _marca;
+  /// Con medida de eje se ofrecen solo las de esa medida; se puede quitar.
+  late bool _soloMedidaEje = widget.medidaEje != null;
+  String? _rfid;
+  bool _leyendoRfid = false;
   final _busqueda = TextEditingController();
   final _profundidad = TextEditingController();
   final _presion = TextEditingController();
@@ -462,13 +666,35 @@ class _FichaPosicionState extends State<_FichaPosicion> {
     super.dispose();
   }
 
+  /// El catálogo en el orden en que se ofrece: lo más montado en la flota
+  /// primero y, si el eje tiene medida, solo esa medida.
+  late final List<Map<String, dynamic>> _ordenadoEje = ordenarReferencias(
+      widget.catalogo, favoritos: widget.favoritos, medida: widget.medidaEje);
+  late final List<Map<String, dynamic>> _ordenadoTodo =
+      ordenarReferencias(widget.catalogo, favoritos: widget.favoritos);
+  List<Map<String, dynamic>> get _ordenado => _soloMedidaEje ? _ordenadoEje : _ordenadoTodo;
+
   List<Map<String, dynamic>> get _resultados {
-    final q = _busqueda.text.trim().toLowerCase();
+    final q = _busqueda.text.trim();
     if (q.isEmpty) return const [];
-    return widget.catalogo.where((r) {
-      final t = '${r['marca'] ?? ''} ${r['modelo'] ?? ''} ${r['medida'] ?? ''}'.toLowerCase();
-      return t.contains(q);
-    }).take(30).toList();
+    return _ordenado.where((r) => coincideReferencia(r, q)).take(30).toList();
+  }
+
+  Future<void> _leerRfid() async {
+    setState(() { _leyendoRfid = true; _error = null; });
+    try {
+      final m = await ProbeSession.instance.leerEpc();
+      if (!mounted) return;
+      if (m.hayEtiqueta && (m.epc ?? m.tid) != null) {
+        setState(() => _rfid = (m.epc ?? m.tid)!.toUpperCase());
+      } else {
+        setState(() => _error = 'No se ha leído ninguna etiqueta. Acerca la sonda al flanco y repite.');
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = 'No se ha podido leer el RFID: ${'$e'.replaceFirst('Bad state: ', '')}');
+    } finally {
+      if (mounted) setState(() => _leyendoRfid = false);
+    }
   }
 
   bool get _puedeGuardar {
@@ -537,7 +763,7 @@ class _FichaPosicionState extends State<_FichaPosicion> {
     }
   }
 
-  Future<void> _guardar() async {
+  Future<void> _guardar({bool copiar = false}) async {
     setState(() { _guardando = true; _error = null; });
     try {
       await TyreControlApi.guardarPosicionInventario(
@@ -553,14 +779,63 @@ class _FichaPosicionState extends State<_FichaPosicion> {
         dot: _dot.text,
         observaciones: _observaciones.text,
         fotoUrl: _fotoUrl,
+        rfidEpc: _rfid,
       );
       widget.onReferenciaUsada(_referencia!);
-      if (mounted) Navigator.of(context).pop(true);
+      if (mounted) Navigator.of(context).pop(_Salida(_referencia!, copiar: copiar));
     } catch (e) {
       if (mounted) setState(() => _error = '$e'.replaceFirst('Exception: ', ''));
     } finally {
       if (mounted) setState(() => _guardando = false);
     }
+  }
+
+  Widget _filaReferencia(Map<String, dynamic> r) {
+    final veces = vecesEnFlota(r, widget.favoritos);
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      title: Text('${r['marca']} ${r['modelo']}', style: const TextStyle(color: AppColors.textPrimary)),
+      subtitle: Text('${r['medida']}', style: const TextStyle(color: AppColors.textSecondary)),
+      trailing: veces > 0
+          ? Text('$veces en la flota', style: const TextStyle(color: AppColors.success, fontSize: 12))
+          : null,
+      onTap: () => setState(() { _referencia = r; _busqueda.clear(); _marca = null; }),
+    );
+  }
+
+  /// Marca → dibujo. Sin marca elegida, lo más montado en la flota de esta
+  /// medida, para que lo normal sea un solo toque.
+  List<Widget> _marcaYDibujo() {
+    final lista = _ordenado;
+    if (lista.isEmpty) {
+      return [
+        const _Nota('No hay ningún neumático de esta medida en el catálogo. '
+            'Pulsa «Ver todas las medidas» o busca por marca.'),
+      ];
+    }
+    final marcas = marcasDe(lista);
+    final favoritas = lista.where((r) => vecesEnFlota(r, widget.favoritos) > 0).take(5).toList();
+    return [
+      Wrap(spacing: 8, runSpacing: 8, children: [
+        for (final m in marcas)
+          ChoiceChip(
+            label: Text(m),
+            selected: _marca == m,
+            onSelected: (v) => setState(() => _marca = v ? m : null),
+          ),
+      ]),
+      const SizedBox(height: 8),
+      if (_marca != null)
+        for (final r in lista.where((r) => r['marca'] == _marca)) _filaReferencia(r)
+      else if (favoritas.isNotEmpty) ...[
+        const Padding(
+          padding: EdgeInsets.only(top: 4),
+          child: Text('LO MÁS MONTADO EN LA FLOTA',
+              style: TextStyle(fontSize: 11, letterSpacing: 1.2, color: AppColors.textSecondary)),
+        ),
+        for (final r in favoritas) _filaReferencia(r),
+      ],
+    ];
   }
 
   @override
@@ -602,23 +877,36 @@ class _FichaPosicionState extends State<_FichaPosicion> {
                 ),
                 const SizedBox(height: 10),
               ],
+              if (widget.medidaEje != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(children: [
+                    Expanded(
+                      child: Text(
+                        _soloMedidaEje
+                            ? 'Medida del eje: ${widget.medidaEje}'
+                            : 'Todas las medidas',
+                        style: const TextStyle(fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () => setState(() { _soloMedidaEje = !_soloMedidaEje; _marca = null; }),
+                      child: Text(_soloMedidaEje ? 'Ver todas las medidas' : 'Solo ${widget.medidaEje}'),
+                    ),
+                  ]),
+                ),
               TextField(
                 controller: _busqueda,
                 onChanged: (_) => setState(() {}),
+                keyboardType: TextInputType.visiblePassword,
                 decoration: const InputDecoration(
                   prefixIcon: Icon(Icons.search),
-                  hintText: 'Buscar marca, modelo o medida',
+                  hintText: 'Buscar: marca, modelo o medida (29580)',
                 ),
               ),
               const SizedBox(height: 8),
-              for (final r in _resultados)
-                ListTile(
-                  title: Text('${r['marca']} ${r['modelo']}',
-                      style: const TextStyle(color: AppColors.textPrimary)),
-                  subtitle: Text('${r['medida']}',
-                      style: const TextStyle(color: AppColors.textSecondary)),
-                  onTap: () => setState(() { _referencia = r; _busqueda.clear(); }),
-                ),
+              if (_busqueda.text.trim().isEmpty) ..._marcaYDibujo(),
+              for (final r in _resultados) _filaReferencia(r),
               if (_busqueda.text.trim().isNotEmpty && _resultados.isEmpty)
                 const _Nota('No está en el catálogo. Avisa a oficina para que lo den de alta; '
                     'mientras tanto elige el modelo más parecido y déjalo en observaciones.'),
@@ -710,6 +998,30 @@ class _FichaPosicionState extends State<_FichaPosicion> {
               ),
 
             const SizedBox(height: 20),
+            // ── RFID ───────────────────────────────────────────────────────
+            const Text('RFID', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700,
+                color: AppColors.textPrimary)),
+            const SizedBox(height: 8),
+            Row(children: [
+              FilledButton.icon(
+                onPressed: !ProbeSession.instance.puedeLeerRfid || _leyendoRfid ? null : _leerRfid,
+                icon: const Icon(Icons.nfc, size: 18),
+                label: Text(_leyendoRfid ? 'Leyendo…' : (_rfid == null ? 'Escanear RFID' : 'Volver a leer')),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  _rfid ?? (ProbeSession.instance.puedeLeerRfid
+                      ? 'Si la goma lleva etiqueta, acerca la sonda al flanco.'
+                      : 'Conecta la sonda para leer el RFID. Si no lleva, sigue.'),
+                  style: TextStyle(
+                      color: _rfid != null ? AppColors.success : AppColors.textSecondary,
+                      fontSize: 13, fontWeight: _rfid != null ? FontWeight.w700 : FontWeight.normal),
+                ),
+              ),
+            ]),
+
+            const SizedBox(height: 20),
             // ── Lo que solo a veces se ve ──────────────────────────────────
             const Text('Si se ven', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700,
                 color: AppColors.textPrimary)),
@@ -746,14 +1058,32 @@ class _FichaPosicionState extends State<_FichaPosicion> {
                 color: AppColors.surface,
                 border: Border(top: BorderSide(color: AppColors.cardBorder)),
               ),
-              child: SizedBox(
-                height: 56, width: double.infinity,
-                child: FilledButton(
-                  onPressed: _puedeGuardar ? _guardar : null,
-                  child: Text(_guardando ? 'Guardando…' : 'Guardar y siguiente rueda',
-                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+              child: Row(children: [
+                if (widget.puedeCopiar) ...[
+                  Expanded(
+                    child: SizedBox(
+                      height: 56,
+                      child: OutlinedButton.icon(
+                        onPressed: _puedeGuardar ? () => _guardar(copiar: true) : null,
+                        icon: const Icon(Icons.copy_all),
+                        label: const Text('Guardar y copiar', style: TextStyle(fontSize: 16)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                ],
+                Expanded(
+                  flex: 2,
+                  child: SizedBox(
+                    height: 56,
+                    child: FilledButton(
+                      onPressed: _puedeGuardar ? _guardar : null,
+                      child: Text(_guardando ? 'Guardando…' : 'Guardar y siguiente rueda',
+                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                    ),
+                  ),
                 ),
-              ),
+              ]),
             ),
           ),
         ]),

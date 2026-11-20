@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 import {
   hayQueCambiar, llantaDeMedida, profundidadMinimaPorLlanta, textoDeCambio,
 } from "./umbralProfundidad";
+import { minimoDeLaGoma, SIN_MINIMOS } from "./umbralProfundidad";
 
 /** Medida → mínimo. Copiada de la comprobación de la migración. */
 const TABLA: Array<[string | null, number | null]> = [
@@ -115,5 +116,27 @@ describe("cómo se dice", () => {
   it("y no dice nada cuando no toca cambiarla", () => {
     expect(textoDeCambio(9, "295/80R22.5")).toBeNull();
     expect(textoDeCambio(null, "295/80R22.5")).toBeNull();
+  });
+});
+
+describe("el mínimo de la empresa manda sobre el de la llanta", () => {
+  const plana = { empresa: 3, porMedida: { "315/80R22.5": 3.5 } };
+
+  it("sin mínimos de empresa, el de la llanta", () => {
+    expect(minimoDeLaGoma("295/80R22.5", SIN_MINIMOS)).toBe(4);
+    expect(minimoDeLaGoma("295/80R22.5", null)).toBe(4);
+  });
+
+  it("con el general de la empresa, ese", () => {
+    expect(minimoDeLaGoma("295/80R22.5", plana)).toBe(3);
+  });
+
+  it("el de la medida gana al general, se escriba como se escriba", () => {
+    expect(minimoDeLaGoma("315/80 r22.5", plana)).toBe(3.5);
+  });
+
+  it("la empresa lo pone también para la goma sin llanta reconocible", () => {
+    expect(minimoDeLaGoma(null, plana)).toBe(3);
+    expect(minimoDeLaGoma(null, SIN_MINIMOS)).toBeNull();
   });
 });
