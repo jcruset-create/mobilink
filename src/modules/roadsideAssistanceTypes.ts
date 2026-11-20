@@ -40,6 +40,10 @@ export type KnownPlace = {
   clientId?: number | null;
   clientName?: string | null;
   notas?: string | null;
+  // Persona de contacto de la base: se propone al crear una OTF en ella.
+  contactoNombre?: string | null;
+  contactoTelefono?: string | null;
+  contactoCargo?: string | null;
   active?: boolean;
   createdAtMs?: number | null;
 };

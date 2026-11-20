@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import '../services/camara.dart';
 import '../theme/app_theme.dart';
+import '../widgets/contacto_base.dart';
 import '../widgets/plano_ruedas.dart';
 import '../widgets/plate_badge.dart';
 
@@ -171,6 +172,7 @@ class _OtfInicioTrabajoScreenState extends State<OtfInicioTrabajoScreen> {
       backgroundColor: AppColors.background,
       appBar: AppBar(
         title: Text('Trabajo ${widget.numero} de ${widget.total}'),
+        actions: [BotonLlamarContacto(trabajo: widget.trabajo)],
         backgroundColor: AppColors.surface,
         foregroundColor: AppColors.textPrimary,
       ),
@@ -443,6 +445,7 @@ class _OtfTrabajoEnCursoScreenState extends State<OtfTrabajoEnCursoScreen> {
       backgroundColor: AppColors.background,
       appBar: AppBar(
         title: Text('Trabajo ${widget.numero} de ${widget.total} · en curso'),
+        actions: [BotonLlamarContacto(trabajo: widget.trabajo)],
         backgroundColor: AppColors.surface,
         foregroundColor: AppColors.textPrimary,
       ),
@@ -691,6 +694,7 @@ class _OtfNoRealizadoScreenState extends State<OtfNoRealizadoScreen> {
       backgroundColor: AppColors.background,
       appBar: AppBar(
         title: Text('No se puede realizar · ${widget.numero} de ${widget.total}'),
+        actions: [BotonLlamarContacto(trabajo: widget.trabajo)],
         backgroundColor: AppColors.surface,
         foregroundColor: AppColors.textPrimary,
       ),

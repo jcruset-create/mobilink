@@ -24,7 +24,38 @@ const CAMPOS: Record<string, { columna: string; valor: (v: unknown) => unknown }
   // A quién se avisa al llegar a la base y a quién va el informe.
   telefonoAviso: { columna: `"telefonoAviso"`, valor: textoONulo },
   emailInforme: { columna: `"emailInforme"`, valor: textoONulo },
+  // Persona de contacto en la base, para que el operario la llame.
+  contactoNombre: { columna: `"contactoNombre"`, valor: textoONulo },
+  contactoTelefono: { columna: `"contactoTelefono"`, valor: textoONulo },
+  contactoCargo: { columna: `"contactoCargo"`, valor: textoONulo },
 };
+
+const CAMPOS_CONTACTO = ["contactoNombre", "contactoTelefono", "contactoCargo"] as const;
+
+/**
+ * Guardar el contacto de una OTF como contacto de su base, para que la
+ * siguiente OTF en esa base lo traiga puesto. null si no hay base o no viene
+ * ningún dato de contacto. Solo cambia lo que llega.
+ */
+export function sqlContactoDeBase(
+  knownPlaceId: unknown,
+  body: Record<string, unknown>,
+  ahoraMs: number
+): { sql: string; params: unknown[] } | null {
+  const id = numeroONulo(knownPlaceId);
+  if (id == null) return null;
+  const sets: string[] = [];
+  const params: unknown[] = [id];
+  for (const campo of CAMPOS_CONTACTO) {
+    if (!Object.prototype.hasOwnProperty.call(body, campo)) continue;
+    params.push(textoONulo(body[campo]));
+    sets.push(`"${campo}" = $${params.length}`);
+  }
+  if (sets.length === 0) return null;
+  params.push(ahoraMs);
+  sets.push(`"updatedAtMs" = $${params.length}`);
+  return { sql: `UPDATE roadside_known_places SET ${sets.join(", ")} WHERE id = $1`, params };
+}
 
 function textoONulo(v: unknown) {
   if (v == null) return null;
