@@ -3,8 +3,11 @@ import {
   anunciarCargaSesion,
   esperarSesion,
   guardarTokenSesion,
+  registrarRenovador,
+  renovarSesion,
   sesionCargada,
   tokenSesionActual,
+  tokenSesionVigente,
 } from "./sesionToken";
 
 /**
@@ -36,16 +39,28 @@ supabase.auth.onAuthStateChange((_event, session) => {
   guardarTokenSesion(session?.access_token ?? null);
 });
 
+// Un token caducado se renueva aquí, que es donde está el cliente (ver
+// «El token caducado» en sesionToken.ts). getSession() ya renueva si hace falta.
+registrarRenovador(async (forzar) => {
+  const { data } = forzar ? await supabase.auth.refreshSession() : await supabase.auth.getSession();
+  return data.session?.access_token ?? null;
+});
+
 export { tokenSesionActual };
 
 export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   // Nada más abrir una pantalla el token puede no haber llegado todavía.
   await esperarSesion();
-  const accessToken = tokenSesionActual();
-  if (!accessToken) return fetch(input, init);
-  const headers = new Headers(init?.headers);
-  if (!headers.has("Authorization")) {
-    headers.set("Authorization", `Bearer ${accessToken}`);
-  }
-  return fetch(input, { ...init, headers });
+  const enviar = (token: string | null) => {
+    if (!token) return fetch(input, init);
+    const headers = new Headers(init?.headers);
+    if (!headers.has("Authorization")) headers.set("Authorization", `Bearer ${token}`);
+    return fetch(input, { ...init, headers });
+  };
+  const token = await tokenSesionVigente();
+  const respuesta = await enviar(token);
+  // 401 con sesión: se renueva y se intenta UNA vez más antes de darlo por malo.
+  if (respuesta.status !== 401 || !token || new Headers(init?.headers).has("Authorization")) return respuesta;
+  const nuevo = await renovarSesion(true);
+  return nuevo && nuevo !== token ? enviar(nuevo) : respuesta;
 }

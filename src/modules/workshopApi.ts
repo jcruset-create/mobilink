@@ -9,7 +9,7 @@ import {
 } from "./techStatus";
 
 import { nowMs } from "./time";
-import { esperarSesion, tokenSesionActual } from "./sesionToken";
+import { esperarSesion, tokenSesionActual, tokenSesionVigente, renovarSesion } from "./sesionToken";
 export async function fetchWithTimeout(
   url: string,
   options?: RequestInit,
@@ -24,29 +24,38 @@ export async function fetchWithTimeout(
    * abrirse: la de OTF dejaba las furgonetas vacías por esto.
    */
   await esperarSesion();
-  const sesion = tokenSesionActual();
-  let opciones = options;
-  if (sesion) {
+  // El token con el que se hicieron las cabeceras puede haber caducado en una
+  // pestaña que llevaba tiempo abierta: se cambia por el vigente.
+  const viejo = tokenSesionActual();
+  const sesion = await tokenSesionVigente();
+  const conToken = (token: string | null, sustituye: string | null): RequestInit | undefined => {
+    if (!token) return options;
     const cabeceras = new Headers(options?.headers);
-    if (!cabeceras.has("Authorization")) {
-      cabeceras.set("Authorization", `Bearer ${sesion}`);
-      opciones = { ...options, headers: cabeceras };
+    const actual = cabeceras.get("Authorization");
+    if (actual && !(sustituye && actual === `Bearer ${sustituye}`)) return options;
+    cabeceras.set("Authorization", `Bearer ${token}`);
+    return { ...options, headers: cabeceras };
+  };
+
+  const enviar = async (opciones: RequestInit | undefined) => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, { ...opciones, signal: controller.signal });
+    } finally {
+      window.clearTimeout(timer);
     }
-  }
+  };
 
-  const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetch(url, {
-      ...opciones,
-      signal: controller.signal,
-    });
-
-    return response;
-  } finally {
-    window.clearTimeout(timer);
-  }
+  const response = await enviar(conToken(sesion, viejo));
+  // 401 con sesión: se renueva y se intenta UNA vez más («El token caducado»,
+  // en sesionToken.ts). Si el token nuevo es el mismo, el 401 es de verdad.
+  if (response.status !== 401 || !sesion) return response;
+  const nuevo = await renovarSesion(true);
+  if (!nuevo || nuevo === sesion) return response;
+  // Las cabeceras de quien llama siguen llevando el token viejo: se sustituye.
+  const reintento = conToken(nuevo, viejo);
+  return reintento === options ? response : enviar(reintento);
 }
 
 export function getAdminHeaders(extra?: HeadersInit): HeadersInit {

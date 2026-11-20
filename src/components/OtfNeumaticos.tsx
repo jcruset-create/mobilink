@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { API_BASE, getAdminHeaders } from "../modules/workshopApi";
+import { API_BASE, fetchWithTimeout, getAdminHeaders } from "../modules/workshopApi";
 import { MARGEN_PLANO_X, MARGEN_PLANO_Y, aspectoPlano, coordAVista } from "../../shared/planoMargen";
 
 /**
@@ -39,7 +39,8 @@ export type NeumaticosTrabajo = {
 };
 
 async function leer<T>(ruta: string): Promise<T> {
-  const r = await fetch(`${API_BASE}${ruta}`, { headers: getAdminHeaders() });
+  // fetchWithTimeout renueva la sesión si ha caducado; TyreControl puede tardar.
+  const r = await fetchWithTimeout(`${API_BASE}${ruta}`, { headers: getAdminHeaders() }, 20000);
   if (!r.ok) throw new Error((await r.json().catch(() => null))?.error ?? "No se ha podido consultar TyreControl");
   return r.json();
 }
