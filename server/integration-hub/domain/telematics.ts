@@ -218,7 +218,7 @@ export interface TripSummary {
  * Proveedores que saben resumir distancias.
  *
  * Es una interfaz APARTE de `ITelematicsConnector`, no un método opcional
- * dentro: así Webfleet, que no lo implementa, ni se entera de que existe, y
+ * dentro: así un conector que no lo implemente ni se entera de que existe, y
  * quien lo necesite comprueba `TRIP_SUMMARY` en las capacidades y hace el
  * cast, en vez de encontrarse un `undefined` a mitad de una sincronización.
  */

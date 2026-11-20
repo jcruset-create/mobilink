@@ -35,8 +35,10 @@ import { IntegrationError } from "../../../domain/errors.ts";
 import {
   TELEMATICS_CAPABILITIES,
   type IFleetPositionProvider,
+  type ITripSummaryProvider,
   type ProviderVehicle,
   type TelemetryWindow,
+  type TripSummary,
   type VehicleTelemetry,
 } from "../../../domain/telematics.ts";
 import {
@@ -50,6 +52,7 @@ import {
   matriculaDeFicha,
   objetoALectura,
   objetoAVehiculo,
+  resumenesDeViajes,
   viajeALectura,
 } from "./mapeo.ts";
 
@@ -67,7 +70,7 @@ export interface WebfleetConfig {
   accionHistorico?: "showLogbook" | "showTripReportExtern";
 }
 
-export class WebfleetConnector implements ITelematicsConnector, IFleetPositionProvider {
+export class WebfleetConnector implements ITelematicsConnector, IFleetPositionProvider, ITripSummaryProvider {
   readonly info: ConnectorInfo = {
     key: "webfleet",
     kind: "telematics",
@@ -86,6 +89,7 @@ export class WebfleetConnector implements ITelematicsConnector, IFleetPositionPr
       TELEMATICS_CAPABILITIES.ODOMETER,
       TELEMATICS_CAPABILITIES.POSITION,
       TELEMATICS_CAPABILITIES.FLEET_POSITIONS,
+      TELEMATICS_CAPABILITIES.TRIP_SUMMARY,
     ],
   };
 
@@ -260,6 +264,28 @@ export class WebfleetConnector implements ITelematicsConnector, IFleetPositionPr
       .map((f) => viajeALectura(f, this.opcionesMapeo, providerVehicleId))
       .filter((l): l is VehicleTelemetry => l !== null)
       .sort((a, b) => a.capturedAt.getTime() - b.capturedAt.getTime());
+  }
+
+  /**
+   * Kilómetros de cada vehículo en la ventana, para el kilometraje mensual.
+   *
+   * `showTripSummaryReportExtern` con rango a medida. Con un solo vehículo se
+   * filtra por `objectno`; con varios se pide la cuenta entera en UNA llamada
+   * y se queda con los pedidos: Webfleet limita peticiones, no vehículos.
+   */
+  async getTripSummary(
+    ctx: OperationContext,
+    providerVehicleIds: string[],
+    window: TelemetryWindow,
+  ): Promise<TripSummary[]> {
+    if (providerVehicleIds.length === 0) return [];
+    const filas = await this.llamar(ctx, "showTripSummaryReportExtern", {
+      ...(providerVehicleIds.length === 1 ? { objectno: String(providerVehicleIds[0]) } : {}),
+      range_pattern: "ud",
+      rangefrom_string: iso(window.from),
+      rangeto_string: iso(window.to),
+    });
+    return resumenesDeViajes(filas, providerVehicleIds, window, this.opcionesMapeo);
   }
 
   /**
