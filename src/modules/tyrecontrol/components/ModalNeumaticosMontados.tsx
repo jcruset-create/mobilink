@@ -108,12 +108,18 @@ export default function ModalNeumaticosMontados({
   const hayInventarioAbierto = modo === "informar" && (hechas.length > 0 || completo);
 
   /** Pone la misma referencia y la misma profundidad en todas las libres. */
-  function aplicarATodas(referenciaId: string, profundidad: string) {
+  function aplicarATodas(referenciaId: string, profundidad: string, presion: string) {
     setBorradores((prev) => {
       const siguiente = { ...prev };
       for (const f of filas) {
         if (f.montajeId) continue;
-        siguiente[f.posicionId] = { ...(siguiente[f.posicionId] ?? borradorVacio()), referenciaId, profundidadMm: profundidad };
+        const actual = siguiente[f.posicionId] ?? borradorVacio();
+        siguiente[f.posicionId] = {
+          ...actual, referenciaId, profundidadMm: profundidad,
+          // La presión en blanco no borra la que ya se hubiera puesto a mano:
+          // en blanco es «no medida», no «quítala».
+          ...(presion.trim() ? { presionBar: presion } : {}),
+        };
       }
       return siguiente;
     });
@@ -438,11 +444,12 @@ function BloqueCatalogo({
 }: {
   opciones: ReferenciaNeumatico[]; totalReferencias: number; busqueda: string; onBusqueda: (v: string) => void;
   soloMedida: boolean; onSoloMedida: (v: boolean) => void; medidaVehiculo: string | null;
-  libres: number; onAplicar: (referenciaId: string, profundidad: string) => void;
+  libres: number; onAplicar: (referenciaId: string, profundidad: string, presion: string) => void;
   onNueva: () => void; msgAlta: string;
 }) {
   const [refTodas, setRefTodas] = useState("");
   const [profTodas, setProfTodas] = useState("");
+  const [presionTodas, setPresionTodas] = useState("");
   return (
     <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -477,8 +484,13 @@ function BloqueCatalogo({
             <input className={`${inputCls} w-24`} inputMode="decimal" value={profTodas}
                    onChange={(e) => setProfTodas(e.target.value)} placeholder="12,5" />
           </label>
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Presión bar</span>
+            <input className={`${inputCls} w-24`} inputMode="decimal" value={presionTodas}
+                   onChange={(e) => setPresionTodas(e.target.value)} placeholder="8,5" />
+          </label>
           <button
-            onClick={() => onAplicar(refTodas, profTodas)}
+            onClick={() => onAplicar(refTodas, profTodas, presionTodas)}
             disabled={!refTodas}
             className="rounded bg-slate-700 px-3 py-2 text-[12px] font-bold text-slate-100 disabled:opacity-40"
           >
