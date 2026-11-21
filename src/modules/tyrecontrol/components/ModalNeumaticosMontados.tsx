@@ -237,6 +237,9 @@ export default function ModalNeumaticosMontados({
       setCerrado(true);
       setMsg(r.ya_estaba ? "El inventario inicial ya estaba cerrado." : "Inventario inicial cerrado. El vehículo queda operativo.");
       onChanged();
+      // Terminado el trabajo, la pantalla se cierra sola: el vehículo, detrás,
+      // ya enseña sus gomas y queda operativo.
+      onClose();
     } catch (e: unknown) {
       setMsg(mensajeError(e, "No se ha podido cerrar el inventario"));
     } finally { setGuardando(false); }
