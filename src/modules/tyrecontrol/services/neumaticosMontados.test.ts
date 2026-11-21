@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  accionDeFila, borradorVacio, datosMedicion, descripcionNeumatico, etiquetaNeumatico,
-  filasDelPlano, planoCompleto, posicionesSinInformar, resumen, validarFila,
+  accionDeFila, borradorVacio, datosMedicion, descripcionNeumatico, encajaEnMedidas, etiquetaNeumatico,
+  filasDelPlano, filtrarCatalogo, libresParaReferencia, medidaDePosicion, medidasDelPlano,
+  planoCompleto, posicionesSinInformar, resumen, validarFila,
   type BorradorFila, type FilaMontada,
 } from "./neumaticosMontados";
 import type { MontajeActual, Neumatico, PosicionVehiculo } from "../types";
@@ -235,5 +236,62 @@ describe("recauchutado y reesculturado al informar", () => {
     expect(datosMedicion(b({ profundidadMm: "12", recauchutado: true, reesculturado: true }))).toEqual({
       profundidad_mm: "12", recauchutado: "true", reesculturado: "true",
     });
+  });
+});
+
+// ── Medida por eje: el caso de la tractora (dirección 385/65, tracción 315/80)
+
+describe("catálogo por la medida de cada eje", () => {
+  const ah51 = { id: "ah51", referencia_completa: "Hankook AH51 385/65 R22.5 164K", tyre_size: { medida: "385/65R22.5" } };
+  const dh51 = { id: "dh51", referencia_completa: "Hankook DH51 315/80 R22.5 156/150L", tyre_size: { medida: "315/80 R22.5" } };
+  const th31 = { id: "th31", referencia_completa: "Hankook TH31+ 385/65 R22.5 164K", tyre_size: { medida: "385/65 R22.5" } };
+  const catalogo = [ah51, dh51, th31];
+  const medidaPorPos = { e1i: "385/65R22.5", e1d: "385/65R22.5", e2ie: "315/80R22.5", e2ii: "315/80R22.5" };
+  const fila = (posicionId: string, montajeId: string | null = null): FilaMontada =>
+    ({ posicionId, codigo: posicionId, orden: 0, montajeId, neumatico: null });
+  const filas = ["e1i", "e1d", "e2ie", "e2ii"].map((p) => fila(p));
+
+  it("cada posición usa la medida de su eje y, si no la tiene, la del vehículo", () => {
+    expect(medidaDePosicion("e2ie", medidaPorPos, "385/65R22.5")).toBe("315/80R22.5");
+    expect(medidaDePosicion("otra", medidaPorPos, "385/65R22.5")).toBe("385/65R22.5");
+    expect(medidaDePosicion("otra", null, null)).toBeNull();
+  });
+
+  it("la tracción ofrece la DH51 y la dirección no (el fallo que se arregla)", () => {
+    const traccion = filtrarCatalogo(catalogo, { medidas: ["315/80R22.5"], soloMedida: true, busqueda: "", max: 200 });
+    const direccion = filtrarCatalogo(catalogo, { medidas: ["385/65R22.5"], soloMedida: true, busqueda: "", max: 200 });
+    expect(traccion.map((r) => r.id)).toEqual(["dh51"]);
+    expect(direccion.map((r) => r.id)).toEqual(["ah51", "th31"]);
+  });
+
+  it("la medida se compara normalizada (con o sin espacio antes de la R)", () => {
+    expect(encajaEnMedidas(th31, ["385/65R22.5"])).toBe(true);
+  });
+
+  it("«mostrar todas las medidas» lo enseña todo; la búsqueda sigue filtrando", () => {
+    expect(filtrarCatalogo(catalogo, { medidas: ["315/80R22.5"], soloMedida: false, busqueda: "", max: 200 })).toHaveLength(3);
+    expect(filtrarCatalogo(catalogo, { medidas: [], soloMedida: false, busqueda: "dh51", max: 200 }).map((r) => r.id)).toEqual(["dh51"]);
+  });
+
+  it("la referencia ya elegida no desaparece del desplegable aunque no encaje", () => {
+    const l = filtrarCatalogo(catalogo, { medidas: ["315/80R22.5"], soloMedida: true, busqueda: "", max: 200, elegida: "ah51" });
+    expect(l.map((r) => r.id)).toContain("ah51");
+  });
+
+  it("el bloque de arriba ofrece las medidas del vehículo, sin repetir", () => {
+    expect(medidasDelPlano(filas, medidaPorPos, null)).toEqual(["385/65R22.5", "315/80R22.5"]);
+  });
+
+  it("«poner en todas» solo rellena las libres de la misma medida", () => {
+    expect(libresParaReferencia(filas, dh51, medidaPorPos, null, true)).toEqual(["e2ie", "e2ii"]);
+    expect(libresParaReferencia(filas, ah51, medidaPorPos, null, true)).toEqual(["e1i", "e1d"]);
+    // Sin filtro de medida, a todas las libres; las ya montadas nunca.
+    const conMontada = [...filas.slice(0, 3), fila("e2ii", "m1")];
+    expect(libresParaReferencia(conMontada, dh51, medidaPorPos, null, false)).toEqual(["e1i", "e1d", "e2ie"]);
+  });
+
+  it("un vehículo de una sola medida se comporta como antes", () => {
+    expect(medidasDelPlano(filas, null, "385/65R22.5")).toEqual(["385/65R22.5"]);
+    expect(libresParaReferencia(filas, ah51, null, "385/65R22.5", true)).toHaveLength(4);
   });
 });

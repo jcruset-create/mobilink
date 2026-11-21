@@ -1056,6 +1056,7 @@ export default function VehicleLayoutImage({
           posiciones={posiciones}
           montajes={montajes}
           medidaVehiculo={medidaPorPosicionId?.[posiciones[0]?.id ?? ""] ?? null}
+          medidaPorPosicion={medidaPorPosicionId ?? null}
           kmActual={kmActual}
           onClose={() => setModalMontados(null)}
           onChanged={() => { setSeleccion(null); onChanged?.(); }}
