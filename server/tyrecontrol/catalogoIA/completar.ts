@@ -15,6 +15,7 @@ import {
   CAMPOS, CAMPO_POR_CLAVE, coincideReferencia, medidaBase, tipoFuenteValido, urlValida, validarValor,
   type TipoFuente,
 } from "../../../src/modules/tyrecontrol/services/completarFicha.ts";
+import { textoClave } from "../../../src/modules/tyrecontrol/services/depurarCatalogo.ts";
 
 const COLUMNAS = CAMPOS.map((c) => c.clave);
 const SELECT_REF =
@@ -80,13 +81,20 @@ export async function huecos(f: { marca?: string; campo?: string; soloFlota?: bo
   const { data, error } = await supabase.from("tc_referencias_neumatico").select(SELECT_REF).eq("activo", true).limit(5000);
   if (error) throw new Error(error.message);
 
-  // Gomas en flota por marca + modelo + medida.
+  // Gomas en flota por marca + modelo + medida; las que tienen equivalencia
+  // («🧹 Depurar catálogo») cuentan para su referencia.
+  const { data: eqs } = await supabase.from("tc_cat_equivalencias_flota").select("marca_texto, modelo_texto, medida_texto, referencia_id");
+  const equiv = new Map((eqs ?? []).map((e: { marca_texto: string; modelo_texto: string; medida_texto: string; referencia_id: string }) =>
+    [`${e.marca_texto}|${e.modelo_texto}|${e.medida_texto}`, e.referencia_id]));
+  const porRef = new Map<string, number>();
   const flota = new Map<string, number>();
   for (let desde = 0; ; desde += 1000) {
     const { data: ns, error: e2 } = await supabase.from("tc_neumaticos")
       .select("marca, modelo, medida").eq("activo", true).range(desde, desde + 999);
     if (e2) throw new Error(e2.message);
     for (const n of ns ?? []) {
+      const ref = equiv.get(`${textoClave(n.marca)}|${textoClave(n.modelo)}|${textoClave(n.medida)}`);
+      if (ref) { porRef.set(ref, (porRef.get(ref) ?? 0) + 1); continue; }
       const k = `${norm(n.marca)}|${norm(n.modelo)}|${medidaBase(n.medida)}`;
       flota.set(k, (flota.get(k) ?? 0) + 1);
     }
@@ -98,7 +106,7 @@ export async function huecos(f: { marca?: string; campo?: string; soloFlota?: bo
     const vacios = COLUMNAS.filter((c) => vacio(r[c]));
     return {
       id: ref.id, referenciaCompleta: ref.referenciaCompleta, marca: ref.marca, modelo: ref.modelo, medida: ref.medida,
-      enFlota: flota.get(`${norm(ref.marca)}|${norm(ref.modelo)}|${medidaBase(ref.medida)}`) ?? 0,
+      enFlota: (flota.get(`${norm(ref.marca)}|${norm(ref.modelo)}|${medidaBase(ref.medida)}`) ?? 0) + (porRef.get(ref.id) ?? 0),
       rellenos: COLUMNAS.length - vacios.length, total: COLUMNAS.length, vacios,
     };
   });

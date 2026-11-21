@@ -23,6 +23,7 @@ import {
 } from "../../../src/modules/tyrecontrol/services/catalogoIA.ts";
 import { buscarModelos } from "./busqueda.ts";
 import { aceptar, completarReferencia, descartar, huecos, mismoModelo, propuestasDe } from "./completar.ts";
+import { cambiarActivo, diagnostico, guardarEquivalencias, quitarEquivalencias, sonDistintos, type NuevaEquivalencia } from "./depurar.ts";
 
 type Peticion = Request & { solicitante: Solicitante };
 
@@ -181,6 +182,51 @@ export function createCatalogoIARouter(): Router {
 
   router.post("/descartar", async (req, res) => {
     try { await descartar(ids((req.body as Cuerpo)?.ids)); res.json({ ok: true }); } catch (e) { fallo(res, e); }
+  });
+
+  // ── Depurar catálogo ──────────────────────────────────────────────────
+  // Diagnóstico de flota frente a catálogo y lo que se decide. No toca gomas.
+  const usuario = (req: Request) => (req as unknown as Peticion).solicitante.usuarioId ?? null;
+
+  router.get("/depurar", async (_req, res) => {
+    try { res.json(await diagnostico()); } catch (e) { fallo(res, e); }
+  });
+
+  router.post("/depurar/equivalencias", async (req, res) => {
+    try {
+      const items = (Array.isArray((req.body as { items?: unknown })?.items) ? (req.body as { items: unknown[] }).items : [])
+        .slice(0, 500)
+        .map((i) => {
+          const x = (i ?? {}) as Record<string, unknown>;
+          return { marca: String(x.marca ?? ""), modelo: String(x.modelo ?? ""), medida: String(x.medida ?? ""), referenciaId: String(x.referenciaId ?? "") } as NuevaEquivalencia;
+        });
+      res.json(await guardarEquivalencias(items, usuario(req)));
+    } catch (e) {
+      const m = e instanceof Error ? e.message : "";
+      if (/Alguna referencia/.test(m)) return res.status(400).json({ error: m });
+      fallo(res, e);
+    }
+  });
+
+  router.post("/depurar/equivalencias/quitar", async (req, res) => {
+    try { await quitarEquivalencias(ids((req.body as Cuerpo)?.ids)); res.json({ ok: true }); } catch (e) { fallo(res, e); }
+  });
+
+  router.post("/depurar/activo", async (req, res) => {
+    try {
+      const b = (req.body ?? {}) as { marcas?: unknown; modelos?: unknown; activo?: unknown };
+      res.json(await cambiarActivo({ marcas: ids(b.marcas), modelos: ids(b.modelos), activo: b.activo === true }));
+    } catch (e) { fallo(res, e); }
+  });
+
+  router.post("/depurar/distintos", async (req, res) => {
+    try {
+      const b = (req.body ?? {}) as { tipo?: unknown; a?: unknown; b?: unknown };
+      const [a, c] = ids([b.a, b.b]);
+      if ((b.tipo !== "modelo" && b.tipo !== "medida") || !a || !c || a === c) return res.status(400).json({ error: "Par no válido" });
+      await sonDistintos(b.tipo, a, c, usuario(req));
+      res.json({ ok: true });
+    } catch (e) { fallo(res, e); }
   });
 
   return router;
