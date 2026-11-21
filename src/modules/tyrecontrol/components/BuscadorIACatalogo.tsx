@@ -55,16 +55,23 @@ type Edicion = { indiceCargaSimple: string; indiceCargaDoble: string; codigoVelo
 
 type Resultado = { modelo: string; ok: boolean; detalle: string };
 
-export default function BuscadorIACatalogo({ onClose, onCreado }: { onClose: () => void; onCreado: () => void }) {
-  const [marca, setMarca] = useState(ultimaBusqueda?.marca ?? "");
-  const [medida, setMedida] = useState(ultimaBusqueda?.medida ?? "");
+export default function BuscadorIACatalogo({ onClose, onCreado, inicial }: {
+  onClose: () => void; onCreado: () => void;
+  /** Abrir ya con esta marca y medida («Dar de alta con IA» desde Depurar catálogo). */
+  inicial?: { marca: string; medida: string };
+}) {
+  // Con `inicial` distinto de la última búsqueda, se empieza de cero.
+  const otra = !!inicial && (inicial.marca !== ultimaBusqueda?.marca || inicial.medida !== ultimaBusqueda?.medida);
+  const previa = otra ? null : ultimaBusqueda;
+  const [marca, setMarca] = useState(inicial?.marca ?? previa?.marca ?? "");
+  const [medida, setMedida] = useState(inicial?.medida ?? previa?.medida ?? "");
   const [marcas, setMarcas] = useState<string[]>([]);
   const [medidas, setMedidas] = useState<string[]>([]);
   const [buscando, setBuscando] = useState(false);
   const [error, setError] = useState("");
-  const [resp, setResp] = useState<RespuestaBusquedaIA | null>(ultimaBusqueda?.resp ?? null);
-  const [marcados, setMarcados] = useState<Set<string>>(ultimaBusqueda?.marcados ?? new Set());
-  const [ediciones, setEdiciones] = useState<Record<string, Edicion>>(ultimaBusqueda?.ediciones ?? {});
+  const [resp, setResp] = useState<RespuestaBusquedaIA | null>(previa?.resp ?? null);
+  const [marcados, setMarcados] = useState<Set<string>>(previa?.marcados ?? new Set());
+  const [ediciones, setEdiciones] = useState<Record<string, Edicion>>(previa?.ediciones ?? {});
   const [avisoCierre, setAvisoCierre] = useState(false);
 
   // Las listas del catálogo. Si fallan, los desplegables salen vacíos y se
