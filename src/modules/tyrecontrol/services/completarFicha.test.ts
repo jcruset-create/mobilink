@@ -58,6 +58,12 @@ describe("alias de modelo", () => {
   it("con el alias confirmado, coincide", () => {
     expect(coincideReferencia({ ...ref, alias: ["BT 200 R"] }, { marca: "Barum", modelo: "BT 200 R", medida: "385/55R22.5", indiceCarga: "160K" }).ok).toBe(true);
   });
+  it("sin marca o sin modelo leídos: no hay ficha (no rescatable)", () => {
+    const r = coincideReferencia(ref, { marca: null, modelo: null, medida: null });
+    expect(r.causa).toBe("sin_ficha");
+    expect(r.motivo).toBe("No se ha encontrado ninguna ficha de esta referencia");
+    expect(coincideReferencia(ref, { marca: "Barum", modelo: "", medida: "385/55R22.5" }).causa).toBe("sin_ficha");
+  });
   it("el alias no salta el índice de carga", () => {
     const r = coincideReferencia({ ...ref, alias: ["BT 200 R"] }, { marca: "Barum", modelo: "BT 200 R", medida: "385/55R22.5", indiceCarga: "158L" });
     expect(r.causa).toBe("indice");

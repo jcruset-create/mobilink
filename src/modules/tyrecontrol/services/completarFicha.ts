@@ -107,20 +107,24 @@ export interface RefCatalogo {
 }
 
 /** Por qué no coincide: solo «modelo» se puede rescatar con «Es el mismo modelo». */
-export type CausaDescarte = "marca" | "modelo" | "medida" | "indice";
+export type CausaDescarte = "sin_ficha" | "marca" | "modelo" | "medida" | "indice";
+
+const SIN_FICHA = "No se ha encontrado ninguna ficha de esta referencia";
 
 /** ¿La ficha que leyó la IA es de ESTA referencia? */
 export function coincideReferencia(ref: RefCatalogo, leida: FichaLeida): { ok: boolean; motivo: string; causa?: CausaDescarte } {
   const mR = norm(ref.marca), mL = norm(leida.marca);
-  if (!mL || !(mL.includes(mR) || mR.includes(mL))) {
-    return { ok: false, causa: "marca", motivo: `La ficha es de «${leida.marca ?? "?"}», no de ${ref.marca}` };
+  // Sin marca o sin modelo leídos, la IA no ha dado con ninguna ficha.
+  if (!mL || !norm(leida.modelo)) return { ok: false, causa: "sin_ficha", motivo: SIN_FICHA };
+  if (!(mL.includes(mR) || mR.includes(mL))) {
+    return { ok: false, causa: "marca", motivo: `La ficha es de «${leida.marca}», no de ${ref.marca}` };
   }
   // El modelo tiene que ser el mismo nombre (o un alias confirmado). Que uno
   // contenga al otro NO basta: «KMAX S» y «KMAX S HL» son neumáticos distintos.
   const oL = norm(leida.modelo);
   const nombres = [ref.modelo, ...(ref.alias ?? [])].map(norm).filter(Boolean);
-  if (!oL || !nombres.includes(oL)) {
-    return { ok: false, causa: "modelo", motivo: `La ficha es del modelo «${leida.modelo ?? "?"}», no ${ref.modelo}` };
+  if (!nombres.includes(oL)) {
+    return { ok: false, causa: "modelo", motivo: `La ficha es del modelo «${leida.modelo}», no ${ref.modelo}` };
   }
   if (medidaBase(leida.medida) !== medidaBase(ref.medida)) {
     return { ok: false, causa: "medida", motivo: `La ficha es de ${leida.medida ?? "otra medida"}, no ${ref.medida}` };

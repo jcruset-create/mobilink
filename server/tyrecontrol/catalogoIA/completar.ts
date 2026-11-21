@@ -231,7 +231,7 @@ export async function completarReferencia(referenciaId: string, usuarioId: strin
   const propuestas = filas.filter((f) => f.estado === "pendiente").length;
   return {
     ok: true,
-    aviso: !coincide.ok ? `Descartado: ${coincide.motivo}.` : propuestas === 0 ? "No se ha encontrado ningún dato con fuente." : "",
+    aviso: !coincide.ok ? (coincide.causa === "sin_ficha" ? `${coincide.motivo}.` : `Descartado: ${coincide.motivo}.`) : propuestas === 0 ? "No se ha encontrado ningún dato con fuente." : "",
     propuestas, invalidas: filas.length - propuestas,
   };
 }
