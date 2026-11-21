@@ -350,7 +350,7 @@ async function tick(clave: string, meses: Mes[]): Promise<void> {
     const d = desenlaceDe(resumen);
     if (d.tipo === "ok") {
       t.hechos += 1;
-      t.ultimo = { vehiculo: paso.etiqueta, mes, resultado: `${d.km ?? 0} km` };
+      t.ultimo = { vehiculo: paso.etiqueta, mes, resultado: `${Math.round(Number(d.km ?? 0)).toLocaleString("es-ES")} km` };
     } else if (d.tipo === "sin_datos") {
       t.sinDatos += 1;
       t.ultimo = { vehiculo: paso.etiqueta, mes, resultado: "sin datos" };
