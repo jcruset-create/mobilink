@@ -23,6 +23,8 @@ import type { CuentaTelematica } from "../services/conciliacion";
  * progreso y se para.
  */
 export default function SincronizacionKilometraje({ empresaId, cuenta }: { empresaId: string; cuenta: CuentaTelematica | null }) {
+  // Webfleet se rellena por mes (toda la flota en una petición); el resto, a gotas.
+  const porMes = cuenta?.connectorKey === "webfleet";
   const [estado, setEstado] = useState<EstadoCuenta | null>(null);
   const [resultado, setResultado] = useState<ResumenCuentaMensual | null>(null);
   const [mesAnterior, setMesAnterior] = useState(false);
@@ -142,8 +144,12 @@ export default function SincronizacionKilometraje({ empresaId, cuenta }: { empre
     const rango = desdeRelleno === hastaRelleno ? desdeRelleno : `${desdeRelleno} a ${hastaRelleno}`;
     if (!confirm(
       `Se pedirán a ${cuenta.connectorKey} los kilómetros de ${rango} (${cuantos} ${cuantos === 1 ? "mes" : "meses"}) ` +
-      `de TODOS los vehículos enlazados que aún no los tengan, de UNO EN UNO y a un vehículo cada 20 segundos.\n\n` +
-      `Con una flota grande y varios meses esto son DÍAS, no horas. Sigue en el servidor aunque cierres la ` +
+      (porMes
+        ? `de TODOS los vehículos enlazados que aún no los tengan, un mes de toda la flota en cada petición, ` +
+          `una cada 20 segundos (unos ${cuantos * 20 < 60 ? `${cuantos * 20} s` : `${Math.ceil((cuantos * 20) / 60)} min`}).\n\n`
+        : `de TODOS los vehículos enlazados que aún no los tengan, de UNO EN UNO y a un vehículo cada 20 segundos.\n\n` +
+          `Con una flota grande y varios meses esto son DÍAS, no horas. `) +
+      `Sigue en el servidor aunque cierres la ` +
       `pantalla y aunque se despliegue, y puedes pararlo cuando quieras. ¿Seguir?`,
     )) return;
     setError("");
@@ -239,7 +245,7 @@ export default function SincronizacionKilometraje({ empresaId, cuenta }: { empre
           disabled={tarea?.estado === "en_curso"}
           className="rounded-lg border border-slate-600 bg-slate-900 px-2 py-1 text-slate-200 disabled:opacity-40"
         />
-        <span className="text-slate-400">un vehículo cada 20 s</span>
+        <span className="text-slate-400">{porMes ? "un mes de toda la flota cada 20 s" : "un vehículo cada 20 s"}</span>
         {tarea?.estado === "en_curso" ? (
           <button
             onClick={() => void detenerRelleno()}
