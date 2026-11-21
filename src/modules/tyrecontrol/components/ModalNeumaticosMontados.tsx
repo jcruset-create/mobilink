@@ -24,7 +24,8 @@ import {
 } from "../services/data";
 import {
   accionDeFila, borradorVacio, datosMedicion, descripcionNeumatico, etiquetaNeumatico,
-  filasDelPlano, planoCompleto, posicionesSinInformar, resumen, validarFila,
+  filasDelPlano, filtrarCatalogo, libresParaReferencia, medidaDePosicion, medidasDelPlano,
+  planoCompleto, posicionesSinInformar, resumen, validarFila,
   type BorradorFila, type FilaMontada,
 } from "../services/neumaticosMontados";
 import type { MontajeActual, Neumatico, PosicionVehiculo, ReferenciaNeumatico } from "../types";
@@ -41,6 +42,9 @@ interface Props {
   montajes: MontajeActual[];
   /** Medida configurada del vehículo: filtra el catálogo por defecto. */
   medidaVehiculo?: string | null;
+  /** Medida configurada de cada posición (la de su eje, si el vehículo
+   *  tiene medidas por eje). Manda sobre medidaVehiculo fila a fila. */
+  medidaPorPosicion?: Record<string, string> | null;
   kmActual?: number | null;
   onClose: () => void;
   /** Recargar el vehículo en la pantalla de detrás. */
@@ -56,7 +60,7 @@ function mensajeError(e: unknown, porDefecto: string): string {
 const MAX_OPCIONES = 200;
 
 export default function ModalNeumaticosMontados({
-  modo, vehiculoId, empresaId, matricula, posiciones, montajes, medidaVehiculo, kmActual, onClose, onChanged,
+  modo, vehiculoId, empresaId, matricula, posiciones, montajes, medidaVehiculo, medidaPorPosicion, kmActual, onClose, onChanged,
 }: Props) {
   const filas = useMemo(() => filasDelPlano(posiciones, montajes), [posiciones, montajes]);
   const [borradores, setBorradores] = useState<Record<string, BorradorFila>>({});
@@ -90,15 +94,23 @@ export default function ModalNeumaticosMontados({
   const set = (posicionId: string, cambio: Partial<BorradorFila>) =>
     setBorradores((prev) => ({ ...prev, [posicionId]: { ...b(posicionId), ...cambio } }));
 
-  // El catálogo, filtrado. Por defecto solo la medida del vehículo: ofrecer
-  // las 500 referencias para elegir una 295/80R22.5 es ofrecer un error.
-  const opciones = useMemo(() => {
-    const t = busquedaRef.trim().toLowerCase();
-    return referencias
-      .filter((r) => !soloMedida || !medidaVehiculo || baseMedida(r.tyre_size?.medida) === baseMedida(medidaVehiculo))
-      .filter((r) => !t || (r.referencia_completa ?? "").toLowerCase().includes(t))
-      .slice(0, MAX_OPCIONES);
-  }, [referencias, busquedaRef, soloMedida, medidaVehiculo]);
+  // El catálogo, filtrado. Por defecto solo las medidas del vehículo:
+  // ofrecer las 500 referencias para elegir una 295/80R22.5 es ofrecer un
+  // error. Con medidas distintas por eje, cada fila filtra por la SUYA (la
+  // tracción ofrece ruedas de tracción) y el bloque de arriba, por todas.
+  const medidasVehiculo = useMemo(
+    () => medidasDelPlano(filas, medidaPorPosicion, medidaVehiculo),
+    [filas, medidaPorPosicion, medidaVehiculo],
+  );
+  const opciones = useMemo(
+    () => filtrarCatalogo(referencias, { medidas: medidasVehiculo, soloMedida, busqueda: busquedaRef, max: MAX_OPCIONES }),
+    [referencias, busquedaRef, soloMedida, medidasVehiculo],
+  );
+  const opcionesDe = (posicionId: string, elegida: string) =>
+    filtrarCatalogo(referencias, {
+      medidas: [medidaDePosicion(posicionId, medidaPorPosicion, medidaVehiculo)],
+      soloMedida, busqueda: busquedaRef, max: MAX_OPCIONES, elegida,
+    });
 
   const plan = resumen(filas, borradores);
   const completo = planoCompleto(filas);
@@ -107,12 +119,16 @@ export default function ModalNeumaticosMontados({
   // ya estaba operativo y solo se viene a corregir, no hay nada que cerrar.
   const hayInventarioAbierto = modo === "informar" && (hechas.length > 0 || completo);
 
-  /** Pone la misma referencia y la misma profundidad en todas las libres. */
-  function aplicarATodas(referenciaId: string, profundidad: string, presion: string) {
+  /** Pone la misma referencia y la misma profundidad en todas las libres
+   *  de SU medida (con el filtro de medida puesto): la de dirección no va a
+   *  la tracción. Devuelve en cuántas la ha puesto. */
+  function aplicarATodas(referenciaId: string, profundidad: string, presion: string): number {
+    const ref = referencias.find((r) => r.id === referenciaId);
+    const destino = new Set(libresParaReferencia(filas, ref, medidaPorPosicion, medidaVehiculo, soloMedida));
     setBorradores((prev) => {
       const siguiente = { ...prev };
       for (const f of filas) {
-        if (f.montajeId) continue;
+        if (!destino.has(f.posicionId)) continue;
         const actual = siguiente[f.posicionId] ?? borradorVacio();
         siguiente[f.posicionId] = {
           ...actual, referenciaId, profundidadMm: profundidad,
@@ -123,6 +139,7 @@ export default function ModalNeumaticosMontados({
       }
       return siguiente;
     });
+    return destino.size;
   }
 
   async function guardar() {
@@ -296,7 +313,7 @@ export default function ModalNeumaticosMontados({
             onBusqueda={setBusquedaRef}
             soloMedida={soloMedida}
             onSoloMedida={setSoloMedida}
-            medidaVehiculo={medidaVehiculo ?? null}
+            medidas={medidasVehiculo}
             libres={filas.filter((f) => !f.montajeId).length}
             onAplicar={aplicarATodas}
             onNueva={() => { setMsgAlta(""); setAltaRef(true); }}
@@ -339,7 +356,8 @@ export default function ModalNeumaticosMontados({
                   borrador={b(fila.posicionId)}
                   modo={modo}
                   empresaId={empresaId}
-                  opciones={opciones}
+                  opciones={opcionesDe(fila.posicionId, b(fila.posicionId).referenciaId)}
+                  medida={medidaDePosicion(fila.posicionId, medidaPorPosicion, medidaVehiculo)}
                   referencias={referencias}
                   guardada={hechas.includes(fila.codigo)}
                   onCambio={(c) => set(fila.posicionId, c)}
@@ -443,17 +461,19 @@ function Aviso({ modo }: { modo: "informar" | "actualizar" }) {
 }
 
 function BloqueCatalogo({
-  opciones, totalReferencias, busqueda, onBusqueda, soloMedida, onSoloMedida, medidaVehiculo, libres, onAplicar,
+  opciones, totalReferencias, busqueda, onBusqueda, soloMedida, onSoloMedida, medidas, libres, onAplicar,
   onNueva, msgAlta,
 }: {
   opciones: ReferenciaNeumatico[]; totalReferencias: number; busqueda: string; onBusqueda: (v: string) => void;
-  soloMedida: boolean; onSoloMedida: (v: boolean) => void; medidaVehiculo: string | null;
-  libres: number; onAplicar: (referenciaId: string, profundidad: string, presion: string) => void;
+  soloMedida: boolean; onSoloMedida: (v: boolean) => void; medidas: string[];
+  libres: number; onAplicar: (referenciaId: string, profundidad: string, presion: string) => number;
   onNueva: () => void; msgAlta: string;
 }) {
   const [refTodas, setRefTodas] = useState("");
   const [profTodas, setProfTodas] = useState("");
   const [presionTodas, setPresionTodas] = useState("");
+  const [msgTodas, setMsgTodas] = useState("");
+  const listaMedidas = medidas.join(" y ");
   return (
     <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -467,10 +487,10 @@ function BloqueCatalogo({
       <div className="mt-2 grid gap-2 sm:grid-cols-2">
         <input className={inputCls} placeholder="Buscar marca, modelo o medida"
                value={busqueda} onChange={(e) => onBusqueda(e.target.value)} />
-        {medidaVehiculo && (
+        {medidas.length > 0 && (
           <label className="flex items-center gap-2 text-[12px] text-slate-300">
             <input type="checkbox" checked={!soloMedida} onChange={(e) => onSoloMedida(!e.target.checked)} />
-            Mostrar todas las medidas (por defecto solo {medidaVehiculo})
+            Mostrar todas las medidas (por defecto solo {listaMedidas}{medidas.length > 1 ? ", cada eje la suya" : ""})
           </label>
         )}
       </div>
@@ -494,17 +514,23 @@ function BloqueCatalogo({
                    onChange={(e) => setPresionTodas(e.target.value)} placeholder="8,5" />
           </label>
           <button
-            onClick={() => onAplicar(refTodas, profTodas, presionTodas)}
+            onClick={() => {
+              const n = onAplicar(refTodas, profTodas, presionTodas);
+              setMsgTodas(n < libres
+                ? `Puesta en ${n} de ${libres} libres: las demás son de otra medida.`
+                : `Puesta en las ${n} libres.`);
+            }}
             disabled={!refTodas}
             className="rounded bg-slate-700 px-3 py-2 text-[12px] font-bold text-slate-100 disabled:opacity-40"
           >
             Poner en todas
           </button>
+          {msgTodas && <div className="w-full text-[11px] text-slate-400">{msgTodas}</div>}
         </div>
       )}
       {opciones.length === 0 && (
         <div className="mt-2 text-[11px] text-amber-300">
-          Sin referencias que encajen{medidaVehiculo && soloMedida ? ` con la medida ${medidaVehiculo}` : ""}.
+          Sin referencias que encajen{medidas.length > 0 && soloMedida ? ` con ${listaMedidas}` : ""}.
           Si la goma no está en el catálogo, dala de alta con «+ Nuevo neumático para el catálogo».
         </div>
       )}
@@ -518,10 +544,11 @@ function BloqueCatalogo({
 }
 
 function Fila({
-  fila, borrador, modo, empresaId, opciones, referencias, guardada, onCambio,
+  fila, borrador, modo, empresaId, opciones, medida, referencias, guardada, onCambio,
 }: {
   fila: FilaMontada; borrador: BorradorFila; modo: "informar" | "actualizar";
-  empresaId: string; opciones: ReferenciaNeumatico[]; referencias: ReferenciaNeumatico[]; guardada: boolean;
+  empresaId: string; opciones: ReferenciaNeumatico[]; medida: string | null;
+  referencias: ReferenciaNeumatico[]; guardada: boolean;
   onCambio: (c: Partial<BorradorFila>) => void;
 }) {
   const error = validarFila(fila, borrador);
@@ -550,6 +577,7 @@ function Fila({
       <tr className="border-t border-slate-700/60 align-top">
         <td className="px-3 py-2">
           <div className="font-semibold text-slate-100">{fila.codigo}</div>
+          {medida && <div className="text-[11px] text-slate-500">{medida}</div>}
           {guardada && <div className="text-[11px] font-bold text-emerald-400">guardada</div>}
           {accion !== "nada" && !guardada && (
             <div className="text-[11px] text-sky-300">
