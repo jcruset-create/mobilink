@@ -1,0 +1,359 @@
+/**
+ * «Buscar neumáticos con IA»: de una frase a fichas de catálogo.
+ *
+ * Lo que hace la pantalla y lo que NO hace:
+ *
+ *  · Buscar y enseñar lo encontrado, con el estado de cada modelo y la fuente
+ *    de la que sale. Cada fila se puede abrir y comprobar.
+ *  · Crear SOLO lo que se marque, y solo tras confirmar. Se marcan solos los
+ *    nuevos verificados; los demás hay que marcarlos a mano después de mirar
+ *    por qué están en revisión.
+ *  · Crear va por `crearReferenciaNeumatico`, el mismo servicio que «Nueva
+ *    referencia»: resuelve marca, modelo y medida, y si la referencia ya
+ *    existía devuelve la que hay en vez de duplicarla.
+ *
+ * Nada se guarda sin que alguien lo marque y confirme. Y lo que la búsqueda no
+ * ha podido verificar no se puede marcar: no es que se desaconseje, es que la
+ * casilla no está.
+ */
+import { useMemo, useState } from "react";
+import { Search, ExternalLink, AlertTriangle, CheckCircle2, HelpCircle, XCircle } from "lucide-react";
+
+import { crearReferenciaNeumatico } from "../services/data";
+import { buscarModelosIA, type RespuestaBusquedaIA } from "../services/catalogoIABusqueda";
+import { ejeDelCandidato, type Candidato, type EstadoCandidato } from "../services/catalogoIA";
+import { Modal, inputCls, TableWrap, tdCls, thCls } from "./ui";
+
+const EJEMPLO = "Busca modelos de neumáticos CEAT en 295/80R22.5";
+
+const ESTADO: Record<EstadoCandidato, { texto: string; clase: string; Icono: typeof CheckCircle2 }> = {
+  nuevo: { texto: "Nuevo", clase: "bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/30", Icono: CheckCircle2 },
+  existente: { texto: "Ya está", clase: "bg-slate-600/30 text-slate-300 ring-1 ring-slate-500/30", Icono: XCircle },
+  revisar: { texto: "Revisar", clase: "bg-amber-500/15 text-amber-300 ring-1 ring-amber-500/30", Icono: AlertTriangle },
+  no_verificado: { texto: "Sin verificar", clase: "bg-rose-500/15 text-rose-300 ring-1 ring-rose-500/30", Icono: HelpCircle },
+};
+
+/** Lo editable de una fila antes de guardarla. */
+type Edicion = { indiceCargaSimple: string; indiceCargaDoble: string; codigoVelocidad: string };
+
+type Resultado = { modelo: string; ok: boolean; detalle: string };
+
+export default function BuscadorIACatalogo({ onClose, onCreado }: { onClose: () => void; onCreado: () => void }) {
+  const [consulta, setConsulta] = useState("");
+  const [buscando, setBuscando] = useState(false);
+  const [error, setError] = useState("");
+  const [resp, setResp] = useState<RespuestaBusquedaIA | null>(null);
+  const [marcados, setMarcados] = useState<Set<string>>(new Set());
+  const [ediciones, setEdiciones] = useState<Record<string, Edicion>>({});
+  const [confirmando, setConfirmando] = useState(false);
+  const [creando, setCreando] = useState(false);
+  const [resultados, setResultados] = useState<Resultado[] | null>(null);
+
+  const clave = (c: Candidato) => `${c.fabricante}|${c.modelo}|${c.medida}`;
+
+  const candidatos = resp?.candidatos ?? [];
+  const seleccionados = useMemo(
+    () => candidatos.filter((c) => marcados.has(clave(c))),
+    [candidatos, marcados],
+  );
+
+  async function buscar() {
+    const texto = consulta.trim();
+    if (!texto || buscando) return;
+    setBuscando(true); setError(""); setResp(null); setResultados(null);
+    setMarcados(new Set()); setEdiciones({});
+    try {
+      const r = await buscarModelosIA(texto);
+      setResp(r);
+      // Se marcan solos los que se pueden crear sin tocar nada. Lo demás pide
+      // una decisión, y marcarlo por ellos sería tomarla.
+      setMarcados(new Set(r.candidatos.filter((c) => c.estado === "nuevo").map(clave)));
+      const ed: Record<string, Edicion> = {};
+      for (const c of r.candidatos) {
+        ed[clave(c)] = {
+          indiceCargaSimple: c.indiceCargaSimple ?? "",
+          indiceCargaDoble: c.indiceCargaDoble ?? "",
+          codigoVelocidad: (c.codigoVelocidad ?? "").toUpperCase(),
+        };
+      }
+      setEdiciones(ed);
+    } catch (e: any) {
+      setError(e?.message ?? "No se ha podido buscar");
+    } finally {
+      setBuscando(false);
+    }
+  }
+
+  function alternar(c: Candidato) {
+    const k = clave(c);
+    setMarcados((prev) => {
+      const s = new Set(prev);
+      if (s.has(k)) s.delete(k); else s.add(k);
+      return s;
+    });
+  }
+
+  function editar(c: Candidato, campo: keyof Edicion, valor: string) {
+    const k = clave(c);
+    setEdiciones((prev) => ({ ...prev, [k]: { ...prev[k], [campo]: valor } }));
+  }
+
+  /** Lo que impide guardar una fila concreta, ya con lo editado a mano. */
+  function problema(c: Candidato): string {
+    const e = ediciones[clave(c)];
+    if (!e?.indiceCargaSimple.trim()) return "falta el índice de carga";
+    if (!/^\d{2,3}$/.test(e.indiceCargaSimple.trim())) return "el índice de carga no es un número de 2 o 3 cifras";
+    if (e.indiceCargaDoble.trim() && !/^\d{2,3}$/.test(e.indiceCargaDoble.trim())) return "el índice de carga doble no cuadra";
+    if (e.codigoVelocidad.trim() && !/^[A-Za-z]$/.test(e.codigoVelocidad.trim())) return "el código de velocidad es una sola letra";
+    return "";
+  }
+
+  const bloqueados = seleccionados.filter((c) => problema(c));
+
+  async function crear() {
+    setCreando(true);
+    const out: Resultado[] = [];
+    for (const c of seleccionados) {
+      const e = ediciones[clave(c)];
+      try {
+        await crearReferenciaNeumatico({
+          marca: c.fabricante,
+          modelo: c.modelo,
+          medida: c.medida,
+          indiceCargaSimple: e.indiceCargaSimple.trim(),
+          indiceCargaDoble: e.indiceCargaDoble.trim() || null,
+          codigoVelocidad: e.codigoVelocidad.trim().toUpperCase(),
+          // El catálogo solo admite cuatro ejes; lo que no encaje va sin eje
+          // antes que con uno inventado, y el alta no revienta por ello.
+          eje: ejeDelCandidato(c.posicion),
+          aplicacion: c.utilizacion ?? null,
+        });
+        out.push({ modelo: `${c.fabricante} ${c.modelo}`, ok: true, detalle: "Creado" });
+      } catch (err: any) {
+        out.push({ modelo: `${c.fabricante} ${c.modelo}`, ok: false, detalle: err?.message ?? "No se ha podido crear" });
+      }
+    }
+    setResultados(out);
+    setCreando(false);
+    setConfirmando(false);
+    if (out.some((r) => r.ok)) onCreado();
+  }
+
+  return (
+    <Modal title="Buscar neumáticos con IA" onClose={onClose} size="xl">
+      <div className="space-y-3">
+        <div className="flex flex-wrap gap-2">
+          <input
+            className={inputCls + " min-w-[18rem] flex-1"}
+            placeholder={EJEMPLO}
+            value={consulta}
+            onChange={(e) => setConsulta(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") void buscar(); }}
+            disabled={buscando}
+          />
+          <button
+            onClick={() => void buscar()}
+            disabled={buscando || !consulta.trim()}
+            className="flex items-center gap-1.5 rounded-lg bg-sky-600 px-3 py-2 text-sm font-bold text-white hover:bg-sky-500 disabled:opacity-50"
+          >
+            <Search size={15} /> {buscando ? "Buscando…" : "Buscar modelos"}
+          </button>
+        </div>
+
+        <p className="text-[12px] text-slate-500">
+          Di la marca y la medida. Por ejemplo: <button className="underline hover:text-slate-300"
+            onClick={() => setConsulta(EJEMPLO)}>{EJEMPLO}</button>
+        </p>
+
+        {buscando && (
+          <div className="rounded-xl border border-sky-500/30 bg-sky-500/5 p-3 text-[13px] text-sky-200">
+            Buscando en los catálogos del fabricante y de distribuidores. Tarda hasta un
+            par de minutos: está leyendo páginas, no contestando de memoria.
+          </div>
+        )}
+
+        {error && <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-3 text-[13px] text-rose-200">{error}</div>}
+
+        {resp && (
+          <>
+            <div className="rounded-xl border border-slate-700 bg-slate-900/50 p-3 text-[13px]">
+              <p className="text-slate-300">
+                He entendido: marca <b className="text-slate-100">{resp.consulta.fabricante ?? "—"}</b>,
+                medida <b className="text-slate-100">{resp.consulta.medida ?? "—"}</b>.
+                {resp.enCatalogo > 0 && (
+                  <> En el catálogo ya hay {resp.enCatalogo} referencia{resp.enCatalogo === 1 ? "" : "s"} de esa marca.</>
+                )}
+              </p>
+              {resp.aviso && <p className="mt-1 text-amber-300">{resp.aviso}</p>}
+              {resp.citas.length > 0 && (
+                <details className="mt-1">
+                  <summary className="cursor-pointer text-[12px] text-slate-500 hover:text-slate-300">
+                    {resp.citas.length} página{resp.citas.length === 1 ? "" : "s"} consultada{resp.citas.length === 1 ? "" : "s"}
+                  </summary>
+                  <ul className="mt-1 space-y-0.5">
+                    {resp.citas.map((u) => (
+                      <li key={u}>
+                        <a href={u} target="_blank" rel="noreferrer" className="text-[11px] text-sky-400 hover:underline break-all">{u}</a>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </div>
+
+            {candidatos.length > 0 && (
+              <TableWrap>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr>
+                      <th className={thCls}></th>
+                      <th className={thCls}>Estado</th>
+                      <th className={thCls}>Modelo</th>
+                      <th className={thCls}>Medida</th>
+                      <th className={thCls}>Carga</th>
+                      <th className={thCls}>Vel.</th>
+                      <th className={thCls}>Uso</th>
+                      <th className={thCls}>M+S / 3PMSF</th>
+                      <th className={thCls}>Fuente</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {candidatos.map((c) => {
+                      const k = clave(c);
+                      const e = ediciones[k];
+                      const est = ESTADO[c.estado];
+                      const puede = c.estado !== "no_verificado" && c.estado !== "existente";
+                      const mal = marcados.has(k) ? problema(c) : "";
+                      return (
+                        <tr key={k} className="border-t border-slate-700/60 align-top">
+                          <td className={tdCls}>
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 accent-emerald-500"
+                              checked={marcados.has(k)}
+                              disabled={!puede}
+                              onChange={() => alternar(c)}
+                              aria-label={`Seleccionar ${c.modelo}`}
+                            />
+                          </td>
+                          <td className={tdCls}>
+                            <span className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-bold ${est.clase}`}>
+                              <est.Icono size={12} /> {est.texto}
+                            </span>
+                            <div className="mt-1 max-w-[16rem] text-[11px] text-slate-400">{c.motivo}</div>
+                            {mal && <div className="mt-1 text-[11px] text-rose-300">No se puede guardar: {mal}</div>}
+                          </td>
+                          <td className={tdCls}>
+                            <div className="font-semibold text-slate-100">{c.modelo}</div>
+                            <div className="text-[11px] text-slate-500">{c.fabricante}</div>
+                          </td>
+                          <td className={tdCls + " whitespace-nowrap text-slate-300"}>{c.medida}</td>
+                          <td className={tdCls}>
+                            <div className="flex items-center gap-1">
+                              <input className={inputCls + " w-14 px-1 py-0.5 text-[12px]"} value={e?.indiceCargaSimple ?? ""}
+                                onChange={(ev) => editar(c, "indiceCargaSimple", ev.target.value)} disabled={!puede} aria-label="Índice de carga" />
+                              <span className="text-slate-600">/</span>
+                              <input className={inputCls + " w-14 px-1 py-0.5 text-[12px]"} value={e?.indiceCargaDoble ?? ""}
+                                onChange={(ev) => editar(c, "indiceCargaDoble", ev.target.value)} disabled={!puede} aria-label="Índice de carga doble" />
+                            </div>
+                          </td>
+                          <td className={tdCls}>
+                            <input className={inputCls + " w-12 px-1 py-0.5 text-[12px] uppercase"} value={e?.codigoVelocidad ?? ""}
+                              onChange={(ev) => editar(c, "codigoVelocidad", ev.target.value)} disabled={!puede} aria-label="Código de velocidad" />
+                          </td>
+                          <td className={tdCls + " text-[12px] text-slate-400"}>
+                            {[c.posicion, c.utilizacion].filter(Boolean).join(" · ") || "—"}
+                          </td>
+                          <td className={tdCls + " text-[12px] text-slate-400"}>
+                            {c.ms ? "M+S" : "—"} / {c.tresPmsf ? "3PMSF" : "—"}
+                          </td>
+                          <td className={tdCls}>
+                            {c.fuentes.length === 0 ? <span className="text-[11px] text-rose-300">sin fuente</span> : (
+                              <ul className="space-y-0.5">
+                                {c.fuentes.slice(0, 3).map((f) => (
+                                  <li key={f.url}>
+                                    <a href={f.url} target="_blank" rel="noreferrer"
+                                      className="inline-flex items-center gap-1 text-[11px] text-sky-400 hover:underline">
+                                      <ExternalLink size={10} /> {f.titulo?.slice(0, 40) || new URL(f.url).hostname}
+                                    </a>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                            {c.parecidos.length > 0 && (
+                              <div className="mt-1 text-[11px] text-amber-300/80">
+                                Ya hay: {c.parecidos.map((p) => `${p.modelo} ${p.medida}`).join(", ")}
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </TableWrap>
+            )}
+
+            {candidatos.length > 0 && (
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-700 pt-3">
+                <div className="text-[12px] text-slate-400">
+                  {seleccionados.length} seleccionado{seleccionados.length === 1 ? "" : "s"} de {candidatos.length}
+                  {bloqueados.length > 0 && (
+                    <span className="text-rose-300"> · {bloqueados.length} con datos que faltan</span>
+                  )}
+                </div>
+                <button
+                  onClick={() => setConfirmando(true)}
+                  disabled={!seleccionados.length || bloqueados.length > 0 || creando}
+                  className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
+                >
+                  Crear {seleccionados.length} en catálogo
+                </button>
+              </div>
+            )}
+          </>
+        )}
+
+        {resultados && (
+          <div className="rounded-xl border border-slate-700 bg-slate-900/50 p-3">
+            <p className="text-sm font-bold text-slate-200">Resultado</p>
+            <ul className="mt-1 space-y-0.5 text-[13px]">
+              {resultados.map((r, i) => (
+                <li key={i} className={r.ok ? "text-emerald-300" : "text-rose-300"}>
+                  {r.ok ? "✓" : "✗"} {r.modelo} — {r.detalle}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+
+      {confirmando && (
+        <Modal title="Confirmar alta en el catálogo" onClose={() => setConfirmando(false)}>
+          <p className="text-sm text-slate-300">
+            Se van a crear {seleccionados.length} referencia{seleccionados.length === 1 ? "" : "s"} en el
+            catálogo. Compruébalas: una vez dentro, las ve todo el mundo.
+          </p>
+          <ul className="mt-2 max-h-56 space-y-0.5 overflow-auto text-[13px] text-slate-200">
+            {seleccionados.map((c) => {
+              const e = ediciones[clave(c)];
+              return (
+                <li key={clave(c)}>
+                  · {c.fabricante} {c.modelo} {c.medida} {e.indiceCargaSimple}
+                  {e.indiceCargaDoble ? `/${e.indiceCargaDoble}` : ""}{e.codigoVelocidad.toUpperCase()}
+                </li>
+              );
+            })}
+          </ul>
+          <div className="mt-3 flex justify-end gap-2">
+            <button onClick={() => setConfirmando(false)} className="rounded-lg border border-slate-600 px-3 py-2 text-sm text-slate-300">Cancelar</button>
+            <button onClick={() => void crear()} disabled={creando}
+              className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-bold text-white hover:bg-emerald-500 disabled:opacity-50">
+              {creando ? "Creando…" : "Sí, crear"}
+            </button>
+          </div>
+        </Modal>
+      )}
+    </Modal>
+  );
+}

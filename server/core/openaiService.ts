@@ -49,6 +49,15 @@ export interface PeticionIA {
   proposito?: Proposito;
   /** Esquema JSON estricto. Si se indica, la respuesta viene validada. */
   esquema?: { nombre: string; schema: Record<string, unknown> };
+  /**
+   * Herramientas alojadas de la Responses API: hoy, `[{ type: "web_search" }]`.
+   *
+   * Va aquí y no en un cliente aparte por la regla de este módulo: el modelo y
+   * la clave se eligen en un solo sitio. Lo que la herramienta consulte queda
+   * en `citas`, que es lo que permite a quien llame comprobar que la búsqueda
+   * ocurrió de verdad en vez de fiarse de que el modelo diga que buscó.
+   */
+  herramientas?: Array<Record<string, unknown>>;
   maxTokens?: number;
   temperatura?: number;
   /** Identificador de la operación, solo para métricas y logs. */
@@ -60,6 +69,14 @@ export interface RespuestaIA<T = string> {
   ok: boolean;
   texto: string;
   datos?: T;
+  /**
+   * URLs que la respuesta cita de verdad (anotaciones `url_citation`).
+   *
+   * No es decoración: una respuesta con herramienta de búsqueda y CERO citas
+   * es una respuesta escrita de memoria, y quien llame tiene que poder
+   * distinguirla de una buscada. Vacío cuando no se pidieron herramientas.
+   */
+  citas?: string[];
   modelo: string;
   tokensEntrada?: number;
   tokensSalida?: number;
@@ -138,6 +155,7 @@ export async function pedirIA<T = string>(req: PeticionIA): Promise<RespuestaIA<
       : req.prompt,
   };
   if (req.temperatura != null) cuerpo.temperature = req.temperatura;
+  if (req.herramientas?.length) cuerpo.tools = req.herramientas;
   if (req.esquema) {
     cuerpo.text = {
       format: { type: "json_schema", name: req.esquema.nombre, strict: true, schema: req.esquema.schema },
@@ -159,6 +177,7 @@ export async function pedirIA<T = string>(req: PeticionIA): Promise<RespuestaIA<
         const salida: RespuestaIA<T> = {
           ok: true,
           texto,
+          citas: extraerCitas(r),
           modelo: m,
           tokensEntrada: r?.usage?.input_tokens,
           tokensSalida: r?.usage?.output_tokens,
@@ -225,6 +244,28 @@ export async function transcribirAudio(
     });
     throw e;
   }
+}
+
+/**
+ * Las URLs que la respuesta cita.
+ *
+ * La Responses API las cuelga de cada trozo de texto como anotaciones
+ * `url_citation`. Se devuelven sin repetir y en el orden en que aparecen.
+ */
+function extraerCitas(r: any): string[] {
+  const urls: string[] = [];
+  const vistas = new Set<string>();
+  for (const o of r?.output ?? []) {
+    for (const c of o?.content ?? []) {
+      for (const a of c?.annotations ?? []) {
+        const url = typeof a?.url === "string" ? a.url : "";
+        if (!url || vistas.has(url)) continue;
+        vistas.add(url);
+        urls.push(url);
+      }
+    }
+  }
+  return urls;
 }
 
 /** La Responses API devuelve el texto en output[].content[].text. */
