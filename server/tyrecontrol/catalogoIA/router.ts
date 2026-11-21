@@ -189,7 +189,11 @@ export function createCatalogoIARouter(): Router {
   const usuario = (req: Request) => (req as unknown as Peticion).solicitante.usuarioId ?? null;
 
   router.get("/depurar", async (_req, res) => {
-    try { res.json(await diagnostico()); } catch (e) { fallo(res, e); }
+    try { res.json(await diagnostico()); } catch (e) {
+      // Solo llega un superadmin: mejor el motivo real que un «no se ha podido» genérico.
+      console.error("[catalogo-ia] depurar:", e instanceof Error ? e.message : e);
+      res.status(500).json({ error: `No se ha podido cargar el diagnóstico: ${e instanceof Error ? e.message : "error"}` });
+    }
   });
 
   router.post("/depurar/equivalencias", async (req, res) => {

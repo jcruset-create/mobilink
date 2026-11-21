@@ -57,7 +57,7 @@ async function cargarCatalogo(): Promise<Catalogo> {
 
 async function cargarFlota(): Promise<GomaFlota[]> {
   const filas = await todo("tc_neumaticos",
-    "id, marca, modelo, medida, indice_carga, codigo_interno, numero_serie, vehiculo:tc_vehiculos(matricula), empresa:tc_empresas(nombre)",
+    "id, marca, modelo, medida, indice_carga, codigo_interno, numero_serie, vehiculo:tc_vehiculos!tc_neumaticos_vehiculo_id_fkey(matricula), empresa:tc_empresas!tc_neumaticos_empresa_id_fkey(nombre)",
     true);
   return filas.map((n) => ({
     id: String(n.id),
