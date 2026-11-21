@@ -18,7 +18,7 @@ import { Router, json, type Request, type Response } from "express";
 import { supabase } from "../../supabase.ts";
 import { resolverSolicitante, type Solicitante } from "../conciliacion/router.ts";
 import {
-  clasificarTodos, interpretarConsulta,
+  clasificarTodos, consultaDe, interpretarConsulta,
   type Candidato, type ReferenciaExistente,
 } from "../../../src/modules/tyrecontrol/services/catalogoIA.ts";
 import { buscarModelos } from "./busqueda.ts";
@@ -91,11 +91,26 @@ export function createCatalogoIARouter(): Router {
    */
   router.post("/buscar", async (req, res) => {
     try {
-      const texto = String((req.body as any)?.consulta ?? "").trim();
-      if (!texto) return res.status(400).json({ error: "Falta la consulta" });
-      if (texto.length > 300) return res.status(400).json({ error: "La consulta es demasiado larga" });
+      const cuerpo = req.body as any;
+      const marca = String(cuerpo?.marca ?? "").trim();
+      const medida = String(cuerpo?.medida ?? "").trim();
+      const texto = String(cuerpo?.consulta ?? "").trim();
 
-      const consulta = interpretarConsulta(texto);
+      if (marca.length > 80 || medida.length > 40 || texto.length > 300) {
+        return res.status(400).json({ error: "La consulta es demasiado larga" });
+      }
+
+      // Dos caminos. Lo normal es que la pantalla mande marca y medida, que es
+      // lo que se elige en los desplegables: elegido de una lista no hay nada
+      // que interpretar, así que no hay nada que interpretar mal. La frase
+      // suelta sigue valiendo, para quien la escriba o la llame desde fuera.
+      const consulta = marca || medida
+        ? consultaDe(marca, medida)
+        : interpretarConsulta(texto);
+
+      if (!consulta.fabricante && !consulta.medida) {
+        return res.status(400).json({ error: "Falta la marca y la medida" });
+      }
       const busqueda = await buscarModelos(consulta);
 
       // Sin marca entendida no hay con qué comparar: se devuelve la

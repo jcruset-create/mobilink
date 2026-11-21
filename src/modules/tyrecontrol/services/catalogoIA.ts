@@ -111,6 +111,30 @@ export function interpretarConsulta(texto: string): ConsultaCatalogo {
 }
 
 /**
+ * La consulta cuando la marca y la medida se eligen en sendos desplegables.
+ *
+ * Es el camino normal de la pantalla, y es mejor que escribir la frase:
+ * cuando se elige de una lista NO hay nada que interpretar, así que no hay
+ * nada que interpretar mal. Una marca de dos palabras —«Double Coin»— o una
+ * medida tecleada a mano entran enteras, sin pasar por el filtro de palabras
+ * de relleno.
+ *
+ * La medida sí se valida: se acepta tecleada, pero tiene que parecerse a una
+ * medida. `null` cuando no lo es, y entonces no se busca.
+ */
+export function consultaDe(marca: string, medida: string): ConsultaCatalogo {
+  const m = String(marca ?? "").trim().replace(/\s+/g, " ");
+  const med = medidaDeTexto(String(medida ?? ""));
+  return {
+    // El texto se compone para que quede en el registro y para que
+    // `marcaPedida` siga teniendo dónde buscar la marca.
+    texto: `Busca modelos de neumáticos ${m} en ${med ?? medida}`,
+    fabricante: m || null,
+    medida: med,
+  };
+}
+
+/**
  * ¿Dijo la persona esta marca?
  *
  * El modelo devuelve el fabricante de cada ficha, y esto comprueba que es el

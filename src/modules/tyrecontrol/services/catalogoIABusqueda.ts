@@ -25,11 +25,18 @@ export interface RespuestaBusquedaIA {
   enCatalogo: number;
 }
 
-export async function buscarModelosIA(consulta: string): Promise<RespuestaBusquedaIA> {
+/**
+ * Busca modelos de una marca en una medida.
+ *
+ * Marca y medida van por separado, no como frase: en la pantalla se eligen de
+ * sendos desplegables y lo elegido no hay que adivinarlo. El servidor sigue
+ * aceptando una frase suelta, pero esto no la usa.
+ */
+export async function buscarModelosIA(params: { marca: string; medida: string }): Promise<RespuestaBusquedaIA> {
   const r = await fetch(`${API}/api/tyrecontrol/catalogo-ia/buscar`, {
     method: "POST",
     headers: { ...(await authHeaders()), "Content-Type": "application/json" },
-    body: JSON.stringify({ consulta }),
+    body: JSON.stringify({ marca: params.marca, medida: params.medida }),
   });
   const data = await r.json().catch(() => null);
   if (!r.ok) throw new Error(data?.error ?? `La búsqueda ha fallado (HTTP ${r.status})`);
