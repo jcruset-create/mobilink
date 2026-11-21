@@ -22,7 +22,7 @@ import {
   type Candidato, type ReferenciaExistente,
 } from "../../../src/modules/tyrecontrol/services/catalogoIA.ts";
 import { buscarModelos } from "./busqueda.ts";
-import { aceptar, completarReferencia, descartar, huecos, propuestasDe } from "./completar.ts";
+import { aceptar, completarReferencia, descartar, huecos, mismoModelo, propuestasDe } from "./completar.ts";
 
 type Peticion = Request & { solicitante: Solicitante };
 
@@ -165,6 +165,18 @@ export function createCatalogoIARouter(): Router {
       const b = req.body as Cuerpo;
       res.json(await aceptar(ids(b?.ids), b?.corregir === true));
     } catch (e) { fallo(res, e); }
+  });
+
+  router.post("/mismo-modelo/:referenciaId", async (req, res) => {
+    try {
+      const id = String(req.params.referenciaId);
+      if (!/^[0-9a-f-]{36}$/i.test(id)) return res.status(400).json({ error: "Referencia no válida" });
+      res.json(await mismoModelo(id, (req as unknown as Peticion).solicitante.usuarioId));
+    } catch (e) {
+      const m = e instanceof Error ? e.message : "";
+      if (/No hay nada descartado|no existe/.test(m)) return res.status(400).json({ error: m });
+      fallo(res, e);
+    }
   });
 
   router.post("/descartar", async (req, res) => {

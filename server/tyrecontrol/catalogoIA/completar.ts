@@ -18,7 +18,7 @@ import {
 
 const COLUMNAS = CAMPOS.map((c) => c.clave);
 const SELECT_REF =
-  `id, referencia_completa, activo, verificacion_notas, fuente_oficial_url, fuente_corroboracion_url, ${COLUMNAS.join(", ")}, ` +
+  `id, modelo_id, referencia_completa, activo, verificacion_notas, fuente_oficial_url, fuente_corroboracion_url, ${COLUMNAS.join(", ")}, ` +
   "modelo:tc_cat_modelos_neumatico(nombre, marca:tc_cat_marcas_neumatico(nombre)), tyre_size:tyre_sizes(medida)";
 
 type FilaRef = Record<string, unknown> & {
@@ -39,8 +39,10 @@ const ESQUEMA_IA = (): { nombre: string; schema: Record<string, unknown> } =>
 const vacio = (v: unknown) => v === null || v === undefined || v === "";
 const norm = (s: unknown) => String(s ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
 
-function aRef(r: FilaRef) {
+function aRef(r: FilaRef, alias: string[] = []) {
   return {
+    modeloId: String(r.modelo_id ?? ""),
+    alias,
     id: String(r.id),
     referenciaCompleta: String(r.referencia_completa ?? ""),
     marca: String(r.modelo?.marca?.nombre ?? ""),
@@ -48,6 +50,22 @@ function aRef(r: FilaRef) {
     medida: String(r.tyre_size?.medida ?? ""),
     fila: r,
   };
+}
+
+/** Los alias confirmados de un modelo (tc_cat_modelos_alias). */
+async function aliasDe(modeloId: string): Promise<string[]> {
+  if (!modeloId) return [];
+  const { data } = await supabase.from("tc_cat_modelos_alias").select("alias").eq("modelo_id", modeloId);
+  return (data ?? []).map((a: { alias: string }) => a.alias);
+}
+
+/** Comprueba un valor ya coincidente: fuente, tipo y rango. */
+function revisarValor(v: { campo: string; valor: unknown; url: unknown; tipo_fuente: unknown }): { motivo: string; causa: string; valor: string } {
+  const val = validarValor(v.campo, v.valor);
+  if (!urlValida(v.url)) return { motivo: "Sin una URL que abrir", causa: "fuente", valor: String(v.valor) };
+  if (!tipoFuenteValido(v.tipo_fuente)) return { motivo: "Sin tipo de fuente", causa: "fuente", valor: String(v.valor) };
+  if (!val.ok) return { motivo: (val as { motivo: string }).motivo, causa: "valor", valor: String(v.valor) };
+  return { motivo: "", causa: "", valor: String(val.valor) };
 }
 
 export interface FilaHueco {
@@ -169,7 +187,7 @@ export async function completarReferencia(referenciaId: string, usuarioId: strin
   if (error) throw new Error(error.message);
   const r = d as unknown as FilaRef | null;
   if (!r) return { ok: false, aviso: "La referencia no existe.", propuestas: 0, invalidas: 0 };
-  const ref = aRef(r);
+  const ref = aRef(r, await aliasDe(String(r.modelo_id ?? "")));
   const campos = COLUMNAS.filter((c) => vacio(r[c]));
   if (!campos.length) return { ok: true, aviso: "No le falta nada.", propuestas: 0, invalidas: 0 };
 
@@ -195,19 +213,15 @@ export async function completarReferencia(referenciaId: string, usuarioId: strin
   await supabase.from("tc_catalogo_propuestas_ia").delete().eq("referencia_id", ref.id).eq("estado", "pendiente");
 
   const filas: Array<Record<string, unknown>> = [];
+  const fichaLeida = { marca: leida.marca ?? null, modelo: leida.modelo ?? null, medida: leida.medida ?? null, indice_carga: leida.indice_carga ?? null };
   for (const v of ia.datos?.valores ?? []) {
     if (!campos.includes(v.campo) || vacio(v.valor)) continue;
-    const val = validarValor(v.campo, v.valor);
-    let motivo = "";
-    if (!coincide.ok) motivo = coincide.motivo;
-    else if (!urlValida(v.url)) motivo = "Sin una URL que abrir";
-    else if (!tipoFuenteValido(v.tipo_fuente)) motivo = "Sin tipo de fuente";
-    else if (!val.ok) motivo = (val as { motivo: string }).motivo;
+    const rev = coincide.ok ? revisarValor(v) : { motivo: coincide.motivo, causa: coincide.causa ?? "", valor: String(v.valor) };
     filas.push({
-      referencia_id: ref.id, campo: v.campo,
-      valor: val.ok ? String(val.valor) : String(v.valor),
+      referencia_id: ref.id, campo: v.campo, valor: rev.valor,
       url: v.url ?? null, tipo_fuente: tipoFuenteValido(v.tipo_fuente) ? v.tipo_fuente : null,
-      estado: motivo ? "invalida" : "pendiente", motivo: motivo || null, creado_por: usuarioId,
+      estado: rev.motivo ? "invalida" : "pendiente", motivo: rev.motivo || null, causa: rev.causa || null,
+      modelo_leido: leida.modelo ?? null, ficha_leida: fichaLeida, creado_por: usuarioId,
     });
   }
   if (filas.length) {
@@ -224,7 +238,7 @@ export async function completarReferencia(referenciaId: string, usuarioId: strin
 
 export async function propuestasDe(referenciaIds: string[]) {
   const { data, error } = await supabase.from("tc_catalogo_propuestas_ia")
-    .select("id, referencia_id, campo, valor, url, tipo_fuente, estado, motivo, created_at")
+    .select("id, referencia_id, campo, valor, url, tipo_fuente, estado, motivo, causa, modelo_leido, created_at")
     .in("referencia_id", referenciaIds).in("estado", ["pendiente", "invalida"])
     .order("created_at", { ascending: false });
   if (error) throw new Error(error.message);
@@ -286,4 +300,42 @@ export async function descartar(ids: string[]): Promise<void> {
     .update({ estado: "descartada", motivo: "Descartada a mano", resuelta_at: new Date().toISOString() })
     .in("id", ids).eq("estado", "pendiente");
   if (error) throw new Error(error.message);
+}
+
+/**
+ * «Es el mismo modelo»: una persona confirma que el nombre de la ficha
+ * («BT 200 R») es el modelo del catálogo («BT200»). Se guarda como alias y las
+ * propuestas descartadas SOLO por el nombre se vuelven a comprobar enteras
+ * (medida, índice de carga, fuente y valor) con ese alias.
+ */
+export async function mismoModelo(referenciaId: string, usuarioId: string | null): Promise<{ alias: string; rescatadas: number; siguenDescartadas: number }> {
+  const { data: d, error } = await supabase.from("tc_referencias_neumatico").select(SELECT_REF).eq("id", referenciaId).maybeSingle();
+  if (error) throw new Error(error.message);
+  const r = d as unknown as FilaRef | null;
+  if (!r) throw new Error("La referencia no existe");
+  const { data: ps, error: e2 } = await supabase.from("tc_catalogo_propuestas_ia")
+    .select("id, campo, valor, url, tipo_fuente, modelo_leido, ficha_leida")
+    .eq("referencia_id", referenciaId).eq("estado", "invalida").eq("causa", "modelo");
+  if (e2) throw new Error(e2.message);
+  const lista = (ps ?? []) as Array<{ id: string; campo: string; valor: string; url: string | null; tipo_fuente: string | null; modelo_leido: string | null; ficha_leida: Record<string, string | null> | null }>;
+  const alias = String(lista[0]?.modelo_leido ?? "").trim();
+  if (!lista.length || !alias) throw new Error("No hay nada descartado por el nombre del modelo en esta referencia");
+
+  const modeloId = String(r.modelo_id ?? "");
+  const { error: e3 } = await supabase.from("tc_cat_modelos_alias").insert({ modelo_id: modeloId, alias, creado_por: usuarioId });
+  if (e3 && !/duplicate|unique/i.test(e3.message)) throw new Error(e3.message);
+
+  const ref = aRef(r, await aliasDe(modeloId));
+  let rescatadas = 0, siguen = 0;
+  for (const p of lista) {
+    const f = p.ficha_leida ?? {};
+    const c = coincideReferencia(ref, { marca: f.marca, modelo: f.modelo ?? alias, medida: f.medida, indiceCarga: f.indice_carga });
+    const rev = c.ok ? revisarValor(p) : { motivo: c.motivo, causa: c.causa ?? "", valor: p.valor };
+    const { error: e4 } = await supabase.from("tc_catalogo_propuestas_ia").update({
+      estado: rev.motivo ? "invalida" : "pendiente", motivo: rev.motivo || null, causa: rev.causa || null, valor: rev.valor,
+    }).eq("id", p.id);
+    if (e4) throw new Error(e4.message);
+    if (rev.motivo) siguen += 1; else rescatadas += 1;
+  }
+  return { alias, rescatadas, siguenDescartadas: siguen };
 }

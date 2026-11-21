@@ -21,6 +21,10 @@ export interface ResumenHuecos { referencias: number; sinProfundidad: number; si
 export interface Propuesta {
   id: string; referencia_id: string; campo: string; valor: string; url: string | null;
   tipo_fuente: "oficial" | "eprel" | "distribuidor" | null; estado: "pendiente" | "invalida"; motivo: string | null;
+  /** Por qué se descartó: solo «modelo» se rescata con «Es el mismo modelo». */
+  causa?: string | null;
+  /** Cómo llama la ficha al modelo («BT 200 R»). */
+  modelo_leido?: string | null;
 }
 
 export const huecosCatalogo = (f: { marca?: string; campo?: string; soloFlota?: boolean }) => {
@@ -38,3 +42,5 @@ export const aceptarPropuestasIA = (ids: string[], corregir = false) =>
   llamar<{ aceptadas: number; saltadas: number }>("/aceptar", { method: "POST", body: JSON.stringify({ ids, corregir }) });
 export const descartarPropuestasIA = (ids: string[]) =>
   llamar<{ ok: true }>("/descartar", { method: "POST", body: JSON.stringify({ ids }) });
+export const mismoModeloIA = (referenciaId: string) =>
+  llamar<{ alias: string; rescatadas: number; siguenDescartadas: number }>(`/mismo-modelo/${referenciaId}`, { method: "POST" });

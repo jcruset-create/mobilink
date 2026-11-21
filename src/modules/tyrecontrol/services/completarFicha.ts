@@ -100,18 +100,36 @@ export function indicesDe(texto: string): string[] {
 }
 
 export interface FichaLeida { marca?: string | null; modelo?: string | null; medida?: string | null; indiceCarga?: string | null }
-export interface RefCatalogo { marca: string; modelo: string; medida: string; referenciaCompleta: string }
+export interface RefCatalogo {
+  marca: string; modelo: string; medida: string; referenciaCompleta: string;
+  /** Otros nombres del mismo modelo, confirmados por una persona (tc_cat_modelos_alias). */
+  alias?: string[];
+}
+
+/** Por qué no coincide: solo «modelo» se puede rescatar con «Es el mismo modelo». */
+export type CausaDescarte = "marca" | "modelo" | "medida" | "indice";
 
 /** ¿La ficha que leyó la IA es de ESTA referencia? */
-export function coincideReferencia(ref: RefCatalogo, leida: FichaLeida): { ok: boolean; motivo: string } {
+export function coincideReferencia(ref: RefCatalogo, leida: FichaLeida): { ok: boolean; motivo: string; causa?: CausaDescarte } {
   const mR = norm(ref.marca), mL = norm(leida.marca);
-  if (!mL || !(mL.includes(mR) || mR.includes(mL))) return { ok: false, motivo: `La ficha es de «${leida.marca ?? "?"}», no de ${ref.marca}` };
-  const oR = norm(ref.modelo), oL = norm(leida.modelo);
-  if (!oL || oL !== oR) return { ok: false, motivo: `La ficha es del modelo «${leida.modelo ?? "?"}», no ${ref.modelo}` };
-  if (medidaBase(leida.medida) !== medidaBase(ref.medida)) return { ok: false, motivo: `La ficha es de ${leida.medida ?? "otra medida"}, no ${ref.medida}` };
+  if (!mL || !(mL.includes(mR) || mR.includes(mL))) {
+    return { ok: false, causa: "marca", motivo: `La ficha es de «${leida.marca ?? "?"}», no de ${ref.marca}` };
+  }
+  // El modelo tiene que ser el mismo nombre (o un alias confirmado). Que uno
+  // contenga al otro NO basta: «KMAX S» y «KMAX S HL» son neumáticos distintos.
+  const oL = norm(leida.modelo);
+  const nombres = [ref.modelo, ...(ref.alias ?? [])].map(norm).filter(Boolean);
+  if (!oL || !nombres.includes(oL)) {
+    return { ok: false, causa: "modelo", motivo: `La ficha es del modelo «${leida.modelo ?? "?"}», no ${ref.modelo}` };
+  }
+  if (medidaBase(leida.medida) !== medidaBase(ref.medida)) {
+    return { ok: false, causa: "medida", motivo: `La ficha es de ${leida.medida ?? "otra medida"}, no ${ref.medida}` };
+  }
   const icR = indicesDe(ref.referenciaCompleta);
   const icL = indicesDe(String(leida.indiceCarga ?? ""));
-  if (icR.length && icL.length && icR[0] !== icL[0]) return { ok: false, motivo: `Índice de carga ${icL.join("/")}, no ${icR.join("/")}` };
+  if (icR.length && icL.length && icR[0] !== icL[0]) {
+    return { ok: false, causa: "indice", motivo: `Índice de carga ${icL.join("/")}, no ${icR.join("/")}` };
+  }
   return { ok: true, motivo: "" };
 }
 

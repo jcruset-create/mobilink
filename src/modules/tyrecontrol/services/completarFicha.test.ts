@@ -47,3 +47,19 @@ describe("coincideReferencia", () => {
     expect(indicesDe("GOODYEAR KMAX T 385/55 R22.5 160L")).toEqual(["160"]);
   });
 });
+
+describe("alias de modelo", () => {
+  const ref = { marca: "Barum", modelo: "BT200", medida: "385/55R22.5", referenciaCompleta: "BARUM BT200 385/55 R22.5 160L" };
+  it("sin alias, otro nombre comercial se descarta por MODELO (rescatable)", () => {
+    const r = coincideReferencia(ref, { marca: "Barum", modelo: "BT 200 R", medida: "385/55 R22.5", indiceCarga: "160K" });
+    expect(r.ok).toBe(false);
+    expect(r.causa).toBe("modelo");
+  });
+  it("con el alias confirmado, coincide", () => {
+    expect(coincideReferencia({ ...ref, alias: ["BT 200 R"] }, { marca: "Barum", modelo: "BT 200 R", medida: "385/55R22.5", indiceCarga: "160K" }).ok).toBe(true);
+  });
+  it("el alias no salta el índice de carga", () => {
+    const r = coincideReferencia({ ...ref, alias: ["BT 200 R"] }, { marca: "Barum", modelo: "BT 200 R", medida: "385/55R22.5", indiceCarga: "158L" });
+    expect(r.causa).toBe("indice");
+  });
+});
