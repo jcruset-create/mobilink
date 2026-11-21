@@ -64,6 +64,7 @@ import {
 import { startWebfleetSync, syncWebfleetOnce, startMantenimientoAvisos } from "./webfleetSync.ts";
 import { getMailTransport } from "./mail.ts";
 import { startCheckpointMail, revisarBuzonCheckpoint } from "./checkpointMail.ts";
+import { createCatalogoIARouter } from "./tyrecontrol/catalogoIA/router.ts";
 import {
   fetchSeguro,
   ErrorRedSegura,
@@ -23133,6 +23134,9 @@ mountTcFleetcheck(app, authenticate, requireModule("tyrecontrol"));
  */
 app.use("/api/tyrecontrol/conciliacion", createConciliacionRouter());
 app.use("/api/tyrecontrol/presencia-bases", createPresenciaRouter());
+// Búsqueda de modelos de neumático con IA. Solo propone: crear sigue siendo
+// cosa del panel, con la sesión de la persona y la RLS del catálogo.
+app.use("/api/tyrecontrol/catalogo-ia", createCatalogoIARouter());
 // Satélite de Google para el mapa de una base: la clave no sale del servidor.
 app.use("/api/tyrecontrol/satelite", createSateliteRouter());
 // La tablet dice dónde está. Solo escribe: el panel lo lee por Supabase.

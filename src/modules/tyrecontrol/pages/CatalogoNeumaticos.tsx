@@ -6,6 +6,7 @@ import type { ReferenciaNeumatico, EjeRecomendado } from "../types";
 import { presionTxt } from "../types";
 import { Modal, inputCls, TableWrap, tdCls, thCls } from "../components/ui";
 import NuevaReferenciaModal, { type FormRef } from "../components/NuevaReferenciaModal";
+import BuscadorIACatalogo from "../components/BuscadorIACatalogo";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 
 type CamposTecnicos = "profundidad_dibujo_mm" | "llanta_recomendada" | "diametro_exterior_mm" | "revoluciones_km" | "carga_maxima_kg" | "presion_maxima_bar" | "peso_kg"
@@ -42,6 +43,9 @@ export default function CatalogoNeumaticos() {
   const [msgEdit, setMsgEdit] = useState("");
   const [borrando, setBorrando] = useState(false);
   const [confirmarBaja, setConfirmarBaja] = useState(false);
+  // Buscar modelos reales en Internet y proponerlos para el catálogo. Solo
+  // propone: crear sigue pasando por crearReferenciaNeumatico, con confirmación.
+  const [buscadorIA, setBuscadorIA] = useState(false);
 
   // Referencias que un técnico creó desde una revisión y nadie ha repasado.
   const [pendientes, setPendientes] = useState<ReferenciaNeumatico[]>([]);
@@ -265,6 +269,7 @@ export default function CatalogoNeumaticos() {
         <h1 className="text-lg font-black">Catálogo de neumáticos</h1>
         {puedeEditar && (
           <div className="flex gap-2">
+            <button onClick={() => setBuscadorIA(true)} className="rounded-lg border border-sky-600 px-3 py-1.5 text-xs font-semibold text-sky-300 hover:bg-sky-600/10">Buscar neumáticos con IA</button>
             <button onClick={abrirSinCatalogar} className="rounded-lg border border-amber-600 px-3 py-1.5 text-xs font-semibold text-amber-300 hover:bg-amber-600/10">Sin catalogar</button>
             <button onClick={() => abrirNuevaRef()} className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-500">+ Nueva referencia</button>
           </div>
@@ -483,6 +488,13 @@ export default function CatalogoNeumaticos() {
         >
           <img src={fotoAmpliada} alt="" className="max-h-full max-w-full rounded-lg bg-white object-contain" />
         </div>
+      )}
+
+      {buscadorIA && (
+        <BuscadorIACatalogo
+          onClose={() => setBuscadorIA(false)}
+          onCreado={() => void cargar()}
+        />
       )}
 
       {prefillRef && (
