@@ -22,6 +22,7 @@ import {
   type Candidato, type ReferenciaExistente,
 } from "../../../src/modules/tyrecontrol/services/catalogoIA.ts";
 import { buscarModelos } from "./busqueda.ts";
+import { aceptar, completarReferencia, descartar, huecos, propuestasDe } from "./completar.ts";
 
 type Peticion = Request & { solicitante: Solicitante };
 
@@ -128,6 +129,46 @@ export function createCatalogoIARouter(): Router {
     } catch (e) {
       fallo(res, e);
     }
+  });
+
+  // ── Completar fichas con IA ───────────────────────────────────────────
+  // Huecos de las referencias, búsqueda de UNA referencia (la pantalla va de
+  // una en una: progreso real y «Parar»), propuestas, aceptar y descartar.
+  const ids = (v: unknown): string[] =>
+    (Array.isArray(v) ? v : []).map(String).filter((x) => /^[0-9a-f-]{36}$/i.test(x)).slice(0, 200);
+
+  router.get("/huecos", async (req, res) => {
+    try {
+      res.json(await huecos({
+        marca: req.query.marca ? String(req.query.marca) : undefined,
+        campo: req.query.campo ? String(req.query.campo) : undefined,
+        soloFlota: req.query.soloFlota === "1",
+      }));
+    } catch (e) { fallo(res, e); }
+  });
+
+  router.post("/completar/:referenciaId", async (req, res) => {
+    try {
+      const id = String(req.params.referenciaId);
+      if (!/^[0-9a-f-]{36}$/i.test(id)) return res.status(400).json({ error: "Referencia no válida" });
+      res.json(await completarReferencia(id, (req as unknown as Peticion).solicitante.usuarioId));
+    } catch (e) { fallo(res, e); }
+  });
+
+  type Cuerpo = { referenciaIds?: unknown; ids?: unknown; corregir?: unknown } | undefined;
+  router.post("/propuestas", async (req, res) => {
+    try { res.json(await propuestasDe(ids((req.body as Cuerpo)?.referenciaIds))); } catch (e) { fallo(res, e); }
+  });
+
+  router.post("/aceptar", async (req, res) => {
+    try {
+      const b = req.body as Cuerpo;
+      res.json(await aceptar(ids(b?.ids), b?.corregir === true));
+    } catch (e) { fallo(res, e); }
+  });
+
+  router.post("/descartar", async (req, res) => {
+    try { await descartar(ids((req.body as Cuerpo)?.ids)); res.json({ ok: true }); } catch (e) { fallo(res, e); }
   });
 
   return router;
