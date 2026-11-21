@@ -64,6 +64,13 @@ export interface BorradorFila {
   /** Si no está dada de alta y se elige del catálogo: la referencia (trae IC y CV). */
   referenciaCorreccionId: string;
   motivo: string;
+  /**
+   * Casillas de la goma que se informa. Solo SUMAN: la base nunca le quita a
+   * una goma lo que ya fuera. Si la marca es recauchutadora, la base la marca
+   * recauchutada aunque aquí venga en false.
+   */
+  recauchutado: boolean;
+  reesculturado: boolean;
 }
 
 export function borradorVacio(): BorradorFila {
@@ -71,6 +78,7 @@ export function borradorVacio(): BorradorFila {
     referenciaId: "", profundidadMm: "", presionBar: "", numeroSerie: "", dot: "",
     observaciones: "", coincide: true, correccion: "ficha", neumaticoCorrectoId: "",
     marca: "", modelo: "", medida: "", referenciaCorreccionId: "", motivo: "",
+    recauchutado: false, reesculturado: false,
   };
 }
 
@@ -188,6 +196,8 @@ export function datosMedicion(b: BorradorFila): Record<string, string> {
   if (dot) datos.dot = dot;
   const obs = (b.observaciones ?? "").trim();
   if (obs) datos.observaciones = obs;
+  if (b.recauchutado) datos.recauchutado = "true";
+  if (b.reesculturado) datos.reesculturado = "true";
   return datos;
 }
 

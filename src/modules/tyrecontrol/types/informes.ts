@@ -415,7 +415,11 @@ export interface InformeEjecutivo {
     mas_vencidos: { matricula: string; ultima: string | null; dias_vencido: number }[];
   };
   por_medida: { medida: string; unidades: number; prof_media: number | null; criticos: number }[];
-  por_marca: { marca: string; unidades: number; prof_media: number | null; criticos: number; reesculturados: number }[];
+  por_marca: {
+    marca: string; unidades: number; prof_media: number | null; criticos: number; reesculturados: number;
+    /** Desde la migración recauchutado_reesculturado; antes no venía. */
+    recauchutados?: number;
+  }[];
   por_base: {
     base: string; vehiculos: number; intervenir: number; revisar: number;
     sin_datos: number; min_mm: number | null; media_mm: number | null;

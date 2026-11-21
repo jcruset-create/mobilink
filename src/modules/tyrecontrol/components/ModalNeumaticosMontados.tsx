@@ -324,6 +324,7 @@ export default function ModalNeumaticosMontados({
                 <th className="px-3 py-2 text-left text-[11px] uppercase text-slate-400">Qué hay</th>
                 <th className="px-3 py-2 text-left text-[11px] uppercase text-slate-400">Prof. mm</th>
                 <th className="px-3 py-2 text-left text-[11px] uppercase text-slate-400">Presión bar</th>
+                <th className="px-3 py-2 text-left text-[11px] uppercase text-slate-400">Estado de la goma</th>
                 <th className="px-3 py-2 text-left text-[11px] uppercase text-slate-400">Nº serie / DOT</th>
               </tr>
             </thead>
@@ -527,6 +528,19 @@ function Fila({
   // corregir todavía. Dejar los campos abiertos sin que escriban nada sería
   // peor que no enseñarlos.
   const soloLectura = libre && modo === "actualizar";
+  /*
+   * Recauchutado / reesculturado.
+   *
+   * Goma ya informada: lo que dice su ficha, sin tocar aquí. Posición nueva:
+   * lo marca quien informa, y si la referencia es de una marca recauchutadora
+   * (Insa) «Recauchutado» sale marcada y bloqueada: la marca manda, y la base
+   * la marca igual aunque aquí no se enviara.
+   */
+  const ref = libre ? referencias.find((r) => r.id === borrador.referenciaId) : undefined;
+  const marcaRecauchutadora = !!ref?.modelo?.marca?.es_recauchutado;
+  const recauchutado = libre ? (borrador.recauchutado || marcaRecauchutadora) : !!fila.neumatico?.recauchutado;
+  const reesculturado = libre ? borrador.reesculturado : !!fila.neumatico?.reesculturado;
+  const casillasFijas = !libre || soloLectura || modo !== "informar";
 
   return (
     <>
@@ -580,6 +594,21 @@ function Fila({
                  onChange={(e) => onCambio({ presionBar: e.target.value })} disabled={soloLectura} placeholder="—" />
         </td>
         <td className="px-3 py-2">
+          <div className="flex flex-wrap gap-1.5">
+            <Casilla
+              etiqueta="Recauchutado" marcada={recauchutado} color="violet"
+              bloqueada={casillasFijas || marcaRecauchutadora}
+              titulo={marcaRecauchutadora ? "La marca es recauchutadora: va marcado siempre" : undefined}
+              onCambio={(v) => onCambio({ recauchutado: v })}
+            />
+            <Casilla
+              etiqueta="Reesculturado" marcada={reesculturado} color="sky"
+              bloqueada={casillasFijas}
+              onCambio={(v) => onCambio({ reesculturado: v })}
+            />
+          </div>
+        </td>
+        <td className="px-3 py-2">
           <div className="flex gap-1">
             <input className={`${inputCls} w-28`} value={borrador.numeroSerie}
                    onChange={(e) => onCambio({ numeroSerie: e.target.value })} disabled={soloLectura} placeholder="Nº serie" />
@@ -592,7 +621,7 @@ function Fila({
       {!libre && !borrador.coincide && (
         <tr className="border-t border-slate-800 bg-slate-900/50">
           <td />
-          <td colSpan={4} className="px-3 py-3">
+          <td colSpan={5} className="px-3 py-3">
             <Correccion fila={fila} borrador={borrador} empresaId={empresaId} referencias={referencias} onCambio={onCambio} />
           </td>
         </tr>
@@ -601,10 +630,34 @@ function Fila({
       {error && (
         <tr className="bg-slate-900/40">
           <td />
-          <td colSpan={4} className="px-3 pb-2 text-[11px] font-semibold text-amber-300">{error}</td>
+          <td colSpan={5} className="px-3 pb-2 text-[11px] font-semibold text-amber-300">{error}</td>
         </tr>
       )}
     </>
+  );
+}
+
+/** Casilla en forma de pastilla: se lee de lejos y se pulsa con el dedo. */
+function Casilla({
+  etiqueta, marcada, bloqueada, color, titulo, onCambio,
+}: {
+  etiqueta: string; marcada: boolean; bloqueada: boolean; color: "violet" | "sky"; titulo?: string;
+  onCambio: (v: boolean) => void;
+}) {
+  const on = color === "violet"
+    ? "border-violet-400 bg-violet-500/15 text-violet-200"
+    : "border-sky-400 bg-sky-500/15 text-sky-200";
+  return (
+    <label
+      title={titulo}
+      className={`inline-flex select-none items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-[12px] ${
+        marcada ? on : "border-slate-600 text-slate-400"
+      } ${bloqueada ? "cursor-default opacity-80" : "cursor-pointer"}`}
+    >
+      <input type="checkbox" className="h-3.5 w-3.5" checked={marcada} disabled={bloqueada}
+             onChange={(e) => onCambio(e.target.checked)} />
+      {etiqueta}
+    </label>
   );
 }
 

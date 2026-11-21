@@ -30,6 +30,8 @@ export default function Neumaticos() {
   const [fEstado, setFEstado] = useState("");
   const [fMarca, setFMarca] = useState("");
   const [fMedida, setFMedida] = useState("");
+  // «Recauchutados» / «Reesculturados»: para contarlos y sacar su lista.
+  const [fTipo, setFTipo] = useState<"" | "recauchutado" | "reesculturado" | "ambos">("");
   const [modal, setModal] = useState<null | { id: string | null; draft: NeumaticoInput }>(null);
   const [saving, setSaving] = useState(false);
   const [productos, setProductos] = useState<ProductoAlmacen[]>([]);
@@ -92,10 +94,13 @@ export default function Neumaticos() {
       if (fEstado && n.estado !== fEstado) return false;
       if (fMarca && n.marca !== fMarca) return false;
       if (fMedida && n.medida !== fMedida) return false;
+      if (fTipo === "recauchutado" && !n.recauchutado) return false;
+      if (fTipo === "reesculturado" && !n.reesculturado) return false;
+      if (fTipo === "ambos" && !(n.recauchutado && n.reesculturado)) return false;
       if (s && ![n.codigo_interno, n.numero_serie, n.dot, n.rfid_epc].some((x) => (x ?? "").toLowerCase().includes(s))) return false;
       return true;
     });
-  }, [items, q, fEmpresa, fEstado, fMarca, fMedida]);
+  }, [items, q, fEmpresa, fEstado, fMarca, fMedida, fTipo]);
 
   async function guardar() {
     if (!modal) return;
@@ -150,7 +155,15 @@ export default function Neumaticos() {
         <select className={`${inputCls} w-auto`} value={fMedida} onChange={(e) => setFMedida(e.target.value)}>
           <option value="">Todas las medidas</option>{medidas.map((m) => <option key={m} value={m}>{m}</option>)}
         </select>
-        <span className="text-xs text-slate-500">{visibles.length}</span>
+        <select className={`${inputCls} w-auto`} value={fTipo} onChange={(e) => setFTipo(e.target.value as typeof fTipo)}>
+          <option value="">Recauchutados y reesculturados: todos</option>
+          <option value="recauchutado">Solo recauchutados</option>
+          <option value="reesculturado">Solo reesculturados</option>
+          <option value="ambos">Recauchutados y reesculturados</option>
+        </select>
+        <span className="text-xs text-slate-500">
+          {visibles.length} · {visibles.filter((n) => n.recauchutado).length} recauchutados · {visibles.filter((n) => n.reesculturado).length} reesculturados
+        </span>
       </div>
 
       <TableWrap>
@@ -168,7 +181,11 @@ export default function Neumaticos() {
               <td className={tdCls + " text-slate-400"}>{n.numero_serie ?? "—"}</td>
               <td className={tdCls + " text-slate-400"}>{n.dot ?? "—"}</td>
               <td className={tdCls + " text-slate-400"}>{n.marca ?? "—"}</td>
-              <td className={tdCls + " text-slate-400"}>{n.modelo ?? "—"}</td>
+              <td className={tdCls + " text-slate-400"}>
+                {n.modelo ?? "—"}
+                {n.recauchutado && <span className="ml-1.5 rounded-full bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-bold text-violet-300">RECAUCH.</span>}
+                {n.reesculturado && <span className="ml-1.5 rounded-full bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-bold text-sky-300">REESC.</span>}
+              </td>
               <td className={tdCls + " text-slate-400"}>{n.medida ?? "—"}</td>
               <td className={tdCls + " text-[11px] text-slate-500"}>{n.rfid_epc ?? "—"}</td>
               <td className={tdCls}><span className={`rounded-full px-2 py-0.5 text-xs font-bold ${ESTADO_COLOR[n.estado]}`}>{ESTADO_NEUMATICO_LABELS[n.estado]}</span></td>

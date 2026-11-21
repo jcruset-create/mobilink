@@ -793,7 +793,7 @@ export default function InformeEjecutivo() {
             <table className="w-full text-[12px]">
               <thead className="text-slate-400">
                 <tr className="border-b border-slate-700 text-left">
-                  <th className="py-1.5">Marca</th><th>Unidades</th><th>Media mm</th><th>Críticos</th><th>Reescult.</th>
+                  <th className="py-1.5">Marca</th><th>Unidades</th><th>Media mm</th><th>Críticos</th><th>Reescult.</th><th>Recauch.</th>
                 </tr>
               </thead>
               <tbody>
@@ -803,6 +803,7 @@ export default function InformeEjecutivo() {
                     <td>{m.unidades}</td><td>{nf(m.prof_media, 1)}</td>
                     <td className={m.criticos > 0 ? "font-bold text-rose-400" : "text-slate-400"}>{m.criticos}</td>
                     <td>{m.reesculturados}</td>
+                    <td>{m.recauchutados ?? "—"}</td>
                   </tr>
                 ))}
               </tbody>
