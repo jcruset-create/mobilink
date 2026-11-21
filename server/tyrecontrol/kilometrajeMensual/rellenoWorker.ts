@@ -37,7 +37,7 @@
 import { claveDeMes, type Mes } from "../../integration-hub/domain/meses.ts";
 import {
   clavePaso, desenlaceDe, enPalabras, intervaloValido, mesDesdeClave, minutosRestantes,
-  pasosPendientes, MAX_INTENTOS_POR_DEFECTO,
+  pasosPendientes, rellenaPorMes, tandaDeLaVuelta, vueltasPendientes, MAX_INTENTOS_POR_DEFECTO,
   type Paso,
 } from "./relleno.ts";
 
@@ -251,7 +251,7 @@ export async function iniciarRelleno(op: OpcionesRelleno): Promise<Tarea> {
   // cuántos faltan y cuánto va a tardar, en vez de un «vale» a ciegas.
   const pendientes = await calcularPendientes(t, op.meses);
   t.total = pendientes.length;
-  refrescarRestante(t, pendientes.length);
+  refrescarRestante(t, pendientes.length, vueltasPendientes(pendientes, rellenaPorMes(t.connectorKey)));
   if (pendientes.length === 0) {
     detener(t, "terminada", "No faltaba ningún vehículo: el mes ya estaba completo");
     return aTarea(t);
@@ -306,9 +306,9 @@ async function calcularPendientes(t: TareaViva, meses: Mes[]): Promise<Paso[]> {
   });
 }
 
-function refrescarRestante(t: TareaViva, pendientes: number): void {
+function refrescarRestante(t: TareaViva, pendientes: number, vueltas = pendientes): void {
   t.pendientes = pendientes;
-  t.minutosRestantes = minutosRestantes(pendientes, t.intervaloSegundos);
+  t.minutosRestantes = minutosRestantes(vueltas, t.intervaloSegundos);
   t.restanteEnPalabras = enPalabras(t.minutosRestantes);
 }
 
@@ -321,15 +321,18 @@ async function tick(clave: string, meses: Mes[]): Promise<void> {
   if (t.ocupado) return;
   t.ocupado = true;
   try {
+    const porMes = rellenaPorMes(t.connectorKey);
     const pendientes = await calcularPendientes(t, meses);
-    refrescarRestante(t, pendientes.length);
+    refrescarRestante(t, pendientes.length, vueltasPendientes(pendientes, porMes));
     if (pendientes.length === 0) {
       detener(t, "terminada", "Todos los vehículos tienen ya su mes guardado");
       console.log(`[km-relleno] ${clave} terminado: ${t.hechos} con km, ${t.sinDatos} sin datos, ${t.fallidos} fallidos`);
       return;
     }
 
-    const paso = pendientes[0];
+    // Webfleet: el mes entero de la flota en una petición. Movertis: uno.
+    const tanda = tandaDeLaVuelta(pendientes, porMes);
+    const paso = tanda[0];
     t.ultimoTickMs = Date.now();
 
     const { syncMonthlyMileage } = await import(
@@ -340,7 +343,7 @@ async function tick(clave: string, meses: Mes[]): Promise<void> {
       connectorKey: t.connectorKey,
       accountKey: t.accountKey,
       meses: [{ year: paso.year, month: paso.month }],
-      mobilinkIds: [paso.mobilinkId],
+      mobilinkIds: tanda.map((p) => p.mobilinkId),
       forzar: t.forzar,
       // Sin tope de espera: aquí no hay nadie delante de una pantalla, y
       // esperar turno es mejor que gastar un intento del vehículo.
@@ -348,7 +351,20 @@ async function tick(clave: string, meses: Mes[]): Promise<void> {
 
     const mes = claveDeMes({ year: paso.year, month: paso.month });
     const d = desenlaceDe(resumen);
-    if (d.tipo === "ok") {
+    if (tanda.length > 1 && (d.tipo === "ok" || d.tipo === "sin_datos")) {
+      // Por mes: se cuentan los vehículos uno a uno, como si se hubieran
+      // pedido por separado, para que el progreso diga lo mismo.
+      const c = resumen.cuentas[0];
+      const conKm = c?.vehiculosConKm ?? 0;
+      const sinDatos = c?.vehiculosSinDatos ?? 0;
+      t.hechos += conKm;
+      t.sinDatos += sinDatos;
+      t.ultimo = {
+        vehiculo: `Toda la flota (${tanda.length})`,
+        mes,
+        resultado: `${conKm} con km · ${Math.round(Number(c?.kmTotales ?? 0)).toLocaleString("es-ES")} km en total`,
+      };
+    } else if (d.tipo === "ok") {
       t.hechos += 1;
       t.ultimo = { vehiculo: paso.etiqueta, mes, resultado: `${d.km ?? 0} km` };
     } else if (d.tipo === "sin_datos") {
@@ -362,12 +378,17 @@ async function tick(clave: string, meses: Mes[]): Promise<void> {
       console.warn(`[km-relleno] ${clave} abandonado: ${d.mensaje}`);
       return;
     } else {
-      const k = clavePaso(paso);
-      const intentos = (t.intentos.get(k) ?? 0) + 1;
-      t.intentos.set(k, intentos);
-      if (intentos >= t.maxIntentos) t.fallidos += 1;
-      if (t.muestraErrores.length < 5) t.muestraErrores.push(`${paso.etiqueta} ${mes}: ${d.mensaje}`);
-      t.ultimo = { vehiculo: paso.etiqueta, mes, resultado: `error (intento ${intentos})` };
+      // Un error de la petición es de toda la tanda: cada vehículo gasta su intento.
+      let intentos = 0;
+      for (const p of tanda) {
+        const k = clavePaso(p);
+        intentos = (t.intentos.get(k) ?? 0) + 1;
+        t.intentos.set(k, intentos);
+        if (intentos >= t.maxIntentos) t.fallidos += 1;
+      }
+      const quien = tanda.length > 1 ? `Toda la flota (${tanda.length})` : paso.etiqueta;
+      if (t.muestraErrores.length < 5) t.muestraErrores.push(`${quien} ${mes}: ${d.mensaje}`);
+      t.ultimo = { vehiculo: quien, mes, resultado: `error (intento ${intentos})` };
     }
     await guardarTarea(t);
   } finally {
