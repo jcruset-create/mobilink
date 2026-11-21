@@ -7,7 +7,7 @@ import { ExternalLink, Sparkles } from "lucide-react";
 import { Modal, inputCls } from "./ui";
 import { CAMPOS, CAMPO_POR_CLAVE } from "../services/completarFicha";
 import {
-  aceptarPropuestasIA, completarReferenciaIA, descartarPropuestasIA, huecosCatalogo, propuestasIA,
+  aceptarPropuestasIA, completarReferenciaIA, descartarPropuestasIA, huecosCatalogo, mismoModeloIA, propuestasIA,
   type FilaHueco, type Propuesta, type ResumenHuecos,
 } from "../services/completarFichaIA";
 
@@ -79,6 +79,24 @@ export default function CompletarFichasIA({ onClose, onCambio }: { onClose: () =
     setPropuestas(ps);
     // Oficiales y EPREL vienen marcadas; las de distribuidor, no.
     setMarcadas(new Set(ps.filter((p) => p.estado === "pendiente" && p.tipo_fuente !== "distribuidor").map((p) => p.id)));
+  }
+
+  /** Confirmar que el nombre de la ficha es el mismo modelo: alias y nueva comprobación. */
+  async function esMismoModelo(refId: string) {
+    setMsg("");
+    try {
+      const r = await mismoModeloIA(refId);
+      const ps = await propuestasIA([...new Set((propuestas ?? []).map((p) => p.referencia_id))]);
+      setPropuestas(ps);
+      // Las rescatadas se marcan con la regla de siempre (oficial y EPREL sí).
+      setMarcadas((s) => {
+        const n = new Set(s);
+        for (const p of ps) if (p.referencia_id === refId && p.estado === "pendiente" && p.tipo_fuente !== "distribuidor") n.add(p.id);
+        return n;
+      });
+      setMsg(`✔ «${r.alias}» guardado como otro nombre del modelo · ${r.rescatadas} datos recuperados` +
+        (r.siguenDescartadas ? ` · ${r.siguenDescartadas} siguen descartados por otro motivo` : ""));
+    } catch (e) { setMsg(e instanceof Error ? e.message : "Error"); }
   }
 
   async function guardar() {
@@ -193,6 +211,22 @@ export default function CompletarFichasIA({ onClose, onCambio }: { onClose: () =
                   <span className="rounded-full bg-violet-500/15 px-2 py-0.5 text-[11px] font-bold text-violet-300">
                     {ps.filter((p) => p.estado === "pendiente").length} propuestas</span>
                 </div>
+                {(() => {
+                  // Descartadas SOLO por el nombre del modelo: una persona puede decir que es el mismo.
+                  const porNombre = ps.filter((p) => p.estado === "invalida" && p.causa === "modelo");
+                  if (!porNombre.length) return null;
+                  const leido = porNombre[0].modelo_leido ?? "?";
+                  const ref = filas.find((f) => f.id === refId);
+                  return (
+                    <div className="flex flex-wrap items-center gap-2 border-b border-slate-700 bg-amber-500/10 p-2.5 text-[12px] text-amber-200">
+                      <span>La ficha llama a este modelo <b>«{leido}»</b> y en el catálogo es <b>«{ref?.modelo ?? "?"}»</b>.
+                        Si es el mismo neumático, se guarda «{leido}» como otro nombre del modelo y se recuperan sus {porNombre.length} datos
+                        (vuelven a comprobarse medida, índice de carga, fuente y valor).</span>
+                      <button onClick={() => void esMismoModelo(refId)}
+                        className="ml-auto rounded-lg border border-amber-500 px-3 py-1.5 font-bold text-amber-200 hover:bg-amber-500/10">Es el mismo modelo</button>
+                    </div>
+                  );
+                })()}
                 <div className="overflow-x-auto">
                   <table className="w-full min-w-[680px] text-[12px]">
                     <thead className="text-slate-400"><tr className="text-left"><th className="p-2" /><th>Campo</th><th>Propuesto</th><th>De dónde sale</th><th>Fuente</th></tr></thead>
