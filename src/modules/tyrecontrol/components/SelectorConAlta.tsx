@@ -112,7 +112,12 @@ export function SelectorConAlta({
       )}
 
       {error && <span className="mt-1 block text-[11px] text-rose-300">{error}</span>}
-      {!error && ayuda && <span className="mt-1 block text-[11px] text-slate-500">{ayuda}</span>}
+      {/* Escrito pero sin confirmar: todavía no está elegido. Se dice, porque
+          si no el botón de abajo sigue apagado sin que se sepa por qué. */}
+      {!error && creando && nombre.trim() && (
+        <span className="mt-1 block text-[11px] font-semibold text-amber-300">Pulsa ✓ (o Intro) para añadirlo</span>
+      )}
+      {!error && !creando && ayuda && <span className="mt-1 block text-[11px] text-slate-500">{ayuda}</span>}
     </label>
   );
 }
