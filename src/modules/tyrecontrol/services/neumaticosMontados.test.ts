@@ -228,3 +228,12 @@ describe("etiquetas", () => {
     expect(descripcionNeumatico(neu({ id: "n" }))).toBe("—");
   });
 });
+
+describe("recauchutado y reesculturado al informar", () => {
+  it("solo viajan si están marcadas", () => {
+    expect(datosMedicion(b({ profundidadMm: "12" }))).not.toHaveProperty("recauchutado");
+    expect(datosMedicion(b({ profundidadMm: "12", recauchutado: true, reesculturado: true }))).toEqual({
+      profundidad_mm: "12", recauchutado: "true", reesculturado: "true",
+    });
+  });
+});
