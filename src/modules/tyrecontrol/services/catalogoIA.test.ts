@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   interpretarConsulta, medidaDeTexto, marcaPedida, clasificar, clasificarTodos,
-  faltanDatos, fuentesUtiles, creables, normModelo, ejeDelCandidato,
+  faltanDatos, fuentesUtiles, creables, normModelo, ejeDelCandidato, consultaDe,
   type CandidatoCrudo, type ReferenciaExistente,
 } from "./catalogoIA";
 
@@ -203,5 +203,36 @@ describe("el eje que el catálogo acepta", () => {
     expect(ejeDelCandidato("urbano")).toBeNull();
     expect(ejeDelCandidato("")).toBeNull();
     expect(ejeDelCandidato(null)).toBeNull();
+  });
+});
+
+describe("consultaDe: marca y medida elegidas en desplegables", () => {
+  it("lo elegido entra tal cual, sin interpretar nada", () => {
+    const c = consultaDe("CEAT", "295/80R22.5");
+    expect(c.fabricante).toBe("CEAT");
+    expect(c.medida).toBe("295/80R22.5");
+  });
+
+  it("una marca de dos palabras no se parte", () => {
+    // Por el camino de la frase, «Double Coin» sobrevive; pero elegirla de la
+    // lista no debe depender de eso. Aquí entra entera por construcción.
+    expect(consultaDe("Double Coin", "315/80R22.5").fabricante).toBe("Double Coin");
+  });
+
+  it("la medida tecleada a mano se normaliza", () => {
+    expect(consultaDe("CEAT", "295/80 R 22,5").medida).toBe("295/80R22.5");
+  });
+
+  it("si lo tecleado no es una medida, no hay medida", () => {
+    // Y sin medida no se busca: es lo que impide gastar una llamada y traer
+    // cualquier cosa.
+    expect(consultaDe("CEAT", "la grande").medida).toBeNull();
+    expect(consultaDe("CEAT", "").medida).toBeNull();
+  });
+
+  it("la marca elegida sigue valiendo para el filtro de la respuesta", () => {
+    const c = consultaDe("CEAT", "295/80R22.5");
+    expect(marcaPedida(c, "CEAT")).toBe(true);
+    expect(marcaPedida(c, "Bridgestone")).toBe(false);
   });
 });

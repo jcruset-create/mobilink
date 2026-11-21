@@ -33,8 +33,13 @@ const ficha = (modelo: string, over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-const respuesta = (modelos: any[], citas: string[] = ["https://www.ceat.com/truck"]) => ({
-  ok: true, texto: "", citas, modelo: "gpt", duracionMs: 10,
+const respuesta = (
+  modelos: any[],
+  opciones: { citas?: string[]; buscoEnWeb?: boolean } = {},
+) => ({
+  ok: true, texto: "", modelo: "gpt", duracionMs: 10,
+  citas: opciones.citas ?? ["https://www.ceat.com/truck"],
+  buscoEnWeb: opciones.buscoEnWeb ?? true,
   datos: { modelos, sin_resultados_fiables: false },
 });
 
@@ -61,16 +66,32 @@ describe("buscarModelos", () => {
     expect(peticion.prompt).toContain("295/80R22.5");
   });
 
-  it("SIN CITAS no se ofrece nada: contestó de memoria", async () => {
+  it("SIN USAR LA HERRAMIENTA no se ofrece nada: contestó de memoria", async () => {
     // Éste es el caso peligroso. El modelo devuelve siete fichas perfectas y
-    // ni una página consultada: son recuerdos, no resultados.
-    vi.mocked(pedirIA).mockResolvedValue(respuesta([ficha("WINMILE X3-R")], []) as any);
+    // ni una búsqueda: son recuerdos, no resultados.
+    vi.mocked(pedirIA).mockResolvedValue(
+      respuesta([ficha("WINMILE X3-R")], { buscoEnWeb: false, citas: [] }) as any,
+    );
 
     const r = await buscarModelos(CONSULTA);
 
     expect(r.ok).toBe(false);
     expect(r.candidatos).toEqual([]);
-    expect(r.aviso).toContain("sin consultar ninguna página");
+    expect(r.aviso).toContain("sin usar la búsqueda web");
+  });
+
+  it("buscó pero la respuesta no trae citas: se ofrece igual", () => {
+    // Con esquema estricto la respuesta final es un JSON y no lleva
+    // anotaciones. Descartarla por eso tiraba búsquedas buenas, que es
+    // exactamente lo que pasó en la primera prueba real.
+    vi.mocked(pedirIA).mockResolvedValue(
+      respuesta([ficha("WINMILE X3-R")], { citas: [], buscoEnWeb: true }) as any,
+    );
+
+    return buscarModelos(CONSULTA).then((r) => {
+      expect(r.ok).toBe(true);
+      expect(r.candidatos).toHaveLength(1);
+    });
   });
 
   it("sin clave de OpenAI lo dice, y dice qué hacer mientras tanto", async () => {
@@ -98,7 +119,8 @@ describe("buscarModelos", () => {
 
   it("que no haya resultados es una respuesta correcta", async () => {
     vi.mocked(pedirIA).mockResolvedValue({
-      ok: true, texto: "", citas: ["https://www.ceat.com/truck"], modelo: "gpt", duracionMs: 1,
+      ok: true, texto: "", citas: ["https://www.ceat.com/truck"], buscoEnWeb: true,
+      modelo: "gpt", duracionMs: 1,
       datos: { modelos: [], sin_resultados_fiables: true },
     } as any);
     const r = await buscarModelos(CONSULTA);

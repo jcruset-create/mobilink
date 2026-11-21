@@ -16,15 +16,32 @@
  * ha podido verificar no se puede marcar: no es que se desaconseje, es que la
  * casilla no está.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Search, ExternalLink, AlertTriangle, CheckCircle2, HelpCircle, XCircle } from "lucide-react";
 
-import { crearReferenciaNeumatico } from "../services/data";
+import { crearReferenciaNeumatico, listarMarcas, listarMedidas } from "../services/data";
+import { opcionesConElegido } from "../catalogo/usos";
+import SelectorConAlta from "./SelectorConAlta";
 import { buscarModelosIA, type RespuestaBusquedaIA } from "../services/catalogoIABusqueda";
 import { ejeDelCandidato, type Candidato, type EstadoCandidato } from "../services/catalogoIA";
 import { Modal, inputCls, TableWrap, tdCls, thCls } from "./ui";
 
-const EJEMPLO = "Busca modelos de neumáticos CEAT en 295/80R22.5";
+/**
+ * Lo último que se buscó, para que cerrar la ventana no tire dos minutos de
+ * trabajo.
+ *
+ * Vive fuera del componente a propósito: la ventana se desmonta al cerrarla y
+ * cualquier estado interno se iría con ella. Sobrevive mientras no se cambie
+ * de pantalla ni se recargue, que es justo donde está el clic accidental.
+ * Guardarlo más allá de eso pediría guardar la búsqueda en el servidor, y eso
+ * es otra cosa.
+ */
+let ultimaBusqueda: {
+  marca: string; medida: string;
+  resp: RespuestaBusquedaIA;
+  marcados: Set<string>;
+  ediciones: Record<string, Edicion>;
+} | null = null;
 
 const ESTADO: Record<EstadoCandidato, { texto: string; clase: string; Icono: typeof CheckCircle2 }> = {
   nuevo: { texto: "Nuevo", clase: "bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/30", Icono: CheckCircle2 },
@@ -39,12 +56,23 @@ type Edicion = { indiceCargaSimple: string; indiceCargaDoble: string; codigoVelo
 type Resultado = { modelo: string; ok: boolean; detalle: string };
 
 export default function BuscadorIACatalogo({ onClose, onCreado }: { onClose: () => void; onCreado: () => void }) {
-  const [consulta, setConsulta] = useState("");
+  const [marca, setMarca] = useState(ultimaBusqueda?.marca ?? "");
+  const [medida, setMedida] = useState(ultimaBusqueda?.medida ?? "");
+  const [marcas, setMarcas] = useState<string[]>([]);
+  const [medidas, setMedidas] = useState<string[]>([]);
   const [buscando, setBuscando] = useState(false);
   const [error, setError] = useState("");
-  const [resp, setResp] = useState<RespuestaBusquedaIA | null>(null);
-  const [marcados, setMarcados] = useState<Set<string>>(new Set());
-  const [ediciones, setEdiciones] = useState<Record<string, Edicion>>({});
+  const [resp, setResp] = useState<RespuestaBusquedaIA | null>(ultimaBusqueda?.resp ?? null);
+  const [marcados, setMarcados] = useState<Set<string>>(ultimaBusqueda?.marcados ?? new Set());
+  const [ediciones, setEdiciones] = useState<Record<string, Edicion>>(ultimaBusqueda?.ediciones ?? {});
+  const [avisoCierre, setAvisoCierre] = useState(false);
+
+  // Las listas del catálogo. Si fallan, los desplegables salen vacíos y se
+  // sigue pudiendo teclear: buscar una marca que no tenemos es el caso normal.
+  useEffect(() => {
+    void listarMarcas().then((ms) => setMarcas(ms.map((m) => m.nombre))).catch(() => setMarcas([]));
+    void listarMedidas().then((ms) => setMedidas(ms.map((m) => m.valor))).catch(() => setMedidas([]));
+  }, []);
   const [confirmando, setConfirmando] = useState(false);
   const [creando, setCreando] = useState(false);
   const [resultados, setResultados] = useState<Resultado[] | null>(null);
@@ -58,12 +86,11 @@ export default function BuscadorIACatalogo({ onClose, onCreado }: { onClose: () 
   );
 
   async function buscar() {
-    const texto = consulta.trim();
-    if (!texto || buscando) return;
+    if (!marca.trim() || !medida.trim() || buscando) return;
     setBuscando(true); setError(""); setResp(null); setResultados(null);
     setMarcados(new Set()); setEdiciones({});
     try {
-      const r = await buscarModelosIA(texto);
+      const r = await buscarModelosIA({ marca: marca.trim(), medida: medida.trim() });
       setResp(r);
       // Se marcan solos los que se pueden crear sin tocar nada. Lo demás pide
       // una decisión, y marcarlo por ellos sería tomarla.
@@ -83,6 +110,12 @@ export default function BuscadorIACatalogo({ onClose, onCreado }: { onClose: () 
       setBuscando(false);
     }
   }
+
+  // Se guarda en cada cambio, no solo al buscar: así cerrar sin querer tampoco
+  // se lleva por delante las casillas marcadas ni los índices corregidos.
+  useEffect(() => {
+    if (resp) ultimaBusqueda = { marca, medida, resp, marcados, ediciones };
+  }, [marca, medida, resp, marcados, ediciones]);
 
   function alternar(c: Candidato) {
     const k = clave(c);
@@ -140,30 +173,51 @@ export default function BuscadorIACatalogo({ onClose, onCreado }: { onClose: () 
   }
 
   return (
-    <Modal title="Buscar neumáticos con IA" onClose={onClose} size="xl">
+    <Modal
+      title="Buscar neumáticos con IA"
+      // Cerrar con una búsqueda en marcha tira dos minutos de espera, y el
+      // servidor la termina y se cobra igual: solo se pierde la respuesta.
+      // Por eso se pregunta en vez de obedecer el clic.
+      onClose={() => (buscando ? setAvisoCierre(true) : onClose())}
+      size="xl"
+    >
       <div className="space-y-3">
-        <div className="flex flex-wrap gap-2">
-          <input
-            className={inputCls + " min-w-[18rem] flex-1"}
-            placeholder={EJEMPLO}
-            value={consulta}
-            onChange={(e) => setConsulta(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") void buscar(); }}
-            disabled={buscando}
-          />
+        <div className="flex flex-wrap items-end gap-2">
+          <div className="min-w-[14rem] flex-1">
+            <SelectorConAlta
+              label="Marca"
+              opciones={opcionesConElegido(marcas, marca)}
+              valor={marca}
+              onChange={setMarca}
+              // No se da de alta nada: lo tecleado solo sirve para esta
+              // búsqueda. Dar de alta la marca antes de saber si sus modelos
+              // existen sería ensuciar el catálogo para poder consultarlo.
+              onCrear={async (n) => n.trim()}
+              placeholder="CEAT"
+              deshabilitado={buscando}
+              ayuda="Si no está en la lista, pulsa ＋ y escríbela. No se da de alta: solo se usa para buscar."
+            />
+          </div>
+          <div className="min-w-[12rem] flex-1">
+            <SelectorConAlta
+              label="Medida"
+              opciones={opcionesConElegido(medidas, medida)}
+              valor={medida}
+              onChange={setMedida}
+              onCrear={async (n) => n.trim()}
+              placeholder="295/80R22.5"
+              deshabilitado={buscando}
+              ayuda="La del neumático que buscas, no la del vehículo."
+            />
+          </div>
           <button
             onClick={() => void buscar()}
-            disabled={buscando || !consulta.trim()}
+            disabled={buscando || !marca.trim() || !medida.trim()}
             className="flex items-center gap-1.5 rounded-lg bg-sky-600 px-3 py-2 text-sm font-bold text-white hover:bg-sky-500 disabled:opacity-50"
           >
             <Search size={15} /> {buscando ? "Buscando…" : "Buscar modelos"}
           </button>
         </div>
-
-        <p className="text-[12px] text-slate-500">
-          Di la marca y la medida. Por ejemplo: <button className="underline hover:text-slate-300"
-            onClick={() => setConsulta(EJEMPLO)}>{EJEMPLO}</button>
-        </p>
 
         {buscando && (
           <div className="rounded-xl border border-sky-500/30 bg-sky-500/5 p-3 text-[13px] text-sky-200">
@@ -327,6 +381,25 @@ export default function BuscadorIACatalogo({ onClose, onCreado }: { onClose: () 
           </div>
         )}
       </div>
+
+      {avisoCierre && (
+        <Modal title="La búsqueda sigue en marcha" onClose={() => setAvisoCierre(false)}>
+          <p className="text-sm text-slate-300">
+            Si cierras ahora pierdes el resultado. El servidor termina de buscar igual
+            —y se cobra igual—, pero la respuesta no llega a ninguna parte.
+          </p>
+          <p className="mt-2 text-[13px] text-slate-400">
+            Si necesitas hacer otra cosa, cambia de pestaña del navegador y vuelve: así no
+            se pierde. Lo que sí la pierde es cambiar de pantalla o recargar.
+          </p>
+          <div className="mt-3 flex justify-end gap-2">
+            <button onClick={() => setAvisoCierre(false)}
+              className="rounded-lg bg-sky-600 px-3 py-2 text-sm font-bold text-white hover:bg-sky-500">Seguir esperando</button>
+            <button onClick={onClose}
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm text-slate-300">Cerrar y perderla</button>
+          </div>
+        </Modal>
+      )}
 
       {confirmando && (
         <Modal title="Confirmar alta en el catálogo" onClose={() => setConfirmando(false)}>

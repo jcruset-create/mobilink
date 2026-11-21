@@ -23,8 +23,14 @@
  *
  * Un modelo al que se le da una herramienta puede no usarla y contestar de
  * memoria, con una seguridad idéntica. Por eso no se mira lo que dice que hizo
- * sino lo que trae: si la respuesta no cita NINGUNA URL, la búsqueda no se da
- * por hecha y se devuelve como no verificada, con el motivo.
+ * sino lo que trae: si en la salida no hay ni una llamada a la búsqueda, no se
+ * ofrece nada.
+ *
+ * La prueba son los `web_search_call` de la salida, NO las citas del texto.
+ * Costó un intento real descubrirlo: con esquema JSON estricto la respuesta
+ * final es un objeto, no prosa, así que no lleva anotaciones de cita aunque el
+ * modelo haya leído diez páginas. Mirando solo las anotaciones, una búsqueda
+ * buena se descartaba como inventada.
  */
 
 import { hayIA, pedirIA } from "../../core/openaiService.ts";
@@ -178,14 +184,14 @@ export async function buscarModelos(consulta: ConsultaCatalogo): Promise<Resulta
   const citas = r.citas ?? [];
   const datos = r.datos;
 
-  // Ni una cita = no usó la herramienta. Lo que haya dicho sale de su memoria,
-  // y eso en un catálogo no vale: se devuelve vacío y se explica.
-  if (!citas.length) {
+  // Ni una llamada a la herramienta = contestó de memoria. En un catálogo eso
+  // no vale: se devuelve vacío y se explica.
+  if (r.buscoEnWeb === false) {
     return {
       ok: false, candidatos: [], citas: [],
       aviso:
-        "La IA ha contestado sin consultar ninguna página, así que no hay nada verificado " +
-        "que ofrecer. Suele pasar si la búsqueda web no está habilitada en la cuenta de " +
+        "La IA ha contestado sin usar la búsqueda web, así que no hay nada verificado " +
+        "que ofrecer. Suele pasar si esa herramienta no está habilitada en la cuenta de " +
         "OpenAI. Vuelve a intentarlo; si se repite, hay que mirar la configuración.",
     };
   }
