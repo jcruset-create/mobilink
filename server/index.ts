@@ -167,6 +167,10 @@ import { createExcepcionesRouter } from "./excepciones/router.ts";
 import { initSatisfaction } from "./satisfaction/schema.ts";
 import { startSatisfactionWorker } from "./satisfaction/worker.ts";
 import { createSatisfactionPublicRouter } from "./satisfaction/routerPublico.ts";
+import {
+  createAltaOperarioAdminRouter,
+  createAltaOperarioPublicRouter,
+} from "./core/altaOperarioRouter.ts";
 import { createCalidadRouter } from "./satisfaction/routerInterno.ts";
 import { createSatisfactionCallbackRouter } from "./satisfaction/routerCallback.ts";
 import { RUTA_CALLBACK } from "./satisfaction/urlPublica.ts";
@@ -23151,6 +23155,14 @@ app.use("/api/excepciones", createExcepcionesRouter(requireSupervisorRole));
  * lleva su límite de peticiones y su límite de tamaño de cuerpo.
  */
 app.use("/api/public/satisfaction", createSatisfactionPublicRouter());
+
+/*
+ * Alta de operario por enlace. Dos montajes y a propósito: el del
+ * encargado exige sesión de administrador y el del operario no exige
+ * nada más que el token que lleva en la URL.
+ */
+app.use("/api/core/alta", createAltaOperarioAdminRouter());
+app.use("/api/public/alta", createAltaOperarioPublicRouter());
 
 /*
  * Calidad: la ficha la puede ver quien ya ve la asistencia; la bandeja y las
