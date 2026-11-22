@@ -51,6 +51,13 @@ const ESTADO: Record<EstadoCandidato, { texto: string; clase: string; Icono: typ
   no_verificado: { texto: "Sin verificar", clase: "bg-rose-500/15 text-rose-300 ring-1 ring-rose-500/30", Icono: HelpCircle },
 };
 
+/**
+ * Casillas de índices: 16 px de letra en el móvil (con menos, el iPhone hace
+ * zoom al tocarlas y la casilla se sale de la vista: parece que no escribe) y
+ * al entrar se selecciona lo que haya, para que lo tecleado lo sustituya.
+ */
+const IDX = "rounded-lg border border-slate-600 bg-slate-900 px-1.5 py-1 text-base text-slate-100 outline-none focus:ring-2 focus:ring-sky-500 disabled:opacity-50 sm:text-[12px]";
+
 /** Lo editable de una fila antes de guardarla. */
 type Edicion = { indiceCargaSimple: string; indiceCargaDoble: string; codigoVelocidad: string };
 
@@ -332,15 +339,15 @@ export default function BuscadorIACatalogo({ onClose, onCreado, inicial }: {
                           <td className={tdCls + " whitespace-nowrap text-slate-300"}>{c.medida}</td>
                           <td className={tdCls}>
                             <div className="flex items-center gap-1">
-                              <input className={inputCls + " w-14 px-1 py-0.5 text-[12px]"} value={e?.indiceCargaSimple ?? ""}
+                              <input className={IDX + " w-16"} inputMode="numeric" onFocus={(ev) => ev.target.select()} value={e?.indiceCargaSimple ?? ""}
                                 onChange={(ev) => editar(c, "indiceCargaSimple", ev.target.value)} disabled={!puede} aria-label="Índice de carga" />
                               <span className="text-slate-600">/</span>
-                              <input className={inputCls + " w-14 px-1 py-0.5 text-[12px]"} value={e?.indiceCargaDoble ?? ""}
+                              <input className={IDX + " w-16"} inputMode="numeric" onFocus={(ev) => ev.target.select()} value={e?.indiceCargaDoble ?? ""}
                                 onChange={(ev) => editar(c, "indiceCargaDoble", ev.target.value)} disabled={!puede} aria-label="Índice de carga doble" />
                             </div>
                           </td>
                           <td className={tdCls}>
-                            <input className={inputCls + " w-12 px-1 py-0.5 text-[12px] uppercase"} value={e?.codigoVelocidad ?? ""}
+                            <input className={IDX + " w-12 uppercase"} maxLength={1} onFocus={(ev) => ev.target.select()} value={e?.codigoVelocidad ?? ""}
                               onChange={(ev) => editar(c, "codigoVelocidad", ev.target.value)} disabled={!puede} aria-label="Código de velocidad" />
                           </td>
                           <td className={tdCls + " text-[12px] text-slate-400"}>
