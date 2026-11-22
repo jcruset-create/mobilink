@@ -91,3 +91,12 @@ describe("sufijoComercial", () => {
     expect(baseMedida("205/75R16C 113/111R")).toBe("205/75R16");
   });
 });
+
+describe("baseMedida con ZR (alta velocidad)", () => {
+  it("245/45ZR18 es 245/45R18", () => {
+    expect(baseMedida("245/45ZR18")).toBe("245/45R18");
+    expect(baseMedida("245/45 ZR 18 100Y")).toBe("245/45R18");
+    expect(baseMedida("235/35ZR19 (91Y)")).toBe("235/35R19");
+    expect(mismaMedida("245/45ZR18", "245/45 R18")).toBe(true);
+  });
+});
