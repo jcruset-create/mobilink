@@ -1,7 +1,7 @@
 import { supabase } from "./supabase";
 import { codigoDeUso } from "../catalogo/usos";
 import { hasRealValue, normalizarValor, type TipoDatoItv } from "./itvValores";
-import { medidaCanonica } from "./medidas";
+import { medidaCanonica, sufijoComercial } from "./medidas";
 import { recorrerPaginas } from "./paginacion";
 import type { CombinacionCat, ReferenciaCat } from "./catalogoVinculado";
 import { claveModelo, kgDeIndice, kmhDeCodigo, medidaDeCatalogo, partesDeMedida, type PlanImportacion } from "./importarCatalogo";
@@ -3534,9 +3534,12 @@ export async function eliminarMotivoPendiente(id: string): Promise<void> {
 function construirMedidaTs(ancho: number, perfil: number | null | undefined, diametro: number): string {
   return perfil != null ? `${ancho}/${perfil} R${diametro}` : `${ancho} R${diametro}`;
 }
+// El mismo nombre que le pondrá la base (tc_tyre_size_referencia_trg), con la
+// «C» de las de furgoneta: si no, se buscaría la combinación por un nombre que
+// no tiene y se intentaría crear otra vez.
 function construirReferenciaTs(medida: string, cargaSimple: string, cargaDoble: string | null | undefined, codigoVelocidad: string): string {
   const cargas = cargaDoble ? `${cargaSimple}/${cargaDoble}` : cargaSimple;
-  return `${medida} ${cargas}${codigoVelocidad}`;
+  return `${medida}${sufijoComercial(medida, cargaDoble)} ${cargas}${codigoVelocidad}`;
 }
 
 export async function listarTyreSizes(filtros?: {
