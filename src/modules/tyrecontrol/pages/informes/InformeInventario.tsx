@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { useInformesFiltros } from "./InformesLayout";
-import { obtenerKpis, inventarioPor, inventarioMarcaMedida, distribucionProfundidad, inventarioCubo } from "../../services/informes";
-import type { CeldaInventario, KpisInformes, DimensionTotal, MarcaMedidaTotal, ProfundidadDistribucion } from "../../types/informes";
+import { obtenerKpis, inventarioPor, inventarioMarcaMedida, distribucionProfundidad, inventarioCubo, planosIncompletos } from "../../services/informes";
+import type { CeldaInventario, KpisInformes, DimensionTotal, MarcaMedidaTotal, PlanosIncompletos, ProfundidadDistribucion } from "../../types/informes";
 import {
-  cuadrosDelInventario, tablasDelInventario, NOMBRE_ESTADO_INVENTARIO, type EstadoInventario,
+  cuadrosDelInventario, tablasDelInventario, ESTADOS_INVENTARIO, NOMBRE_ESTADO_INVENTARIO, type EstadoInventario,
 } from "../../services/cuadrosInformes";
 import { ESTADO_NEUMATICO_LABELS } from "../../types";
 import type { EstadoNeumatico } from "../../types";
@@ -40,6 +41,13 @@ function TablaDim({ titulo, columna, datos, etiquetar }: {
   );
 }
 
+// Estados de la ficha que no están en ESTADO_NEUMATICO_LABELS.
+const ETIQUETA_ESTADO_EXTRA: Record<string, string> = {
+  pendiente_clasificacion: "Pendiente de clasificar", no_localizado: "No localizado", "—": "Sin estado",
+};
+
+const TONO_CUADRO: Partial<Record<EstadoInventario, "info" | "warn">> = { montado: "info", pendiente_clasificacion: "warn" };
+
 export default function InformeInventario() {
   const { filtros } = useInformesFiltros();
   const [kpis, setKpis] = useState<KpisInformes | null>(null);
@@ -58,6 +66,16 @@ export default function InformeInventario() {
    */
   const [celdas, setCeldas] = useState<CeldaInventario[] | null>(null);
   const [soloEstado, setSoloEstado] = useState<EstadoInventario | null>(null);
+  const [planos, setPlanos] = useState<PlanosIncompletos | null>(null);
+
+  // El aviso va aparte y no frena el informe: si tarda o la base aún no
+  // tiene la función, el inventario sale igual y el aviso, cuando llegue.
+  useEffect(() => {
+    let vivo = true;
+    setPlanos(null);
+    planosIncompletos(filtros).then((p) => { if (vivo) setPlanos(p); });
+    return () => { vivo = false; };
+  }, [filtros]);
 
   useEffect(() => {
     let vivo = true;
@@ -97,23 +115,39 @@ export default function InformeInventario() {
     : {
         total: kpis?.neumaticos_total ?? 0, montado: kpis?.neumaticos_montados ?? 0, almacen: kpis?.neumaticos_almacen ?? 0,
         reparacion: kpis?.neumaticos_reparacion ?? 0, descartado: kpis?.neumaticos_descartados ?? 0,
+        pendiente_clasificacion: 0, papelera: 0, otros: 0,
       };
+  // Sin las celdas no se sabe cuántos hay de los estados nuevos: esos cuadros
+  // no se enseñan antes que enseñar un cero que no es verdad.
+  const visibles = filtra ? ESTADOS_INVENTARIO : (["montado", "almacen", "reparacion", "descartado"] as EstadoInventario[]);
   const tablas = celdas
     ? tablasDelInventario(celdas, soloEstado)
     : { porMarca, porMedida, porModelo, porEstado, marcaMedida, profundidad: prof, enElFiltro: 0, delHistorico: 0 };
   const alternar = (e: EstadoInventario) => setSoloEstado((actual) => (actual === e ? null : e));
 
-  const etiquetaEstado = (s: string) => ESTADO_NEUMATICO_LABELS[s as EstadoNeumatico] ?? s;
+  const etiquetaEstado = (s: string) =>
+    ESTADO_NEUMATICO_LABELS[s as EstadoNeumatico] ?? ETIQUETA_ESTADO_EXTRA[s] ?? s;
 
   return (
     <div>
-      <div className="mb-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
-        <KpiCard title="Total controlados" value={cuadros.total} onClick={filtra ? () => setSoloEstado(null) : undefined} />
-        {(["montado", "almacen", "reparacion", "descartado"] as const).map((e) => (
-          <KpiCard key={e} title={NOMBRE_ESTADO_INVENTARIO[e]} value={cuadros[e]} tono={e === "montado" ? "info" : "neutral"}
+      <div className="mb-3 grid grid-cols-2 gap-2 lg:grid-cols-4">
+        <KpiCard title="Total controlados" value={cuadros.total} hint={filtra ? "La suma de los cuadros" : undefined}
+                 onClick={filtra ? () => setSoloEstado(null) : undefined} />
+        {visibles.map((e) => (
+          <KpiCard key={e} title={NOMBRE_ESTADO_INVENTARIO[e]} value={cuadros[e]} tono={TONO_CUADRO[e] ?? "neutral"}
+                   hint={e === "otros" ? "Reservados, no localizados, sin estado" : undefined}
                    activo={soloEstado === e} onClick={filtra ? () => alternar(e) : undefined} />
         ))}
       </div>
+
+      {soloEstado === "pendiente_clasificacion" && (
+        <div className="mb-3 text-[12px] text-slate-400">
+          Son gomas desmontadas que nadie ha clasificado todavía (almacén, reparación o descarte).
+          Se clasifican en <Link to="/tyrecontrol/almacen-usados" className="font-bold text-sky-300 hover:underline">Almacén de usados</Link>.
+        </div>
+      )}
+
+      {planos && <AvisoPlanos planos={planos} />}
 
       {soloEstado && (
         <div className="mb-3 flex flex-wrap items-center gap-2 text-[12px] text-slate-400">
@@ -195,6 +229,71 @@ export default function InformeInventario() {
         </TableWrap>
         <div className="mt-2 text-[11px] text-slate-500">Rangos en mm. Serán configurables en una próxima fase. Los neumáticos sin ninguna revisión no aparecen aquí.</div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Un camión monta las ruedas por ejes: un eje con 1 o 3 ruedas, o una ficha
+ * «montada» que no está en ninguna posición, es un dato mal cargado. Salía a
+ * la luz solo porque el número de montados era impar.
+ */
+function AvisoPlanos({ planos }: { planos: PlanosIncompletos }) {
+  const [abierto, setAbierto] = useState(false);
+  const nVeh = planos.vehiculos.length;
+  const nFichas = planos.fichas_sin_posicion_total;
+  if (nVeh === 0 && nFichas === 0) return null;
+  const partes = [
+    nVeh > 0 ? `${nVeh} ${nVeh === 1 ? "vehículo con el plano incompleto" : "vehículos con el plano incompleto"}` : null,
+    nFichas > 0 ? `${nFichas} ${nFichas === 1 ? "ficha montada sin posición" : "fichas montadas sin posición"}` : null,
+  ].filter(Boolean);
+  return (
+    <div className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-[12px] text-amber-100">
+      <button type="button" onClick={() => setAbierto((a) => !a)} className="flex w-full items-center justify-between gap-2 text-left">
+        <span><span className="font-bold">⚠ {partes.join(" · ")}</span>
+          <span className="text-amber-200/80"> — el recuento de montados no es fiable hasta corregirlo.</span></span>
+        <span className="shrink-0 font-bold text-amber-300">{abierto ? "Ocultar" : "Ver"}</span>
+      </button>
+      {abierto && (
+        <div className="mt-3 space-y-3">
+          {nVeh > 0 && (
+            <div>
+              <div className="mb-1 text-amber-200/80">
+                Tienen alguna rueda informada y alguna posición sin rueda. Se corrige en la ficha del vehículo,
+                con «Informar los neumáticos que ya lleva».
+              </div>
+              <ul className="divide-y divide-amber-500/20">
+                {planos.vehiculos.map((v) => (
+                  <li key={v.vehiculo_id} className="flex flex-wrap items-baseline gap-x-3 py-1">
+                    <Link to={`/tyrecontrol/vehiculos/${v.vehiculo_id}`} className="font-bold text-sky-300 hover:underline">{v.matricula}</Link>
+                    <span>{v.montadas} de {v.posiciones}</span>
+                    <span className="text-amber-200/80">falta{v.faltan.length === 1 ? "" : "n"}: {v.faltan.join(", ")}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {nFichas > 0 && (
+            <div>
+              <div className="mb-1 text-amber-200/80">
+                Están en «montado» pero en ningún vehículo: suelen ser fichas genéricas de una importación que se
+                quedaron colgando. Cuentan como montadas sin estarlo.
+              </div>
+              <ul className="flex flex-wrap gap-x-3 gap-y-1">
+                {planos.fichas_sin_posicion.map((f) => (
+                  <li key={f.id}>
+                    <span className="font-semibold">{f.codigo_interno ?? "sin código"}</span>
+                    {(f.marca || f.medida) && <span className="text-amber-200/70"> {[f.marca, f.medida].filter(Boolean).join(" ")}</span>}
+                  </li>
+                ))}
+              </ul>
+              {nFichas > planos.fichas_sin_posicion.length && (
+                <div className="mt-1 text-amber-200/70">… y {nFichas - planos.fichas_sin_posicion.length} más.</div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
