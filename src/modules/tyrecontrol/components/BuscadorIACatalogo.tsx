@@ -25,7 +25,7 @@ import { opcionesConElegido } from "../catalogo/usos";
 import SelectorConAlta from "./SelectorConAlta";
 import { buscarModelosIA, type RespuestaBusquedaIA } from "../services/catalogoIABusqueda";
 import { ejeDelCandidato, type Candidato, type EstadoCandidato } from "../services/catalogoIA";
-import { Modal, inputCls, TableWrap, tdCls, thCls } from "./ui";
+import { Modal, TableWrap, tdCls, thCls } from "./ui";
 
 /**
  * Lo último que se buscó, para que cerrar la ventana no tire dos minutos de
