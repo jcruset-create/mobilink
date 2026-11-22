@@ -25,7 +25,15 @@ const valorBonito = (p: Propuesta) => {
 };
 const host = (u: string | null) => { try { return u ? new URL(u).hostname.replace(/^www\./, "") : ""; } catch { return ""; } };
 
-export default function CompletarFichasIA({ onClose, onCambio }: { onClose: () => void; onCambio: () => void }) {
+export default function CompletarFichasIA({ onClose, onCambio, referenciaIds }: {
+  onClose: () => void; onCambio: () => void;
+  /**
+   * Referencias recién creadas («Buscar neumáticos con IA»): se buscan sus
+   * datos nada más abrir, sin pasar por la lista, y se enseñan para aceptar.
+   */
+  referenciaIds?: string[];
+}) {
+  const directo = !!referenciaIds?.length;
   const [marca, setMarca] = useState("");
   const [campo, setCampo] = useState("profundidad_dibujo_mm");
   const [soloFlota, setSoloFlota] = useState(false);
@@ -51,31 +59,42 @@ export default function CompletarFichasIA({ onClose, onCambio }: { onClose: () =
     finally { setCargando(false); }
   }
   // Primera carga, con el filtro por defecto (las que no tienen profundidad).
+  // Con referencias recién creadas: todas, y a buscar las suyas directamente.
+  const idsDirectos = referenciaIds?.join(",") ?? "";
   useEffect(() => {
     let vivo = true;
-    huecosCatalogo({ campo: "profundidad_dibujo_mm" })
-      .then((r) => { if (vivo) { setFilas(r.filas); setResumen(r.resumen); } })
+    const ids = idsDirectos ? idsDirectos.split(",") : [];
+    huecosCatalogo(ids.length ? {} : { campo: "profundidad_dibujo_mm" })
+      .then((r) => {
+        if (!vivo) return;
+        setFilas(r.filas); setResumen(r.resumen);
+        if (ids.length) {
+          const lista = r.filas.filter((f) => ids.includes(f.id));
+          if (lista.length) void buscar(lista);
+          else setMsg("✔ Estas referencias ya tienen la ficha completa: no hay nada que buscar.");
+        }
+      })
       .catch((e) => { if (vivo) setError(e instanceof Error ? e.message : "Error"); });
     return () => { vivo = false; };
-  }, []);
+  }, [idsDirectos]);
 
   const elegidas = useMemo(() => filas.filter((f) => sel.has(f.id)), [filas, sel]);
 
-  async function buscar() {
+  async function buscar(lista: FilaHueco[]) {
     parar.current = false;
     const avisos: string[] = [];
-    setProgreso({ hechas: 0, total: elegidas.length, actual: "", avisos });
-    for (let i = 0; i < elegidas.length; i++) {
+    setProgreso({ hechas: 0, total: lista.length, actual: "", avisos });
+    for (let i = 0; i < lista.length; i++) {
       if (parar.current) break;
-      const f = elegidas[i];
-      setProgreso({ hechas: i, total: elegidas.length, actual: f.referenciaCompleta, avisos: [...avisos] });
+      const f = lista[i];
+      setProgreso({ hechas: i, total: lista.length, actual: f.referenciaCompleta, avisos: [...avisos] });
       try {
         const r = await completarReferenciaIA(f.id);
         if (r.aviso) avisos.push(`${f.referenciaCompleta}: ${r.aviso}`);
       } catch (e) { avisos.push(`${f.referenciaCompleta}: ${e instanceof Error ? e.message : "error"}`); }
     }
     setProgreso((p) => (p ? { ...p, hechas: p.total, actual: "", avisos } : p));
-    const ps = await propuestasIA(elegidas.map((f) => f.id)).catch(() => [] as Propuesta[]);
+    const ps = await propuestasIA(lista.map((f) => f.id)).catch(() => [] as Propuesta[]);
     setPropuestas(ps);
     // Oficiales y EPREL vienen marcadas; las de distribuidor, no.
     setMarcadas(new Set(ps.filter((p) => p.estado === "pendiente" && p.tipo_fuente !== "distribuidor").map((p) => p.id)));
@@ -108,7 +127,8 @@ export default function CompletarFichasIA({ onClose, onCambio }: { onClose: () =
       if (sobran.length) await descartarPropuestasIA(sobran);
       setMsg(`✔ ${r.aceptadas} datos guardados en el catálogo${r.saltadas ? ` · ${r.saltadas} saltados porque el campo ya tenía dato` : ""}.`);
       setPropuestas(null); setProgreso(null);
-      onCambio(); await cargar();
+      onCambio();
+      if (!directo) await cargar();
     } catch (e) { setMsg(e instanceof Error ? e.message : "Error al guardar"); }
     finally { setGuardando(false); }
   }
@@ -122,9 +142,9 @@ export default function CompletarFichasIA({ onClose, onCambio }: { onClose: () =
   const toggle = (s: Set<string>, id: string) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; };
 
   return (
-    <Modal title="✨ Completar fichas con IA" size="xl" onClose={onClose}>
+    <Modal title={directo ? "✨ Rellenar la ficha de las referencias creadas" : "✨ Completar fichas con IA"} size="xl" onClose={onClose}>
       <div className="space-y-3 text-sm">
-        {resumen && (
+        {resumen && !directo && (
           <div className="grid gap-2 sm:grid-cols-4">
             {[["Referencias activas", resumen.referencias, ""], ["Sin profundidad de nuevo", resumen.sinProfundidad, "text-rose-300"],
               ["Sin etiqueta UE", resumen.sinEtiqueta, "text-rose-300"], ["Con algún hueco", resumen.conHueco, ""]].map(([t, v, c]) => (
@@ -136,7 +156,29 @@ export default function CompletarFichasIA({ onClose, onCambio }: { onClose: () =
           </div>
         )}
 
-        {!propuestas && (
+        {!propuestas && directo && (
+          <>
+            {error && <div className="text-rose-300">{error}</div>}
+            {!progreso && !error && !msg && <div className="text-slate-400">Preparando la búsqueda de la ficha…</div>}
+            {progreso && (
+              <div className="rounded-lg border border-violet-500/40 bg-violet-500/10 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <b>{progreso.hechas < progreso.total ? `Buscando la ficha ${progreso.hechas + 1} de ${progreso.total}` : "Búsqueda terminada"}</b>
+                  {progreso.actual && <span className="text-[12px] text-slate-400">{progreso.actual}</span>}
+                  {progreso.hechas < progreso.total && (
+                    <button onClick={() => { parar.current = true; }} className="ml-auto rounded border border-slate-600 px-2 py-1 text-[11px]">Parar</button>)}
+                </div>
+                <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-800">
+                  <div className="h-full bg-violet-500" style={{ width: `${(progreso.hechas / Math.max(1, progreso.total)) * 100}%` }} />
+                </div>
+                <div className="mt-2 text-[11px] text-slate-400">Se busca la ficha técnica de cada referencia (1-2 minutos cada una). Nada se escribe hasta que lo aceptes.</div>
+              </div>
+            )}
+            {msg && <div className="flex justify-end"><button onClick={onClose} className="rounded-lg border border-slate-600 px-3 py-1.5 text-[12px]">Cerrar</button></div>}
+          </>
+        )}
+
+        {!propuestas && !directo && (
           <>
             <div className="flex flex-wrap items-end gap-2">
               <label className="block"><span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Marca</span>
@@ -150,7 +192,7 @@ export default function CompletarFichasIA({ onClose, onCambio }: { onClose: () =
                 <input type="checkbox" checked={soloFlota} onChange={(e) => setSoloFlota(e.target.checked)} /> Solo con neumáticos en la flota</label>
               <button onClick={() => void cargar()} disabled={cargando} className="rounded-lg border border-slate-600 px-3 py-2 text-[12px] text-slate-200">
                 {cargando ? "Cargando…" : "Filtrar"}</button>
-              <button onClick={() => void buscar()} disabled={!elegidas.length || !!progreso && progreso.hechas < progreso.total}
+              <button onClick={() => void buscar(elegidas)} disabled={!elegidas.length || !!progreso && progreso.hechas < progreso.total}
                 className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-2 text-[13px] font-bold text-white disabled:opacity-40">
                 <Sparkles size={14} /> Buscar datos de {elegidas.length || "las"} marcada{elegidas.length === 1 ? "" : "s"}</button>
             </div>
@@ -255,7 +297,7 @@ export default function CompletarFichasIA({ onClose, onCambio }: { onClose: () =
                 className="rounded border border-slate-600 px-3 py-1.5 text-[12px]">Aceptar solo oficiales</button>
               <label className="flex items-center gap-1.5 text-[12px] text-slate-300">
                 <input type="checkbox" checked={corregir} onChange={(e) => setCorregir(e.target.checked)} /> Corregir también los que ya tienen dato</label>
-              <button onClick={() => { setPropuestas(null); setProgreso(null); }} className="ml-auto rounded border border-slate-600 px-3 py-1.5 text-[12px]">Volver</button>
+              <button onClick={() => { if (directo) onClose(); else { setPropuestas(null); setProgreso(null); } }} className="ml-auto rounded border border-slate-600 px-3 py-1.5 text-[12px]">{directo ? "Ahora no" : "Volver"}</button>
               <button onClick={() => void guardar()} disabled={guardando || !marcadas.size}
                 className="rounded-lg bg-emerald-600 px-4 py-2 text-[13px] font-bold text-white disabled:opacity-40">
                 {guardando ? "Guardando…" : `Guardar ${marcadas.size} marcado${marcadas.size === 1 ? "" : "s"}`}</button>
