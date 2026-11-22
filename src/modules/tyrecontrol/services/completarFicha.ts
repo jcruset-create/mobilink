@@ -7,6 +7,8 @@
  *  - ¿Trae una URL que abrir? Sin URL no se propone.
  */
 
+import { baseMedida } from "./medidas";
+
 export type TipoFuente = "oficial" | "eprel" | "distribuidor";
 
 export interface CampoFicha {
@@ -87,8 +89,13 @@ export function validarValor(clave: string, bruto: unknown): Validacion {
 }
 
 const norm = (s: unknown) => String(s ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-/** «295/80 R22.5» y «295/80R22.5» son la misma medida. */
-export const medidaBase = (s: unknown) => String(s ?? "").toUpperCase().replace(/\s+/g, "").replace(/^(\d+\/\d+)R/, "$1R");
+/**
+ * «295/80 R22.5», «295/80R22.5» y «205/75 R 16 C» frente a «205/75R16»: la
+ * misma medida. La «C» (comercial/furgoneta) no cambia la medida; lo que
+ * separa una C de una de turismo es el índice de carga, y ése se compara
+ * aparte. Es la normalización común del proyecto (shared/medidas).
+ */
+export const medidaBase = (s: unknown) => baseMedida(s == null ? "" : String(s));
 
 /** Índices de carga de una referencia: «154/150» o «160» → ["154","150"]. */
 export function indicesDe(texto: string): string[] {

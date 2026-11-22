@@ -29,6 +29,8 @@
  * humano, con su confirmación, y usa el servicio de catálogo de siempre.
  */
 
+import { baseMedida } from "./medidas";
+
 // ── Normalización, la misma que usa el catálogo ─────────────────────────────
 
 const sinAcentos = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "");
@@ -329,7 +331,8 @@ export function clasificar(
       motivo: `«${fabricante || "sin marca"}» no es la marca que has pedido${consulta.fabricante ? ` (${consulta.fabricante})` : ""}.`,
     };
   }
-  if (consulta.medida && medida !== consulta.medida) {
+  // La «C» de comercial no hace otra medida (205/75 R16 C = 205/75R16).
+  if (consulta.medida && baseMedida(medida) !== baseMedida(consulta.medida)) {
     return {
       ...base, estado: "no_verificado",
       motivo: `La ficha es de ${medida || "una medida que no dice"}, no de ${consulta.medida}.`,

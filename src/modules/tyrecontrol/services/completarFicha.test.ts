@@ -42,6 +42,12 @@ describe("coincideReferencia", () => {
     expect(coincideReferencia(ref, { marca: "Goodyear", modelo: "KMAX D GEN-2", medida: "315/80R22.5" }).ok).toBe(false);
     expect(coincideReferencia(ref, { marca: "Michelin", modelo: "KMAX D GEN-2", medida: "315/70R22.5" }).ok).toBe(false);
   });
+  it("la «C» de comercial no hace otra medida: 205/75 R 16 C es 205/75R16", () => {
+    const furgo = { marca: "Continental", modelo: "ContiVanContact 100", medida: "205/75R16", referenciaCompleta: "Continental ContiVanContact 100 205/75 R16 113/111R" };
+    expect(coincideReferencia(furgo, { marca: "Continental", modelo: "ContiVanContact 100", medida: "205/75 R 16 C", indiceCarga: "113/111R" }).ok).toBe(true);
+    // Lo que separa una C de una de turismo es el índice: ése sí se descarta.
+    expect(coincideReferencia(furgo, { marca: "Continental", modelo: "ContiVanContact 100", medida: "205/75 R16", indiceCarga: "104H" }).causa).toBe("indice");
+  });
   it("saca los índices de carga de la referencia", () => {
     expect(indicesDe("Goodyear KMAX D GEN-2 315/70R22.5 154/150")).toEqual(["154", "150"]);
     expect(indicesDe("GOODYEAR KMAX T 385/55 R22.5 160L")).toEqual(["160"]);
