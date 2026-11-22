@@ -42,6 +42,7 @@ import {
   vincularLote,
   type Ambito,
 } from "./acciones.ts";
+import { cambiarDeVehiculo } from "./cambioVehiculo.ts";
 
 /** Perfil del que llama, resuelto contra la base. Nunca contra la petición. */
 export interface Solicitante {
@@ -544,6 +545,35 @@ export function createConciliacionRouter(): Router {
         tcVehicleId: String(req.body?.tcVehicleId ?? ""),
         neumaticosMontadosVistos: Number(req.body?.neumaticosMontadosVistos ?? -1),
         desvincularTambien: req.body?.desvincularTambien === true,
+      });
+      res.json({ ok: true, ...r });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /**
+   * «El equipo está ahora en otro vehículo»: uno o varios avisos de cambio de
+   * matrícula en el proveedor. Solo llegan identificadores; matrículas, nombres
+   * y qué es cada aviso salen de una conciliación en vivo (cambioVehiculo.ts).
+   */
+  router.post("/cambio-vehiculo", async (req, res) => {
+    try {
+      const { solicitante } = req as PeticionConciliacion;
+      const empresaId = empresaDe(solicitante, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const brutos: unknown[] = Array.isArray(req.body?.cambios) ? req.body.cambios : [];
+      const cambios = brutos.map((x) => {
+        const c = (x ?? {}) as Record<string, unknown>;
+        return {
+          tcVehicleId: String(c.tcVehicleId ?? ""),
+          externalVehicleId: String(c.externalVehicleId ?? ""),
+          neumaticosMontadosVistos: Number(c.neumaticosMontadosVistos ?? -1),
+        };
+      }).filter((c) => c.tcVehicleId && c.externalVehicleId);
+      const r = await cambiarDeVehiculo(ambitoDe(empresaId, req.body), {
+        cambios,
+        darDeBajaAntiguo: req.body?.darDeBajaAntiguo === true,
       });
       res.json({ ok: true, ...r });
     } catch (e) {
