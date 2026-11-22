@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   interpretarConsulta, medidaDeTexto, marcaPedida, clasificar, clasificarTodos,
-  faltanDatos, fuentesUtiles, creables, normModelo, ejeDelCandidato, consultaDe,
+  faltanDatos, fuentesUtiles, creables, normModelo, ejeDelCandidato, consultaDe, normalizarIndices,
   type CandidatoCrudo, type ReferenciaExistente,
 } from "./catalogoIA";
 
@@ -234,5 +234,27 @@ describe("consultaDe: marca y medida elegidas en desplegables", () => {
     const c = consultaDe("CEAT", "295/80R22.5");
     expect(marcaPedida(c, "CEAT")).toBe(true);
     expect(marcaPedida(c, "Bridgestone")).toBe(false);
+  });
+});
+
+describe("normalizarIndices: los índices tal como vienen en los catálogos", () => {
+  const c = (simple: string | null, doble: string | null = null, vel: string | null = null) =>
+    normalizarIndices({ fabricante: "Uniroyal", modelo: "FH 40", medida: "315/80R22.5", indiceCargaSimple: simple, indiceCargaDoble: doble, codigoVelocidad: vel } as CandidatoCrudo);
+  it("separa «156/150 L» en simple, doble y velocidad", () => {
+    expect(c("156/150 L")).toMatchObject({ indiceCargaSimple: "156", indiceCargaDoble: "150", codigoVelocidad: "L" });
+    expect(c("156/150L")).toMatchObject({ indiceCargaSimple: "156", indiceCargaDoble: "150", codigoVelocidad: "L" });
+  });
+  it("ignora el segundo marcado entre paréntesis", () => {
+    expect(c("156/150 L (154/150 M)")).toMatchObject({ indiceCargaSimple: "156", indiceCargaDoble: "150", codigoVelocidad: "L" });
+    expect(c("156", "150", "L (M)")).toMatchObject({ indiceCargaSimple: "156", indiceCargaDoble: "150", codigoVelocidad: "L" });
+  });
+  it("no toca lo que ya está bien ni inventa", () => {
+    expect(c("156", "150", "L")).toMatchObject({ indiceCargaSimple: "156", indiceCargaDoble: "150", codigoVelocidad: "L" });
+    expect(c("160 K")).toMatchObject({ indiceCargaSimple: "160", codigoVelocidad: "K" });
+    expect(c(null).indiceCargaSimple).toBeNull();
+    expect(c("150L", "147L")).toMatchObject({ indiceCargaSimple: "150", indiceCargaDoble: "147", codigoVelocidad: "L" });
+  });
+  it("con los índices separados, se puede crear", () => {
+    expect(faltanDatos(c("156/150 L"))).toEqual([]);
   });
 });

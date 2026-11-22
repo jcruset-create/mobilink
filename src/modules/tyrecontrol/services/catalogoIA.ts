@@ -225,6 +225,44 @@ export function fuentesUtiles(fuentes?: FuenteCandidato[] | null): FuenteCandida
 }
 
 /**
+ * Pone los índices en su sitio cuando la IA los copia tal cual del catálogo.
+ *
+ * Los catálogos los escriben juntos («156/150 L», a veces con un segundo
+ * marcado: «156/150 L (154/150 M)») y la IA a menudo los mete enteros en el
+ * índice simple. Se separan: simple 156, doble 150, velocidad L. El marcado
+ * entre paréntesis se ignora. Solo rellena lo que venga vacío o mal formado.
+ */
+export function normalizarIndices<T extends CandidatoCrudo>(c: T): T {
+  const leer = (t: unknown) => {
+    const m = String(t ?? "").toUpperCase().replace(/\(.*?\)/g, " ").trim()
+      .match(/^(\d{2,3})(?:\s*\/\s*(\d{2,3}))?\s*([A-Z])?\b/);
+    return m ? { simple: m[1], doble: m[2] ?? null, vel: m[3] ?? null } : null;
+  };
+  const simple = String(c.indiceCargaSimple ?? "").trim();
+  const doble = String(c.indiceCargaDoble ?? "").trim();
+  const vel = String(c.codigoVelocidad ?? "").trim().toUpperCase();
+  const out = { ...c };
+  const s = IC_VALIDO.test(simple) ? null : leer(simple);
+  if (s) {
+    out.indiceCargaSimple = s.simple;
+    if (!IC_VALIDO.test(doble) && s.doble) out.indiceCargaDoble = s.doble;
+    if (!VEL_VALIDO.test(vel) && s.vel) out.codigoVelocidad = s.vel;
+  }
+  const d = doble && !IC_VALIDO.test(doble) ? leer(doble) : null;
+  if (d) {
+    out.indiceCargaDoble = d.simple;
+    if (!VEL_VALIDO.test(String(out.codigoVelocidad ?? "")) && d.vel) out.codigoVelocidad = d.vel;
+  }
+  const v = String(out.codigoVelocidad ?? "").toUpperCase().replace(/\(.*?\)/g, " ").trim();
+  if (v && VEL_VALIDO.test(v)) out.codigoVelocidad = v;
+  else if (v) {
+    const letra = v.match(/\b([A-Z])\b/);
+    if (letra) out.codigoVelocidad = letra[1];
+  }
+  return out;
+}
+
+/**
  * Qué le falta a un candidato para poder crearse.
  *
  * El catálogo exige marca, modelo, medida e índice de carga; el código de
@@ -266,6 +304,7 @@ export function clasificar(
   consulta: ConsultaCatalogo,
   existentes: ReferenciaExistente[],
 ): Candidato {
+  crudo = normalizarIndices(crudo);
   const fuentes = fuentesUtiles(crudo.fuentes);
   const fabricante = String(crudo.fabricante ?? "").trim();
   const modelo = String(crudo.modelo ?? "").trim();
