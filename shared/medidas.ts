@@ -5,7 +5,9 @@
  */
 export function baseMedida(s?: string | null): string {
   const t = (s ?? "").toUpperCase().replace(/\s+/g, "");
-  const m = t.match(/(\d{2,3})(?:\/(\d{2,3}))?R?(\d{1,2}(?:[.,]\d)?)/);
+  // La «Z» de «245/45ZR18» (alta velocidad) va delante de la R y no cambia la
+  // medida. Sin contemplarla, la expresión casaba basura («24R5»).
+  const m = t.match(/(\d{2,3})(?:\/(\d{2,3}))?Z?R?(\d{1,2}(?:[.,]\d)?)/);
   if (!m) return t;
   return `${m[1]}${m[2] ? "/" + m[2] : ""}R${m[3].replace(",", ".")}`;
 }
