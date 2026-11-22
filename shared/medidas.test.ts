@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { baseMedida, medidaCanonica, mismaMedida } from "./medidas";
+import { baseMedida, medidaCanonica, mismaMedida, sufijoComercial } from "./medidas";
 
 describe("baseMedida", () => {
   it("normaliza la medida quitando espacios e índices", () => {
@@ -71,5 +71,23 @@ describe("medidaCanonica", () => {
     for (const s of ["295/80R22,5", "315/80 R 22,5 156/150 L", "7.50-16", "12R22.5"]) {
       expect(medidaCanonica(medidaCanonica(s))).toBe(medidaCanonica(s));
     }
+  });
+});
+
+describe("sufijoComercial", () => {
+  it("furgoneta: llanta entera hasta 17\" e índice doble", () => {
+    expect(sufijoComercial("205/75R16", "111")).toBe("C");
+    expect(sufijoComercial("205/75 R16", "111")).toBe("C");
+    expect(sufijoComercial("185R14", "100")).toBe("C");
+  });
+  it("turismo, camión, LT y la que ya la lleva: sin C", () => {
+    expect(sufijoComercial("205/55R16", null)).toBe("");
+    expect(sufijoComercial("315/80R22.5", "150")).toBe("");
+    expect(sufijoComercial("215/75R17.5", "124")).toBe("");
+    expect(sufijoComercial("LT245/75R16", "116")).toBe("");
+    expect(sufijoComercial("195/70R15C", "102")).toBe("");
+  });
+  it("con la C, la medida base es la misma", () => {
+    expect(baseMedida("205/75R16C 113/111R")).toBe("205/75R16");
   });
 });
