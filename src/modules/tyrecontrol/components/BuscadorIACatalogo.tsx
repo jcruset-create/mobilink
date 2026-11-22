@@ -20,6 +20,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Search, ExternalLink, AlertTriangle, CheckCircle2, HelpCircle, XCircle } from "lucide-react";
 
 import { crearReferenciaNeumatico, listarMarcas, listarMedidas } from "../services/data";
+import CompletarFichasIA from "./CompletarFichasIA";
 import { opcionesConElegido } from "../catalogo/usos";
 import SelectorConAlta from "./SelectorConAlta";
 import { buscarModelosIA, type RespuestaBusquedaIA } from "../services/catalogoIABusqueda";
@@ -73,6 +74,8 @@ export default function BuscadorIACatalogo({ onClose, onCreado, inicial }: {
   const [marcados, setMarcados] = useState<Set<string>>(previa?.marcados ?? new Set());
   const [ediciones, setEdiciones] = useState<Record<string, Edicion>>(previa?.ediciones ?? {});
   const [avisoCierre, setAvisoCierre] = useState(false);
+  /** Referencias recién creadas cuya ficha se está rellenando. */
+  const [rellenar, setRellenar] = useState<string[] | null>(null);
 
   // Las listas del catálogo. Si fallan, los desplegables salen vacíos y se
   // sigue pudiendo teclear: buscar una marca que no tenemos es el caso normal.
@@ -153,10 +156,11 @@ export default function BuscadorIACatalogo({ onClose, onCreado, inicial }: {
   async function crear() {
     setCreando(true);
     const out: Resultado[] = [];
+    const creadas: string[] = [];
     for (const c of seleccionados) {
       const e = ediciones[clave(c)];
       try {
-        await crearReferenciaNeumatico({
+        const id = await crearReferenciaNeumatico({
           marca: c.fabricante,
           modelo: c.modelo,
           medida: c.medida,
@@ -168,6 +172,7 @@ export default function BuscadorIACatalogo({ onClose, onCreado, inicial }: {
           eje: ejeDelCandidato(c.posicion),
           aplicacion: c.utilizacion ?? null,
         });
+        creadas.push(id);
         out.push({ modelo: `${c.fabricante} ${c.modelo}`, ok: true, detalle: "Creado" });
       } catch (err: any) {
         out.push({ modelo: `${c.fabricante} ${c.modelo}`, ok: false, detalle: err?.message ?? "No se ha podido crear" });
@@ -177,6 +182,9 @@ export default function BuscadorIACatalogo({ onClose, onCreado, inicial }: {
     setCreando(false);
     setConfirmando(false);
     if (out.some((r) => r.ok)) onCreado();
+    // Y a continuación, la ficha técnica de lo creado (profundidad, diámetro,
+    // cargas, etiqueta UE…), con la misma búsqueda y reglas de «Completar fichas».
+    if (creadas.length) setRellenar([...new Set(creadas)]);
   }
 
   return (
@@ -433,6 +441,9 @@ export default function BuscadorIACatalogo({ onClose, onCreado, inicial }: {
             </button>
           </div>
         </Modal>
+      )}
+      {rellenar && (
+        <CompletarFichasIA referenciaIds={rellenar} onClose={() => setRellenar(null)} onCambio={onCreado} />
       )}
     </Modal>
   );
