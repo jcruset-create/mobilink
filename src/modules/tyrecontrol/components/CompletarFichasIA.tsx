@@ -95,9 +95,26 @@ export default function CompletarFichasIA({ onClose, onCambio, referenciaIds }: 
     }
     setProgreso((p) => (p ? { ...p, hechas: p.total, actual: "", avisos } : p));
     const ps = await propuestasIA(lista.map((f) => f.id)).catch(() => [] as Propuesta[]);
+    // Oficiales y EPREL son las fiables; las de distribuidor, no.
+    const fiables = ps.filter((p) => p.estado === "pendiente" && p.tipo_fuente !== "distribuidor").map((p) => p.id);
+    if (directo) {
+      // Referencias recién creadas: lo oficial y EPREL se guarda solo. Queda a
+      // la vista lo de distribuidor (para aceptarlo a mano) y lo descartado.
+      let guardadas = 0;
+      if (fiables.length) {
+        try { guardadas = (await aceptarPropuestasIA(fiables, false)).aceptadas; onCambio(); }
+        catch (e) { setError(e instanceof Error ? e.message : "No se han podido guardar los datos"); }
+      }
+      const resto = ps.filter((p) => !fiables.includes(p.id));
+      setMsg(guardadas
+        ? `✔ ${guardadas} datos de fuente oficial o EPREL guardados automáticamente en la ficha.`
+        : "No se ha encontrado ningún dato de fuente oficial o EPREL.");
+      setPropuestas(resto.length ? resto : null);
+      setMarcadas(new Set());
+      return;
+    }
     setPropuestas(ps);
-    // Oficiales y EPREL vienen marcadas; las de distribuidor, no.
-    setMarcadas(new Set(ps.filter((p) => p.estado === "pendiente" && p.tipo_fuente !== "distribuidor").map((p) => p.id)));
+    setMarcadas(new Set(fiables));
   }
 
   /** Confirmar que el nombre de la ficha es el mismo modelo: alias y nueva comprobación. */
@@ -171,7 +188,7 @@ export default function CompletarFichasIA({ onClose, onCambio, referenciaIds }: 
                 <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-800">
                   <div className="h-full bg-violet-500" style={{ width: `${(progreso.hechas / Math.max(1, progreso.total)) * 100}%` }} />
                 </div>
-                <div className="mt-2 text-[11px] text-slate-400">Se busca la ficha técnica de cada referencia (1-2 minutos cada una). Nada se escribe hasta que lo aceptes.</div>
+                <div className="mt-2 text-[11px] text-slate-400">Se busca la ficha técnica de cada referencia (1-2 minutos cada una). Lo de fuente oficial o EPREL se guarda solo; lo de distribuidor queda para que lo aceptes tú.</div>
               </div>
             )}
             {msg && <div className="flex justify-end"><button onClick={onClose} className="rounded-lg border border-slate-600 px-3 py-1.5 text-[12px]">Cerrar</button></div>}
@@ -241,6 +258,12 @@ export default function CompletarFichasIA({ onClose, onCambio, referenciaIds }: 
 
         {propuestas && (
           <>
+            {directo && (
+              <div className="rounded border border-sky-500/40 bg-sky-500/10 p-2 text-[12px] text-sky-200">
+                {msg && <div className="mb-1 font-semibold text-emerald-300">{msg}</div>}
+                Esto otro no se ha guardado: es de distribuidor (márcalo si te fías de la fuente) o se ha descartado.
+              </div>
+            )}
             {progreso?.avisos.length ? (
               <div className="rounded border border-amber-500/40 bg-amber-500/10 p-2 text-[12px] text-amber-200">
                 {progreso.avisos.map((a) => <div key={a}>{a}</div>)}
@@ -293,18 +316,18 @@ export default function CompletarFichasIA({ onClose, onCambio, referenciaIds }: 
             ))}
             {!porRef.size && <div className="text-slate-400">No se ha encontrado ningún dato con fuente para estas referencias.</div>}
             <div className="flex flex-wrap items-center gap-2">
-              <button onClick={() => setMarcadas(new Set((propuestas ?? []).filter((p) => p.estado === "pendiente" && p.tipo_fuente === "oficial").map((p) => p.id)))}
-                className="rounded border border-slate-600 px-3 py-1.5 text-[12px]">Aceptar solo oficiales</button>
+              {!directo && <button onClick={() => setMarcadas(new Set((propuestas ?? []).filter((p) => p.estado === "pendiente" && p.tipo_fuente === "oficial").map((p) => p.id)))}
+                className="rounded border border-slate-600 px-3 py-1.5 text-[12px]">Aceptar solo oficiales</button>}
               <label className="flex items-center gap-1.5 text-[12px] text-slate-300">
                 <input type="checkbox" checked={corregir} onChange={(e) => setCorregir(e.target.checked)} /> Corregir también los que ya tienen dato</label>
-              <button onClick={() => { if (directo) onClose(); else { setPropuestas(null); setProgreso(null); } }} className="ml-auto rounded border border-slate-600 px-3 py-1.5 text-[12px]">{directo ? "Ahora no" : "Volver"}</button>
+              <button onClick={() => { if (directo) onClose(); else { setPropuestas(null); setProgreso(null); } }} className="ml-auto rounded border border-slate-600 px-3 py-1.5 text-[12px]">{directo ? "Cerrar" : "Volver"}</button>
               <button onClick={() => void guardar()} disabled={guardando || !marcadas.size}
                 className="rounded-lg bg-emerald-600 px-4 py-2 text-[13px] font-bold text-white disabled:opacity-40">
                 {guardando ? "Guardando…" : `Guardar ${marcadas.size} marcado${marcadas.size === 1 ? "" : "s"}`}</button>
             </div>
           </>
         )}
-        {msg && <div className="text-[12px] font-semibold text-emerald-300">{msg}</div>}
+        {msg && !(directo && propuestas) && <div className="text-[12px] font-semibold text-emerald-300">{msg}</div>}
       </div>
     </Modal>
   );
