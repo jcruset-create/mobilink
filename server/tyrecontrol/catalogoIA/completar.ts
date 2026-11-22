@@ -347,3 +347,39 @@ export async function mismoModelo(referenciaId: string, usuarioId: string | null
   }
   return { alias, rescatadas, siguenDescartadas: siguen };
 }
+
+/**
+ * «Es la misma medida»: una persona confirma que la medida de la ficha
+ * («225/55R17C») es la de la referencia («225/55 R17»). Las propuestas
+ * descartadas SOLO por la medida se vuelven a comprobar enteras —marca,
+ * modelo, índice de carga, fuente y valor— tomando la medida por buena. No
+ * se guarda nada más: una medida no tiene «otros nombres» que recordar, y lo
+ * que separa una C de una de turismo, el índice, se sigue comprobando.
+ */
+export async function mismaMedida(referenciaId: string): Promise<{ rescatadas: number; siguenDescartadas: number }> {
+  const { data: d, error } = await supabase.from("tc_referencias_neumatico").select(SELECT_REF).eq("id", referenciaId).maybeSingle();
+  if (error) throw new Error(error.message);
+  const r = d as unknown as FilaRef | null;
+  if (!r) throw new Error("La referencia no existe");
+  const { data: ps, error: e2 } = await supabase.from("tc_catalogo_propuestas_ia")
+    .select("id, campo, valor, url, tipo_fuente, modelo_leido, ficha_leida")
+    .eq("referencia_id", referenciaId).eq("estado", "invalida").eq("causa", "medida");
+  if (e2) throw new Error(e2.message);
+  const lista = (ps ?? []) as Array<{ id: string; campo: string; valor: string; url: string | null; tipo_fuente: string | null; modelo_leido: string | null; ficha_leida: Record<string, string | null> | null }>;
+  if (!lista.length) throw new Error("No hay nada descartado por la medida en esta referencia");
+
+  const ref = aRef(r, await aliasDe(String(r.modelo_id ?? "")));
+  let rescatadas = 0, siguen = 0;
+  for (const p of lista) {
+    const f = p.ficha_leida ?? {};
+    const c = coincideReferencia(ref, { marca: f.marca, modelo: f.modelo ?? p.modelo_leido, medida: ref.medida, indiceCarga: f.indice_carga });
+    const rev = c.ok ? revisarValor(p) : { motivo: c.motivo, causa: c.causa ?? "", valor: p.valor };
+    const { error: e4 } = await supabase.from("tc_catalogo_propuestas_ia").update({
+      estado: rev.motivo ? "invalida" : "pendiente", motivo: rev.motivo || null, causa: rev.causa || null, valor: rev.valor,
+    }).eq("id", p.id);
+    if (e4) throw new Error(e4.message);
+    if (rev.motivo) siguen += 1; else rescatadas += 1;
+  }
+  return { rescatadas, siguenDescartadas: siguen };
+}
+

@@ -21,7 +21,7 @@ export interface ResumenHuecos { referencias: number; sinProfundidad: number; si
 export interface Propuesta {
   id: string; referencia_id: string; campo: string; valor: string; url: string | null;
   tipo_fuente: "oficial" | "eprel" | "distribuidor" | null; estado: "pendiente" | "invalida"; motivo: string | null;
-  /** Por qué se descartó: solo «modelo» se rescata con «Es el mismo modelo». */
+  /** Por qué se descartó: «modelo» y «medida» se rescatan a mano («Es el mismo modelo» / «Es la misma medida»). */
   causa?: string | null;
   /** Cómo llama la ficha al modelo («BT 200 R»). */
   modelo_leido?: string | null;
@@ -44,3 +44,5 @@ export const descartarPropuestasIA = (ids: string[]) =>
   llamar<{ ok: true }>("/descartar", { method: "POST", body: JSON.stringify({ ids }) });
 export const mismoModeloIA = (referenciaId: string) =>
   llamar<{ alias: string; rescatadas: number; siguenDescartadas: number }>(`/mismo-modelo/${referenciaId}`, { method: "POST" });
+export const mismaMedidaIA = (referenciaId: string) =>
+  llamar<{ rescatadas: number; siguenDescartadas: number }>(`/misma-medida/${referenciaId}`, { method: "POST" });

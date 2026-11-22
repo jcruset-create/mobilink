@@ -7,7 +7,7 @@ import { ExternalLink, Sparkles } from "lucide-react";
 import { Modal, inputCls } from "./ui";
 import { CAMPOS, CAMPO_POR_CLAVE } from "../services/completarFicha";
 import {
-  aceptarPropuestasIA, completarReferenciaIA, descartarPropuestasIA, huecosCatalogo, mismoModeloIA, propuestasIA,
+  aceptarPropuestasIA, completarReferenciaIA, descartarPropuestasIA, huecosCatalogo, mismaMedidaIA, mismoModeloIA, propuestasIA,
   type FilaHueco, type Propuesta, type ResumenHuecos,
 } from "../services/completarFichaIA";
 
@@ -133,6 +133,23 @@ export default function CompletarFichasIA({ onClose, onCambio, referenciaIds }: 
         return n;
       });
       setMsg(`✔ «${r.alias}» guardado como otro nombre del modelo · ${r.rescatadas} datos recuperados` +
+        (r.siguenDescartadas ? ` · ${r.siguenDescartadas} siguen descartados por otro motivo` : ""));
+    } catch (e) { setMsg(e instanceof Error ? e.message : "Error"); }
+  }
+
+  /** Confirmar que la medida de la ficha es la de la referencia: nueva comprobación. */
+  async function esMismaMedida(refId: string) {
+    setMsg("");
+    try {
+      const r = await mismaMedidaIA(refId);
+      const ps = await propuestasIA([...new Set((propuestas ?? []).map((p) => p.referencia_id))]);
+      setPropuestas(ps);
+      setMarcadas((s) => {
+        const n = new Set(s);
+        for (const p of ps) if (p.referencia_id === refId && p.estado === "pendiente" && p.tipo_fuente !== "distribuidor") n.add(p.id);
+        return n;
+      });
+      setMsg(`✔ Medida confirmada · ${r.rescatadas} datos recuperados` +
         (r.siguenDescartadas ? ` · ${r.siguenDescartadas} siguen descartados por otro motivo` : ""));
     } catch (e) { setMsg(e instanceof Error ? e.message : "Error"); }
   }
@@ -291,6 +308,19 @@ export default function CompletarFichasIA({ onClose, onCambio, referenciaIds }: 
                         (vuelven a comprobarse medida, índice de carga, fuente y valor).</span>
                       <button onClick={() => void esMismoModelo(refId)}
                         className="ml-auto rounded-lg border border-amber-500 px-3 py-1.5 font-bold text-amber-200 hover:bg-amber-500/10">Es el mismo modelo</button>
+                    </div>
+                  );
+                })()}
+                {(() => {
+                  // Descartadas SOLO por la medida: una persona puede decir que es la misma.
+                  const porMedida = ps.filter((p) => p.estado === "invalida" && p.causa === "medida");
+                  if (!porMedida.length) return null;
+                  return (
+                    <div className="flex flex-wrap items-center gap-2 border-b border-slate-700 bg-amber-500/10 p-2.5 text-[12px] text-amber-200">
+                      <span>{porMedida[0].motivo}. Si es la misma medida escrita de otra forma, se recuperan sus {porMedida.length} datos
+                        (vuelven a comprobarse marca, modelo, índice de carga, fuente y valor).</span>
+                      <button onClick={() => void esMismaMedida(refId)}
+                        className="ml-auto rounded-lg border border-amber-500 px-3 py-1.5 font-bold text-amber-200 hover:bg-amber-500/10">Es la misma medida</button>
                     </div>
                   );
                 })()}
