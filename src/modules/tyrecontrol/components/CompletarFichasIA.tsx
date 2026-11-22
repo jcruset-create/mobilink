@@ -76,6 +76,8 @@ export default function CompletarFichasIA({ onClose, onCambio, referenciaIds }: 
       })
       .catch((e) => { if (vivo) setError(e instanceof Error ? e.message : "Error"); });
     return () => { vivo = false; };
+    // Solo al abrir (o con otras referencias): buscar() no debe relanzar la búsqueda.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idsDirectos]);
 
   const elegidas = useMemo(() => filas.filter((f) => sel.has(f.id)), [filas, sel]);
