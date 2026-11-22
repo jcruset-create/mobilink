@@ -157,6 +157,7 @@ export default function BuscadorIACatalogo({ onClose, onCreado, inicial }: {
     setCreando(true);
     const out: Resultado[] = [];
     const creadas: string[] = [];
+    const hechas = new Set<string>();
     for (const c of seleccionados) {
       const e = ediciones[clave(c)];
       try {
@@ -173,12 +174,24 @@ export default function BuscadorIACatalogo({ onClose, onCreado, inicial }: {
           aplicacion: c.utilizacion ?? null,
         });
         creadas.push(id);
+        hechas.add(clave(c));
         out.push({ modelo: `${c.fabricante} ${c.modelo}`, ok: true, detalle: "Creado" });
       } catch (err: any) {
         out.push({ modelo: `${c.fabricante} ${c.modelo}`, ok: false, detalle: err?.message ?? "No se ha podido crear" });
       }
     }
     setResultados(out);
+    // Lo creado ya está en el catálogo: se desmarca y pasa a «Ya está», para
+    // que «Crear» no vuelva a ofrecerlo.
+    if (hechas.size) {
+      setMarcados((m) => new Set([...m].filter((k) => !hechas.has(k))));
+      setResp((r) => r && {
+        ...r,
+        candidatos: r.candidatos.map((c) => hechas.has(clave(c))
+          ? { ...c, estado: "existente" as const, motivo: "Creado ahora en el catálogo." }
+          : c),
+      });
+    }
     setCreando(false);
     setConfirmando(false);
     if (out.some((r) => r.ok)) onCreado();
