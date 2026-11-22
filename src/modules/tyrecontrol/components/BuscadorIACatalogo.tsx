@@ -38,7 +38,7 @@ import { Modal, TableWrap, tdCls, thCls } from "./ui";
  * es otra cosa.
  */
 let ultimaBusqueda: {
-  marca: string; medida: string;
+  marca: string; medida: string; modelo: string;
   resp: RespuestaBusquedaIA;
   marcados: Set<string>;
   ediciones: Record<string, Edicion>;
@@ -65,14 +65,16 @@ type Resultado = { modelo: string; ok: boolean; detalle: string };
 
 export default function BuscadorIACatalogo({ onClose, onCreado, inicial }: {
   onClose: () => void; onCreado: () => void;
-  /** Abrir ya con esta marca y medida («Dar de alta con IA» desde Depurar catálogo). */
-  inicial?: { marca: string; medida: string };
+  /** Abrir ya con esta marca, medida y modelo («Dar de alta con IA» desde Depurar catálogo). */
+  inicial?: { marca: string; medida: string; modelo?: string };
 }) {
   // Con `inicial` distinto de la última búsqueda, se empieza de cero.
-  const otra = !!inicial && (inicial.marca !== ultimaBusqueda?.marca || inicial.medida !== ultimaBusqueda?.medida);
+  const otra = !!inicial && (inicial.marca !== ultimaBusqueda?.marca || inicial.medida !== ultimaBusqueda?.medida
+    || (inicial.modelo ?? "") !== (ultimaBusqueda?.modelo ?? ""));
   const previa = otra ? null : ultimaBusqueda;
   const [marca, setMarca] = useState(inicial?.marca ?? previa?.marca ?? "");
   const [medida, setMedida] = useState(inicial?.medida ?? previa?.medida ?? "");
+  const [modelo, setModelo] = useState(inicial?.modelo ?? previa?.modelo ?? "");
   const [marcas, setMarcas] = useState<string[]>([]);
   const [medidas, setMedidas] = useState<string[]>([]);
   const [buscando, setBuscando] = useState(false);
@@ -107,7 +109,7 @@ export default function BuscadorIACatalogo({ onClose, onCreado, inicial }: {
     setBuscando(true); setError(""); setResp(null); setResultados(null);
     setMarcados(new Set()); setEdiciones({});
     try {
-      const r = await buscarModelosIA({ marca: marca.trim(), medida: medida.trim() });
+      const r = await buscarModelosIA({ marca: marca.trim(), medida: medida.trim(), modelo: modelo.trim() || undefined });
       setResp(r);
       // Se marcan solos los que se pueden crear sin tocar nada. Lo demás pide
       // una decisión, y marcarlo por ellos sería tomarla.
@@ -131,8 +133,8 @@ export default function BuscadorIACatalogo({ onClose, onCreado, inicial }: {
   // Se guarda en cada cambio, no solo al buscar: así cerrar sin querer tampoco
   // se lleva por delante las casillas marcadas ni los índices corregidos.
   useEffect(() => {
-    if (resp) ultimaBusqueda = { marca, medida, resp, marcados, ediciones };
-  }, [marca, medida, resp, marcados, ediciones]);
+    if (resp) ultimaBusqueda = { marca, medida, modelo, resp, marcados, ediciones };
+  }, [marca, medida, modelo, resp, marcados, ediciones]);
 
   function alternar(c: Candidato) {
     const k = clave(c);
@@ -245,6 +247,13 @@ export default function BuscadorIACatalogo({ onClose, onCreado, inicial }: {
               ayuda="La del neumático que buscas, no la del vehículo."
             />
           </div>
+          <label className="block min-w-[9rem] flex-1">
+            <span className="mb-1 block text-[11px] font-semibold uppercase text-slate-400">Modelo (opcional)</span>
+            <input id="buscador-ia-modelo" value={modelo} onChange={(e) => setModelo(e.target.value)} disabled={buscando}
+              placeholder="AH31" maxLength={80}
+              className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-base text-slate-100 outline-none focus:ring-2 focus:ring-sky-500 sm:text-sm" />
+            <span className="mt-1 block text-[11px] text-slate-500">Para buscar solo ese modelo. Vacío: todos los de la marca y medida.</span>
+          </label>
           <button
             onClick={() => void buscar()}
             disabled={buscando || !marca.trim() || !medida.trim()}
@@ -268,7 +277,8 @@ export default function BuscadorIACatalogo({ onClose, onCreado, inicial }: {
             <div className="rounded-xl border border-slate-700 bg-slate-900/50 p-3 text-[13px]">
               <p className="text-slate-300">
                 He entendido: marca <b className="text-slate-100">{resp.consulta.fabricante ?? "—"}</b>,
-                medida <b className="text-slate-100">{resp.consulta.medida ?? "—"}</b>.
+                medida <b className="text-slate-100">{resp.consulta.medida ?? "—"}</b>
+                {resp.consulta.modelo && <>, modelo <b className="text-slate-100">{resp.consulta.modelo}</b></>}.
                 {resp.enCatalogo > 0 && (
                   <> En el catálogo ya hay {resp.enCatalogo} referencia{resp.enCatalogo === 1 ? "" : "s"} de esa marca.</>
                 )}

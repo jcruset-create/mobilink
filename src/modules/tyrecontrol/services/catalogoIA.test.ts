@@ -258,3 +258,14 @@ describe("normalizarIndices: los índices tal como vienen en los catálogos", ()
     expect(faltanDatos(c("156/150 L"))).toEqual([]);
   });
 });
+
+describe("consultaDe con modelo", () => {
+  it("lleva el modelo cuando se pide uno concreto", () => {
+    const c = consultaDe("Hankook", "315/80 R22.5", " AH31 ");
+    expect(c).toMatchObject({ fabricante: "Hankook", medida: "315/80R22.5", modelo: "AH31" });
+    expect(c.texto).toContain("modelo AH31");
+  });
+  it("sin modelo, como siempre", () => {
+    expect(consultaDe("Hankook", "315/80R22.5").modelo).toBeNull();
+  });
+});

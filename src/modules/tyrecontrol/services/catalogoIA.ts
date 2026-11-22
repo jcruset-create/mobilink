@@ -60,6 +60,8 @@ export interface ConsultaCatalogo {
   fabricante: string | null;
   /** Medida normalizada: `295/80R22.5`. `null` si la frase no trae ninguna. */
   medida: string | null;
+  /** Modelo concreto que se busca («AH31»), si se sabe. Opcional. */
+  modelo?: string | null;
 }
 
 const PATRON_MEDIDA = /(\d{2,3}\s*\/\s*\d{2,3}\s*R\s*\d{2}(?:[.,]\d)?|\d{1,2}(?:[.,]\d{1,2})?\s*R\s*\d{2}(?:[.,]\d)?)/i;
@@ -122,15 +124,19 @@ export function interpretarConsulta(texto: string): ConsultaCatalogo {
  * La medida sí se valida: se acepta tecleada, pero tiene que parecerse a una
  * medida. `null` cuando no lo es, y entonces no se busca.
  */
-export function consultaDe(marca: string, medida: string): ConsultaCatalogo {
+export function consultaDe(marca: string, medida: string, modelo?: string | null): ConsultaCatalogo {
   const m = String(marca ?? "").trim().replace(/\s+/g, " ");
   const med = medidaDeTexto(String(medida ?? ""));
+  const mod = String(modelo ?? "").trim().replace(/\s+/g, " ").slice(0, 80);
   return {
     // El texto se compone para que quede en el registro y para que
     // `marcaPedida` siga teniendo dónde buscar la marca.
-    texto: `Busca modelos de neumáticos ${m} en ${med ?? medida}`,
+    texto: mod
+      ? `Busca el modelo ${mod} de neumáticos ${m} en ${med ?? medida}`
+      : `Busca modelos de neumáticos ${m} en ${med ?? medida}`,
     fabricante: m || null,
     medida: med,
+    modelo: mod || null,
   };
 }
 
