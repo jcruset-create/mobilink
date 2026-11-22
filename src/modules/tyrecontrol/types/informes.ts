@@ -70,6 +70,15 @@ export interface CeldaInventario {
   n: number;
 }
 
+/** Aviso «plano incompleto» del informe de inventario. */
+export interface PlanosIncompletos {
+  /** Vehículos con alguna rueda informada y alguna posición sin rueda. */
+  vehiculos: { vehiculo_id: string; matricula: string; montadas: number; posiciones: number; faltan: string[] }[];
+  /** Fichas en «montado» que no están en ninguna posición (lista con tope). */
+  fichas_sin_posicion: { id: string; codigo_interno: string | null; marca: string | null; medida: string | null; del_historico: boolean }[];
+  fichas_sin_posicion_total: number;
+}
+
 export interface DimensionTotal {
   etiqueta: string;
   total: number;
