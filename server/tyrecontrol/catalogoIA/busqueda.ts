@@ -111,8 +111,13 @@ function instrucciones(consulta: ConsultaCatalogo): string {
   return [
     "Eres el documentalista técnico de un taller de neumáticos de camión y autobús.",
     "",
-    `Busca en Internet qué modelos de ${consulta.fabricante ?? "el fabricante indicado"} ` +
-      `se comercializan en la medida ${consulta.medida ?? "indicada"}.`,
+    consulta.modelo
+      ? `Busca en Internet el modelo «${consulta.modelo}» de ${consulta.fabricante ?? "el fabricante indicado"} ` +
+        `en la medida ${consulta.medida ?? "indicada"}. Puede venir con otro nombre comercial o con ` +
+        `prefijos de gama (p. ej. «Smart Flex AH31» para «AH31»): devuélvelo con el nombre que use el ` +
+        `fabricante. Céntrate en ese modelo; añade otros solo si salen en la misma ficha.`
+      : `Busca en Internet qué modelos de ${consulta.fabricante ?? "el fabricante indicado"} ` +
+        `se comercializan en la medida ${consulta.medida ?? "indicada"}.`,
     "",
     "Reglas, por este orden:",
     "",

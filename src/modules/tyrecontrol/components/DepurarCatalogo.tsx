@@ -7,7 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Modal, inputCls } from "./ui";
 import BuscadorIACatalogo from "./BuscadorIACatalogo";
-import type { Diagnostico, GrupoSinReferencia, TipoSugerencia } from "../services/depurarCatalogo";
+import { quitarIndices, type Diagnostico, type GrupoSinReferencia, type TipoSugerencia } from "../services/depurarCatalogo";
 import {
   cambiarActivoCatalogo, diagnosticoCatalogo, guardarEquivalencias, marcarDistintos, quitarEquivalencias,
 } from "../services/depurarCatalogoApi";
@@ -34,7 +34,7 @@ export default function DepurarCatalogo({ onClose, onCambio }: { onClose: () => 
   const [marca, setMarca] = useState("");
   const [elegida, setElegida] = useState<Record<string, string>>({});
   const [marcadas, setMarcadas] = useState<Set<string>>(new Set());
-  const [alta, setAlta] = useState<{ marca: string; medida: string } | null>(null);
+  const [alta, setAlta] = useState<{ marca: string; medida: string; modelo: string } | null>(null);
   // Pestaña «sobra».
   const [selMarcas, setSelMarcas] = useState<Set<string>>(new Set());
   const [selModelos, setSelModelos] = useState<Set<string>>(new Set());
@@ -157,7 +157,7 @@ export default function DepurarCatalogo({ onClose, onCambio }: { onClose: () => 
                           </td>
                           <td className="p-2 text-right">
                             {(g.tipo === "sin_modelo" || g.tipo === "sin_medida" || g.tipo === "sin_marca") && (
-                              <button onClick={() => setAlta({ marca: g.marcaCatalogo ?? g.marca, medida: g.medida })}
+                              <button onClick={() => setAlta({ marca: g.marcaCatalogo ?? g.marca, medida: g.medida, modelo: quitarIndices(g.modelo) })}
                                 className="whitespace-nowrap rounded-lg border border-violet-500 px-2.5 py-1 text-xs font-semibold text-violet-200 hover:bg-violet-600/20">✨ Dar de alta con IA</button>
                             )}
                           </td>

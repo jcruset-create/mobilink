@@ -97,8 +97,9 @@ export function createCatalogoIARouter(): Router {
       const marca = String(cuerpo?.marca ?? "").trim();
       const medida = String(cuerpo?.medida ?? "").trim();
       const texto = String(cuerpo?.consulta ?? "").trim();
+      const modelo = String(cuerpo?.modelo ?? "").trim();
 
-      if (marca.length > 80 || medida.length > 40 || texto.length > 300) {
+      if (marca.length > 80 || medida.length > 40 || texto.length > 300 || modelo.length > 80) {
         return res.status(400).json({ error: "La consulta es demasiado larga" });
       }
 
@@ -107,7 +108,7 @@ export function createCatalogoIARouter(): Router {
       // que interpretar, así que no hay nada que interpretar mal. La frase
       // suelta sigue valiendo, para quien la escriba o la llame desde fuera.
       const consulta = marca || medida
-        ? consultaDe(marca, medida)
+        ? consultaDe(marca, medida, modelo)
         : interpretarConsulta(texto);
 
       if (!consulta.fabricante && !consulta.medida) {
@@ -121,7 +122,7 @@ export function createCatalogoIARouter(): Router {
       const candidatos: Candidato[] = clasificarTodos(busqueda.candidatos, consulta, existentes);
 
       res.json({
-        consulta: { texto: consulta.texto, fabricante: consulta.fabricante, medida: consulta.medida },
+        consulta: { texto: consulta.texto, fabricante: consulta.fabricante, medida: consulta.medida, modelo: consulta.modelo ?? null },
         candidatos,
         citas: busqueda.citas,
         aviso: busqueda.aviso,
