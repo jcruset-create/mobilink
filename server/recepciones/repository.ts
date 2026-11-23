@@ -16,6 +16,7 @@
 
 import type { PoolClient, QueryResult, QueryResultRow } from "pg";
 import pool from "../db.ts";
+import { hayCore as hayCoreEn, NOMBRE_CORE_SQL } from "../core/hayCore.ts";
 import { numero } from "./domain/cantidades.ts";
 import type { EstadoAlbaran, EstadoIncidencia, EstadoPedido, ResultadoRecepcion, TipoIncidencia } from "./domain/estados.ts";
 
@@ -800,18 +801,10 @@ const aOperario = (r: any): Operario => {
  * operarios funcionan como siempre, con su propio nombre.
  */
 export async function hayCore(ejecutor?: Ejecutor): Promise<{ core: boolean; numero: boolean }> {
-  const { rows } = await db(ejecutor).query(
-    `SELECT to_regclass('sea_employees') IS NOT NULL AS core,
-            EXISTS (
-              SELECT 1 FROM information_schema.columns
-               WHERE table_name = 'sea_employees' AND column_name = 'numero_trabajador'
-                 AND table_schema = ANY (current_schemas(false))
-            ) AS numero`
-  );
-  return { core: rows[0]?.core === true, numero: rows[0]?.numero === true };
+  return hayCoreEn(db(ejecutor));
 }
 
-const NOMBRE_CORE = `NULLIF(trim(concat_ws(' ', e.nombre, e.apellidos)), '')`;
+const NOMBRE_CORE = NOMBRE_CORE_SQL;
 
 async function selectOperario(ejecutor?: Ejecutor): Promise<{ sql: string; core: boolean }> {
   const { core, numero } = await hayCore(ejecutor);

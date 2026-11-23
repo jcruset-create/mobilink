@@ -246,6 +246,25 @@ export async function patchTechRoadsideCapable(name: string, value: boolean) {
   return response.json();
 }
 
+/**
+ * Enlaza un técnico con su persona de Core (o lo desenlaza con `null`). El
+ * servidor no deja enlazar a una persona que ya es otro técnico.
+ */
+export async function vincularTecnicoCore(name: string, employeeId: string | null) {
+  const response = await fetchWithTimeout(
+    `${API_BASE}/api/techs/${encodeURIComponent(name)}/vinculo-core`,
+    {
+      method: "PUT",
+      headers: getAdminHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ employeeId }),
+    }
+  );
+  if (!response.ok) {
+    const error = await readApiError(response);
+    throw new Error(error?.error || `No se pudo enlazar a ${name} con Core.`);
+  }
+}
+
 export async function deleteTechFromBackend(name: string) {
   const response = await fetchWithTimeout(
     `${API_BASE}/api/techs/${encodeURIComponent(name)}`,

@@ -2,6 +2,7 @@ import { type ChangeEvent, useState } from "react";
 import { WORKSHOPS, DEFAULT_WORKSHOP_ID } from "../modules/workshops";
 import { Link2, Pencil, Phone, Plus, X } from "lucide-react";
 import VinculoCoreModal from "./VinculoCoreModal";
+import PersonaCoreSelector, { type PersonaCore } from "./PersonaCoreSelector";
 import type {
   AreaKey,
   AssignmentRole,
@@ -36,6 +37,8 @@ type Props = {
     phone: string;
     workshopId: string;
     isNew: boolean;
+    /** Alta sobre una persona de Core: el técnico nace enlazado con ella. */
+    employeeId?: string | null;
     competencies: Record<CompetencyKey, RoleCapability>;
     priorities: Record<AreaKey, RolePriority>;
     roadsideCapable: boolean;
@@ -68,6 +71,10 @@ type ModalState =
   | {
       mode: "new";
       name: string;
+      /** La persona de Core elegida. */
+      persona: PersonaCore | null;
+      /** Core no responde (o no hay): alta como siempre, solo con nombre. */
+      sinCore: boolean;
       phone: string;
       workshopId: string;
       roadsideCapable: boolean;
@@ -103,6 +110,8 @@ export default function TecnicosView({
     setModal({
       mode: "new",
       name: "",
+      persona: null,
+      sinCore: false,
       phone: "",
       workshopId: DEFAULT_WORKSHOP_ID,
       roadsideCapable: false,
@@ -134,11 +143,13 @@ export default function TecnicosView({
     if (modal.mode === "new") {
       const name = modal.name.trim();
       if (!name) return;
+      if (!modal.sinCore && !modal.persona) return;
       onSaveTech({
         name,
         phone: modal.phone.trim(),
         workshopId: modal.workshopId,
         isNew: true,
+        employeeId: modal.persona?.id ?? null,
         competencies: modal.competencies,
         priorities: modal.priorities,
         roadsideCapable: modal.roadsideCapable,
@@ -252,6 +263,17 @@ export default function TecnicosView({
                           </span>
                         )}
                       </div>
+                      {tech.employeeId && tech.coreNombre && (
+                        <div className="text-xs text-slate-400">
+                          {tech.coreNombre}
+                          {tech.coreNumero ? ` · Nº ${tech.coreNumero}` : ""}
+                        </div>
+                      )}
+                      {tech.bajaEnCore && (
+                        <div className="mt-0.5 rounded bg-rose-500/15 px-1.5 py-0.5 text-[11px] font-bold text-rose-300">
+                          De baja en Core: dale de baja también aquí
+                        </div>
+                      )}
                       <div className="text-xs font-semibold text-slate-400">
                         {tech.status}
                       </div>
@@ -400,6 +422,34 @@ export default function TecnicosView({
                 </div>
               )}
 
+              {/* Persona de Core (solo alta) */}
+              {modal.mode === "new" && !modal.sinCore && (
+                <div className="block">
+                  <span className="mb-1 block text-xs font-bold text-slate-300">
+                    Persona de la plantilla *
+                  </span>
+                  <PersonaCoreSelector
+                    elegida={modal.persona}
+                    onElegir={(persona) =>
+                      setModal((prev) =>
+                        prev?.mode === "new"
+                          ? {
+                              ...prev,
+                              persona,
+                              // Se propone el nombre de pila: el del taller es
+                              // corto, y es la clave de su histórico.
+                              name: persona && !prev.name.trim() ? persona.nombre.split(" ")[0] : prev.name,
+                            }
+                          : prev
+                      )
+                    }
+                    onSinCore={() =>
+                      setModal((prev) => (prev?.mode === "new" ? { ...prev, sinCore: true } : prev))
+                    }
+                  />
+                </div>
+              )}
+
               {/* Nombre */}
               <label className="block">
                 <span className="mb-1 block text-xs font-bold text-slate-300">
@@ -409,7 +459,7 @@ export default function TecnicosView({
                   <input
                     type="text"
                     autoFocus
-                    placeholder="Nombre del técnico"
+                    placeholder="Nombre en el taller"
                     value={modal.name}
                     onChange={(e) =>
                       setModal((prev) =>
@@ -582,7 +632,7 @@ export default function TecnicosView({
               <button
                 type="button"
                 onClick={handleSave}
-                disabled={modal.mode === "new" && !modal.name.trim()}
+                disabled={modal.mode === "new" && (!modal.name.trim() || (!modal.sinCore && !modal.persona))}
                 className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-black text-white hover:bg-sky-500 disabled:opacity-40"
               >
                 Guardar

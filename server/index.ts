@@ -13,6 +13,7 @@ import { fileURLToPath } from "url";
 import db, { initDb } from "./db.ts";
 import type { PoolClient } from "pg";
 import { supabase, supabaseAnonAuth, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_BUCKET, SUPABASE_DOCS_BUCKET } from "./supabase.ts";
+import { hayCore, NOMBRE_CORE_SQL } from "./core/hayCore.ts";
 import { fallaAlFirmar, firmarEnFilas, firmarUrls } from "./core/fotosFirmadas.ts";
 import { descargarMedioTwilio, rescatarMedioDeTwilio } from "./core/medioTwilio.ts";
 import { elegirPosicion, horaWebfleet, type PosicionElegida } from "./core/posicionDoble.ts";
@@ -905,6 +906,11 @@ function normalizeTechRow(t: any) {
     // Persona de Core con la que está vinculado (paso 2 de la unificación).
     // null = todavía sin vincular; el histórico sigue yendo por nombre.
     employeeId: t.employee_id ?? null,
+    // Quién es en Core, cuando está enlazado (fase C). Solo para enseñarlo:
+    // el técnico se sigue llamando `name`.
+    coreNombre: t.core_nombre ?? null,
+    coreNumero: t.core_numero ?? null,
+    bajaEnCore: t.employee_id != null && t.core_activo === false,
     // Taller al que pertenece. null = el de por defecto, que es como se ha
     // comportado siempre mientras la columna no existía.
     workshopId: t.workshopId ?? null,
@@ -2769,14 +2775,29 @@ Si no hay técnico válido, responsable debe ser null.
    TECHS
 ========================================================= */
 
+/*
+ * Fase C de la unificación: de los técnicos enlazados con Core se trae
+ * también quién son en Core (nombre completo, número de trabajador) y si allí
+ * están de baja. El nombre del técnico NO cambia: es la clave con la que el
+ * taller apunta todo su histórico. Sin Core en la base, como antes.
+ */
 app.get("/api/techs", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
+    const { core, numero } = await hayCore(db);
     const result = await db.query(`
-      SELECT name, status, blocked, "currentJobId", competencies, priorities, avatar,
-             "roadsideCapable", "compartidoCentral", "currentRoadsideAssistanceId", phone,
-             "statusChangedAtMs", "statusTotals", activo, employee_id, "workshopId"
-      FROM techs
-      ORDER BY id ASC
+      SELECT t.name, t.status, t.blocked, t."currentJobId", t.competencies, t.priorities, t.avatar,
+             t."roadsideCapable", t."compartidoCentral", t."currentRoadsideAssistanceId", t.phone,
+             t."statusChangedAtMs", t."statusTotals", t.activo, t.employee_id, t."workshopId"
+             ${
+               core
+                 ? `, ${NOMBRE_CORE_SQL} AS core_nombre,
+                    ${numero ? "e.numero_trabajador" : "NULL::text"} AS core_numero,
+                    e.activo AS core_activo`
+                 : ""
+             }
+      FROM techs t
+      ${core ? "LEFT JOIN sea_employees e ON e.id = t.employee_id" : ""}
+      ORDER BY t.id ASC
     `);
 
     res.json(result.rows.map(normalizeTechRow));
@@ -2992,15 +3013,23 @@ app.put("/api/techs/:name/activo", requireAdminRole, async (req, res) => {
 // Propuesta de emparejado, para revisarla ANTES de aplicar nada. No escribe.
 app.get("/api/techs/vinculo-core", requireAdminRole, async (_req, res) => {
   try {
+    const { numero } = await hayCore(db);
     const [tecnicos, empleados] = await Promise.all([
       db.query(`SELECT name, employee_id FROM techs ORDER BY name`),
       db.query(
-        `SELECT id, nombre, apellidos, codigo_operario
+        `SELECT id, nombre, apellidos, codigo_operario,
+                ${numero ? "numero_trabajador" : "NULL::text AS numero_trabajador"}
            FROM sea_employees
           WHERE activo = true
           ORDER BY nombre`
       ),
     ]);
+    // Quién es ya técnico: el alta de uno nuevo no lo ofrece.
+    const tecnicoDe = new Map<string, string>(
+      tecnicos.rows
+        .filter((t: any) => t.employee_id)
+        .map((t: any) => [String(t.employee_id), String(t.name)])
+    );
 
     const yaVinculados = new Map<string, string>(
       tecnicos.rows
@@ -3020,10 +3049,13 @@ app.get("/api/techs/vinculo-core", requireAdminRole, async (_req, res) => {
     res.json({
       propuestas,
       // Lista completa para elegir a mano cuando la propuesta es ambigua o no
-      // hay candidato. Solo id y nombre: lo demás de la ficha no hace falta.
+      // hay candidato, y para el alta de un técnico nuevo. Lo justo para
+      // elegir: nombre, número de trabajador y si ya es técnico.
       empleados: empleados.rows.map((e: any) => ({
         id: String(e.id),
         nombre: [e.nombre, e.apellidos].filter(Boolean).join(" ").trim(),
+        numeroTrabajador: e.numero_trabajador ?? null,
+        tecnico: tecnicoDe.get(String(e.id)) ?? null,
       })),
       resumen: {
         total: propuestas.length,
