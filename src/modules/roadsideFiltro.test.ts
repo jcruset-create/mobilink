@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { coincide, filtrar, finDelDia, hayCriterios, inicioDelDia, normalizar } from "./roadsideFiltro";
+import { coincide, filtrar, finDelDia, hayCriterios, inicioDelDia, normalizar, operariosDe, SIN_OPERARIO } from "./roadsideFiltro";
 
 const dia = (aaaammdd: string, h = 12) => {
   const [a, m, d] = aaaammdd.split("-").map(Number);
@@ -170,5 +170,32 @@ describe("límites del día", () => {
     expect(inicioDelDia("2026-9-7")).toBeNull();
     expect(inicioDelDia("")).toBeNull();
     expect(finDelDia("ayer")).toBeNull();
+  });
+});
+
+describe("filtro por operario", () => {
+  const lista = [
+    { plate: "1111AAA", assignedTechName: "Iván" },
+    { plate: "2222BBB", assignedTechName: "David" },
+    { plate: "3333CCC", assignedTechName: null },
+    { plate: "4444DDD", assignedTechName: "ivan " },
+    { plate: "5555FFF", assignedTechName: "Iván G." },
+  ];
+
+  it("el nombre exacto, sin acentos ni mayúsculas, y no «contiene»", () => {
+    expect(filtrar(lista, { operario: "Iván" }).map((x) => x.plate)).toEqual(["1111AAA", "4444DDD"]);
+  });
+
+  it("las que no tienen a nadie", () => {
+    expect(filtrar(lista, { operario: SIN_OPERARIO }).map((x) => x.plate)).toEqual(["3333CCC"]);
+  });
+
+  it("se suma a los demás criterios", () => {
+    expect(filtrar(lista, { operario: "David", matricula: "1111" })).toEqual([]);
+    expect(hayCriterios({ operario: "David" })).toBe(true);
+  });
+
+  it("las opciones del desplegable: sin repetir y en orden", () => {
+    expect(operariosDe(lista)).toEqual(["David", "Iván", "Iván G."]);
   });
 });
