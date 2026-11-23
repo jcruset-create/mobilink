@@ -16,6 +16,7 @@ import {
   type WebfleetCreds,
 } from "./tyrecontrol/webfleetCredenciales.ts";
 import { agruparPorCuenta } from "./tyrecontrol/webfleetCuentas.ts";
+import { estadoWebfleetCambia } from "./webfleetCambios.ts";
 import { jsonAjeno } from "./core/jsonAjeno.ts";
 
 type WfObject = Record<string, any>;
@@ -23,7 +24,13 @@ type WfObject = Record<string, any>;
 // Las columnas se llamaban webfleet_* hasta que dejó de ser cosa solo de
 // Webfleet: la misma geo-zona la lee ahora el barrido de telemática del Hub.
 type Base = { id: string; empresa_id: string; nombre: string; base_lat: number | null; base_lng: number | null; base_radio_m: number | null; base_genera_avisos: boolean };
-type EstadoPrevio = { estado: string; delegacion_id: string | null; entrada_base_at: string | null };
+type EstadoPrevio = {
+  estado: string;
+  delegacion_id: string | null;
+  entrada_base_at: string | null;
+  /** El resto de columnas: solo para saber si la fila cambia. */
+  [campo: string]: unknown;
+};
 
 // ── Petición a Webfleet, con las credenciales de CADA cliente ────────────────
 //
@@ -129,6 +136,8 @@ function odometroKm(o: WfObject): number | null {
 export async function syncWebfleetOnce(): Promise<
   | {
       actualizados: number;
+      /** De esos, los que traían algo distinto y se han escrito. */
+      conCambios?: number;
       /** Cuentas de Webfleet distintas consultadas en este ciclo. */
       cuentas?: number;
       /** Vehículos no tocados porque su cuenta falló o no tenía credenciales. */
@@ -142,7 +151,10 @@ export async function syncWebfleetOnce(): Promise<
       // Bases = delegaciones con geo-zona definida.
       supabase.from("tc_delegaciones").select("id, empresa_id, nombre, base_lat, base_lng, base_radio_m, base_genera_avisos").not("base_lat", "is", null),
       supabase.from("tc_vehiculos").select("id, empresa_id, delegacion_id, matricula, km_actual, webfleet_vehicle_id").eq("activo", true),
-      supabase.from("tc_vehiculo_webfleet_estado").select("vehiculo_id, estado, delegacion_id, entrada_base_at"),
+      // Todo lo que se escribe, para escribir solo lo que cambia (ver webfleetCambios.ts).
+      supabase
+        .from("tc_vehiculo_webfleet_estado")
+        .select("vehiculo_id, empresa_id, estado, delegacion_id, entrada_base_at, lat, lng, postext, velocidad_kmh, odometro_km, pos_time"),
       supabase.from("tc_operaciones_mantenimiento").select("id, nombre"),
     ]);
 
@@ -283,8 +295,14 @@ export async function syncWebfleetOnce(): Promise<
       }
     }
 
-    if (filas.length > 0) {
-      const { error } = await supabase.from("tc_vehiculo_webfleet_estado").upsert(filas, { onConflict: "vehiculo_id" });
+    /*
+     * Solo las filas que cambian. Un vehículo aparcado toda la noche eran 288
+     * escrituras al día de lo mismo; la tabla llegó a 24 millones de
+     * actualizaciones, la que más disco gastaba de la base.
+     */
+    const cambiadas = filas.filter((f) => estadoWebfleetCambia(previos.get(f.vehiculo_id), f));
+    if (cambiadas.length > 0) {
+      const { error } = await supabase.from("tc_vehiculo_webfleet_estado").upsert(cambiadas, { onConflict: "vehiculo_id" });
       if (error) return { error: error.message };
     }
 
@@ -322,7 +340,7 @@ export async function syncWebfleetOnce(): Promise<
     if (alertas.length > 0) {
       await supabase.from("tc_webfleet_alertas").upsert(alertas, { onConflict: "vehiculo_id,delegacion_id,entrada_base_at", ignoreDuplicates: true });
     }
-    return { actualizados: filas.length, cuentas: flota.cuentas, omitidos };
+    return { actualizados: filas.length, conCambios: cambiadas.length, cuentas: flota.cuentas, omitidos };
   } catch (e: any) {
     return { error: e?.message || "Error sync Webfleet" };
   }
@@ -411,7 +429,7 @@ export async function startWebfleetSync(): Promise<void> {
     else {
       const extra = res.omitidos ? `, ${res.omitidos} sin consultar` : "";
       console.log(
-        `[webfleet-sync] ${res.actualizados} vehículos actualizados` +
+        `[webfleet-sync] ${res.actualizados} vehículos revisados, ${res.conCambios ?? res.actualizados} con cambios` +
           `${res.cuentas != null ? ` (${res.cuentas} cuenta(s))` : ""}${extra}`,
       );
     }
