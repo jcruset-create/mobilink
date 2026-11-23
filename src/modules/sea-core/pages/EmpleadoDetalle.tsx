@@ -20,7 +20,7 @@ type Empleado = {
   sea_work_centers: { nombre: string } | null;
 };
 
-const TABS = ["Datos personales", "Competencias", "Certificaciones", "Autorizaciones", "Formación", "Vestuario", "Acceso"];
+const TABS = ["Datos personales", "Competencias", "Certificaciones", "Autorizaciones", "Formación", "Vestuario", "Documentación", "Acceso"];
 // Solo el superadministrador ve y edita el horario; va al final para no mover el resto.
 const TAB_HORARIO = TABS.length;
 
@@ -29,6 +29,49 @@ const ROL_BADGE: Record<string, string> = {
   operario: "bg-blue-100 text-blue-800", prl: "bg-purple-100 text-purple-800",
   almacen: "bg-green-100 text-green-800",
 };
+
+/**
+ * Lo que el servidor cuenta de la ficha que rellenó el propio trabajador.
+ *
+ * Viene de `/api/core/alta/:id`, que es de administradores: si la llamada no
+ * pasa, esta pantalla simplemente no enseña nada de esto. La documentación de
+ * alguien no es algo que se deje a medio esconder en una pestaña por si acaso.
+ */
+type Revision = {
+  estadoAlta: string;
+  invitacion: {
+    estado: string; motivo: string; enviadoAt: string | null; abiertoAt: string | null;
+    recibidaAt: string | null; caducaAt: string | null; firmadoAt: string | null;
+    verificadoAt: string | null;
+  } | null;
+  documentos: Array<{ tipo: string; url: string | null; subidoAt: string; bytes: number | null }>;
+  firma: string | null;
+  verificacion: { campos: Array<{ campo: string; tecleado: string | null; leido: string | null; veredicto: string; nota: string }>; resumen: string } | null;
+  consentimientos: Array<{ tipo: string; aceptado: boolean; fecha: string | null }>;
+  puedeVerificar: boolean;
+};
+
+const DOC_LABEL: Record<string, string> = {
+  dni_anverso: "DNI · delante",
+  dni_reverso: "DNI · detrás",
+  carnet_anverso: "Carnet · delante",
+  carnet_reverso: "Carnet · detrás",
+};
+
+const VEREDICTO: Record<string, { label: string; clase: string }> = {
+  coincide:    { label: "Cuadra",     clase: "bg-green-500/20 text-green-300" },
+  no_coincide: { label: "No cuadra",  clase: "bg-red-500/20 text-red-300" },
+  ilegible:    { label: "No se lee",  clase: "bg-amber-500/20 text-amber-300" },
+};
+
+const CONSENT_LABEL: Record<string, string> = {
+  normativa_interna: "Normativa interna",
+  whatsapp: "Avisos por WhatsApp",
+  proteccion_datos: "Tratamiento de datos",
+};
+
+const fechaHora = (iso: string | null | undefined) =>
+  iso ? new Date(iso).toLocaleString("es-ES", { dateStyle: "short", timeStyle: "short" }) : "—";
 
 const NIVEL_BADGE: Record<string, string> = {
   basico: "bg-slate-700 text-slate-200", medio: "bg-blue-100 text-blue-700",
@@ -46,6 +89,12 @@ export default function EmpleadoDetalle() {
   const [empleado, setEmpleado] = useState<Empleado | null>(null);
   const [tabActiva, setTabActiva] = useState(0);
   const [cargando, setCargando] = useState(true);
+
+  // Revisión del alta (solo administradores; si no, se queda en null).
+  const [revision, setRevision] = useState<Revision | null>(null);
+  const [accion, setAccion] = useState<"" | "aprobando" | "verificando" | "corrigiendo">("");
+  const [revMensaje, setRevMensaje] = useState("");
+  const [revError, setRevError] = useState("");
   const esSuperadmin = useEsSuperadmin();
   const tabs = esSuperadmin ? [...TABS, "Horario"] : TABS;
 
@@ -168,6 +217,7 @@ export default function EmpleadoDetalle() {
       setVestuarioId(null);
       setFormVest({ calzado: "", pantalon: "", camisa: "", camiseta: "", chaqueta: "", sudadera: "", chaleco: "", observaciones: "" });
     }
+    void cargarRevision(empId);
     setCargando(false);
     void cargarEstadoPin(empId);
   }
@@ -184,6 +234,86 @@ export default function EmpleadoDetalle() {
     setFormComp({ competencia_id: "", nivel: "basico", notas: "" });
     setMensaje("Competencia añadida."); setTimeout(() => setMensaje(""), 3000);
     cargar(id!);
+  }
+
+  /**
+   * La revisión del alta. Va con el resto de la carga de la ficha y no en un
+   * efecto aparte: es un dato más de esta pantalla, y así se refresca sola
+   * cuando algo la recarga.
+   */
+  async function cargarRevision(empId: string) {
+    try {
+      const r = await apiFetch(`/api/core/alta/${empId}`);
+      setRevision(r.ok ? await r.json() : null);
+    } catch {
+      setRevision(null);
+    }
+  }
+
+  /** Lanza la comprobación de lo tecleado contra las fotos. */
+  async function comprobarConIA() {
+    if (!id) return;
+    setAccion("verificando");
+    setRevError("");
+    try {
+      const r = await apiFetch(`/api/core/alta/${id}/verificar`, { method: "POST" });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d?.error ?? "No se ha podido comprobar.");
+      await cargarRevision(id);
+      setRevMensaje("Comprobación hecha.");
+      setTimeout(() => setRevMensaje(""), 4000);
+    } catch (e) {
+      setRevError(e instanceof Error ? e.message : "No se ha podido comprobar.");
+    } finally {
+      setAccion("");
+    }
+  }
+
+  async function aprobarFicha() {
+    if (!id) return;
+    setAccion("aprobando");
+    setRevError("");
+    try {
+      const r = await apiFetch(`/api/core/alta/${id}/aprobar`, { method: "POST" });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d?.error ?? "No se ha podido aprobar.");
+      await Promise.all([cargarRevision(id), cargar(id)]);
+      setRevMensaje(
+        d.certificaciones?.length
+          ? `Ficha aprobada. Anotado en Certificaciones: ${d.certificaciones.join(", ")}.`
+          : "Ficha aprobada. El empleado queda activo."
+      );
+      setTimeout(() => setRevMensaje(""), 6000);
+    } catch (e) {
+      setRevError(e instanceof Error ? e.message : "No se ha podido aprobar.");
+    } finally {
+      setAccion("");
+    }
+  }
+
+  /** Le devuelve el enlace con una nota de qué hay que corregir. */
+  async function pedirCorreccion() {
+    if (!id) return;
+    const nota = prompt("¿Qué tiene que corregir? (se le manda en el SMS)", "");
+    if (nota === null) return;
+    setAccion("corrigiendo");
+    setRevError("");
+    try {
+      const r = await apiFetch("/api/core/alta/invitar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ employeeId: id, motivo: "actualizacion", nota }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d?.error ?? "No se ha podido mandar el SMS.");
+      await Promise.all([cargarRevision(id), cargar(id)]);
+      setRevMensaje("Enlace reenviado con tu nota. Caduca en 72 horas.");
+      setTimeout(() => setRevMensaje(""), 6000);
+    } catch (e) {
+      setRevError(e instanceof Error ? e.message : "No se ha podido mandar el SMS.");
+    } finally {
+      setAccion("");
+    }
   }
 
   async function addCertificacion() {
@@ -439,6 +569,40 @@ export default function EmpleadoDetalle() {
           <Link to="/core/empleados" className="text-sm text-slate-400 hover:text-slate-200">← Volver</Link>
         </div>
       </div>
+
+      {revMensaje && (
+        <p className="rounded-lg border border-green-800 bg-green-900/30 p-3 text-sm text-green-200">{revMensaje}</p>
+      )}
+      {revError && (
+        <p className="rounded-lg border border-red-800 bg-red-950/60 p-3 text-sm text-red-200">{revError}</p>
+      )}
+
+      {revision?.estadoAlta === "recibida" && (
+        <div className="rounded-xl border border-amber-700 bg-amber-500/10 p-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="text-sm text-amber-100">
+            <b>La ha rellenado el propio trabajador</b> y está pendiente de revisar.
+            <span className="text-amber-200/70">
+              {" "}Enviada el {fechaHora(revision.invitacion?.recibidaAt)}. Mira la pestaña Documentación antes de aprobar.
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {revision.puedeVerificar && (
+              <button onClick={() => void comprobarConIA()} disabled={accion !== ""}
+                className="rounded-lg border border-slate-600 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-700/50 disabled:opacity-50">
+                {accion === "verificando" ? "Comprobando…" : "Comprobar con IA"}
+              </button>
+            )}
+            <button onClick={() => void pedirCorreccion()} disabled={accion !== ""}
+              className="rounded-lg border border-slate-600 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-700/50 disabled:opacity-50">
+              {accion === "corrigiendo" ? "Enviando…" : "Pedirle que corrija"}
+            </button>
+            <button onClick={() => void aprobarFicha()} disabled={accion !== ""}
+              className="rounded-lg bg-green-700 px-4 py-1.5 text-xs font-bold text-white hover:bg-green-600 disabled:opacity-50">
+              {accion === "aprobando" ? "Aprobando…" : "Aprobar y activar"}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="border-b border-slate-700 flex gap-0 overflow-x-auto">
@@ -881,7 +1045,118 @@ export default function EmpleadoDetalle() {
           </div>
         </div>
       )}
-      {tabActiva === 6 && <AccesoEmpleado empleado={empleado} />}
+      {/* Tab: Documentación */}
+      {tabActiva === 6 && (
+        <div className="space-y-4">
+          {!revision ? (
+            <div className="rounded-xl border border-slate-700 bg-slate-800 p-5 text-sm text-slate-400">
+              La documentación personal solo la ve un administrador.
+            </div>
+          ) : revision.documentos.length === 0 && !revision.firma ? (
+            <div className="rounded-xl border border-slate-700 bg-slate-800 p-5 text-sm text-slate-400">
+              Este empleado todavía no ha subido ninguna documentación.{" "}
+              {revision.estadoAlta === "completa"
+                ? "Puedes pedírsela desde la lista de empleados, con «Pedir actualización»."
+                : "Está pendiente de que rellene el formulario que le mandamos."}
+            </div>
+          ) : (
+            <>
+              <div className="rounded-xl border border-slate-700 bg-slate-800 p-5 space-y-3">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <h2 className="font-semibold text-slate-200">Lo que ha subido</h2>
+                  <span className="text-xs text-slate-500">
+                    Los enlaces caducan en una hora: la documentación no vive en una URL pública.
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  {revision.documentos.map((d) => (
+                    <a key={d.tipo} href={d.url ?? undefined} target="_blank" rel="noreferrer"
+                      className="group rounded-xl border border-slate-700 bg-slate-900 p-2 hover:border-sky-600">
+                      {d.url ? (
+                        <img src={d.url} alt={DOC_LABEL[d.tipo] ?? d.tipo}
+                          className="h-36 w-full rounded-lg object-cover" />
+                      ) : (
+                        <div className="flex h-36 items-center justify-center rounded-lg bg-slate-800 text-xs text-slate-500">
+                          No se ha podido abrir
+                        </div>
+                      )}
+                      <div className="mt-2 text-xs font-semibold text-slate-200 group-hover:text-sky-400">
+                        {DOC_LABEL[d.tipo] ?? d.tipo}
+                      </div>
+                      <div className="text-[11px] text-slate-500">{fechaHora(d.subidoAt)}</div>
+                    </a>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                <div className="rounded-xl border border-slate-700 bg-slate-800 p-5 space-y-3">
+                  <h2 className="font-semibold text-slate-200">Firma y permisos</h2>
+                  {revision.firma ? (
+                    <img src={revision.firma} alt="Firma del empleado"
+                      className="h-24 w-full rounded-lg bg-slate-50 object-contain p-2" />
+                  ) : (
+                    <p className="text-sm text-slate-500">Sin firma.</p>
+                  )}
+                  {revision.consentimientos.map((c, i) => (
+                    <div key={`${c.tipo}-${i}`} className="flex justify-between border-b border-slate-700 pb-2 text-sm last:border-0">
+                      <span className="text-slate-400">{CONSENT_LABEL[c.tipo] ?? c.tipo}</span>
+                      <span className={c.aceptado ? "text-green-400" : "text-slate-500"}>
+                        {c.aceptado ? `Aceptado · ${fechaHora(c.fecha)}` : "No aceptado"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="rounded-xl border border-slate-700 bg-slate-800 p-5 space-y-3">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <h2 className="font-semibold text-slate-200">Lo tecleado contra la foto</h2>
+                    {revision.puedeVerificar && (
+                      <button onClick={() => void comprobarConIA()} disabled={accion !== ""}
+                        className="rounded-lg border border-slate-600 px-3 py-1 text-xs text-slate-300 hover:bg-slate-700/50 disabled:opacity-50">
+                        {accion === "verificando" ? "Comprobando…" : revision.verificacion ? "Volver a comprobar" : "Comprobar con IA"}
+                      </button>
+                    )}
+                  </div>
+                  {!revision.verificacion ? (
+                    <p className="text-sm leading-6 text-slate-400">
+                      Todavía no se ha comprobado. La IA compara lo que escribió el trabajador con sus
+                      fotos y marca lo que no cuadra; <b className="text-slate-300">no corrige nada</b>,
+                      decide quien revisa.
+                    </p>
+                  ) : (
+                    <>
+                      <p className="text-xs text-slate-500">
+                        Comprobado el {fechaHora(revision.invitacion?.verificadoAt)}
+                      </p>
+                      <div className="space-y-2">
+                        {revision.verificacion.campos.map((c) => (
+                          <div key={c.campo} className="border-b border-slate-700 pb-2 last:border-0">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-sm text-slate-300">{c.campo}</span>
+                              <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${VEREDICTO[c.veredicto]?.clase ?? "bg-slate-700 text-slate-300"}`}>
+                                {VEREDICTO[c.veredicto]?.label ?? c.veredicto}
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-slate-500">
+                              Tecleado: {c.tecleado ?? "—"}
+                              {c.leido ? ` · En la foto: ${c.leido}` : ""}
+                            </div>
+                            {c.nota && <div className="text-[11px] text-slate-400">{c.nota}</div>}
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-xs text-slate-400">{revision.verificacion.resumen}</p>
+                    </>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {tabActiva === 7 && <AccesoEmpleado empleado={empleado} />}
       {tabActiva === TAB_HORARIO && esSuperadmin && empleado && (
         <HorarioEmpleado empleadoId={empleado.id} nombre={[empleado.nombre, empleado.apellidos].filter(Boolean).join(" ")} />
       )}

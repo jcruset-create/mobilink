@@ -13,6 +13,10 @@ import {
   textoSms,
   urlDeAlta,
   validarFicha,
+  motivoDeInvitacion,
+  estadoTrasInvitar,
+  textoSmsActualizacion,
+  resumenVerificacion,
 } from "./altaOperario";
 
 describe("dniValido", () => {
@@ -194,5 +198,60 @@ describe("esTipoDocumento", () => {
     expect(esTipoDocumento("carnet_reverso")).toBe(true);
     expect(esTipoDocumento("nomina")).toBe(false);
     expect(esTipoDocumento(null)).toBe(false);
+  });
+});
+
+describe("alta o actualizacion", () => {
+  it("a quien ya esta completo se le pide una actualizacion, no un alta", () => {
+    expect(motivoDeInvitacion("completa")).toBe("actualizacion");
+  });
+
+  it("a quien esta a medias se le sigue pidiendo el alta", () => {
+    expect(motivoDeInvitacion("pendiente")).toBe("alta");
+    expect(motivoDeInvitacion("recibida")).toBe("alta");
+    expect(motivoDeInvitacion(null)).toBe("alta");
+  });
+
+  it("la ficha no vuelve a «enviado» cuando es una actualizacion", () => {
+    expect(estadoTrasInvitar("actualizacion")).toBe("actualizando");
+    expect(estadoTrasInvitar("alta")).toBe("enviado");
+  });
+
+  it("el SMS de actualizacion dice que la ficha ya esta empezada", () => {
+    const sms = textoSmsActualizacion({ empresa: "COMERCIAL SEA", nombre: "Albert", url: "https://x.es/alta/t" });
+    expect(sms).toContain("repasa y actualiza");
+    expect(sms).toContain("Ya tienes la ficha empezada");
+    expect(sms).not.toContain("terminar tu alta");
+  });
+
+  it("la nota del encargado viaja en el SMS", () => {
+    const sms = textoSmsActualizacion({
+      empresa: "COMERCIAL SEA", nombre: "Albert", url: "https://x.es/alta/t",
+      nota: "La foto del DNI sale movida.",
+    });
+    expect(sms).toContain("La foto del DNI sale movida.");
+  });
+});
+
+describe("resumenVerificacion", () => {
+  const campo = (veredicto: "coincide" | "no_coincide" | "ilegible") => ({
+    campo: "dni_nie", tecleado: "x", leido: "y", veredicto, nota: "",
+  });
+
+  it("sin verificacion no hay problemas que enseñar", () => {
+    expect(resumenVerificacion(null)).toEqual({ coinciden: 0, noCoinciden: 0, ilegibles: 0, hayProblemas: false });
+  });
+
+  it("cuenta cada veredicto por separado", () => {
+    const r = resumenVerificacion({
+      campos: [campo("coincide"), campo("coincide"), campo("ilegible"), campo("no_coincide")],
+      resumen: "",
+    });
+    expect(r).toEqual({ coinciden: 2, noCoinciden: 1, ilegibles: 1, hayProblemas: true });
+  });
+
+  it("lo ilegible no es un problema: es una foto mala, no un dato falso", () => {
+    const r = resumenVerificacion({ campos: [campo("ilegible"), campo("coincide")], resumen: "" });
+    expect(r.hayProblemas).toBe(false);
   });
 });

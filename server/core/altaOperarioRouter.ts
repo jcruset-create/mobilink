@@ -16,14 +16,19 @@
 
 import { Router, json, type Request, type Response } from "express";
 import multer from "multer";
+import sharp from "sharp";
 
 import db from "../db.ts";
 import { supabase } from "../supabase.ts";
 import { authenticate, requireAdmin } from "./auth.ts";
 import { registrarAuditoria } from "./auditoria.ts";
 import { clienteTwilio, hayCredencialesTwilio } from "./twilio.ts";
+import { hayIA, pedirIA } from "./openaiService.ts";
 import {
   CAMPOS_TALLA,
+  CAMPOS_VERIFICABLES,
+  ESQUEMA_VERIFICACION,
+  INSTRUCCIONES_VERIFICACION,
   caducidadDesde,
   esTipoDocumento,
   faltaParaEnviar,
@@ -32,9 +37,14 @@ import {
   movilValido,
   nuevoToken,
   textoSms,
+  estadoTrasInvitar,
+  motivoDeInvitacion,
+  textoSmsActualizacion,
   urlDeAlta,
   validarFicha,
   type Consentimiento,
+  type MotivoInvitacion,
+  type Verificacion,
 } from "./altaOperario.ts";
 
 /** Bucket PRIVADO. Hay que crearlo a mano en Supabase, sin marcar «Public». */
@@ -167,7 +177,7 @@ export function createAltaOperarioAdminRouter(): Router {
     }
 
     const { rows } = await db.query(
-      `SELECT e.id, e.nombre, e.apellidos, e.telefono, e.company_id, c.nombre AS empresa
+      `SELECT e.id, e.nombre, e.apellidos, e.telefono, e.estado_alta, e.company_id, c.nombre AS empresa
          FROM sea_employees e
          LEFT JOIN sea_companies c ON c.id = e.company_id
         WHERE e.id = $1`,
@@ -188,6 +198,20 @@ export function createAltaOperarioAdminRouter(): Router {
       });
     }
 
+    /*
+     * Alta o actualización. Por defecto lo decide el estado de la ficha —a
+     * quien ya está completo se le pide que repase, no que se dé de alta—,
+     * pero la pantalla puede forzarlo: «pedir corrección» sobre una ficha
+     * recién recibida es una actualización, aunque el alta no esté cerrada.
+     */
+    const motivo: MotivoInvitacion =
+      req.body?.motivo === "actualizacion" || req.body?.motivo === "alta"
+        ? req.body.motivo
+        : motivoDeInvitacion(empleado.estado_alta);
+    const nota = String(req.body?.nota ?? "").trim().slice(0, 160) || null;
+    const estadoNuevo = estadoTrasInvitar(motivo);
+    const estadoPrevio = String(empleado.estado_alta ?? "pendiente");
+
     const token = nuevoToken();
     const caduca = caducidadDesde(Date.now());
     const cliente = await db.connect();
@@ -200,15 +224,15 @@ export function createAltaOperarioAdminRouter(): Router {
         [employeeId]
       );
       const { rows: creada } = await cliente.query(
-        `INSERT INTO sea_employee_invites (employee_id, token_hash, telefono, canal, estado, caduca_at, enviado_por)
-         VALUES ($1, $2, $3, 'sms', 'enviado', $4, $5)
+        `INSERT INTO sea_employee_invites (employee_id, token_hash, telefono, canal, estado, caduca_at, enviado_por, motivo)
+         VALUES ($1, $2, $3, 'sms', 'enviado', $4, $5, $6)
          RETURNING id`,
-        [employeeId, hashToken(token), movil, caduca.toISOString(), req.authCtx!.userId]
+        [employeeId, hashToken(token), movil, caduca.toISOString(), req.authCtx!.userId, motivo]
       );
       invitacionId = creada[0].id;
       await cliente.query(
-        `UPDATE sea_employees SET estado_alta = 'enviado', telefono = COALESCE(telefono, $2) WHERE id = $1`,
-        [employeeId, movil]
+        `UPDATE sea_employees SET estado_alta = $3, telefono = COALESCE(telefono, $2) WHERE id = $1`,
+        [employeeId, movil, estadoNuevo]
       );
       await cliente.query("COMMIT");
     } catch (e) {
@@ -218,11 +242,13 @@ export function createAltaOperarioAdminRouter(): Router {
       cliente.release();
     }
 
-    const cuerpo = textoSms({
+    const comun = {
       empresa: String(empleado.empresa ?? "Mobilink"),
       nombre: String(empleado.nombre ?? "").split(" ")[0],
       url: urlDeAlta(baseUrlPublica(), token),
-    });
+    };
+    const cuerpo =
+      motivo === "actualizacion" ? textoSmsActualizacion({ ...comun, nota }) : textoSms(comun);
 
     try {
       const mensaje = await clienteTwilio().messages.create({
@@ -242,7 +268,7 @@ export function createAltaOperarioAdminRouter(): Router {
         `UPDATE sea_employee_invites SET estado = 'anulada', error = $2 WHERE id = $1`,
         [invitacionId, motivo]
       );
-      await db.query(`UPDATE sea_employees SET estado_alta = 'pendiente' WHERE id = $1`, [employeeId]);
+      await db.query(`UPDATE sea_employees SET estado_alta = $2 WHERE id = $1`, [employeeId, estadoPrevio]);
       return res.status(502).json({ error: `No se ha podido mandar el SMS: ${motivo}` });
     }
 
@@ -252,14 +278,299 @@ export function createAltaOperarioAdminRouter(): Router {
       accion: "core.alta.invitar",
       entidad: "sea_employees",
       entidadId: employeeId,
-      detalle: { canal: "sms", caduca: caduca.toISOString() },
+      detalle: { canal: "sms", motivo, caduca: caduca.toISOString() },
       ip: req.ip,
     }).catch(() => {});
 
-    res.json({ ok: true, estado: "enviado", caducaAt: caduca.toISOString() });
+    res.json({ ok: true, estado: estadoNuevo, motivo, caducaAt: caduca.toISOString() });
+  });
+
+  /**
+   * Todo lo que hace falta para revisar una ficha recién recibida.
+   *
+   * Las fotos salen con URL firmada de una hora y no públicas: el bucket es
+   * privado justo para que el DNI de un trabajador no viva en una URL que
+   * cualquiera pueda reenviar.
+   */
+  r.get("/:employeeId", async (req: Request, res: Response) => {
+    const employeeId = String(req.params.employeeId ?? "");
+    if (!/^[0-9a-f-]{36}$/i.test(employeeId)) {
+      return res.status(400).json({ error: "Ese empleado no existe." });
+    }
+
+    const { rows: emp } = await db.query(
+      `SELECT estado_alta FROM sea_employees WHERE id = $1`,
+      [employeeId]
+    );
+    if (emp.length === 0) return res.status(404).json({ error: "Ese empleado no existe." });
+
+    const { rows: inv } = await db.query(
+      `SELECT id, estado, motivo, enviado_at, abierto_at, recibida_at, caduca_at,
+              firmado_at, firma_path, verificacion, verificado_at
+         FROM sea_employee_invites
+        WHERE employee_id = $1
+        ORDER BY enviado_at DESC
+        LIMIT 1`,
+      [employeeId]
+    );
+    const { rows: consentimientos } = await db.query(
+      `SELECT tipo, aceptado, fecha FROM sea_consents
+        WHERE employee_id = $1 ORDER BY fecha DESC LIMIT 6`,
+      [employeeId]
+    );
+
+    const invitacion = inv[0] ?? null;
+    res.json({
+      estadoAlta: emp[0].estado_alta,
+      invitacion: invitacion && {
+        estado: invitacion.estado,
+        motivo: invitacion.motivo,
+        enviadoAt: invitacion.enviado_at,
+        abiertoAt: invitacion.abierto_at,
+        recibidaAt: invitacion.recibida_at,
+        caducaAt: invitacion.caduca_at,
+        firmadoAt: invitacion.firmado_at,
+        verificadoAt: invitacion.verificado_at,
+      },
+      documentos: await documentosConUrl(employeeId),
+      firma: invitacion?.firma_path ? await urlFirmada(invitacion.firma_path) : null,
+      verificacion: invitacion?.verificacion ?? null,
+      consentimientos,
+      puedeVerificar: hayIA(),
+    });
+  });
+
+  /**
+   * Contrasta lo que tecleó el trabajador con sus fotos.
+   *
+   * Se lanza a mano desde la pantalla de revisión, y no al recibir la ficha,
+   * por una razón práctica: si el modelo está caído o la clave caducada, el
+   * trabajador no tiene por qué enterarse ni quedarse esperando. El encargado
+   * sí, porque es quien va a decidir.
+   */
+  r.post("/:employeeId/verificar", async (req: Request, res: Response) => {
+    const employeeId = String(req.params.employeeId ?? "");
+    if (!/^[0-9a-f-]{36}$/i.test(employeeId)) {
+      return res.status(400).json({ error: "Ese empleado no existe." });
+    }
+    if (!hayIA()) {
+      return res.status(503).json({
+        error: "La comprobación automática no está configurada en este servidor.",
+      });
+    }
+
+    try {
+      const verificacion = await verificarConIA(employeeId);
+      await db.query(
+        `UPDATE sea_employee_invites SET verificacion = $2, verificado_at = now()
+          WHERE id = (SELECT id FROM sea_employee_invites WHERE employee_id = $1
+                       ORDER BY enviado_at DESC LIMIT 1)`,
+        [employeeId, JSON.stringify(verificacion)]
+      );
+      res.json({ ok: true, verificacion });
+    } catch (e) {
+      const motivo = e instanceof Error ? e.message : "error desconocido";
+      res.status(502).json({ error: `No se ha podido comprobar: ${motivo}` });
+    }
+  });
+
+  /**
+   * Dar la ficha por buena.
+   *
+   * Solo desde `recibida`: aprobar una ficha que nadie ha mandado no
+   * significa nada, y dejarlo pasar convertiría el botón en una forma de
+   * cerrar altas vacías sin que quede claro quién lo hizo.
+   */
+  r.post("/:employeeId/aprobar", async (req: Request, res: Response) => {
+    const employeeId = String(req.params.employeeId ?? "");
+    if (!/^[0-9a-f-]{36}$/i.test(employeeId)) {
+      return res.status(400).json({ error: "Ese empleado no existe." });
+    }
+
+    const { rows } = await db.query(
+      `SELECT estado_alta, carnet_numero, carnet_clases, carnet_caducidad,
+              cap_numero, cap_caducidad
+         FROM sea_employees WHERE id = $1`,
+      [employeeId]
+    );
+    const empleado = rows[0];
+    if (!empleado) return res.status(404).json({ error: "Ese empleado no existe." });
+    if (empleado.estado_alta !== "recibida") {
+      return res.status(409).json({
+        error: "Esta ficha no está pendiente de revisar.",
+        code: "NO_PENDIENTE",
+      });
+    }
+
+    await db.query(`UPDATE sea_employees SET estado_alta = 'completa' WHERE id = $1`, [employeeId]);
+    const certificaciones = await anotarCaducidades(employeeId, empleado);
+
+    await registrarAuditoria({
+      empresaId: req.authCtx!.empresaId,
+      userId: req.authCtx!.userId,
+      accion: "core.alta.aprobar",
+      entidad: "sea_employees",
+      entidadId: employeeId,
+      detalle: { certificaciones },
+      ip: req.ip,
+    }).catch(() => {});
+
+    res.json({ ok: true, estado: "completa", certificaciones });
   });
 
   return r;
+}
+
+// ── Lo que necesita la pantalla de revisión ────────────────────────────────
+
+/** Una hora: lo que dura mirar una ficha, no lo que dura un enlace reenviado. */
+const CADUCIDAD_URL_S = 3600;
+
+async function urlFirmada(ruta: string): Promise<string | null> {
+  const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(ruta, CADUCIDAD_URL_S);
+  return error ? null : data.signedUrl;
+}
+
+async function documentosConUrl(
+  employeeId: string
+): Promise<Array<{ tipo: string; url: string | null; subidoAt: string; bytes: number | null }>> {
+  const { rows } = await db.query(
+    `SELECT tipo, storage_path, subido_at, bytes FROM sea_employee_documents
+      WHERE employee_id = $1 ORDER BY tipo`,
+    [employeeId]
+  );
+  return Promise.all(
+    rows.map(
+      async (d: { tipo: string; storage_path: string; subido_at: string; bytes: number | null }) => ({
+        tipo: d.tipo,
+        url: await urlFirmada(d.storage_path),
+        subidoAt: d.subido_at,
+        bytes: d.bytes,
+      })
+    )
+  );
+}
+
+/**
+ * El carnet y el CAP, anotados como certificaciones con su caducidad.
+ *
+ * Así dejan de ser dos fechas sueltas en la ficha y pasan a la pestaña de
+ * Certificaciones, que es donde ya se mira qué caduca y cuándo. No se
+ * duplica: si ya hay una igual con la misma fecha, se deja la que está.
+ */
+async function anotarCaducidades(
+  employeeId: string,
+  e: {
+    carnet_numero: string | null;
+    carnet_clases: string | null;
+    carnet_caducidad: string | null;
+    cap_numero: string | null;
+    cap_caducidad: string | null;
+  }
+): Promise<string[]> {
+  const candidatas = [
+    e.carnet_caducidad && {
+      nombre: `Carnet de conducir${e.carnet_clases ? ` (${e.carnet_clases})` : ""}`,
+      numero: e.carnet_numero,
+      caducidad: e.carnet_caducidad,
+    },
+    e.cap_caducidad && { nombre: "CAP", numero: e.cap_numero, caducidad: e.cap_caducidad },
+  ].filter(Boolean) as Array<{ nombre: string; numero: string | null; caducidad: string }>;
+
+  const anotadas: string[] = [];
+  for (const c of candidatas) {
+    const { rows } = await db.query(
+      `SELECT 1 FROM sea_employee_certifications
+        WHERE employee_id = $1 AND nombre = $2 AND fecha_caducidad = $3`,
+      [employeeId, c.nombre, c.caducidad]
+    );
+    if (rows.length > 0) continue;
+    await db.query(
+      `INSERT INTO sea_employee_certifications
+         (employee_id, nombre, entidad_emisora, fecha_caducidad, numero_certificado)
+       VALUES ($1, $2, 'DGT', $3, $4)`,
+      [employeeId, c.nombre, c.caducidad, c.numero]
+    );
+    anotadas.push(c.nombre);
+  }
+  return anotadas;
+}
+
+// ── La comprobación con IA ─────────────────────────────────────────────────
+
+/**
+ * Una foto de móvil de 2,5 MB no se le manda tal cual al modelo.
+ *
+ * A 1400 px de ancho se lee perfectamente un DNI —las letras del documento
+ * ocupan una fracción del encuadre— y el fichero baja a unos cientos de kB.
+ * Lo que se ahorra no es dinero: es el minuto largo que tardaría en subir
+ * cuatro fotos enteras mientras el encargado mira una pantalla parada.
+ */
+async function imagenParaIA(ruta: string): Promise<string | null> {
+  const { data, error } = await supabase.storage.from(BUCKET).download(ruta);
+  if (error || !data) return null;
+  const original = Buffer.from(await data.arrayBuffer());
+  const reducida = await sharp(original)
+    .rotate()
+    .resize({ width: 1400, withoutEnlargement: true })
+    .jpeg({ quality: 80 })
+    .toBuffer();
+  return `data:image/jpeg;base64,${reducida.toString("base64")}`;
+}
+
+async function verificarConIA(employeeId: string): Promise<Verificacion> {
+  const { rows: emp } = await db.query(
+    `SELECT nombre, apellidos, dni_nie, fecha_nacimiento, carnet_numero,
+            carnet_caducidad, carnet_clases
+       FROM sea_employees WHERE id = $1`,
+    [employeeId]
+  );
+  if (emp.length === 0) throw new Error("el empleado no existe");
+
+  const { rows: docs } = await db.query(
+    `SELECT tipo, storage_path FROM sea_employee_documents WHERE employee_id = $1 ORDER BY tipo`,
+    [employeeId]
+  );
+  if (docs.length === 0) throw new Error("no hay ninguna foto que mirar");
+
+  const imagenes: Array<{ url: string }> = [];
+  const presentes: string[] = [];
+  for (const d of docs as Array<{ tipo: string; storage_path: string }>) {
+    const uri = await imagenParaIA(d.storage_path);
+    if (!uri) continue;
+    imagenes.push({ url: uri });
+    presentes.push(d.tipo);
+  }
+  if (imagenes.length === 0) throw new Error("no se ha podido leer ninguna foto");
+
+  const tecleado = CAMPOS_VERIFICABLES.map(
+    (c) => `- ${c.campo} (${c.etiqueta}): ${formatearValor(emp[0][c.campo])}`
+  ).join("\n");
+
+  const r = await pedirIA<Verificacion>({
+    operacion: "core.alta.verificar",
+    proposito: "documento",
+    prompt:
+      `${INSTRUCCIONES_VERIFICACION}\n\n` +
+      `Fotos adjuntas, en este orden: ${presentes.join(", ")}.\n\n` +
+      `Lo que ha tecleado el trabajador:\n${tecleado}`,
+    imagenes,
+    esquema: {
+      nombre: "verificacion_documentacion",
+      schema: ESQUEMA_VERIFICACION as unknown as Record<string, unknown>,
+    },
+    maxTokens: 2000,
+    timeoutMs: 90_000,
+  });
+
+  if (!r.ok || !r.datos) throw new Error(r.error?.slice(0, 200) ?? "el modelo no ha contestado");
+  return r.datos;
+}
+
+function formatearValor(v: unknown): string {
+  if (v == null || v === "") return "(vacío)";
+  if (v instanceof Date) return v.toISOString().slice(0, 10).split("-").reverse().join("/");
+  return String(v);
 }
 
 // ── Router del operario ────────────────────────────────────────────────────

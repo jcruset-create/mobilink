@@ -286,3 +286,139 @@ export function motivoCerrado(
   if (new Date(invitacion.caduca_at).getTime() <= ahoraMs) return "caducada";
   return null;
 }
+
+// ── Pedirle a alguien que ya está dado de alta que repase su ficha ─────────
+
+export type MotivoInvitacion = "alta" | "actualizacion";
+
+/**
+ * Para qué se manda el enlace, según cómo esté la ficha hoy.
+ *
+ * A quien ya está completo se le pide una ACTUALIZACIÓN, no un alta. La
+ * diferencia no es cosmética: decide el texto del SMS, el estado en el que
+ * queda la ficha y, sobre todo, lo que ve el encargado en la lista. Un
+ * operario de hace diez años con la etiqueta «Enlace enviado» parece un alta
+ * a medias, y no lo es.
+ */
+export function motivoDeInvitacion(estadoAlta: string | null | undefined): MotivoInvitacion {
+  return estadoAlta === "completa" ? "actualizacion" : "alta";
+}
+
+/** En qué estado queda la ficha al mandar el enlace. */
+export function estadoTrasInvitar(motivo: MotivoInvitacion): "enviado" | "actualizando" {
+  return motivo === "actualizacion" ? "actualizando" : "enviado";
+}
+
+/**
+ * El SMS de la actualización.
+ *
+ * Dice de entrada que no hay que hacer el alta otra vez, porque la primera
+ * reacción de quien lleva diez años en la empresa al recibir «completa tu
+ * alta» es pensar que es un error o una estafa.
+ */
+export function textoSmsActualizacion(p: {
+  empresa: string;
+  nombre: string;
+  url: string;
+  nota?: string | null;
+}): string {
+  const nota = p.nota?.trim() ? ` ${p.nota.trim()}` : "";
+  return (
+    `${p.empresa}: ${p.nombre}, repasa y actualiza tus datos aqui: ${p.url}${nota} ` +
+    `Ya tienes la ficha empezada, solo hay que revisarla. Caduca en ${CADUCIDAD_HORAS} h.`
+  );
+}
+
+// ── La comprobación de lo tecleado contra la foto ──────────────────────────
+
+export type Veredicto = "coincide" | "no_coincide" | "ilegible";
+
+export type CampoVerificado = {
+  campo: string;
+  tecleado: string | null;
+  leido: string | null;
+  veredicto: Veredicto;
+  nota: string;
+};
+
+export type Verificacion = { campos: CampoVerificado[]; resumen: string };
+
+/** Qué campos se contrastan, y de qué foto sale cada uno. */
+export const CAMPOS_VERIFICABLES = [
+  { campo: "nombre", documento: "dni_anverso", etiqueta: "Nombre" },
+  { campo: "apellidos", documento: "dni_anverso", etiqueta: "Apellidos" },
+  { campo: "dni_nie", documento: "dni_anverso", etiqueta: "DNI / NIE" },
+  { campo: "fecha_nacimiento", documento: "dni_anverso", etiqueta: "Fecha de nacimiento" },
+  { campo: "carnet_numero", documento: "carnet_anverso", etiqueta: "Nº de carnet" },
+  { campo: "carnet_caducidad", documento: "carnet_anverso", etiqueta: "Caducidad del carnet" },
+  { campo: "carnet_clases", documento: "carnet_reverso", etiqueta: "Clases del carnet" },
+] as const;
+
+export const ESQUEMA_VERIFICACION = {
+  type: "object",
+  additionalProperties: false,
+  required: ["campos", "resumen"],
+  properties: {
+    campos: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["campo", "tecleado", "leido", "veredicto", "nota"],
+        properties: {
+          campo: { type: "string" },
+          tecleado: { type: ["string", "null"] },
+          leido: { type: ["string", "null"] },
+          veredicto: { type: "string", enum: ["coincide", "no_coincide", "ilegible"] },
+          nota: { type: "string" },
+        },
+      },
+    },
+    resumen: { type: "string" },
+  },
+} as const;
+
+/**
+ * Lo que se le pide al modelo.
+ *
+ * Dos reglas que son el motivo de que esto exista: NO corrige y NO rellena.
+ * Lo que vale es lo que escribió el trabajador; el modelo solo dice si la
+ * foto lo respalda. En cuanto se le deja «arreglar» un apellido, el dato de
+ * la ficha deja de tener un responsable con nombre.
+ */
+export const INSTRUCCIONES_VERIFICACION = [
+  "Eres un revisor de documentación laboral. Recibes lo que un trabajador ha",
+  "tecleado en su ficha y las fotos de su DNI y de su carnet de conducir.",
+  "",
+  "Para cada campo di si la foto respalda lo tecleado:",
+  "  · coincide     — lo que pone en el documento es lo mismo.",
+  "  · no_coincide  — el documento dice otra cosa (ponla en `leido`).",
+  "  · ilegible     — no se lee, está cortado, borroso o no aparece.",
+  "",
+  "Reglas:",
+  "- NO corrijas ni completes nada: solo comparas.",
+  "- Si el campo tecleado viene vacío, veredicto `ilegible` y nota explicando",
+  "  que el trabajador no lo ha puesto.",
+  "- Las tildes, las mayúsculas y el orden de los apellidos no son diferencias:",
+  "  'MARIA GERMY ESCALIER' y 'Maria Germy Escalier' coinciden.",
+  "- Las fechas, en dd/mm/aaaa.",
+  "- `nota` es una frase corta en español, para que la lea el encargado.",
+].join("\n");
+
+/** Un vistazo rápido al veredicto, que es lo que pinta la pantalla. */
+export function resumenVerificacion(v: Verificacion | null | undefined): {
+  coinciden: number;
+  noCoinciden: number;
+  ilegibles: number;
+  hayProblemas: boolean;
+} {
+  const campos = v?.campos ?? [];
+  const cuenta = (x: Veredicto) => campos.filter((c) => c.veredicto === x).length;
+  const noCoinciden = cuenta("no_coincide");
+  return {
+    coinciden: cuenta("coincide"),
+    noCoinciden,
+    ilegibles: cuenta("ilegible"),
+    hayProblemas: noCoinciden > 0,
+  };
+}
