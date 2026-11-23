@@ -2,13 +2,14 @@
  * Tipos de vehículo cuya configuración de ejes es SIEMPRE la misma.
  *
  * Lo dijo Jordi: «si es un autocar 2x4x2, configuración de ejes siempre es un
- * bus 2x4x2». Elegir el tipo ya la deja puesta y no se puede cambiar; así no
+ * bus 2x4x2», y lo mismo con el autobús 2x4 → «2X4 BUS». Elegir el tipo ya la deja puesta y no se puede cambiar; así no
  * vuelve a salir un autocar con la de un camión o sin configuración.
  *
  * Clave: `tc_tipos_vehiculo.nombre`. Valor: `tc_config_ejes.nombre`.
  */
 const CONFIG_FIJA: Record<string, string> = {
   autocar: "2x4x2 Bus",
+  autobus: "2X4 BUS",
 };
 
 /** El nombre de la configuración que manda para ese tipo, o null si es libre. */

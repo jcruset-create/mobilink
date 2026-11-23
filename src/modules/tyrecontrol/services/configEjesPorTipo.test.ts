@@ -13,8 +13,12 @@ describe("configuración de ejes fija por tipo", () => {
     expect(idConfigFija("autocar", configs)).toBe("b");
   });
 
+  it("un autobús 2x4 es siempre 2X4 BUS, no el 2x4 de camión ni la tractora", () => {
+    expect(configFijaDeTipo("autobus")).toBe("2X4 BUS");
+    expect(idConfigFija("autobus", [...configs, { id: "d", nombre: "2x4" }, { id: "e", nombre: "2x4 Tractora" }])).toBe("a");
+  });
+
   it("los demás tipos se eligen libremente", () => {
-    expect(configFijaDeTipo("autobus")).toBeNull();
     expect(configFijaDeTipo("autocar_2x4x4")).toBeNull();
     expect(idConfigFija(null, configs)).toBeNull();
   });
