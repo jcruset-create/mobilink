@@ -92,6 +92,7 @@ import Fichajes from "./modules/presencia/pages/Fichajes";
 import CoreDashboard from "./modules/sea-core/pages/CoreDashboard";
 import Empleados from "./modules/sea-core/pages/Empleados";
 import EmpleadoDetalle from "./modules/sea-core/pages/EmpleadoDetalle";
+import EnlazarTrabajadores from "./modules/sea-core/pages/EnlazarTrabajadores";
 import Empresas from "./modules/sea-core/pages/Empresas";
 import CentrosTrabajo from "./modules/sea-core/pages/CentrosTrabajo";
 import CoreCompetencias from "./modules/sea-core/pages/Competencias";
@@ -395,6 +396,7 @@ export default function App() {
       <Route path="/core" element={<Protegida><CoreDashboard /></Protegida>} />
       <Route path="/core/empleados" element={<Protegida><Empleados /></Protegida>} />
       <Route path="/core/empleados/:id" element={<Protegida><EmpleadoDetalle /></Protegida>} />
+      <Route path="/core/enlaces" element={<Protegida><EnlazarTrabajadores /></Protegida>} />
       <Route path="/core/empresas" element={<Protegida><Empresas /></Protegida>} />
       <Route path="/core/centros" element={<Protegida><CentrosTrabajo /></Protegida>} />
       <Route path="/core/competencias" element={<Protegida><CoreCompetencias /></Protegida>} />

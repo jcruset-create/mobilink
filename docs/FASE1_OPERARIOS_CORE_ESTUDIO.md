@@ -1,5 +1,37 @@
 # Fase 1 — Estudio: Core como fuente única de operarios y usuarios
 
+> **2026-11-23 · Número de trabajador — Fase B hecha (enlazar trabajadores).**
+> Estado en producción antes de empezar: los 21 empleados activos reales ya
+> tienen número (copiado de `codigo_operario`, que es el de nóminas). Por
+> enlazar: Taller 1, Administración 8, Almacén 7, Recepciones 3, TyreControl 7
+> (2 administradores + 5 operadores). Cash ya estaba entero (10/10).
+>
+> **Qué se ha hecho**
+> - `supabase/migrations/core_enlace_modulos.sql`: `employee_id` (FK a
+>   `sea_employees`, `ON DELETE SET NULL`) en `perfiles_usuario`,
+>   `rcp_operarios` y `tc_usuarios`. Sin triggers, sin copiar datos, sin DROP.
+> - `server/core/enlaceTrabajadores.ts`: `GET /api/core/enlaces` y
+>   `PUT /api/core/enlaces/:modulo/:id`, solo administradores. Una persona solo
+>   puede ser un usuario de cada módulo (409 si ya lo es). No se enlaza a nadie
+>   de baja. `app_usuarios` y `rcp_operarios` se filtran por la empresa cliente
+>   del administrador (salvo superadmin).
+> - Core → **Enlazar trabajadores**: una pestaña por módulo; se escribe el
+>   número de trabajador, sale a quién corresponde y se confirma. Pista por
+>   nombre marcada «por nombre — revisar».
+> - Cash no tiene pestaña: ya enlaza con su propia lógica y está entero.
+>
+> **Orden en Supabase**
+> 1. `core_enlace_modulos.sql` (idempotente; se salta la tabla que no exista).
+> 2. Enlazar desde Core → Enlazar trabajadores.
+> 3. Ver el avance con las consultas 5a–5c y 6d–6f de
+>    `core_numero_trabajador_informe.sql`.
+>
+> **Pendiente de decidir**
+> - Varios de los 8 usuarios de Administración pueden no ser plantilla
+>   (oficina, cuentas de prueba): se dejan sin enlazar, no hay que forzarlo.
+> - Fase C (los módulos leen la identidad de Core y dejan de crear personas):
+>   empezar por el módulo que quede entero primero.
+
 > **2026-11-23 · Número de trabajador por empresa — Fase A hecha.**
 > Plan completo en `PROMPT_NUMERO_TRABAJADOR_CORE.md`. Sustituye al paso «el DNI
 > como identificador único», que queda aparcado: el DNI sigue siendo un dato de
