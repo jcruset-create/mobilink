@@ -3480,7 +3480,16 @@ app.post("/api/jobs", requireSupervisorRole, async (req, res) => {
   try {
     const job = req.body ?? {};
 
-    const safeJobId = job.id ?? Date.now();
+    /*
+     * El id: si viene uno válido (el operativo guarda y reguarda el mismo
+     * trabajo muchas veces), se respeta. Si no viene, viene a 0 o no cabe en
+     * la columna —`jobs.id` es SERIAL, INTEGER de cuatro bytes; un
+     * `Date.now()` lo desborda y Postgres tumba la operación con «integer out
+     * of range»—, lo asigna la propia tabla (server/core/idDeTrabajo.ts).
+     */
+    const idPedido = Number(job.id);
+    const idValido = Number.isFinite(idPedido) && idPedido > 0 && idPedido <= 2147483647;
+    const safeJobId = idValido ? Math.round(idPedido) : await siguienteIdDeTrabajo(db);
     const incomingPlate = String(job.plate ?? "").trim().toUpperCase();
 
     if (!incomingPlate) {
