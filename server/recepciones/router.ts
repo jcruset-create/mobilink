@@ -187,13 +187,29 @@ export function createRecepcionesRouter(): Router {
     })
   );
 
+  // Para el alta: las personas de Core entre las que elegir. `disponible`
+  // false = esta base no tiene Core y el alta sigue siendo con nombre.
+  r.get(
+    "/operarios/personas-core",
+    exigirPermiso("recepciones.operarios.manage"),
+    ruta(async (req, res) => {
+      const personas = await repo.empleadosCoreParaOperario(contextoDe(req).empresaId);
+      res.json({ disponible: personas !== null, personas: personas ?? [] });
+    })
+  );
+
   r.post(
     "/operarios",
     exigirPermiso("recepciones.operarios.manage"),
     ruta(async (req, res) => {
       const ctx = contextoDe(req);
       const b = (req.body ?? {}) as Record<string, unknown>;
-      const operario = await servicio.crearOperario(ctx, { nombre: texto(b.nombre), centroId: texto(b.centroId) || null, pin: texto(b.pin) });
+      const operario = await servicio.crearOperario(ctx, {
+        nombre: texto(b.nombre),
+        centroId: texto(b.centroId) || null,
+        pin: texto(b.pin),
+        employeeId: texto(b.employeeId) || null,
+      });
       void registrarAuditoria({ empresaId: ctx.empresaId, userId: ctx.userId, accion: "recepciones.operario.crear", entidad: "rcp_operarios", entidadId: operario.id, ip: req.ip });
       res.status(201).json({ operario });
     })

@@ -1,5 +1,33 @@
 # Fase 1 — Estudio: Core como fuente única de operarios y usuarios
 
+> **2026-11-23 · Fase C empezada por Recepciones (el más pequeño, 3/3 enlazados).**
+> Recepciones era el caso limpio: el operario del muelle no teclea su nombre
+> para firmar (lo elige de la lista y pone el PIN), así que leer el nombre de
+> Core no toca ningún login.
+>
+> **Qué se ha hecho**
+> - Lectura: `server/recepciones/repository.ts` cruza `rcp_operarios` con
+>   `sea_employees` por `employee_id`. El nombre que se enseña es el de Core y,
+>   si en Core está de baja, el operario no sale para firmar ni puede firmar.
+>   Sin enlace, el de siempre.
+> - Alta: con Core en la base, se elige la persona (por Nº o nombre) y el
+>   nombre lo pone Core. `GET /api/recepciones/operarios/personas-core` da la
+>   lista; esconde a quien ya es usuario de OTRA empresa (mismo criterio que
+>   Cash). Una persona solo puede ser un operario.
+> - Edición: el nombre de un enlazado no se cambia en Recepciones (409
+>   `NOMBRE_EN_CORE`); centro, PIN y baja del módulo, igual que antes.
+> - Sin Core en la base (`sea_employees` no existe), todo como antes.
+> - `rcp_operarios.nombre` se sigue rellenando al dar de alta: es NOT NULL y
+>   el respaldo si un día se desenlaza. No se borra nada (sin DROP).
+> - No hace falta ninguna migración: `employee_id` ya lo puso
+>   `core_enlace_modulos.sql`, y el arranque lo añade en bases sin ella.
+>
+> **Pendiente**
+> - Almacén (5 de 7 sin enlazar): su APK entra comparando el nombre que
+>   guarda `perfiles_usuario`; hay que decidir si el login pasa a mirar Core.
+> - Las recepciones ya firmadas guardan el nombre de entonces
+>   (`operario_nombre`): es histórico y no cambia.
+
 > **2026-11-23 · Número de trabajador — Fase B hecha (enlazar trabajadores).**
 > Estado en producción antes de empezar: los 21 empleados activos reales ya
 > tienen número (copiado de `codigo_operario`, que es el de nóminas). Por

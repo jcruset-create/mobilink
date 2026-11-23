@@ -739,30 +739,99 @@ export async function aplicarMapeoALineas(
 
 /* ── Operarios del muelle ────────────────────────────────────────────────── */
 
-/** Lo que se puede enseñar de un operario: nunca el PIN ni su hash. */
+/**
+ * Lo que se puede enseñar de un operario: nunca el PIN ni su hash.
+ *
+ * ## La identidad viene de Core
+ *
+ * Si el operario está enlazado con una persona de Core (`employee_id`), el
+ * nombre que se enseña es el de Core y, si en Core está de baja, el operario
+ * cuenta como de baja aunque aquí siga activo. `nombreModulo` es lo que guarda
+ * la tabla del módulo: el respaldo de los que no están enlazados. Ver
+ * docs/FASE1_OPERARIOS_CORE_ESTUDIO.md.
+ */
 export type Operario = {
   id: string;
   centroId: string | null;
+  /** El nombre que vale: el de Core si está enlazado, si no el del módulo. */
   nombre: string;
+  /** Activo de verdad: en el módulo Y, si está enlazado, en Core. */
   activo: boolean;
+  /** Solo el interruptor del módulo, para «Dar de baja» / «Reactivar». */
+  activoEnModulo: boolean;
   bloqueadoHasta: string | null;
   creadoNombre: string | null;
   createdAt: string;
+  employeeId: string | null;
+  /** Está enlazado y la persona existe en Core. */
+  enlazado: boolean;
+  numeroTrabajador: string | null;
+  /** En Core está de baja: aquí no puede firmar. */
+  bajaEnCore: boolean;
+  nombreModulo: string;
 };
 
 /** Con el secreto dentro: sólo para verificar, nunca para devolver por la API. */
 export type OperarioConPin = Operario & { pinHash: string; pinSalt: string; intentosFallidos: number };
 
 /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
-const aOperario = (r: any): Operario => ({
-  id: r.id,
-  centroId: r.centro_id ?? null,
-  nombre: r.nombre,
-  activo: r.activo === true,
-  bloqueadoHasta: iso(r.bloqueado_hasta),
-  creadoNombre: r.creado_nombre ?? null,
-  createdAt: iso(r.created_at)!,
-});
+const aOperario = (r: any): Operario => {
+  const bajaEnCore = r.enlazado === true && r.e_activo === false;
+  return {
+    id: r.id,
+    centroId: r.centro_id ?? null,
+    nombre: r.nombre_efectivo ?? r.nombre,
+    activo: r.activo === true && !bajaEnCore,
+    activoEnModulo: r.activo === true,
+    bloqueadoHasta: iso(r.bloqueado_hasta),
+    creadoNombre: r.creado_nombre ?? null,
+    createdAt: iso(r.created_at)!,
+    employeeId: r.employee_id ?? null,
+    enlazado: r.enlazado === true,
+    numeroTrabajador: r.e_numero ?? null,
+    bajaEnCore,
+    nombreModulo: r.nombre,
+  };
+};
+
+/**
+ * ¿Hay Core en esta base? `sea_employees` la crean las migraciones de
+ * Supabase: en una base del módulo sin ellas no existe, y entonces los
+ * operarios funcionan como siempre, con su propio nombre.
+ */
+export async function hayCore(ejecutor?: Ejecutor): Promise<{ core: boolean; numero: boolean }> {
+  const { rows } = await db(ejecutor).query(
+    `SELECT to_regclass('sea_employees') IS NOT NULL AS core,
+            EXISTS (
+              SELECT 1 FROM information_schema.columns
+               WHERE table_name = 'sea_employees' AND column_name = 'numero_trabajador'
+                 AND table_schema = ANY (current_schemas(false))
+            ) AS numero`
+  );
+  return { core: rows[0]?.core === true, numero: rows[0]?.numero === true };
+}
+
+const NOMBRE_CORE = `NULLIF(trim(concat_ws(' ', e.nombre, e.apellidos)), '')`;
+
+async function selectOperario(ejecutor?: Ejecutor): Promise<{ sql: string; core: boolean }> {
+  const { core, numero } = await hayCore(ejecutor);
+  if (!core) {
+    return {
+      core,
+      sql: `SELECT o.*, o.nombre AS nombre_efectivo, NULL::text AS e_numero,
+                   NULL::boolean AS e_activo, false AS enlazado
+              FROM rcp_operarios o`,
+    };
+  }
+  return {
+    core,
+    sql: `SELECT o.*, COALESCE(${NOMBRE_CORE}, o.nombre) AS nombre_efectivo,
+                 ${numero ? "e.numero_trabajador" : "NULL::text"} AS e_numero,
+                 e.activo AS e_activo, (e.id IS NOT NULL) AS enlazado
+            FROM rcp_operarios o
+            LEFT JOIN sea_employees e ON e.id = o.employee_id`,
+  };
+}
 
 /**
  * Los operarios de la empresa. Con `centroId` salen los de ese centro más los
@@ -773,34 +842,91 @@ export async function listarOperarios(
   filtro: { centroId?: string | null; soloActivos?: boolean } = {},
   ejecutor?: Ejecutor
 ): Promise<Operario[]> {
+  const { sql, core } = await selectOperario(ejecutor);
   const params: unknown[] = [empresaId];
-  const cond = ["empresa_id = $1"];
-  if (filtro.soloActivos) cond.push("activo");
+  const cond = ["o.empresa_id = $1"];
+  // De baja en Core es de baja aquí: no sale en el desplegable de quién firma.
+  if (filtro.soloActivos) cond.push(core ? "o.activo AND (e.id IS NULL OR e.activo)" : "o.activo");
   if (filtro.centroId) {
     params.push(filtro.centroId);
-    cond.push(`(centro_id IS NULL OR centro_id = $${params.length}::uuid)`);
+    cond.push(`(o.centro_id IS NULL OR o.centro_id = $${params.length}::uuid)`);
   }
-  const { rows } = await db(ejecutor).query(`SELECT * FROM rcp_operarios WHERE ${cond.join(" AND ")} ORDER BY nombre`, params);
+  const { rows } = await db(ejecutor).query(`${sql} WHERE ${cond.join(" AND ")} ORDER BY nombre_efectivo`, params);
   return rows.map(aOperario);
 }
 
 export async function operarioPorId(empresaId: string, id: string, ejecutor?: Ejecutor): Promise<OperarioConPin | null> {
-  const { rows } = await db(ejecutor).query(`SELECT * FROM rcp_operarios WHERE empresa_id = $1 AND id = $2`, [empresaId, id]);
+  const { sql } = await selectOperario(ejecutor);
+  const { rows } = await db(ejecutor).query(`${sql} WHERE o.empresa_id = $1 AND o.id = $2`, [empresaId, id]);
   if (!rows[0]) return null;
   return { ...aOperario(rows[0]), pinHash: rows[0].pin_hash, pinSalt: rows[0].pin_salt, intentosFallidos: Number(rows[0].intentos_fallidos ?? 0) };
 }
 
+/** Una persona de Core que se puede dar de alta como operario. */
+export type EmpleadoCore = { id: string; nombre: string; numeroTrabajador: string | null; yaEsOperario: boolean };
+
+/**
+ * Las personas de Core que puede elegir esta empresa al dar de alta un
+ * operario. `null` si Core no está en esta base.
+ *
+ * `sea_employees` no tiene empresa de la plataforma. Se usa el mismo criterio
+ * que Cash (`server/cash/expenseclaims/empleados.ts`): se esconden las que ya
+ * son usuarios de OTRA empresa. Sin `app_usuarios` no hay con qué separar y
+ * salen todas.
+ */
+export async function empleadosCoreParaOperario(empresaId: string, ejecutor?: Ejecutor): Promise<EmpleadoCore[] | null> {
+  const { core, numero } = await hayCore(ejecutor);
+  if (!core) return null;
+  const { rows: hay } = await db(ejecutor).query(`SELECT to_regclass('app_usuarios') IS NOT NULL AS usuarios`);
+  const deOtra = hay[0]?.usuarios
+    ? `AND NOT EXISTS (SELECT 1 FROM app_usuarios u WHERE u.employee_id = e.id AND u.empresa_id::text <> $1)`
+    : "";
+  const { rows } = await db(ejecutor).query(
+    `SELECT e.id::text AS id, ${NOMBRE_CORE} AS nombre,
+            ${numero ? "e.numero_trabajador" : "NULL::text"} AS numero,
+            EXISTS (SELECT 1 FROM rcp_operarios o WHERE o.employee_id = e.id AND o.empresa_id::text = $1) AS ya
+       FROM sea_employees e
+      WHERE e.activo ${deOtra}
+      ORDER BY 2`,
+    [empresaId]
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    nombre: r.nombre ?? "",
+    numeroTrabajador: r.numero ?? null,
+    yaEsOperario: r.ya === true,
+  }));
+}
+
 export async function crearOperario(
   empresaId: string,
-  datos: { nombre: string; centroId: string | null; pinHash: string; pinSalt: string; creadoPor: string | null; creadoNombre: string | null },
+  datos: {
+    nombre: string;
+    centroId: string | null;
+    pinHash: string;
+    pinSalt: string;
+    creadoPor: string | null;
+    creadoNombre: string | null;
+    employeeId?: string | null;
+  },
   ejecutor?: Ejecutor
 ): Promise<Operario> {
   const { rows } = await db(ejecutor).query(
-    `INSERT INTO rcp_operarios (empresa_id, nombre, centro_id, pin_hash, pin_salt, creado_por, creado_nombre)
-     VALUES ($1,$2,$3::uuid,$4,$5,$6,$7) RETURNING *`,
-    [empresaId, datos.nombre, datos.centroId, datos.pinHash, datos.pinSalt, datos.creadoPor, datos.creadoNombre]
+    `INSERT INTO rcp_operarios (empresa_id, nombre, centro_id, pin_hash, pin_salt, creado_por, creado_nombre, employee_id)
+     VALUES ($1,$2,$3::uuid,$4,$5,$6,$7,$8::uuid) RETURNING id`,
+    [empresaId, datos.nombre, datos.centroId, datos.pinHash, datos.pinSalt, datos.creadoPor, datos.creadoNombre, datos.employeeId ?? null]
   );
-  return aOperario(rows[0]);
+  return (await operarioSinPin(empresaId, rows[0].id, ejecutor))!;
+}
+
+/** Lo que devuelven crear y actualizar, que acaba en la API: sin el PIN. */
+async function operarioSinPin(empresaId: string, id: string, ejecutor?: Ejecutor): Promise<Operario | null> {
+  const o: Partial<OperarioConPin> | null = await operarioPorId(empresaId, id, ejecutor);
+  if (!o) return null;
+  delete o.pinHash;
+  delete o.pinSalt;
+  delete o.intentosFallidos;
+  return o as Operario;
 }
 
 export async function actualizarOperario(
@@ -820,10 +946,10 @@ export async function actualizarOperario(
        intentos_fallidos = CASE WHEN $7 IS NULL THEN intentos_fallidos ELSE 0 END,
        bloqueado_hasta   = CASE WHEN $7 IS NULL THEN bloqueado_hasta ELSE NULL END,
        updated_at = now()
-     WHERE empresa_id = $1 AND id = $2 RETURNING *`,
+     WHERE empresa_id = $1 AND id = $2 RETURNING id`,
     [empresaId, id, datos.nombre ?? null, datos.centroId !== undefined, datos.centroId ?? null, datos.activo ?? null, datos.pinHash ?? null, datos.pinSalt ?? null]
   );
-  return rows[0] ? aOperario(rows[0]) : null;
+  return rows[0] ? operarioSinPin(empresaId, rows[0].id, ejecutor) : null;
 }
 
 /** Deja constancia de cómo fue el intento de PIN. Fuera de la transacción del cierre. */

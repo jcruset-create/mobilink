@@ -26,6 +26,7 @@ import type {
   Incidencia,
   MapeoArticulo,
   Operario,
+  PersonaCore,
   Pedido,
   Proveedor,
   Recepcion,
@@ -120,7 +121,9 @@ export const releerObservaciones = () =>
 export const listarOperarios = (centroId?: string, soloActivos?: boolean) =>
   pedir<{ operarios: Operario[] }>(`/operarios${query({ centroId, soloActivos: soloActivos ? "1" : undefined })}`);
 
-export const crearOperario = (datos: { nombre: string; pin: string; centroId?: string | null }) =>
+export const personasCore = () => pedir<{ disponible: boolean; personas: PersonaCore[] }>("/operarios/personas-core");
+
+export const crearOperario = (datos: { nombre?: string; employeeId?: string | null; pin: string; centroId?: string | null }) =>
   pedir<{ operario: Operario }>("/operarios", json(datos));
 
 export const actualizarOperario = (id: string, datos: { nombre?: string; pin?: string; centroId?: string | null; activo?: boolean }) =>
