@@ -1,12 +1,13 @@
 import { useState, type ReactNode } from "react";
 import { useEsSuperadmin } from "../../esSuperadmin";
 import { NavLink, useNavigate } from "react-router-dom";
-import { Menu, Home, LayoutDashboard, Users, Building2, MapPin, Target, KeyRound, CalendarDays } from "lucide-react";
+import { Menu, Home, LayoutDashboard, Users, Building2, MapPin, Target, KeyRound, CalendarDays, Link2 } from "lucide-react";
 import VersionDesplegada from "../../../components/VersionDesplegada";
 
 const NAV = [
   { to: "/core", label: "Dashboard", icon: LayoutDashboard, end: true },
   { to: "/core/empleados", label: "Empleados", icon: Users, end: false },
+  { to: "/core/enlaces", label: "Enlazar trabajadores", icon: Link2, end: false },
   { to: "/core/empresas", label: "Empresas", icon: Building2, end: false },
   { to: "/core/centros", label: "Centros de trabajo", icon: MapPin, end: false },
   { to: "/core/competencias", label: "Competencias", icon: Target, end: false },

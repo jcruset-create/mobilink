@@ -105,3 +105,28 @@ select rol, count(*) as por_enlazar
  where activo = true
    and rol in ('administrador', 'operador')
  group by rol;
+
+
+-- =============================================================================
+-- 6. [Después de core_enlace_modulos.sql] Avance del enlace en los módulos que
+--    no tenían employee_id. Mismo formato que 5a–5c.
+-- =============================================================================
+
+-- 6d. Almacén
+select count(*) filter (where employee_id is not null) as enlazados,
+       count(*) filter (where employee_id is null)     as sin_enlazar
+  from perfiles_usuario
+ where activo is not false;
+
+-- 6e. Recepciones
+select count(*) filter (where employee_id is not null) as enlazados,
+       count(*) filter (where employee_id is null)     as sin_enlazar
+  from rcp_operarios
+ where activo = true;
+
+-- 6f. TyreControl (solo operarios internos)
+select count(*) filter (where employee_id is not null) as enlazados,
+       count(*) filter (where employee_id is null)     as sin_enlazar
+  from tc_usuarios
+ where activo = true
+   and rol in ('administrador', 'operador');
