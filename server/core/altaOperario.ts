@@ -286,3 +286,238 @@ export function motivoCerrado(
   if (new Date(invitacion.caduca_at).getTime() <= ahoraMs) return "caducada";
   return null;
 }
+
+// ── Pedirle a alguien que ya está dado de alta que repase su ficha ─────────
+
+export type MotivoInvitacion = "alta" | "actualizacion";
+
+/**
+ * Para qué se manda el enlace, según cómo esté la ficha hoy.
+ *
+ * A quien ya está completo se le pide una ACTUALIZACIÓN, no un alta. La
+ * diferencia no es cosmética: decide el texto del SMS, el estado en el que
+ * queda la ficha y, sobre todo, lo que ve el encargado en la lista. Un
+ * operario de hace diez años con la etiqueta «Enlace enviado» parece un alta
+ * a medias, y no lo es.
+ */
+export function motivoDeInvitacion(estadoAlta: string | null | undefined): MotivoInvitacion {
+  return estadoAlta === "completa" ? "actualizacion" : "alta";
+}
+
+/** En qué estado queda la ficha al mandar el enlace. */
+export function estadoTrasInvitar(motivo: MotivoInvitacion): "enviado" | "actualizando" {
+  return motivo === "actualizacion" ? "actualizando" : "enviado";
+}
+
+/**
+ * El SMS de la actualización.
+ *
+ * Dice de entrada que no hay que hacer el alta otra vez, porque la primera
+ * reacción de quien lleva diez años en la empresa al recibir «completa tu
+ * alta» es pensar que es un error o una estafa.
+ */
+export function textoSmsActualizacion(p: {
+  empresa: string;
+  nombre: string;
+  url: string;
+  nota?: string | null;
+}): string {
+  const nota = p.nota?.trim() ? ` ${p.nota.trim()}` : "";
+  return (
+    `${p.empresa}: ${p.nombre}, repasa y actualiza tus datos aqui: ${p.url}${nota} ` +
+    `Ya tienes la ficha empezada, solo hay que revisarla. Caduca en ${CADUCIDAD_HORAS} h.`
+  );
+}
+
+// ── La comprobación de lo tecleado contra la foto ──────────────────────────
+
+export type Veredicto = "coincide" | "no_coincide" | "ilegible";
+
+export type CampoVerificado = {
+  campo: string;
+  tecleado: string | null;
+  leido: string | null;
+  veredicto: Veredicto;
+  nota: string;
+};
+
+export type Verificacion = { campos: CampoVerificado[]; resumen: string };
+
+/** Qué campos se contrastan, y de qué foto sale cada uno. */
+export const CAMPOS_VERIFICABLES = [
+  { campo: "nombre", documento: "dni_anverso", etiqueta: "Nombre" },
+  { campo: "apellidos", documento: "dni_anverso", etiqueta: "Apellidos" },
+  { campo: "dni_nie", documento: "dni_anverso", etiqueta: "DNI / NIE" },
+  { campo: "fecha_nacimiento", documento: "dni_anverso", etiqueta: "Fecha de nacimiento" },
+  { campo: "carnet_numero", documento: "carnet_anverso", etiqueta: "Nº de carnet" },
+  { campo: "carnet_caducidad", documento: "carnet_anverso", etiqueta: "Caducidad del carnet" },
+  { campo: "carnet_clases", documento: "carnet_reverso", etiqueta: "Clases del carnet" },
+] as const;
+
+export const ESQUEMA_VERIFICACION = {
+  type: "object",
+  additionalProperties: false,
+  required: ["campos", "resumen"],
+  properties: {
+    campos: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["campo", "tecleado", "leido", "veredicto", "nota"],
+        properties: {
+          campo: { type: "string" },
+          tecleado: { type: ["string", "null"] },
+          leido: { type: ["string", "null"] },
+          veredicto: { type: "string", enum: ["coincide", "no_coincide", "ilegible"] },
+          nota: { type: "string" },
+        },
+      },
+    },
+    resumen: { type: "string" },
+  },
+} as const;
+
+/**
+ * Lo que se le pide al modelo.
+ *
+ * Dos reglas que son el motivo de que esto exista: NO corrige y NO rellena.
+ * Lo que vale es lo que escribió el trabajador; el modelo solo dice si la
+ * foto lo respalda. En cuanto se le deja «arreglar» un apellido, el dato de
+ * la ficha deja de tener un responsable con nombre.
+ */
+export const INSTRUCCIONES_VERIFICACION = [
+  "Eres un revisor de documentación laboral. Recibes lo que un trabajador ha",
+  "tecleado en su ficha y las fotos de su DNI y de su carnet de conducir.",
+  "",
+  "Para cada campo di si la foto respalda lo tecleado:",
+  "  · coincide     — lo que pone en el documento es lo mismo.",
+  "  · no_coincide  — el documento dice otra cosa (ponla en `leido`).",
+  "  · ilegible     — no se lee, está cortado, borroso o no aparece.",
+  "",
+  "Reglas:",
+  "- NO corrijas ni completes nada: solo comparas.",
+  "- Si el campo tecleado viene vacío, veredicto `ilegible` y nota explicando",
+  "  que el trabajador no lo ha puesto.",
+  "- Las tildes, las mayúsculas y el orden de los apellidos no son diferencias:",
+  "  'MARIA GERMY ESCALIER' y 'Maria Germy Escalier' coinciden.",
+  "- Las fechas, en dd/mm/aaaa.",
+  "- `nota` es una frase corta en español, para que la lea el encargado.",
+].join("\n");
+
+/** Un vistazo rápido al veredicto, que es lo que pinta la pantalla. */
+export function resumenVerificacion(v: Verificacion | null | undefined): {
+  coinciden: number;
+  noCoinciden: number;
+  ilegibles: number;
+  hayProblemas: boolean;
+} {
+  const campos = v?.campos ?? [];
+  const cuenta = (x: Veredicto) => campos.filter((c) => c.veredicto === x).length;
+  const noCoinciden = cuenta("no_coincide");
+  return {
+    coinciden: cuenta("coincide"),
+    noCoinciden,
+    ilegibles: cuenta("ilegible"),
+    hayProblemas: noCoinciden > 0,
+  };
+}
+
+// ── Recortar el documento dentro de la foto ────────────────────────────────
+
+/** El recuadro del documento, en proporciones de la foto (0 a 1). */
+export type Recuadro = { x0: number; y0: number; x1: number; y1: number };
+
+export type LecturaRecorte = {
+  encontrado: boolean;
+  recuadro: Recuadro;
+  /** Grados en sentido horario que le faltan al recorte para quedar derecho. */
+  giro: 0 | 90 | 180 | 270;
+  nota: string;
+};
+
+export const ESQUEMA_RECORTE = {
+  type: "object",
+  additionalProperties: false,
+  required: ["encontrado", "recuadro", "giro", "nota"],
+  properties: {
+    encontrado: { type: "boolean" },
+    recuadro: {
+      type: "object",
+      additionalProperties: false,
+      required: ["x0", "y0", "x1", "y1"],
+      properties: {
+        x0: { type: "number" },
+        y0: { type: "number" },
+        x1: { type: "number" },
+        y1: { type: "number" },
+      },
+    },
+    giro: { type: "integer", enum: [0, 90, 180, 270] },
+    nota: { type: "string" },
+  },
+} as const;
+
+export const INSTRUCCIONES_RECORTE = [
+  "En la foto hay un documento de identidad (DNI, NIE o carnet de conducir)",
+  "sobre una mesa, una mano o un fondo cualquiera.",
+  "",
+  "Devuelve el recuadro que lo contiene, en proporciones de la imagen: 0,0 es",
+  "la esquina superior izquierda y 1,1 la inferior derecha. x0/y0 es la esquina",
+  "de arriba a la izquierda del documento y x1/y1 la de abajo a la derecha.",
+  "",
+  "`giro` es cuánto hay que girar ese recorte en sentido horario para que el",
+  "texto del documento se lea derecho: 0, 90, 180 o 270.",
+  "",
+  "Reglas:",
+  "- Ajusta el recuadro al documento, sin dejar media mesa dentro.",
+  "- Mejor pasarse un poco que cortar una esquina del documento.",
+  "- Si no hay ningún documento, o no se distingue del fondo, `encontrado`",
+  "  falso y explica por qué en `nota`. No te inventes un recuadro.",
+].join("\n");
+
+/** El margen que se deja alrededor del documento: ni pegado ni con medio fondo. */
+export const MARGEN_RECORTE = 0.04;
+
+/**
+ * El recuadro que dice el modelo → píxeles de verdad, o `null`.
+ *
+ * Devuelve `null` en cuanto algo no cuadra —coordenadas al revés, fuera de la
+ * imagen, o un recuadro ridículamente pequeño— y quien llama se queda con la
+ * foto original. Un recorte equivocado es peor que ninguno: corta el DNI por
+ * la mitad y nadie se entera hasta que hace falta el documento.
+ */
+export function recorteEnPixeles(
+  r: Recuadro,
+  ancho: number,
+  alto: number,
+  margen = MARGEN_RECORTE
+): { left: number; top: number; width: number; height: number } | null {
+  const nums = [r?.x0, r?.y0, r?.x1, r?.y1];
+  if (nums.some((n) => typeof n !== "number" || !Number.isFinite(n))) return null;
+  if (!(r.x1 > r.x0) || !(r.y1 > r.y0)) return null;
+  if (ancho <= 0 || alto <= 0) return null;
+
+  // Un documento que ocupa menos de un 15 % de la foto no es un documento:
+  // es el modelo señalando un trozo de algo.
+  if ((r.x1 - r.x0) * (r.y1 - r.y0) < 0.15) return null;
+
+  const en01 = (n: number) => Math.min(1, Math.max(0, n));
+  const x0 = en01(r.x0 - margen);
+  const y0 = en01(r.y0 - margen);
+  const x1 = en01(r.x1 + margen);
+  const y1 = en01(r.y1 + margen);
+
+  const left = Math.round(x0 * ancho);
+  const top = Math.round(y0 * alto);
+  const width = Math.round((x1 - x0) * ancho);
+  const height = Math.round((y1 - y0) * alto);
+  if (width < 32 || height < 32) return null;
+
+  return {
+    left,
+    top,
+    width: Math.min(width, ancho - left),
+    height: Math.min(height, alto - top),
+  };
+}

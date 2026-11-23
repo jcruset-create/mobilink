@@ -51,6 +51,7 @@ const ESTADO_ALTA: Record<string, { label: string; clase: string }> = {
   enviado:   { label: "Enlace enviado", clase: "bg-sky-500/20 text-sky-300" },
   abierto:   { label: "Rellenando",   clase: "bg-sky-500/20 text-sky-300" },
   recibida:  { label: "Por revisar",  clase: "bg-amber-500/20 text-amber-300" },
+  actualizando: { label: "Actualización pedida", clase: "bg-sky-500/20 text-sky-300" },
 };
 
 const EMPTY = {
@@ -116,17 +117,31 @@ export default function Empleados() {
    * guarda el token sin que el navegador llegue a verlo.
    */
   async function enviarEnlace(e: Empleado) {
+    const actualizacion = e.estado_alta === "completa";
+    /*
+     * A quien ya está dado de alta se le pregunta antes. El botón está en una
+     * fila de una lista de veintitantos: un clic de más manda un SMS a alguien
+     * que lleva diez años aquí y le dice que repase su ficha.
+     */
+    if (actualizacion && !confirm(
+      `Se le mandará un SMS a ${e.nombre} (${e.telefono ?? "sin móvil"}) pidiéndole que repase y actualice su ficha. ¿Seguimos?`
+    )) return;
+
     setEnviando(e.id);
     setMensaje("");
     try {
       const r = await apiFetch("/api/core/alta/invitar", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ employeeId: e.id }),
+        body: JSON.stringify({ employeeId: e.id, motivo: actualizacion ? "actualizacion" : "alta" }),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d?.error ?? "No se ha podido mandar el enlace.");
-      setMensaje(`Enlace enviado a ${e.nombre} por SMS. Caduca en 72 horas.`);
+      setMensaje(
+        actualizacion
+          ? `SMS enviado a ${e.nombre}: le hemos pedido que repase su ficha. El enlace caduca en 72 horas.`
+          : `Enlace enviado a ${e.nombre} por SMS. Caduca en 72 horas.`
+      );
       setTimeout(() => setMensaje(""), 5000);
       cargar();
     } catch (err) {
@@ -321,13 +336,23 @@ export default function Empleados() {
                         className="rounded-lg bg-slate-700 px-2 py-1 text-xs hover:bg-slate-600">
                         Editar
                       </button>
-                      {ESTADO_ALTA[e.estado_alta ?? ""] && (
-                        <button onClick={() => void enviarEnlace(e)} disabled={enviando === e.id}
-                          title="Le manda por SMS el enlace para que rellene su ficha"
-                          className="rounded-lg bg-sky-600 px-2 py-1 text-xs text-white hover:bg-sky-500 disabled:opacity-50">
-                          {enviando === e.id ? "Enviando…" : e.estado_alta === "pendiente" ? "Enviar enlace" : "Reenviar"}
-                        </button>
-                      )}
+                      <button onClick={() => void enviarEnlace(e)} disabled={enviando === e.id}
+                        title={e.estado_alta === "completa"
+                          ? "Le manda un SMS para que repase y actualice su ficha"
+                          : "Le manda por SMS el enlace para que rellene su ficha"}
+                        className={`rounded-lg px-2 py-1 text-xs disabled:opacity-50 ${
+                          e.estado_alta === "completa"
+                            ? "bg-slate-700 text-slate-200 hover:bg-slate-600"
+                            : "bg-sky-600 text-white hover:bg-sky-500"
+                        }`}>
+                        {enviando === e.id
+                          ? "Enviando…"
+                          : e.estado_alta === "completa"
+                            ? "Pedir actualización"
+                            : e.estado_alta === "pendiente"
+                              ? "Enviar enlace"
+                              : "Reenviar"}
+                      </button>
                     </div>
                   </td>
                 </tr>
