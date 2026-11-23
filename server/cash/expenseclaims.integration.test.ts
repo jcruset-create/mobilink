@@ -673,6 +673,33 @@ describe.runIf(RUN)("Liquidaciones · el pago", () => {
     expect(tras.lineas.some((x) => x.id === r.pago.operacionId)).toBe(false);
   });
 
+  it("por proveedor cuenta los EMISORES de los tickets, no al trabajador", async () => {
+    const l = await aprobada82();
+    const r = await pago.pagarLiquidacion(ctxJefe, l.id, enEfectivo(`prov-${randomUUID()}`));
+    const filtro = { empresaId: EMPRESA, desde: fecha, hasta: fecha, centroId: null, conceptoId: null };
+    const inf = await stats.gastoPorProveedor(filtro);
+
+    // Cada ticket de esta liquidación es de su establecimiento (ver `aMano`).
+    const { rows: lineas } = await db.query(
+      `SELECT id, importe_centimos FROM cash_expense_claim_lines WHERE claim_id = $1 ORDER BY id`,
+      [l.id]
+    );
+    for (const x of lineas) {
+      const p = inf.proveedores.find((p) => p.clave === `NOMBRE:establecimiento ${x.id}`);
+      expect(p?.importeCentimos).toBe(Number(x.importe_centimos));
+    }
+    // El pago lleva el nombre de Juan, pero Juan es a quien se reembolsa, no a quien se le compra.
+    expect(inf.proveedores.some((p) => p.nombre === `Juan ${sufijo}`)).toBe(false);
+
+    // Y el detalle dice de qué liquidación sale y qué operación de caja la pagó.
+    const detalle = await stats.pagosDeProveedor(filtro, `NOMBRE:establecimiento ${lineas[0].id}`);
+    expect(detalle).toEqual([
+      expect.objectContaining({ numero: r.pago.numero, documento: `Liquidación ${l.numero} · Juan ${sufijo}` }),
+    ]);
+
+    await servicio.anularOperacion(ctxJefe, r.pago.operacionId, "prueba de proveedores");
+  });
+
   it("sale UN pago por el total, del cajón, y los tickets quedan como sus justificantes", async () => {
     const l = await aprobada82();
     const operacionesAntes = await contar("cash_operations");

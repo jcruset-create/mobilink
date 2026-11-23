@@ -15,6 +15,7 @@
  *   4. Es de GASTO: un cobro no lo acepta, ni siquiera en silencio.
  */
 
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const RUN = process.env.RUN_DB_TESTS === "1" && !!process.env.DATABASE_URL;
@@ -500,6 +501,113 @@ describe.runIf(RUN)("estadísticas de gasto", () => {
       },
       false
     );
+    expect(r.totalCentimos).toBe(0);
+  });
+});
+
+describe.runIf(RUN)("gasto por proveedor", () => {
+  let stats: typeof import("./expensestats.ts");
+  let sesionP = 0;
+  /*
+   * Un taller y una fecha propios: así no se mezcla lo que paguen las otras
+   * pruebas, ni lo que dejó una pasada anterior sobre la misma base.
+   */
+  const DIA = "2019-06-10";
+  const CENTRO = randomUUID();
+  const filtro = { empresaId: EMPRESA, desde: DIA, hasta: DIA, centroId: CENTRO, conceptoId: null };
+
+  const pagarP = (importe: number, extra: Record<string, unknown> = {}) =>
+    servicio.registrarOperacion(ctx, {
+      sessionId: sesionP,
+      tipo: "PAYMENT",
+      importeCentimos: importe,
+      formasPago: [{ forma: "CASH", importe }],
+      efectivoEntregado: [{ valor: 2000, cantidad: importe / 2000 }],
+      concepto: "proveedor",
+      ...extra,
+    });
+
+  beforeAll(async () => {
+    stats = await import("./expensestats.ts");
+    const { rows } = await db.query(
+      `INSERT INTO cash_registers (empresa_id, centro, centro_id, nombre, activa, created_at_ms, updated_at_ms)
+       VALUES ($1,'Centro',$4,$2,true,$3,$3) RETURNING id`,
+      [EMPRESA, `Proveedores ${sufijo}`, Date.now(), CENTRO]
+    );
+    sesionP = (
+      await servicio.abrirJornada(ctx, {
+        registerId: rows[0].id,
+        fondoManual: [{ valor: 2000, cantidad: 20 }],
+      })
+    ).sesion.id;
+    await db.query(`UPDATE cash_sessions SET fecha = $2::date WHERE id = $1`, [sesionP, DIA]);
+  });
+
+  it("agrupa por el código de la ERP, el nombre escrito y deja aparte lo que no tiene proveedor", async () => {
+    const ahora = Date.now();
+    const { rows: [doc] } = await db.query(
+      `INSERT INTO cash_external_documents
+         (empresa_id, external_system, external_id, tipo, party_tipo, party_external_id, party_nombre,
+          numero, total_centimos, pendiente_centimos, created_at_ms, updated_at_ms)
+       VALUES ($1,'TEST',$2,'SUPPLIER_INVOICE','SUPPLIER','400123','Ferretería Industrial','FV-1',4000,4000,$3,$3)
+       RETURNING id`,
+      [EMPRESA, `prov-${sufijo}`, ahora]
+    );
+
+    // La factura de la ERP: manda su código aunque en el pago se escribiera otra cosa.
+    await pagarP(4000, { documentoId: doc.id, partyNombre: "lo que sea" });
+    // Dos maneras de escribir el mismo proveedor.
+    await pagarP(2000, { partyNombre: "Repsol, S.A." });
+    await pagarP(2000, { partyNombre: "REPSOL" });
+    // Sin nombre: sale, no se esconde.
+    await pagarP(2000);
+    // Anulado: no es gasto de nadie.
+    const anulado = await pagarP(2000, { partyNombre: "Repsol" });
+    await servicio.anularOperacion(ctx, anulado.operacionId, "duplicado");
+
+    const r = await stats.gastoPorProveedor(filtro);
+
+    const erp = r.proveedores.find((p) => p.clave === "ERP:400123")!;
+    expect(erp).toMatchObject({ nombre: "Ferretería Industrial", via: "ERP", identificador: "400123", importeCentimos: 4000, operaciones: 1 });
+
+    const repsol = r.proveedores.find((p) => p.clave === "NOMBRE:repsol")!;
+    expect(repsol).toMatchObject({ via: "NOMBRE", importeCentimos: 4000, operaciones: 2 });
+
+    expect(r.sinProveedorCentimos).toBe(2000);
+    expect(r.proveedores.find((p) => p.clave == null)?.nombre).toBe("Sin proveedor");
+
+    // El total es TODO el gasto del día, y cuadra con el reparto por concepto.
+    expect(r.totalCentimos).toBe(10000);
+    expect(r.operaciones).toBe(4);
+    const porConcepto = await stats.informeDeGasto({ ...filtro, granularidad: "dia" }, false);
+    expect(r.totalCentimos).toBe(porConcepto.totalCentimos);
+
+    // De mayor a menor.
+    const importes = r.proveedores.map((p) => p.importeCentimos);
+    expect(importes).toEqual([...importes].sort((a, b) => b - a));
+  });
+
+  it("el detalle de un proveedor trae sus pagos, y el de «sin proveedor» los suyos", async () => {
+    const repsol = await stats.pagosDeProveedor(filtro, "NOMBRE:repsol");
+    expect(repsol).toHaveLength(2);
+    expect(repsol.every((p) => p.importeCentimos === 2000 && p.fecha === DIA)).toBe(true);
+
+    const erp = await stats.pagosDeProveedor(filtro, "ERP:400123");
+    expect(erp).toHaveLength(1);
+    expect(erp[0]!.documento).toBe("FV-1");
+
+    const sin = await stats.pagosDeProveedor(filtro, null);
+    expect(sin).toHaveLength(1);
+  });
+
+  it("el filtro de concepto se aplica también aquí", async () => {
+    const r = await stats.gastoPorProveedor({ ...filtro, conceptoId: 999_999_999 });
+    expect(r.totalCentimos).toBe(0);
+    expect(r.proveedores).toEqual([]);
+  });
+
+  it("el gasto de otra empresa no se suma nunca", async () => {
+    const r = await stats.gastoPorProveedor({ ...filtro, empresaId: "00000000-0000-4000-a000-0000000000ff" });
     expect(r.totalCentimos).toBe(0);
   });
 });
