@@ -25,11 +25,19 @@ import { registrarAuditoria } from "./auditoria.ts";
 import { clienteTwilio, hayCredencialesTwilio } from "./twilio.ts";
 import { hayIA, pedirIA } from "./openaiService.ts";
 import {
+  ESQUEMA_ESQUINAS,
+  INSTRUCCIONES_ESQUINAS,
+  enderezar,
+  esquinasValidas,
+  tamanoDeSalida,
+  type Esquinas,
+} from "./recorteDocumento.ts";
+import {
   CAMPOS_TALLA,
   CAMPOS_VERIFICABLES,
-  ESQUEMA_RECORTE,
+  ESQUEMA_LECTURA,
   ESQUEMA_VERIFICACION,
-  INSTRUCCIONES_RECORTE,
+  INSTRUCCIONES_LECTURA,
   INSTRUCCIONES_VERIFICACION,
   caducidadDesde,
   esTipoDocumento,
@@ -44,9 +52,10 @@ import {
   textoSmsActualizacion,
   urlDeAlta,
   validarFicha,
-  recorteEnPixeles,
+  certificacionesDeLectura,
+  fichaDeLectura,
   type Consentimiento,
-  type LecturaRecorte,
+  type Lectura,
   type MotivoInvitacion,
   type Verificacion,
 } from "./altaOperario.ts";
@@ -310,7 +319,7 @@ export function createAltaOperarioAdminRouter(): Router {
 
     const { rows: inv } = await db.query(
       `SELECT id, estado, motivo, enviado_at, abierto_at, recibida_at, caduca_at,
-              firmado_at, firma_path, verificacion, verificado_at
+              firmado_at, firma_path, verificacion, verificado_at, lectura, leido_at
          FROM sea_employee_invites
         WHERE employee_id = $1
         ORDER BY enviado_at DESC
@@ -335,10 +344,13 @@ export function createAltaOperarioAdminRouter(): Router {
         caducaAt: invitacion.caduca_at,
         firmadoAt: invitacion.firmado_at,
         verificadoAt: invitacion.verificado_at,
+        leidoAt: invitacion.leido_at,
       },
       documentos: await documentosConUrl(employeeId),
       firma: invitacion?.firma_path ? await urlFirmada(invitacion.firma_path) : null,
       verificacion: invitacion?.verificacion ?? null,
+      lectura: invitacion?.lectura ?? null,
+      certificacionesPropuestas: certificacionesDeLectura(invitacion?.lectura ?? null),
       consentimientos,
       puedeVerificar: hayIA(),
     });
@@ -376,6 +388,142 @@ export function createAltaOperarioAdminRouter(): Router {
       const motivo = e instanceof Error ? e.message : "error desconocido";
       res.status(502).json({ error: `No se ha podido comprobar: ${motivo}` });
     }
+  });
+
+  /**
+   * Subir una foto desde la ficha, sin pasar por el trabajador.
+   *
+   * Hace falta porque la mitad de las veces el DNI llega al mostrador en la
+   * mano: el trabajador se planta allí con el documento y no tiene sentido
+   * mandarle un SMS para que se haga una foto a sí mismo delante de ti.
+   */
+  r.post("/:employeeId/documento", subidaFoto.single("foto"), async (req: Request, res: Response) => {
+    const employeeId = String(req.params.employeeId ?? "");
+    const tipo = String(req.body?.tipo ?? "");
+    if (!/^[0-9a-f-]{36}$/i.test(employeeId)) {
+      return res.status(400).json({ error: "Ese empleado no existe." });
+    }
+    if (!esTipoDocumento(tipo)) return res.status(400).json({ error: "Ese documento no se pide." });
+
+    const fichero = req.file;
+    if (!fichero) return res.status(400).json({ error: "No ha llegado la foto." });
+    if (!MIMES.has(fichero.mimetype)) {
+      return res.status(400).json({ error: "La foto tiene que ser JPG, PNG o WEBP." });
+    }
+
+    const { rows } = await db.query(`SELECT 1 FROM sea_employees WHERE id = $1`, [employeeId]);
+    if (rows.length === 0) return res.status(404).json({ error: "Ese empleado no existe." });
+
+    const ruta = await guardarDocumento(employeeId, tipo, fichero);
+    // Aquí sí se espera al recorte: el encargado está mirando la pantalla y
+    // lo que quiere ver al soltar la foto es cómo ha quedado.
+    await mejorarDocumento(employeeId, tipo, ruta).catch(() => false);
+
+    await registrarAuditoria({
+      empresaId: req.authCtx!.empresaId,
+      userId: req.authCtx!.userId,
+      accion: "core.alta.documento",
+      entidad: "sea_employees",
+      entidadId: employeeId,
+      detalle: { tipo },
+      ip: req.ip,
+    }).catch(() => {});
+
+    res.json({ ok: true, tipo, documentos: await documentosConUrl(employeeId) });
+  });
+
+  /**
+   * Leer lo que ponen los documentos.
+   *
+   * Distinto de `verificar`: aquello compara lo tecleado con la foto, esto
+   * saca datos que no tiene nadie —las clases del carnet y la fecha de cada
+   * una, que es la tabla del reverso—. Lo leído NO se escribe en la ficha:
+   * se guarda, se enseña y lo pasa el que revisa.
+   */
+  r.post("/:employeeId/leer", async (req: Request, res: Response) => {
+    const employeeId = String(req.params.employeeId ?? "");
+    if (!/^[0-9a-f-]{36}$/i.test(employeeId)) {
+      return res.status(400).json({ error: "Ese empleado no existe." });
+    }
+    if (!hayIA()) {
+      return res.status(503).json({ error: "La lectura automática no está configurada." });
+    }
+
+    try {
+      const lectura = await leerDocumentos(employeeId);
+      await db.query(
+        `UPDATE sea_employee_invites SET lectura = $2, leido_at = now()
+          WHERE id = (SELECT id FROM sea_employee_invites WHERE employee_id = $1
+                       ORDER BY enviado_at DESC LIMIT 1)`,
+        [employeeId, JSON.stringify(lectura)]
+      );
+      res.json({ ok: true, lectura, certificaciones: certificacionesDeLectura(lectura) });
+    } catch (e) {
+      const motivo = e instanceof Error ? e.message : "error desconocido";
+      res.status(502).json({ error: `No se ha podido leer: ${motivo}` });
+    }
+  });
+
+  /**
+   * Pasar lo leído a la ficha.
+   *
+   * El botón que separa «la IA informa» de «la IA decide». Escribe solo los
+   * campos que se han leído —lo vacío no borra nada de lo que ya hubiera— y
+   * anota una certificación por clase, cada una con su fecha.
+   */
+  r.post("/:employeeId/aplicar-lectura", async (req: Request, res: Response) => {
+    const employeeId = String(req.params.employeeId ?? "");
+    if (!/^[0-9a-f-]{36}$/i.test(employeeId)) {
+      return res.status(400).json({ error: "Ese empleado no existe." });
+    }
+
+    const { rows } = await db.query(
+      `SELECT lectura FROM sea_employee_invites
+        WHERE employee_id = $1 AND lectura IS NOT NULL
+        ORDER BY enviado_at DESC LIMIT 1`,
+      [employeeId]
+    );
+    const lectura = rows[0]?.lectura as Lectura | undefined;
+    if (!lectura) return res.status(409).json({ error: "Todavía no se ha leído la documentación." });
+
+    const campos = fichaDeLectura(lectura);
+    const nombres = Object.keys(campos);
+    if (nombres.length > 0) {
+      const sets = nombres.map((c, i) => `${c} = $${i + 2}`).join(", ");
+      await db.query(
+        `UPDATE sea_employees SET ${sets}, updated_at = now() WHERE id = $1`,
+        [employeeId, ...nombres.map((c) => campos[c])]
+      );
+    }
+
+    const anotadas: string[] = [];
+    for (const c of certificacionesDeLectura(lectura)) {
+      const { rows: ya } = await db.query(
+        `SELECT 1 FROM sea_employee_certifications
+          WHERE employee_id = $1 AND nombre = $2 AND fecha_caducidad = $3`,
+        [employeeId, c.nombre, c.caducidad]
+      );
+      if (ya.length > 0) continue;
+      await db.query(
+        `INSERT INTO sea_employee_certifications
+           (employee_id, nombre, entidad_emisora, fecha_caducidad, numero_certificado)
+         VALUES ($1, $2, 'DGT', $3, $4)`,
+        [employeeId, c.nombre, c.caducidad, c.numero]
+      );
+      anotadas.push(`${c.nombre} (${c.caducidad})`);
+    }
+
+    await registrarAuditoria({
+      empresaId: req.authCtx!.empresaId,
+      userId: req.authCtx!.userId,
+      accion: "core.alta.aplicarLectura",
+      entidad: "sea_employees",
+      entidadId: employeeId,
+      detalle: { campos: nombres, certificaciones: anotadas },
+      ip: req.ip,
+    }).catch(() => {});
+
+    res.json({ ok: true, campos: nombres, certificaciones: anotadas });
   });
 
   /**
@@ -512,9 +660,12 @@ async function documentosConUrl(employeeId: string): Promise<DocumentoRevision[]
 /**
  * De la foto de un móvil a algo que parece un documento escaneado.
  *
- * El modelo NO recorta: devuelve coordenadas. El recorte, el enderezado y la
- * mejora los hace `sharp` aquí, que es instantáneo y no cuesta nada. Y la
- * original no se toca: si el recorte sale mal, sigue estando entera.
+ * El modelo NO dibuja: dice dónde están las cuatro esquinas del documento y
+ * el enderezado lo hace `recorteDocumento.ts` muestreando la foto original,
+ * píxel a píxel. Así el número del DNI que acaba en la ficha es el que había
+ * en el documento, y no uno que un modelo de imagen haya repintado.
+ *
+ * Y la original no se toca: si el enderezado sale mal, sigue estando entera.
  */
 async function mejorarDocumento(
   employeeId: string,
@@ -526,9 +677,17 @@ async function mejorarDocumento(
   const { data, error } = await supabase.storage.from(BUCKET).download(rutaOriginal);
   if (error || !data) throw new Error("no se ha podido leer la foto");
 
-  // Primero se normaliza la orientación EXIF: así las coordenadas que dé el
-  // modelo valen sobre los mismos píxeles que luego se recortan.
-  const derecha = await sharp(Buffer.from(await data.arrayBuffer())).rotate().toBuffer();
+  /*
+   * Se normaliza la orientación EXIF y se baja a 2400 px antes de nada.
+   *
+   * Lo segundo es por memoria: el enderezado trabaja sobre el búfer crudo, y
+   * una foto de 4032x3024 en crudo son 36 MB. A 2400 se queda en 13, y la
+   * salida son 1600 de todas formas, así que no se pierde nada visible.
+   */
+  const derecha = await sharp(Buffer.from(await data.arrayBuffer()))
+    .rotate()
+    .resize({ width: 2400, withoutEnlargement: true })
+    .toBuffer();
   const meta = await sharp(derecha).metadata();
   const ancho = meta.width ?? 0;
   const alto = meta.height ?? 0;
@@ -539,23 +698,23 @@ async function mejorarDocumento(
     .jpeg({ quality: 80 })
     .toBuffer();
 
-  const r = await pedirIA<LecturaRecorte>({
+  const r = await pedirIA<{ encontrado: boolean; esquinas: Esquinas; nota: string }>({
     operacion: "core.alta.recortar",
     proposito: "documento",
-    prompt: INSTRUCCIONES_RECORTE,
+    prompt: INSTRUCCIONES_ESQUINAS,
     imagenes: [{ url: `data:image/jpeg;base64,${paraModelo.toString("base64")}` }],
     esquema: {
-      nombre: "recuadro_documento",
-      schema: ESQUEMA_RECORTE as unknown as Record<string, unknown>,
+      nombre: "esquinas_documento",
+      schema: ESQUEMA_ESQUINAS as unknown as Record<string, unknown>,
     },
     maxTokens: 500,
     timeoutMs: 60_000,
   });
 
-  const lectura = r.datos;
-  const caja = r.ok && lectura?.encontrado ? recorteEnPixeles(lectura.recuadro, ancho, alto) : null;
+  const respuesta = r.datos;
+  const esquinas = r.ok && respuesta?.encontrado ? respuesta.esquinas : null;
 
-  if (!caja) {
+  if (!esquinasValidas(esquinas)) {
     // Se anota por qué no, y se deja la original: la ficha la enseña igual.
     await db.query(
       `UPDATE sea_employee_documents
@@ -565,50 +724,85 @@ async function mejorarDocumento(
         employeeId,
         tipo,
         JSON.stringify({
-          nota: lectura?.nota ?? r.error?.slice(0, 200) ?? "no se ha encontrado el documento",
           encontrado: false,
+          nota:
+            respuesta?.nota ??
+            r.error?.slice(0, 200) ??
+            "no se han encontrado las esquinas del documento",
         }),
       ]
     );
     return false;
   }
 
-  const limpia = await sharp(derecha)
-    .extract(caja)
-    .rotate(lectura!.giro)
-    // `normalise` estira el histograma: el gris de una foto con sombra pasa a
-    // blanco y negro de verdad, que es lo que hace legible un DNI a contraluz.
-    .normalise()
-    .sharpen()
-    .resize({ width: 1600, withoutEnlargement: true })
-    .jpeg({ quality: 88 })
-    .toBuffer();
+  const salida = tamanoDeSalida(esquinas, ancho, alto);
+  if (!salida.ancho || !salida.alto) return false;
 
+  /*
+   * A partir de aquí nada puede tumbar la petición: si el enderezado o la
+   * subida fallan, la foto original sigue entera y la ficha la enseña igual.
+   * Lo que no puede pasar es que un error técnico acabe en rojo encima de la
+   * ficha del trabajador, que es lo que pasó el primer día.
+   */
   const rutaRecorte = `empleados/${employeeId}/recorte-${tipo}.jpg`;
-  const subida = await supabase.storage
-    .from(BUCKET)
-    .upload(rutaRecorte, limpia, { contentType: "image/jpeg", upsert: true });
-  if (subida.error) throw new Error(subida.error.message);
+  try {
+    const { data: crudo, info } = await sharp(derecha)
+      .removeAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
 
-  await db.query(
-    `UPDATE sea_employee_documents
-        SET recorte_path = $3, recorte_at = now(), recorte_meta = $4
-      WHERE employee_id = $1 AND tipo = $2`,
-    [
-      employeeId,
-      tipo,
-      rutaRecorte,
-      JSON.stringify({
-        encontrado: true,
-        recuadro: lectura!.recuadro,
-        giro: lectura!.giro,
-        nota: lectura!.nota,
-        bytes: limpia.length,
-        modelo: r.modelo,
-      }),
-    ]
-  );
-  return true;
+    const enderezada = enderezar(crudo, info.width, info.height, info.channels, esquinas, salida);
+
+    const limpia = await sharp(enderezada, {
+      raw: { width: salida.ancho, height: salida.alto, channels: info.channels as 1 | 2 | 3 | 4 },
+    })
+      // `normalise` estira el histograma: el gris de una foto con sombra pasa
+      // a blanco y negro de verdad, que es lo que hace legible un DNI a
+      // contraluz.
+      .normalise()
+      .sharpen()
+      .jpeg({ quality: 88 })
+      .toBuffer();
+
+    const subida = await supabase.storage
+      .from(BUCKET)
+      .upload(rutaRecorte, limpia, { contentType: "image/jpeg", upsert: true });
+    if (subida.error) throw new Error(subida.error.message);
+
+    await db.query(
+      `UPDATE sea_employee_documents
+          SET recorte_path = $3, recorte_at = now(), recorte_meta = $4
+        WHERE employee_id = $1 AND tipo = $2`,
+      [
+        employeeId,
+        tipo,
+        rutaRecorte,
+        JSON.stringify({
+          encontrado: true,
+          esquinas,
+          nota: respuesta!.nota,
+          salida,
+          bytes: limpia.length,
+          modelo: r.modelo,
+        }),
+      ]
+    );
+    return true;
+  } catch (e) {
+    const motivo = e instanceof Error ? e.message : "error desconocido";
+    console.error("[Core alta] recorte fallido:", motivo);
+    await db.query(
+      `UPDATE sea_employee_documents
+          SET recorte_path = NULL, recorte_at = now(), recorte_meta = $3
+        WHERE employee_id = $1 AND tipo = $2`,
+      [
+        employeeId,
+        tipo,
+        JSON.stringify({ encontrado: false, nota: `No se ha podido recortar: ${motivo}` }),
+      ]
+    );
+    return false;
+  }
 }
 
 /**
@@ -654,6 +848,28 @@ async function anotarCaducidades(
     anotadas.push(c.nombre);
   }
   return anotadas;
+}
+
+/** Guarda la foto en el bucket y la anota en la ficha. Devuelve su ruta. */
+async function guardarDocumento(
+  employeeId: string,
+  tipo: string,
+  fichero: { buffer: Buffer; mimetype: string; size: number }
+): Promise<string> {
+  const extension =
+    fichero.mimetype === "image/png" ? "png" : fichero.mimetype === "image/webp" ? "webp" : "jpg";
+  const ruta = await guardarEnStorage(employeeId, `${tipo}.${extension}`, fichero.buffer, fichero.mimetype);
+
+  await db.query(
+    `INSERT INTO sea_employee_documents (employee_id, tipo, storage_path, mime, bytes)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (employee_id, tipo) DO UPDATE
+       SET storage_path = EXCLUDED.storage_path, mime = EXCLUDED.mime,
+           bytes = EXCLUDED.bytes, subido_at = now(),
+           recorte_path = NULL, recorte_at = NULL, recorte_meta = NULL`,
+    [employeeId, tipo, ruta, fichero.mimetype, fichero.size]
+  );
+  return ruta;
 }
 
 // ── La comprobación con IA ─────────────────────────────────────────────────
@@ -821,22 +1037,7 @@ export function createAltaOperarioPublicRouter(): Router {
       return res.status(400).json({ error: "La foto tiene que ser JPG, PNG o WEBP." });
     }
 
-    const extension = fichero.mimetype === "image/png" ? "png" : fichero.mimetype === "image/webp" ? "webp" : "jpg";
-    const ruta = await guardarEnStorage(
-      invitacion!.employee_id,
-      `${tipo}.${extension}`,
-      fichero.buffer,
-      fichero.mimetype
-    );
-
-    await db.query(
-      `INSERT INTO sea_employee_documents (employee_id, tipo, storage_path, mime, bytes)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (employee_id, tipo) DO UPDATE
-         SET storage_path = EXCLUDED.storage_path, mime = EXCLUDED.mime,
-             bytes = EXCLUDED.bytes, subido_at = now()`,
-      [invitacion!.employee_id, tipo, ruta, fichero.mimetype, fichero.size]
-    );
+    const ruta = await guardarDocumento(invitacion!.employee_id, tipo, fichero);
 
     res.json({ ok: true, tipo, documentos: await documentosDe(invitacion!.employee_id) });
 
@@ -955,4 +1156,47 @@ async function guardarFicha(
       valores
     );
   }
+}
+
+
+/**
+ * Lee el DNI y el carnet de las fotos que haya.
+ *
+ * Se le dan las versiones RECORTADAS cuando existen: el documento llena el
+ * encuadre y la tabla de clases del reverso se lee mucho mejor que en una
+ * foto donde ocupa un tercio de la imagen.
+ */
+async function leerDocumentos(employeeId: string): Promise<Lectura> {
+  const { rows: docs } = await db.query(
+    `SELECT tipo, storage_path, recorte_path FROM sea_employee_documents
+      WHERE employee_id = $1 ORDER BY tipo`,
+    [employeeId]
+  );
+  if (docs.length === 0) throw new Error("no hay ninguna foto que leer");
+
+  const imagenes: Array<{ url: string }> = [];
+  const presentes: string[] = [];
+  for (const d of docs as Array<{ tipo: string; storage_path: string; recorte_path: string | null }>) {
+    const uri = await imagenParaIA(d.recorte_path ?? d.storage_path);
+    if (!uri) continue;
+    imagenes.push({ url: uri });
+    presentes.push(d.tipo);
+  }
+  if (imagenes.length === 0) throw new Error("no se ha podido leer ninguna foto");
+
+  const r = await pedirIA<Lectura>({
+    operacion: "core.alta.leer",
+    proposito: "documento",
+    prompt: `${INSTRUCCIONES_LECTURA}\n\nFotos adjuntas, en este orden: ${presentes.join(", ")}.`,
+    imagenes,
+    esquema: {
+      nombre: "lectura_documentacion",
+      schema: ESQUEMA_LECTURA as unknown as Record<string, unknown>,
+    },
+    maxTokens: 2000,
+    timeoutMs: 90_000,
+  });
+
+  if (!r.ok || !r.datos) throw new Error(r.error?.slice(0, 200) ?? "el modelo no ha contestado");
+  return r.datos;
 }

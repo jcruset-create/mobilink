@@ -423,101 +423,128 @@ export function resumenVerificacion(v: Verificacion | null | undefined): {
   };
 }
 
-// ── Recortar el documento dentro de la foto ────────────────────────────────
+// ── Lo que dice la documentación ───────────────────────────────────────────
 
-/** El recuadro del documento, en proporciones de la foto (0 a 1). */
-export type Recuadro = { x0: number; y0: number; x1: number; y1: number };
+/**
+ * Una clase del permiso de conducción con SU fecha.
+ *
+ * Van por separado porque caducan por separado: el reverso del carnet es una
+ * tabla con una fila por clase, y la C profesional caduca cada cinco años
+ * mientras la B del mismo carnet dura diez. Guardar solo «caduca el día X»
+ * es perder justo el dato que hace falta para avisar a tiempo.
+ */
+export type ClaseCarnet = { clase: string; caducidad: string | null };
 
-export type LecturaRecorte = {
-  encontrado: boolean;
-  recuadro: Recuadro;
-  /** Grados en sentido horario que le faltan al recorte para quedar derecho. */
-  giro: 0 | 90 | 180 | 270;
-  nota: string;
+export type Lectura = {
+  identidad: { numero: string | null; caducidad: string | null; nota: string };
+  carnet: {
+    numero: string | null;
+    caducidad: string | null;
+    clases: ClaseCarnet[];
+    capNumero: string | null;
+    capCaducidad: string | null;
+    nota: string;
+  };
 };
 
-export const ESQUEMA_RECORTE = {
+export const ESQUEMA_LECTURA = {
   type: "object",
   additionalProperties: false,
-  required: ["encontrado", "recuadro", "giro", "nota"],
+  required: ["identidad", "carnet"],
   properties: {
-    encontrado: { type: "boolean" },
-    recuadro: {
+    identidad: {
       type: "object",
       additionalProperties: false,
-      required: ["x0", "y0", "x1", "y1"],
+      required: ["numero", "caducidad", "nota"],
       properties: {
-        x0: { type: "number" },
-        y0: { type: "number" },
-        x1: { type: "number" },
-        y1: { type: "number" },
+        numero: { type: ["string", "null"] },
+        caducidad: { type: ["string", "null"] },
+        nota: { type: "string" },
       },
     },
-    giro: { type: "integer", enum: [0, 90, 180, 270] },
-    nota: { type: "string" },
+    carnet: {
+      type: "object",
+      additionalProperties: false,
+      required: ["numero", "caducidad", "clases", "capNumero", "capCaducidad", "nota"],
+      properties: {
+        numero: { type: ["string", "null"] },
+        caducidad: { type: ["string", "null"] },
+        clases: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["clase", "caducidad"],
+            properties: {
+              clase: { type: "string" },
+              caducidad: { type: ["string", "null"] },
+            },
+          },
+        },
+        capNumero: { type: ["string", "null"] },
+        capCaducidad: { type: ["string", "null"] },
+        nota: { type: "string" },
+      },
+    },
   },
 } as const;
 
-export const INSTRUCCIONES_RECORTE = [
-  "En la foto hay un documento de identidad (DNI, NIE o carnet de conducir)",
-  "sobre una mesa, una mano o un fondo cualquiera.",
+export const INSTRUCCIONES_LECTURA = [
+  "Lee los documentos de las fotos y devuelve lo que ponen. No interpretes",
+  "ni completes: si un dato no se ve, va a null y lo explicas en la nota.",
   "",
-  "Devuelve el recuadro que lo contiene, en proporciones de la imagen: 0,0 es",
-  "la esquina superior izquierda y 1,1 la inferior derecha. x0/y0 es la esquina",
-  "de arriba a la izquierda del documento y x1/y1 la de abajo a la derecha.",
+  "Del documento de identidad (DNI o NIE):",
+  "- numero: el número con su letra.",
+  "- caducidad: la fecha de validez del documento.",
   "",
-  "`giro` es cuánto hay que girar ese recorte en sentido horario para que el",
-  "texto del documento se lea derecho: 0, 90, 180 o 270.",
+  "Del permiso de conducción:",
+  "- numero: el número del permiso (suele ser el DNI).",
+  "- caducidad: la fecha de validez del documento entero, si aparece.",
+  "- clases: UNA ENTRADA POR CLASE de las que tiene concedidas (AM, A1, A2,",
+  "  A, B, BE, C1, C, CE, D1, D, DE…). El reverso es una tabla con una fila",
+  "  por clase y su fecha; copia la fecha de CADA fila en su clase. Si una",
+  "  clase no tiene fecha propia, caducidad a null.",
+  "- capNumero y capCaducidad: solo si en la foto aparece la tarjeta CAP.",
   "",
-  "Reglas:",
-  "- Ajusta el recuadro al documento, sin dejar media mesa dentro.",
-  "- Mejor pasarse un poco que cortar una esquina del documento.",
-  "- Si no hay ningún documento, o no se distingue del fondo, `encontrado`",
-  "  falso y explica por qué en `nota`. No te inventes un recuadro.",
+  "Todas las fechas en dd/mm/aaaa.",
 ].join("\n");
 
-/** El margen que se deja alrededor del documento: ni pegado ni con medio fondo. */
-export const MARGEN_RECORTE = 0.04;
-
 /**
- * El recuadro que dice el modelo → píxeles de verdad, o `null`.
+ * Lo leído → las certificaciones que tocaría anotar.
  *
- * Devuelve `null` en cuanto algo no cuadra —coordenadas al revés, fuera de la
- * imagen, o un recuadro ridículamente pequeño— y quien llama se queda con la
- * foto original. Un recorte equivocado es peor que ninguno: corta el DNI por
- * la mitad y nadie se entera hasta que hace falta el documento.
+ * Una por clase con fecha propia, más el CAP. Se construye aquí, aparte de
+ * la base, para poder enseñarle al que revisa EXACTAMENTE lo que se le va a
+ * escribir en la ficha antes de que pulse el botón.
  */
-export function recorteEnPixeles(
-  r: Recuadro,
-  ancho: number,
-  alto: number,
-  margen = MARGEN_RECORTE
-): { left: number; top: number; width: number; height: number } | null {
-  const nums = [r?.x0, r?.y0, r?.x1, r?.y1];
-  if (nums.some((n) => typeof n !== "number" || !Number.isFinite(n))) return null;
-  if (!(r.x1 > r.x0) || !(r.y1 > r.y0)) return null;
-  if (ancho <= 0 || alto <= 0) return null;
+export function certificacionesDeLectura(
+  lectura: Lectura | null | undefined
+): Array<{ nombre: string; caducidad: string; numero: string | null }> {
+  const fuera: Array<{ nombre: string; caducidad: string; numero: string | null }> = [];
+  for (const c of lectura?.carnet?.clases ?? []) {
+    const clase = String(c?.clase ?? "").trim().toUpperCase();
+    const caducidad = fechaIso(c?.caducidad);
+    if (!clase || !caducidad) continue;
+    fuera.push({ nombre: `Carnet de conducir ${clase}`, caducidad, numero: lectura?.carnet?.numero ?? null });
+  }
+  const cap = fechaIso(lectura?.carnet?.capCaducidad);
+  if (cap) fuera.push({ nombre: "CAP", caducidad: cap, numero: lectura?.carnet?.capNumero ?? null });
+  return fuera;
+}
 
-  // Un documento que ocupa menos de un 15 % de la foto no es un documento:
-  // es el modelo señalando un trozo de algo.
-  if ((r.x1 - r.x0) * (r.y1 - r.y0) < 0.15) return null;
-
-  const en01 = (n: number) => Math.min(1, Math.max(0, n));
-  const x0 = en01(r.x0 - margen);
-  const y0 = en01(r.y0 - margen);
-  const x1 = en01(r.x1 + margen);
-  const y1 = en01(r.y1 + margen);
-
-  const left = Math.round(x0 * ancho);
-  const top = Math.round(y0 * alto);
-  const width = Math.round((x1 - x0) * ancho);
-  const height = Math.round((y1 - y0) * alto);
-  if (width < 32 || height < 32) return null;
-
-  return {
-    left,
-    top,
-    width: Math.min(width, ancho - left),
-    height: Math.min(height, alto - top),
+/** Lo leído → los campos de la ficha. Solo lo que se entiende. */
+export function fichaDeLectura(lectura: Lectura | null | undefined): Record<string, string | null> {
+  const clases = (lectura?.carnet?.clases ?? [])
+    .map((c) => String(c?.clase ?? "").trim().toUpperCase())
+    .filter(Boolean);
+  const campos: Record<string, string | null> = {};
+  const poner = (campo: string, valor: string | null) => {
+    if (valor) campos[campo] = valor;
   };
+  poner("dni_caducidad", fechaIso(lectura?.identidad?.caducidad));
+  poner("carnet_numero", lectura?.carnet?.numero ?? null);
+  poner("carnet_caducidad", fechaIso(lectura?.carnet?.caducidad));
+  poner("carnet_clases", clases.length ? clases.join(", ") : null);
+  poner("cap_numero", lectura?.carnet?.capNumero ?? null);
+  poner("cap_caducidad", fechaIso(lectura?.carnet?.capCaducidad));
+  return campos;
 }

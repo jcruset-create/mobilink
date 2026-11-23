@@ -10,6 +10,7 @@ import { useEsSuperadmin } from "../../esSuperadmin";
 type Empleado = {
   id: string; nombre: string; apellidos: string | null;
   dni_nie: string | null; num_seguridad_social: string | null;
+  dni_caducidad: string | null;
   direccion: string | null; codigo_postal: string | null;
   poblacion: string | null; provincia: string | null;
   telefono: string | null; email: string | null;
@@ -43,6 +44,7 @@ type Revision = {
     estado: string; motivo: string; enviadoAt: string | null; abiertoAt: string | null;
     recibidaAt: string | null; caducaAt: string | null; firmadoAt: string | null;
     verificadoAt: string | null;
+    leidoAt: string | null;
   } | null;
   documentos: Array<{
     tipo: string;
@@ -56,6 +58,15 @@ type Revision = {
   }>;
   firma: string | null;
   verificacion: { campos: Array<{ campo: string; tecleado: string | null; leido: string | null; veredicto: string; nota: string }>; resumen: string } | null;
+  lectura: {
+    identidad: { numero: string | null; caducidad: string | null; nota: string };
+    carnet: {
+      numero: string | null; caducidad: string | null;
+      clases: Array<{ clase: string; caducidad: string | null }>;
+      capNumero: string | null; capCaducidad: string | null; nota: string;
+    };
+  } | null;
+  certificacionesPropuestas: Array<{ nombre: string; caducidad: string; numero: string | null }>;
   consentimientos: Array<{ tipo: string; aceptado: boolean; fecha: string | null }>;
   puedeVerificar: boolean;
 };
@@ -101,7 +112,7 @@ export default function EmpleadoDetalle() {
 
   // Revisión del alta (solo administradores; si no, se queda en null).
   const [revision, setRevision] = useState<Revision | null>(null);
-  const [accion, setAccion] = useState<"" | "aprobando" | "verificando" | "corrigiendo" | "recortando">("");
+  const [accion, setAccion] = useState<"" | "aprobando" | "verificando" | "corrigiendo" | "recortando" | "leyendo" | "aplicando" | "subiendo">("");
   const [revMensaje, setRevMensaje] = useState("");
   const [revError, setRevError] = useState("");
   const esSuperadmin = useEsSuperadmin();
@@ -273,6 +284,70 @@ export default function EmpleadoDetalle() {
       setTimeout(() => setRevMensaje(""), 4000);
     } catch (e) {
       setRevError(e instanceof Error ? e.message : "No se ha podido comprobar.");
+    } finally {
+      setAccion("");
+    }
+  }
+
+  /** Sube una foto desde aquí: el DNI que llega al mostrador en la mano. */
+  async function subirDocumento(tipo: string, fichero: File) {
+    if (!id) return;
+    setAccion("subiendo");
+    setRevError("");
+    try {
+      const cuerpo = new FormData();
+      cuerpo.append("tipo", tipo);
+      cuerpo.append("foto", fichero);
+      const r = await apiFetch(`/api/core/alta/${id}/documento`, { method: "POST", body: cuerpo });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d?.error ?? "No se ha podido subir la foto.");
+      await cargarRevision(id);
+      setRevMensaje("Foto subida.");
+      setTimeout(() => setRevMensaje(""), 4000);
+    } catch (e) {
+      setRevError(e instanceof Error ? e.message : "No se ha podido subir la foto.");
+    } finally {
+      setAccion("");
+    }
+  }
+
+  /** Le pide a la IA que lea los documentos: carnets, clases y caducidades. */
+  async function leerDocumentacion() {
+    if (!id) return;
+    setAccion("leyendo");
+    setRevError("");
+    try {
+      const r = await apiFetch(`/api/core/alta/${id}/leer`, { method: "POST" });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d?.error ?? "No se ha podido leer.");
+      await cargarRevision(id);
+      setRevMensaje("Documentación leída. Repásala antes de pasarla a la ficha.");
+      setTimeout(() => setRevMensaje(""), 5000);
+    } catch (e) {
+      setRevError(e instanceof Error ? e.message : "No se ha podido leer.");
+    } finally {
+      setAccion("");
+    }
+  }
+
+  /** Lo leído pasa a la ficha y a Certificaciones. Lo decide quien revisa. */
+  async function aplicarLectura() {
+    if (!id) return;
+    setAccion("aplicando");
+    setRevError("");
+    try {
+      const r = await apiFetch(`/api/core/alta/${id}/aplicar-lectura`, { method: "POST" });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d?.error ?? "No se ha podido pasar a la ficha.");
+      await Promise.all([cargarRevision(id), cargar(id)]);
+      setRevMensaje(
+        d.certificaciones?.length
+          ? `Ficha actualizada. Anotado en Certificaciones: ${d.certificaciones.join(", ")}.`
+          : "Ficha actualizada con lo leído."
+      );
+      setTimeout(() => setRevMensaje(""), 7000);
+    } catch (e) {
+      setRevError(e instanceof Error ? e.message : "No se ha podido pasar a la ficha.");
     } finally {
       setAccion("");
     }
@@ -653,6 +728,8 @@ export default function EmpleadoDetalle() {
               { label: "Nombre completo", value: `${empleado.nombre} ${empleado.apellidos ?? ""}` },
               { label: "DNI / NIE", value: empleado.dni_nie },
               { label: "Nº Seguridad Social", value: empleado.num_seguridad_social },
+              { label: "El DNI caduca el", value: empleado.dni_caducidad
+                ? new Date(empleado.dni_caducidad).toLocaleDateString("es-ES") : null },
               { label: "Dirección", value: direccionCompleta(empleado) },
               { label: "Email", value: empleado.email },
               { label: "Teléfono", value: empleado.telefono },
@@ -1080,13 +1157,6 @@ export default function EmpleadoDetalle() {
             <div className="rounded-xl border border-slate-700 bg-slate-800 p-5 text-sm text-slate-400">
               La documentación personal solo la ve un administrador.
             </div>
-          ) : revision.documentos.length === 0 && !revision.firma ? (
-            <div className="rounded-xl border border-slate-700 bg-slate-800 p-5 text-sm text-slate-400">
-              Este empleado todavía no ha subido ninguna documentación.{" "}
-              {revision.estadoAlta === "completa"
-                ? "Puedes pedírsela desde la lista de empleados, con «Pedir actualización»."
-                : "Está pendiente de que rellene el formulario que le mandamos."}
-            </div>
           ) : (
             <>
               <div className="rounded-xl border border-slate-700 bg-slate-800 p-5 space-y-3">
@@ -1098,6 +1168,24 @@ export default function EmpleadoDetalle() {
                   </span>
                 </div>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  {Object.keys(DOC_LABEL)
+                    .filter((tipo) => !revision.documentos.some((d) => d.tipo === tipo))
+                    .map((tipo) => (
+                      <label key={tipo}
+                        className="flex cursor-pointer flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-slate-600 bg-slate-900 p-2 text-center hover:border-sky-600"
+                        style={{ minHeight: 190 }}>
+                        <span className="text-xs font-semibold text-slate-300">{DOC_LABEL[tipo]}</span>
+                        <span className="text-[11px] text-slate-500">
+                          {accion === "subiendo" ? "Subiendo…" : "Falta. Toca para subirla tú."}
+                        </span>
+                        <input type="file" accept="image/*" className="hidden"
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) void subirDocumento(tipo, f);
+                            e.target.value = "";
+                          }} />
+                      </label>
+                    ))}
                   {revision.documentos.map((d) => (
                     <div key={d.tipo} className="rounded-xl border border-slate-700 bg-slate-900 p-2">
                       <a href={d.url ?? undefined} target="_blank" rel="noreferrer" className="group block">
@@ -1128,6 +1216,15 @@ export default function EmpleadoDetalle() {
                             {accion === "recortando" ? "recortando…" : "recortar otra vez"}
                           </button>
                         )}
+                        <label className="cursor-pointer text-slate-400 underline hover:text-slate-200">
+                          cambiar foto
+                          <input type="file" accept="image/*" className="hidden"
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) void subirDocumento(d.tipo, f);
+                              e.target.value = "";
+                            }} />
+                        </label>
                       </div>
                       {!d.recortada && d.recorteNota && (
                         <div className="mt-1 text-[11px] text-slate-500">{d.recorteNota}</div>
@@ -1135,6 +1232,93 @@ export default function EmpleadoDetalle() {
                     </div>
                   ))}
                 </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-700 bg-slate-800 p-5 space-y-3">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <h2 className="font-semibold text-slate-200">Lo que dice la documentación</h2>
+                  {revision.puedeVerificar && (
+                    <div className="flex gap-2">
+                      <button onClick={() => void leerDocumentacion()} disabled={accion !== ""}
+                        className="rounded-lg border border-slate-600 px-3 py-1 text-xs text-slate-300 hover:bg-slate-700/50 disabled:opacity-50">
+                        {accion === "leyendo" ? "Leyendo…" : revision.lectura ? "Volver a leer" : "Leer documentación"}
+                      </button>
+                      {revision.lectura && (
+                        <button onClick={() => void aplicarLectura()} disabled={accion !== ""}
+                          className="rounded-lg bg-sky-600 px-3 py-1 text-xs font-semibold text-white hover:bg-sky-500 disabled:opacity-50">
+                          {accion === "aplicando" ? "Pasando…" : "Pasar a la ficha"}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {!revision.lectura ? (
+                  <p className="text-sm leading-6 text-slate-400">
+                    Sin leer. La IA saca de las fotos el número y la caducidad del DNI, y del carnet
+                    las clases que tiene <b className="text-slate-300">con la fecha de cada una</b>.
+                    Lo leído se enseña aquí; a la ficha pasa cuando tú le des al botón.
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                    <div className="space-y-2">
+                      <h3 className="text-xs font-bold uppercase tracking-wide text-slate-400">Documento de identidad</h3>
+                      <div className="flex justify-between border-b border-slate-700 pb-2 text-sm">
+                        <span className="text-slate-400">Número</span>
+                        <span className="font-medium">{revision.lectura.identidad.numero ?? "—"}</span>
+                      </div>
+                      <div className="flex justify-between border-b border-slate-700 pb-2 text-sm">
+                        <span className="text-slate-400">Caduca el</span>
+                        <span className="font-medium">{revision.lectura.identidad.caducidad ?? "—"}</span>
+                      </div>
+                      {revision.lectura.identidad.nota && (
+                        <p className="text-[11px] text-slate-500">{revision.lectura.identidad.nota}</p>
+                      )}
+                      <p className="pt-2 text-[11px] text-slate-500">
+                        Leído el {fechaHora(revision.invitacion?.leidoAt)}
+                      </p>
+                    </div>
+
+                    <div className="space-y-2">
+                      <h3 className="text-xs font-bold uppercase tracking-wide text-slate-400">Permiso de conducción</h3>
+                      <div className="flex justify-between border-b border-slate-700 pb-2 text-sm">
+                        <span className="text-slate-400">Número</span>
+                        <span className="font-medium">{revision.lectura.carnet.numero ?? "—"}</span>
+                      </div>
+                      {revision.lectura.carnet.clases.length === 0 ? (
+                        <p className="text-sm text-slate-500">No se ha leído ninguna clase.</p>
+                      ) : (
+                        revision.lectura.carnet.clases.map((c) => (
+                          <div key={c.clase} className="flex items-center justify-between border-b border-slate-700 pb-2 text-sm">
+                            <span className="rounded bg-slate-700 px-2 py-0.5 font-mono text-xs text-slate-200">{c.clase}</span>
+                            <span className={c.caducidad ? "font-medium" : "text-amber-300"}>
+                              {c.caducidad ?? "sin fecha"}
+                            </span>
+                          </div>
+                        ))
+                      )}
+                      {revision.lectura.carnet.capCaducidad && (
+                        <div className="flex justify-between border-b border-slate-700 pb-2 text-sm">
+                          <span className="text-slate-400">CAP</span>
+                          <span className="font-medium">{revision.lectura.carnet.capCaducidad}</span>
+                        </div>
+                      )}
+                      {revision.lectura.carnet.nota && (
+                        <p className="text-[11px] text-slate-500">{revision.lectura.carnet.nota}</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {revision.certificacionesPropuestas.length > 0 && (
+                  <p className="text-xs text-slate-400">
+                    Al pasarlo a la ficha se anotarán en Certificaciones:{" "}
+                    <b className="text-slate-200">
+                      {revision.certificacionesPropuestas.map((c) => `${c.nombre} (${c.caducidad})`).join(", ")}
+                    </b>
+                    .
+                  </p>
+                )}
               </div>
 
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

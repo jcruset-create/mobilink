@@ -17,7 +17,8 @@ import {
   estadoTrasInvitar,
   textoSmsActualizacion,
   resumenVerificacion,
-  recorteEnPixeles,
+  certificacionesDeLectura,
+  fichaDeLectura,
 } from "./altaOperario";
 
 describe("dniValido", () => {
@@ -257,36 +258,65 @@ describe("resumenVerificacion", () => {
   });
 });
 
-describe("recorteEnPixeles", () => {
-  const caja = { x0: 0.2, y0: 0.3, x1: 0.8, y1: 0.9 };
+describe("lo que dice la documentacion", () => {
+  const lectura = {
+    identidad: { numero: "39882775Q", caducidad: "02/09/2031", nota: "" },
+    carnet: {
+      numero: "39882775Q",
+      caducidad: "14/03/2029",
+      clases: [
+        { clase: "b", caducidad: "14/03/2029" },
+        { clase: "C+E", caducidad: "14/03/2027" },
+        { clase: "AM", caducidad: null },
+      ],
+      capNumero: "123456",
+      capCaducidad: "01/06/2028",
+      nota: "",
+    },
+  };
 
-  it("convierte proporciones en pixeles y deja margen alrededor", () => {
-    // 0.2 - 0.04 = 0.16 de 1000 = 160; ancho (0.8+0.04) - 0.16 = 0.68 -> 680
-    expect(recorteEnPixeles(caja, 1000, 1000)).toEqual({ left: 160, top: 260, width: 680, height: 680 });
+  it("una certificacion por clase CON fecha, mas el CAP", () => {
+    const c = certificacionesDeLectura(lectura);
+    expect(c).toEqual([
+      { nombre: "Carnet de conducir B", caducidad: "2029-03-14", numero: "39882775Q" },
+      { nombre: "Carnet de conducir C+E", caducidad: "2027-03-14", numero: "39882775Q" },
+      { nombre: "CAP", caducidad: "2028-06-01", numero: "123456" },
+    ]);
   });
 
-  it("no se sale de la foto aunque el margen empuje fuera", () => {
-    const r = recorteEnPixeles({ x0: 0, y0: 0, x1: 1, y1: 1 }, 800, 600)!;
-    expect(r.left).toBe(0);
-    expect(r.top).toBe(0);
-    expect(r.left + r.width).toBeLessThanOrEqual(800);
-    expect(r.top + r.height).toBeLessThanOrEqual(600);
+  it("una clase sin fecha no se anota: no habria nada que avisar", () => {
+    expect(certificacionesDeLectura(lectura).some((c) => c.nombre.includes("AM"))).toBe(false);
   });
 
-  it("rechaza el recuadro al reves, que recortaria cualquier cosa", () => {
-    expect(recorteEnPixeles({ x0: 0.9, y0: 0.3, x1: 0.2, y1: 0.9 }, 1000, 1000)).toBeNull();
+  it("sin lectura no hay nada que proponer", () => {
+    expect(certificacionesDeLectura(null)).toEqual([]);
   });
 
-  it("rechaza un recuadro minusculo: eso no es un DNI", () => {
-    expect(recorteEnPixeles({ x0: 0.4, y0: 0.4, x1: 0.5, y1: 0.5 }, 1000, 1000)).toBeNull();
+  it("la ficha se rellena con lo leido, con las fechas en formato base", () => {
+    expect(fichaDeLectura(lectura)).toEqual({
+      dni_caducidad: "2031-09-02",
+      carnet_numero: "39882775Q",
+      carnet_caducidad: "2029-03-14",
+      carnet_clases: "B, C+E, AM",
+      cap_numero: "123456",
+      cap_caducidad: "2028-06-01",
+    });
   });
 
-  it("rechaza numeros que no son numeros", () => {
-    expect(recorteEnPixeles({ x0: NaN, y0: 0, x1: 1, y1: 1 }, 1000, 1000)).toBeNull();
-    expect(recorteEnPixeles({} as never, 1000, 1000)).toBeNull();
+  it("lo que no se ha leido no se escribe: no borra lo que ya hubiera", () => {
+    const vacia = {
+      identidad: { numero: null, caducidad: null, nota: "ilegible" },
+      carnet: { numero: null, caducidad: null, clases: [], capNumero: null, capCaducidad: null, nota: "" },
+    };
+    expect(fichaDeLectura(vacia)).toEqual({});
   });
 
-  it("rechaza una foto sin medidas", () => {
-    expect(recorteEnPixeles(caja, 0, 0)).toBeNull();
+  it("una fecha que no se entiende no pasa a la ficha", () => {
+    const rara = {
+      ...lectura,
+      identidad: { numero: "X", caducidad: "el mes que viene", nota: "" },
+    };
+    expect(fichaDeLectura(rara).dni_caducidad).toBeUndefined();
   });
 });
+
