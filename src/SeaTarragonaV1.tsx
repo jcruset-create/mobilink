@@ -154,6 +154,7 @@ import {
   loadTechsFromBackend,
   saveJobToBackend,
   saveTechToBackend,
+  vincularTecnicoCore,
   patchTechRoadsideCapable,
   deleteTechFromBackend,
   updateJobInBackend,
@@ -1675,6 +1676,11 @@ blocked: isUnavailableTechStatus(
       workshopId: found.workshopId ?? null,
       phone: found.phone ?? null,
       employeeId: found.employeeId ?? null,
+      // Quién es en Core y si allí está de baja: solo para la pantalla de
+      // técnicos. El servidor no los lee al guardar.
+      coreNombre: found.coreNombre ?? null,
+      coreNumero: found.coreNumero ?? null,
+      bajaEnCore: found.bajaEnCore === true,
     }
   : baseTech;
       });
@@ -4102,6 +4108,11 @@ async function resetAllSystem() {
       workshopId: found.workshopId ?? null,
       phone: found.phone ?? null,
       employeeId: found.employeeId ?? null,
+      // Quién es en Core y si allí está de baja: solo para la pantalla de
+      // técnicos. El servidor no los lee al guardar.
+      coreNombre: found.coreNombre ?? null,
+      coreNumero: found.coreNumero ?? null,
+      bajaEnCore: found.bajaEnCore === true,
     }
   : baseTech;
       });
@@ -4652,7 +4663,7 @@ if (view === "tecnicos" && canView("tecnicos")) {
             });
           });
       }}
-      onSaveTech={({ name, phone, workshopId, isNew, competencies, priorities, roadsideCapable }) => {
+      onSaveTech={({ name, phone, workshopId, isNew, employeeId, competencies, priorities, roadsideCapable }) => {
         if (isNew) {
           if (!name || techs.some((t) => t.name.toLowerCase() === name.toLowerCase())) return;
           const newTech = {
@@ -4669,6 +4680,16 @@ if (view === "tecnicos" && canView("tecnicos")) {
           setTechs((prev) => [...prev, newTech]);
           appendLog(`Técnico añadido: ${name}.`);
           saveTechToBackend(newTech)
+            // Nace enlazado con su persona de Core (fase C de la unificación).
+            // Si el enlace falla, el técnico queda creado sin enlazar y se
+            // avisa: se puede enlazar después desde «Vincular con Core».
+            .then(() =>
+              employeeId
+                ? vincularTecnicoCore(name, employeeId).catch((e) =>
+                    window.alert(`${name} se ha creado, pero sin enlazar con Core: ${e instanceof Error ? e.message : e}`)
+                  )
+                : undefined
+            )
             .then(() => reloadTechsFromBackend())
             .catch((e) => console.error("Error guardando técnico:", e));
         } else {

@@ -91,6 +91,11 @@ export type Tech = {
   phone?: string | null;
   /** Empleado de Core vinculado (sea_employees.id). null = sin vincular. */
   employeeId?: string | null;
+  /** Quién es en Core (nombre completo y número). Solo para enseñarlo. */
+  coreNombre?: string | null;
+  coreNumero?: string | null;
+  /** Enlazado con alguien que en Core está de baja. */
+  bajaEnCore?: boolean;
 };
 
 export type SavedTechConfig = {
