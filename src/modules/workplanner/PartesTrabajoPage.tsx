@@ -10,6 +10,7 @@ import {
   type ParteTrabajo,
 } from "../parteTrabajoATrabajos";
 import { allocateJobPure } from "../assignment";
+import { idDeTrabajoNuevo } from "../idDeTrabajoNuevo";
 import { buildTechLoadStats, buildTechStats } from "../workshopReports";
 import { getOperationKey } from "../jobHelpers";
 import {
@@ -337,8 +338,9 @@ export default function PartesTrabajoPage() {
     try {
       const material = resumenMateriales(conversion.materiales);
 
-      let siguienteId =
-        jobs.reduce((max, j) => Math.max(max, Number(j.id) || 0), 0) + 1;
+      // Ver idDeTrabajoNuevo.ts: «mayor id + 1» chocaba con trabajos ya
+      // cerrados que no están en la lista viva («Conflicto de ID»).
+      let siguienteId = idDeTrabajoNuevo(jobs);
 
       let jobsAcumulados = [...jobs];
       let techsAcumulados = [...techs];
