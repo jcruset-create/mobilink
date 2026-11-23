@@ -145,6 +145,7 @@ import { createUbicacionRouter } from "./tyrecontrol/ubicacion/router.ts";
 import { createKilometrajeMensualRouter } from "./tyrecontrol/kilometrajeMensual/router.ts";
 import { createAltaOperativaRouter } from "./tyrecontrol/altaOperativa/router.ts";
 import { createKilometrajeActualRouter } from "./tyrecontrol/kilometrajeActual/router.ts";
+import { createKmFichaRouter } from "./tyrecontrol/kilometrajeRevisiones/router.ts";
 import { createParteFlotasRouter } from "./tyrecontrol/parteFlotas/router.ts";
 import { createParteProveedorRouter } from "./tyrecontrol/parteProveedor/router.ts";
 import { startConciliacionQuincenal } from "./tyrecontrol/conciliacion/worker.ts";
@@ -23186,6 +23187,7 @@ app.use("/api/tyrecontrol/kilometraje-mensual", createKilometrajeMensualRouter()
 // de kilometraje mensual: si no, la ruta genérica se lo come.
 app.use("/api/tyrecontrol/alta-operativa", createAltaOperativaRouter());
 app.use("/api/tyrecontrol/kilometraje-actual", createKilometrajeActualRouter());
+app.use("/api/tyrecontrol/km-ficha", createKmFichaRouter());
 app.use("/api/tyrecontrol/parte-proveedor", createParteProveedorRouter());
 app.use("/api/tyrecontrol/parte-flotas", createParteFlotasRouter());
 app.use("/api/tyrecontrol", createTyreControlRouter(requireSupervisorRole));
