@@ -24,7 +24,16 @@ export type Operario = {
   bloqueadoHasta: string | null;
   creadoNombre: string | null;
   createdAt: string;
+  /** Solo el interruptor del módulo: `activo` es false también si está de baja en Core. */
+  activoEnModulo: boolean;
+  /** La persona de Core que es (el nombre de arriba es el suyo). */
+  employeeId: string | null;
+  enlazado: boolean;
+  numeroTrabajador: string | null;
+  bajaEnCore: boolean;
 };
+/** Una persona de Core que se puede dar de alta como operario. */
+export type PersonaCore = { id: string; nombre: string; numeroTrabajador: string | null; yaEsOperario: boolean };
 export type Centro = { id: string; nombre: string; activo: boolean };
 
 export type Contadores = { pendientes: number; recibidos: number; incidenciasAbiertas: number; pedidosPendientes: number; correosEnRevision?: number };

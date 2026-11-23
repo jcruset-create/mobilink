@@ -25,6 +25,7 @@
 
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -701,8 +702,94 @@ describe.skipIf(!RUN)("Recepciones · circuito manual contra PostgreSQL", () => 
   });
 
   describe("quién recibe la mercancía", () => {
-    const alta = (nombre: string, pin: string, centroId: string | null = null) =>
-      api("/operarios", gestorA, { method: "POST", body: { nombre, pin, centroId } });
+    /*
+     * Con Core en la base, un operario es una persona de Core: el alta elige
+     * a la persona y el nombre lo pone Core. `sea_employees` la crean las
+     * migraciones de Supabase, no el arranque; aquí se crea lo mínimo (lo
+     * mismo que las pruebas de Cash, para que cualquiera de las dos pueda ir
+     * primero) y así estas pruebas no dependen del orden.
+     */
+    beforeAll(async () => {
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS sea_employees (
+          id UUID PRIMARY KEY,
+          nombre TEXT NOT NULL,
+          apellidos TEXT,
+          activo BOOLEAN NOT NULL DEFAULT true
+        )`);
+    });
+
+    // Las personas de prueba se borran al acabar: la tabla es compartida con
+    // las pruebas de Cash, que también leen la plantilla.
+    const creadas: string[] = [];
+    afterAll(async () => {
+      await db.query(`DELETE FROM rcp_operarios WHERE employee_id = ANY($1::uuid[])`, [creadas]);
+      await db.query(`DELETE FROM sea_employees WHERE id = ANY($1::uuid[])`, [creadas]);
+    });
+
+    /** Una persona de Core con ese nombre completo. */
+    async function persona(nombre: string, activo = true): Promise<string> {
+      const id = randomUUID();
+      await db.query(`INSERT INTO sea_employees (id, nombre, apellidos, activo) VALUES ($1, $2, NULL, $3)`, [id, nombre, activo]);
+      creadas.push(id);
+      return id;
+    }
+
+    const alta = async (nombre: string, pin: string, centroId: string | null = null) =>
+      api("/operarios", gestorA, { method: "POST", body: { employeeId: await persona(nombre), pin, centroId } });
+
+    it("con Core, el alta es sobre una persona de la plantilla y el nombre lo pone Core", async () => {
+      const sinPersona = await api("/operarios", gestorA, { method: "POST", body: { nombre: "Tecleado A Mano", pin: "4321" } });
+      expect(sinPersona.status).toBe(400);
+      expect(sinPersona.body.code).toBe("PERSONA_REQUERIDA");
+
+      const id = await persona(`Rosa Muelle ${Date.now()}`);
+      const elegibles = await api("/operarios/personas-core", gestorA);
+      expect(elegibles.body.disponible).toBe(true);
+      expect(elegibles.body.personas.find((p: any) => p.id === id)).toMatchObject({ yaEsOperario: false });
+
+      const creado = await api("/operarios", gestorA, {
+        method: "POST",
+        body: { employeeId: id, nombre: "Esto Se Ignora", pin: "4321" },
+      });
+      expect(creado.status, JSON.stringify(creado.body)).toBe(201);
+      expect(creado.body.operario).toMatchObject({ employeeId: id, enlazado: true, bajaEnCore: false });
+      expect(creado.body.operario.nombre).toMatch(/^Rosa Muelle/);
+
+      const otraVez = await api("/operarios", gestorA, { method: "POST", body: { employeeId: id, pin: "4321" } });
+      expect(otraVez.status).toBe(409);
+      expect((await api("/operarios/personas-core", gestorA)).body.personas.find((p: any) => p.id === id).yaEsOperario).toBe(true);
+    });
+
+    it("el nombre de un enlazado se cambia en Core, no aquí, y se ve el de Core", async () => {
+      const operario = (await alta(`Luis Muelle ${Date.now()}`, "4321")).body.operario;
+      const renombrar = await api(`/operarios/${operario.id}`, gestorA, { method: "PATCH", body: { nombre: "Otro" } });
+      expect(renombrar.status).toBe(409);
+      expect(renombrar.body.code).toBe("NOMBRE_EN_CORE");
+
+      await db.query(`UPDATE sea_employees SET nombre = 'Luis Cambiado En Core' WHERE id = $1`, [operario.employeeId]);
+      const lista = (await api("/operarios", gestorA)).body.operarios;
+      expect(lista.find((o: any) => o.id === operario.id).nombre).toBe("Luis Cambiado En Core");
+    });
+
+    it("de baja en Core es de baja aquí: no sale para firmar y no firma", async () => {
+      const nombre = `Marc Muelle ${Date.now()}`;
+      const operario = (await alta(nombre, "4321")).body.operario;
+      await db.query(`UPDATE sea_employees SET activo = false WHERE id = $1`, [operario.employeeId]);
+
+      const paraFirmar = (await api("/operarios?soloActivos=1", operarioA)).body.operarios;
+      expect(paraFirmar.map((o: any) => o.id)).not.toContain(operario.id);
+      const gestion = (await api("/operarios", gestorA)).body.operarios.find((o: any) => o.id === operario.id);
+      expect(gestion).toMatchObject({ activo: false, activoEnModulo: true, bajaEnCore: true });
+
+      const pedido = await crearPedido(2);
+      const { albaran } = await crearAlbaran(pedido, 2);
+      const r = await api(`/albaranes/${albaran.id}/recepcion`, operarioA, {
+        method: "POST",
+        body: { resultado: "OK", operarioId: operario.id, pin: "4321" },
+      });
+      expect(r.status).toBe(404);
+    });
 
     it("sin padrón de operarios firma la sesión: el módulo se puede usar desde el primer día", async () => {
       const pedido = await crearPedido(2);

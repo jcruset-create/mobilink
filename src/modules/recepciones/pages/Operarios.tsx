@@ -9,6 +9,10 @@
  * nuevo. Eso es también la salida cuando alguien se lo olvida o se queda
  * bloqueado por fallarlo cinco veces.
  *
+ * Con Core en la base, el operario es una persona de la plantilla: el alta la
+ * elige (por su número de trabajador) y el nombre lo pone Core, que es donde
+ * se cambia. Si en Core está de baja, aquí tampoco firma.
+ *
  * Ojo con lo que implica dar de alta al primero: a partir de ese momento,
  * cerrar una recepción en ese centro exige elegir operario y teclear su PIN.
  * Mientras la lista esté vacía, firma la sesión.
@@ -19,7 +23,7 @@ import { KeyRound, Plus, UserCheck } from "lucide-react";
 import * as api from "../services/api";
 import { useRecepciones } from "../contexts/RecepcionesContext";
 import { Aviso, EmptyRow, ErrorBox, Modal, TableWrap, TextField, btnMini, btnPrimary, btnSecondary, inputCls, tdCls, thCls } from "../components/ui";
-import type { Operario } from "../types";
+import type { Operario, PersonaCore } from "../types";
 import { fmtFechaHora } from "../../administracion/types";
 
 export default function Operarios() {
@@ -32,6 +36,8 @@ export default function Operarios() {
   // y para decidir si un bloqueo sigue vivo basta con la de la última carga.
   const [ahora, setAhora] = useState(() => Date.now());
   const puedeGestionar = puede("recepciones.operarios.manage");
+  /** `null` mientras no se sabe; `false` = esta base no tiene Core. */
+  const [personas, setPersonas] = useState<PersonaCore[] | false | null>(null);
 
   const cargar = useCallback(async () => {
     try {
@@ -39,10 +45,14 @@ export default function Operarios() {
       setOperarios(r.operarios);
       setAhora(Date.now());
       setError(null);
+      if (puedeGestionar) {
+        const p = await api.personasCore();
+        setPersonas(p.disponible ? p.personas : false);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se han podido cargar los operarios");
     }
-  }, []);
+  }, [puedeGestionar]);
 
   useEffect(() => {
     void cargar();
@@ -50,7 +60,7 @@ export default function Operarios() {
 
   async function alternar(o: Operario) {
     try {
-      await api.actualizarOperario(o.id, { activo: !o.activo });
+      await api.actualizarOperario(o.id, { activo: !o.activoEnModulo });
       await cargar();
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se ha podido cambiar el operario");
@@ -104,10 +114,23 @@ export default function Operarios() {
                   <span className="flex items-center gap-2">
                     <UserCheck className="h-4 w-4 text-slate-500" /> {o.nombre}
                   </span>
+                  {o.enlazado ? (
+                    <span className="mt-0.5 block text-[11px] font-normal text-slate-400">
+                      Core{o.numeroTrabajador ? ` · Nº ${o.numeroTrabajador}` : ""}
+                    </span>
+                  ) : (
+                    personas && (
+                      <span className="mt-0.5 block text-[11px] font-normal text-amber-300">
+                        Sin enlazar con Core · se enlaza en Core → Enlazar trabajadores
+                      </span>
+                    )
+                  )}
                 </td>
                 <td className={tdCls}>{nombreCentro(o.centroId)}</td>
                 <td className={tdCls}>
-                  {!o.activo ? (
+                  {o.bajaEnCore ? (
+                    <span className="rounded-full bg-slate-600/40 px-2 py-0.5 text-[11px] font-bold text-slate-300">De baja en Core</span>
+                  ) : !o.activo ? (
                     <span className="rounded-full bg-slate-600/40 px-2 py-0.5 text-[11px] font-bold text-slate-300">De baja</span>
                   ) : bloqueado ? (
                     <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[11px] font-bold text-amber-200">
@@ -128,7 +151,7 @@ export default function Operarios() {
                         <KeyRound className="h-3.5 w-3.5" /> {bloqueado ? "Desbloquear con un PIN nuevo" : "Cambiar PIN"}
                       </button>
                       <button className={btnMini} onClick={() => void alternar(o)}>
-                        {o.activo ? "Dar de baja" : "Reactivar"}
+                        {o.activoEnModulo ? "Dar de baja" : "Reactivar"}
                       </button>
                     </div>
                   )}
@@ -139,7 +162,15 @@ export default function Operarios() {
         </tbody>
       </TableWrap>
 
-      {creando && <NuevoOperario centros={centros} centroFijo={centroId} onClose={() => setCreando(false)} onCreado={cargar} />}
+      {creando && (
+        <NuevoOperario
+          centros={centros}
+          centroFijo={centroId}
+          personas={personas || null}
+          onClose={() => setCreando(false)}
+          onCreado={cargar}
+        />
+      )}
       {cambiandoPin && <CambiarPin operario={cambiandoPin} onClose={() => setCambiandoPin(null)} onHecho={cargar} />}
     </div>
   );
@@ -164,29 +195,48 @@ function CamposPin({ pin, repetir, onPin, onRepetir }: { pin: string; repetir: s
   );
 }
 
+/**
+ * Alta de un operario. Con Core (`personas` no es null), se elige a la persona
+ * por su número de trabajador o buscándola por nombre, y no se teclea nombre:
+ * lo pone Core. Sin Core, como siempre.
+ */
 function NuevoOperario({
   centros,
   centroFijo,
+  personas,
   onClose,
   onCreado,
 }: {
   centros: { id: string; nombre: string }[];
   centroFijo: string | null;
+  personas: PersonaCore[] | null;
   onClose: () => void;
   onCreado: () => Promise<void>;
 }) {
   const [nombre, setNombre] = useState("");
+  const [buscar, setBuscar] = useState("");
+  const [elegida, setElegida] = useState<PersonaCore | null>(null);
   const [centro, setCentro] = useState(centroFijo ?? "");
   const [pin, setPin] = useState("");
   const [repetir, setRepetir] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [guardando, setGuardando] = useState(false);
-  const valido = nombre.trim().length > 0 && pin.length >= 4 && pin === repetir;
+  const valido = (personas ? elegida !== null : nombre.trim().length > 0) && pin.length >= 4 && pin === repetir;
+
+  // Por número exacto primero (es lo que se tiene a mano), y si no, por nombre.
+  const texto = buscar.trim().toLowerCase();
+  const coincidencias = !personas || !texto
+    ? []
+    : personas
+        .filter((p) => (p.numeroTrabajador ?? "").toLowerCase() === texto.replace(/\s+/g, "") || p.nombre.toLowerCase().includes(texto))
+        .slice(0, 8);
 
   async function guardar() {
     setGuardando(true);
     try {
-      await api.crearOperario({ nombre: nombre.trim(), pin, centroId: centro || null });
+      await api.crearOperario(
+        personas ? { employeeId: elegida?.id, pin, centroId: centro || null } : { nombre: nombre.trim(), pin, centroId: centro || null }
+      );
       await onCreado();
       onClose();
     } catch (e) {
@@ -213,7 +263,50 @@ function NuevoOperario({
     >
       <div className="space-y-3">
         {error && <ErrorBox>{error}</ErrorBox>}
-        <TextField label="Nombre y apellidos" value={nombre} onChange={setNombre} />
+        {personas ? (
+          <div>
+            <label className="mb-1 block text-[11px] font-bold uppercase tracking-wide text-slate-400">Persona de la plantilla</label>
+            {elegida ? (
+              <div className="flex items-center justify-between rounded-lg border border-slate-600 bg-slate-900 px-3 py-2">
+                <span className="font-bold text-slate-100">
+                  {elegida.nombre}
+                  {elegida.numeroTrabajador && <span className="ml-2 text-[12px] font-normal text-slate-400">Nº {elegida.numeroTrabajador}</span>}
+                </span>
+                <button className={btnMini} onClick={() => setElegida(null)}>
+                  Cambiar
+                </button>
+              </div>
+            ) : (
+              <>
+                <input className={inputCls} value={buscar} onChange={(e) => setBuscar(e.target.value)} placeholder="Nº de trabajador o nombre" autoFocus />
+                {coincidencias.length > 0 && (
+                  <ul className="mt-1 max-h-56 overflow-auto rounded-lg border border-slate-700 bg-slate-900">
+                    {coincidencias.map((p) => (
+                      <li key={p.id}>
+                        <button
+                          className="flex w-full items-center justify-between px-3 py-2 text-left text-[13px] hover:bg-slate-800 disabled:opacity-40"
+                          disabled={p.yaEsOperario}
+                          onClick={() => setElegida(p)}
+                        >
+                          <span>{p.nombre}</span>
+                          <span className="text-[11px] text-slate-400">
+                            {p.yaEsOperario ? "ya es operario" : p.numeroTrabajador ? `Nº ${p.numeroTrabajador}` : "sin número"}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {texto && coincidencias.length === 0 && <p className="mt-1 text-[12px] text-amber-300">Nadie en la plantilla con ese número o nombre.</p>}
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Los operarios salen de la plantilla de Core. Si la persona no está, hay que darla de alta antes en Core → Empleados.
+                </p>
+              </>
+            )}
+          </div>
+        ) : (
+          <TextField label="Nombre y apellidos" value={nombre} onChange={setNombre} />
+        )}
         <div>
           <label className="mb-1 block text-[11px] font-bold uppercase tracking-wide text-slate-400">Centro</label>
           <select className={inputCls} value={centro} onChange={(e) => setCentro(e.target.value)} disabled={centroFijo !== null}>

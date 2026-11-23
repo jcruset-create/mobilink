@@ -199,6 +199,10 @@ export async function initRecepciones(): Promise<void> {
       UNIQUE (empresa_id, nombre)
     );
     CREATE INDEX IF NOT EXISTS rcp_operarios_centro_idx ON rcp_operarios(empresa_id, centro_id) WHERE activo;
+    -- La persona de Core (sea_employees) que es este operario. Sin clave
+    -- foránea aquí, porque sea_employees la crean las migraciones de Supabase
+    -- y no existe en todas las bases; la FK la pone core_enlace_modulos.sql.
+    ALTER TABLE rcp_operarios ADD COLUMN IF NOT EXISTS employee_id UUID;
   `);
 
   // ── Albaranes (expediciones del proveedor) ────────────────────────────────
