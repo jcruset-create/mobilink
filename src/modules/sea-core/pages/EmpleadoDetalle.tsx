@@ -44,7 +44,16 @@ type Revision = {
     recibidaAt: string | null; caducaAt: string | null; firmadoAt: string | null;
     verificadoAt: string | null;
   } | null;
-  documentos: Array<{ tipo: string; url: string | null; subidoAt: string; bytes: number | null }>;
+  documentos: Array<{
+    tipo: string;
+    /** La limpia si salió; si no, la original. */
+    url: string | null;
+    urlOriginal: string | null;
+    recortada: boolean;
+    recorteNota: string | null;
+    subidoAt: string;
+    bytes: number | null;
+  }>;
   firma: string | null;
   verificacion: { campos: Array<{ campo: string; tecleado: string | null; leido: string | null; veredicto: string; nota: string }>; resumen: string } | null;
   consentimientos: Array<{ tipo: string; aceptado: boolean; fecha: string | null }>;
@@ -92,7 +101,7 @@ export default function EmpleadoDetalle() {
 
   // Revisión del alta (solo administradores; si no, se queda en null).
   const [revision, setRevision] = useState<Revision | null>(null);
-  const [accion, setAccion] = useState<"" | "aprobando" | "verificando" | "corrigiendo">("");
+  const [accion, setAccion] = useState<"" | "aprobando" | "verificando" | "corrigiendo" | "recortando">("");
   const [revMensaje, setRevMensaje] = useState("");
   const [revError, setRevError] = useState("");
   const esSuperadmin = useEsSuperadmin();
@@ -177,6 +186,20 @@ export default function EmpleadoDetalle() {
     }
   }
 
+  /**
+   * La revisión del alta. Va con el resto de la carga de la ficha y no en un
+   * efecto aparte: es un dato más de esta pantalla, y así se refresca sola
+   * cuando algo la recarga.
+   */
+  async function cargarRevision(empId: string) {
+    try {
+      const r = await apiFetch(`/api/core/alta/${empId}`);
+      setRevision(r.ok ? await r.json() : null);
+    } catch {
+      setRevision(null);
+    }
+  }
+
   async function cargar(empId: string) {
     setCargando(true);
     const [{ data: emp }, { data: comp }, { data: cert }, { data: aut }, { data: form },
@@ -236,20 +259,6 @@ export default function EmpleadoDetalle() {
     cargar(id!);
   }
 
-  /**
-   * La revisión del alta. Va con el resto de la carga de la ficha y no en un
-   * efecto aparte: es un dato más de esta pantalla, y así se refresca sola
-   * cuando algo la recarga.
-   */
-  async function cargarRevision(empId: string) {
-    try {
-      const r = await apiFetch(`/api/core/alta/${empId}`);
-      setRevision(r.ok ? await r.json() : null);
-    } catch {
-      setRevision(null);
-    }
-  }
-
   /** Lanza la comprobación de lo tecleado contra las fotos. */
   async function comprobarConIA() {
     if (!id) return;
@@ -264,6 +273,25 @@ export default function EmpleadoDetalle() {
       setTimeout(() => setRevMensaje(""), 4000);
     } catch (e) {
       setRevError(e instanceof Error ? e.message : "No se ha podido comprobar.");
+    } finally {
+      setAccion("");
+    }
+  }
+
+  /** Vuelve a intentar el recorte de una foto concreta. */
+  async function recortarOtraVez(tipo: string) {
+    if (!id) return;
+    setAccion("recortando");
+    setRevError("");
+    try {
+      const r = await apiFetch(`/api/core/alta/${id}/documento/${tipo}/recortar`, { method: "POST" });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d?.error ?? "No se ha podido recortar.");
+      await cargarRevision(id);
+      setRevMensaje(d.recortado ? "Foto recortada." : "No se ha encontrado el documento en la foto; se queda la original.");
+      setTimeout(() => setRevMensaje(""), 5000);
+    } catch (e) {
+      setRevError(e instanceof Error ? e.message : "No se ha podido recortar.");
     } finally {
       setAccion("");
     }
@@ -1065,26 +1093,46 @@ export default function EmpleadoDetalle() {
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
                   <h2 className="font-semibold text-slate-200">Lo que ha subido</h2>
                   <span className="text-xs text-slate-500">
-                    Los enlaces caducan en una hora: la documentación no vive en una URL pública.
+                    Se enseña la versión recortada y enderezada; la original se guarda entera.
+                    Los enlaces caducan en una hora: esto no vive en una URL pública.
                   </span>
                 </div>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                   {revision.documentos.map((d) => (
-                    <a key={d.tipo} href={d.url ?? undefined} target="_blank" rel="noreferrer"
-                      className="group rounded-xl border border-slate-700 bg-slate-900 p-2 hover:border-sky-600">
-                      {d.url ? (
-                        <img src={d.url} alt={DOC_LABEL[d.tipo] ?? d.tipo}
-                          className="h-36 w-full rounded-lg object-cover" />
-                      ) : (
-                        <div className="flex h-36 items-center justify-center rounded-lg bg-slate-800 text-xs text-slate-500">
-                          No se ha podido abrir
+                    <div key={d.tipo} className="rounded-xl border border-slate-700 bg-slate-900 p-2">
+                      <a href={d.url ?? undefined} target="_blank" rel="noreferrer" className="group block">
+                        {d.url ? (
+                          <img src={d.url} alt={DOC_LABEL[d.tipo] ?? d.tipo}
+                            className="h-36 w-full rounded-lg bg-slate-950 object-contain" />
+                        ) : (
+                          <div className="flex h-36 items-center justify-center rounded-lg bg-slate-800 text-xs text-slate-500">
+                            No se ha podido abrir
+                          </div>
+                        )}
+                        <div className="mt-2 text-xs font-semibold text-slate-200 group-hover:text-sky-400">
+                          {DOC_LABEL[d.tipo] ?? d.tipo}
                         </div>
-                      )}
-                      <div className="mt-2 text-xs font-semibold text-slate-200 group-hover:text-sky-400">
-                        {DOC_LABEL[d.tipo] ?? d.tipo}
-                      </div>
+                      </a>
                       <div className="text-[11px] text-slate-500">{fechaHora(d.subidoAt)}</div>
-                    </a>
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px]">
+                        <span className={d.recortada ? "text-green-400" : "text-amber-300"}>
+                          {d.recortada ? "Recortada" : "Sin recortar"}
+                        </span>
+                        {d.recortada && d.urlOriginal && (
+                          <a href={d.urlOriginal} target="_blank" rel="noreferrer"
+                            className="text-slate-400 underline hover:text-slate-200">ver original</a>
+                        )}
+                        {revision.puedeVerificar && (
+                          <button onClick={() => void recortarOtraVez(d.tipo)} disabled={accion !== ""}
+                            className="text-sky-400 underline hover:text-sky-300 disabled:opacity-50">
+                            {accion === "recortando" ? "recortando…" : "recortar otra vez"}
+                          </button>
+                        )}
+                      </div>
+                      {!d.recortada && d.recorteNota && (
+                        <div className="mt-1 text-[11px] text-slate-500">{d.recorteNota}</div>
+                      )}
+                    </div>
                   ))}
                 </div>
               </div>

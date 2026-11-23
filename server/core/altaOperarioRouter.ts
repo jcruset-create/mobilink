@@ -27,7 +27,9 @@ import { hayIA, pedirIA } from "./openaiService.ts";
 import {
   CAMPOS_TALLA,
   CAMPOS_VERIFICABLES,
+  ESQUEMA_RECORTE,
   ESQUEMA_VERIFICACION,
+  INSTRUCCIONES_RECORTE,
   INSTRUCCIONES_VERIFICACION,
   caducidadDesde,
   esTipoDocumento,
@@ -42,7 +44,9 @@ import {
   textoSmsActualizacion,
   urlDeAlta,
   validarFicha,
+  recorteEnPixeles,
   type Consentimiento,
+  type LecturaRecorte,
   type MotivoInvitacion,
   type Verificacion,
 } from "./altaOperario.ts";
@@ -375,6 +379,39 @@ export function createAltaOperarioAdminRouter(): Router {
   });
 
   /**
+   * Volver a recortar una foto.
+   *
+   * Existe porque el recorte automático a veces sale torcido —una foto a
+   * contraluz, el documento sobre una carpeta del mismo color— y el encargado
+   * no tiene por qué pedirle otra foto al trabajador por eso: primero se
+   * intenta otra vez, que el original sigue ahí entero.
+   */
+  r.post("/:employeeId/documento/:tipo/recortar", async (req: Request, res: Response) => {
+    const employeeId = String(req.params.employeeId ?? "");
+    const tipo = String(req.params.tipo ?? "");
+    if (!/^[0-9a-f-]{36}$/i.test(employeeId) || !esTipoDocumento(tipo)) {
+      return res.status(400).json({ error: "Ese documento no existe." });
+    }
+    if (!hayIA()) {
+      return res.status(503).json({ error: "El recorte automático no está configurado." });
+    }
+
+    const { rows } = await db.query(
+      `SELECT storage_path FROM sea_employee_documents WHERE employee_id = $1 AND tipo = $2`,
+      [employeeId, tipo]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: "Esa foto no está subida." });
+
+    try {
+      const hecho = await mejorarDocumento(employeeId, tipo, rows[0].storage_path);
+      res.json({ ok: true, recortado: hecho, documentos: await documentosConUrl(employeeId) });
+    } catch (e) {
+      const motivo = e instanceof Error ? e.message : "error desconocido";
+      res.status(502).json({ error: `No se ha podido recortar: ${motivo}` });
+    }
+  });
+
+  /**
    * Dar la ficha por buena.
    *
    * Solo desde `recibida`: aprobar una ficha que nadie ha mandado no
@@ -431,24 +468,147 @@ async function urlFirmada(ruta: string): Promise<string | null> {
   return error ? null : data.signedUrl;
 }
 
-async function documentosConUrl(
-  employeeId: string
-): Promise<Array<{ tipo: string; url: string | null; subidoAt: string; bytes: number | null }>> {
+type DocumentoRevision = {
+  tipo: string;
+  /** La que se enseña: la limpia si salió, y si no la original. */
+  url: string | null;
+  /** La foto tal cual la mandó, siempre. */
+  urlOriginal: string | null;
+  recortada: boolean;
+  recorteNota: string | null;
+  subidoAt: string;
+  bytes: number | null;
+};
+
+async function documentosConUrl(employeeId: string): Promise<DocumentoRevision[]> {
   const { rows } = await db.query(
-    `SELECT tipo, storage_path, subido_at, bytes FROM sea_employee_documents
+    `SELECT tipo, storage_path, recorte_path, recorte_meta, subido_at, bytes
+       FROM sea_employee_documents
       WHERE employee_id = $1 ORDER BY tipo`,
     [employeeId]
   );
   return Promise.all(
-    rows.map(
-      async (d: { tipo: string; storage_path: string; subido_at: string; bytes: number | null }) => ({
+    rows.map(async (d: {
+      tipo: string; storage_path: string; recorte_path: string | null;
+      recorte_meta: { nota?: string } | null; subido_at: string; bytes: number | null;
+    }) => {
+      const original = await urlFirmada(d.storage_path);
+      const recorte = d.recorte_path ? await urlFirmada(d.recorte_path) : null;
+      return {
         tipo: d.tipo,
-        url: await urlFirmada(d.storage_path),
+        url: recorte ?? original,
+        urlOriginal: original,
+        recortada: Boolean(recorte),
+        recorteNota: d.recorte_meta?.nota ?? null,
         subidoAt: d.subido_at,
         bytes: d.bytes,
-      })
-    )
+      };
+    })
   );
+}
+
+// ── Recortar y mejorar la foto ─────────────────────────────────────────────
+
+/**
+ * De la foto de un móvil a algo que parece un documento escaneado.
+ *
+ * El modelo NO recorta: devuelve coordenadas. El recorte, el enderezado y la
+ * mejora los hace `sharp` aquí, que es instantáneo y no cuesta nada. Y la
+ * original no se toca: si el recorte sale mal, sigue estando entera.
+ */
+async function mejorarDocumento(
+  employeeId: string,
+  tipo: string,
+  rutaOriginal: string
+): Promise<boolean> {
+  if (!hayIA()) return false;
+
+  const { data, error } = await supabase.storage.from(BUCKET).download(rutaOriginal);
+  if (error || !data) throw new Error("no se ha podido leer la foto");
+
+  // Primero se normaliza la orientación EXIF: así las coordenadas que dé el
+  // modelo valen sobre los mismos píxeles que luego se recortan.
+  const derecha = await sharp(Buffer.from(await data.arrayBuffer())).rotate().toBuffer();
+  const meta = await sharp(derecha).metadata();
+  const ancho = meta.width ?? 0;
+  const alto = meta.height ?? 0;
+  if (!ancho || !alto) throw new Error("la foto no se ha podido medir");
+
+  const paraModelo = await sharp(derecha)
+    .resize({ width: 1400, withoutEnlargement: true })
+    .jpeg({ quality: 80 })
+    .toBuffer();
+
+  const r = await pedirIA<LecturaRecorte>({
+    operacion: "core.alta.recortar",
+    proposito: "documento",
+    prompt: INSTRUCCIONES_RECORTE,
+    imagenes: [{ url: `data:image/jpeg;base64,${paraModelo.toString("base64")}` }],
+    esquema: {
+      nombre: "recuadro_documento",
+      schema: ESQUEMA_RECORTE as unknown as Record<string, unknown>,
+    },
+    maxTokens: 500,
+    timeoutMs: 60_000,
+  });
+
+  const lectura = r.datos;
+  const caja = r.ok && lectura?.encontrado ? recorteEnPixeles(lectura.recuadro, ancho, alto) : null;
+
+  if (!caja) {
+    // Se anota por qué no, y se deja la original: la ficha la enseña igual.
+    await db.query(
+      `UPDATE sea_employee_documents
+          SET recorte_path = NULL, recorte_at = now(), recorte_meta = $3
+        WHERE employee_id = $1 AND tipo = $2`,
+      [
+        employeeId,
+        tipo,
+        JSON.stringify({
+          nota: lectura?.nota ?? r.error?.slice(0, 200) ?? "no se ha encontrado el documento",
+          encontrado: false,
+        }),
+      ]
+    );
+    return false;
+  }
+
+  const limpia = await sharp(derecha)
+    .extract(caja)
+    .rotate(lectura!.giro)
+    // `normalise` estira el histograma: el gris de una foto con sombra pasa a
+    // blanco y negro de verdad, que es lo que hace legible un DNI a contraluz.
+    .normalise()
+    .sharpen()
+    .resize({ width: 1600, withoutEnlargement: true })
+    .jpeg({ quality: 88 })
+    .toBuffer();
+
+  const rutaRecorte = `empleados/${employeeId}/recorte-${tipo}.jpg`;
+  const subida = await supabase.storage
+    .from(BUCKET)
+    .upload(rutaRecorte, limpia, { contentType: "image/jpeg", upsert: true });
+  if (subida.error) throw new Error(subida.error.message);
+
+  await db.query(
+    `UPDATE sea_employee_documents
+        SET recorte_path = $3, recorte_at = now(), recorte_meta = $4
+      WHERE employee_id = $1 AND tipo = $2`,
+    [
+      employeeId,
+      tipo,
+      rutaRecorte,
+      JSON.stringify({
+        encontrado: true,
+        recuadro: lectura!.recuadro,
+        giro: lectura!.giro,
+        nota: lectura!.nota,
+        bytes: limpia.length,
+        modelo: r.modelo,
+      }),
+    ]
+  );
+  return true;
 }
 
 /**
@@ -679,6 +839,17 @@ export function createAltaOperarioPublicRouter(): Router {
     );
 
     res.json({ ok: true, tipo, documentos: await documentosDe(invitacion!.employee_id) });
+
+    /*
+     * Y ya sin que nadie espere: la copia recortada y enderezada.
+     *
+     * Va después de contestar a propósito. Son unos segundos de modelo y el
+     * operario está en la calle con su móvil: si la respuesta dependiera de
+     * esto, cada foto parecería colgada y acabaría dándole dos veces.
+     */
+    void mejorarDocumento(invitacion!.employee_id, tipo, ruta).catch((e) => {
+      console.error("[Core alta] no se ha podido recortar la foto:", e);
+    });
   });
 
   /** La envía. A partir de aquí el enlace deja de abrir. */

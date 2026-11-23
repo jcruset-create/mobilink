@@ -17,6 +17,7 @@ import {
   estadoTrasInvitar,
   textoSmsActualizacion,
   resumenVerificacion,
+  recorteEnPixeles,
 } from "./altaOperario";
 
 describe("dniValido", () => {
@@ -253,5 +254,39 @@ describe("resumenVerificacion", () => {
   it("lo ilegible no es un problema: es una foto mala, no un dato falso", () => {
     const r = resumenVerificacion({ campos: [campo("ilegible"), campo("coincide")], resumen: "" });
     expect(r.hayProblemas).toBe(false);
+  });
+});
+
+describe("recorteEnPixeles", () => {
+  const caja = { x0: 0.2, y0: 0.3, x1: 0.8, y1: 0.9 };
+
+  it("convierte proporciones en pixeles y deja margen alrededor", () => {
+    // 0.2 - 0.04 = 0.16 de 1000 = 160; ancho (0.8+0.04) - 0.16 = 0.68 -> 680
+    expect(recorteEnPixeles(caja, 1000, 1000)).toEqual({ left: 160, top: 260, width: 680, height: 680 });
+  });
+
+  it("no se sale de la foto aunque el margen empuje fuera", () => {
+    const r = recorteEnPixeles({ x0: 0, y0: 0, x1: 1, y1: 1 }, 800, 600)!;
+    expect(r.left).toBe(0);
+    expect(r.top).toBe(0);
+    expect(r.left + r.width).toBeLessThanOrEqual(800);
+    expect(r.top + r.height).toBeLessThanOrEqual(600);
+  });
+
+  it("rechaza el recuadro al reves, que recortaria cualquier cosa", () => {
+    expect(recorteEnPixeles({ x0: 0.9, y0: 0.3, x1: 0.2, y1: 0.9 }, 1000, 1000)).toBeNull();
+  });
+
+  it("rechaza un recuadro minusculo: eso no es un DNI", () => {
+    expect(recorteEnPixeles({ x0: 0.4, y0: 0.4, x1: 0.5, y1: 0.5 }, 1000, 1000)).toBeNull();
+  });
+
+  it("rechaza numeros que no son numeros", () => {
+    expect(recorteEnPixeles({ x0: NaN, y0: 0, x1: 1, y1: 1 }, 1000, 1000)).toBeNull();
+    expect(recorteEnPixeles({} as never, 1000, 1000)).toBeNull();
+  });
+
+  it("rechaza una foto sin medidas", () => {
+    expect(recorteEnPixeles(caja, 0, 0)).toBeNull();
   });
 });
