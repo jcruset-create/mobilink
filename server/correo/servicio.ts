@@ -411,9 +411,12 @@ export async function enviarRecordatoriosPendientes(limite = 20): Promise<number
     if (!tocaRecordar(estado, now).toca) continue;
     if (!rec.destinatario) {
       // Sin destinatario no se puede pedir nada. Se deja anotado para que la
-      // bandeja lo enseñe: es un dato que falta, no un fallo del envío.
+      // bandeja lo enseñe: es un dato que falta, no un fallo del envío. Una
+      // vez: reescribir el mismo aviso cada pasada era una escritura cada
+      // cuarto de hora, para siempre.
       await db.query(
-        `UPDATE assistance_reminders SET "ultimoError" = $2, "updatedAtMs" = $3 WHERE id = $1`,
+        `UPDATE assistance_reminders SET "ultimoError" = $2, "updatedAtMs" = $3
+          WHERE id = $1 AND "ultimoError" IS DISTINCT FROM $2`,
         [rec.id, "Sin dirección de correo a la que pedirlo", now]);
       continue;
     }

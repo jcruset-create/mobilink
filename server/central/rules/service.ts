@@ -329,6 +329,11 @@ async function abrirIncidencia(
        -- lo que mide cuánto lleva el problema sin resolverse.
        DO UPDATE SET valor = EXCLUDED.valor, umbral = EXCLUDED.umbral,
                      actualizada_en_ms = EXCLUDED.actualizada_en_ms
+       -- Solo si algo cambia: cada quince minutos se reescribía cada
+       -- incidencia abierta con el mismo valor. Sin cambio no vuelve fila, y
+       -- eso ya se lee como «no es nueva».
+       WHERE (central_incidents.valor, central_incidents.umbral)
+             IS DISTINCT FROM (EXCLUDED.valor, EXCLUDED.umbral)
      RETURNING id, (xmax = 0) AS insertada`,
     [
       empresaId,

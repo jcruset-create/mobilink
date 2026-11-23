@@ -131,6 +131,28 @@ export function contentSidDeConfirmacion(): string {
 }
 
 /**
+ * Por qué NO se puede mandar la confirmación de esta cita, o `null` si se
+ * puede. Es configuración, no un fallo del envío: falta la plantilla, el
+ * teléfono no es un móvil o no hay credenciales de Twilio.
+ *
+ * Se pregunta ANTES de reservar el intento. Reservarlo y devolverlo cada
+ * minuto, mientras falte la plantilla, eran dos escrituras por cita y minuto
+ * para no mandar nada.
+ */
+export function motivoParaNoEnviar(
+  cita: Record<string, unknown>
+): "sin-plantilla" | "sin-telefono" | "sin-twilio" | null {
+  if (!contentSidDeConfirmacion()) return "sin-plantilla";
+  const telefono = aE164(String(cita.customerPhone ?? ""));
+  if (!telefono || telefono === "+") return "sin-telefono";
+  // `clienteTwilio()` siempre construye un cliente, con credenciales o sin
+  // ellas, así que preguntar por el cliente no sirve de nada: hay que
+  // preguntar por las credenciales antes.
+  if (!hayCredencialesTwilio()) return "sin-twilio";
+  return null;
+}
+
+/**
  * Manda la solicitud de confirmación.
  *
  * No escribe en la base: de eso se encarga quien llama, y solo si esto
@@ -141,16 +163,10 @@ export async function enviarConfirmacion(
   cita: Record<string, any>,
   opciones: { motivo: string; urlBase?: string }
 ): Promise<ResultadoEnvio> {
+  const motivo = motivoParaNoEnviar(cita);
+  if (motivo) return { estado: motivo };
   const contentSid = contentSidDeConfirmacion();
-  if (!contentSid) return { estado: "sin-plantilla" };
-
   const telefono = aE164(String(cita.customerPhone ?? ""));
-  if (!telefono || telefono === "+") return { estado: "sin-telefono" };
-
-  // `clienteTwilio()` siempre construye un cliente, con credenciales o sin
-  // ellas, así que preguntar por el cliente no sirve de nada: hay que
-  // preguntar por las credenciales antes.
-  if (!hayCredencialesTwilio()) return { estado: "sin-twilio" };
   const cliente = clienteTwilio();
 
   const mensaje = await cliente.messages.create({

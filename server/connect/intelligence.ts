@@ -233,7 +233,12 @@ export async function predictDemand(): Promise<void> {
        ON CONFLICT ("predictionType", "targetKey")
        DO UPDATE SET "predictedValue" = EXCLUDED."predictedValue",
                      "confidenceMin" = EXCLUDED."confidenceMin",
-                     "confidenceMax" = EXCLUDED."confidenceMax"`,
+                     "confidenceMax" = EXCLUDED."confidenceMax"
+       -- Cada hora se recalculan las 24: solo se reescribe la que cambia.
+       WHERE (connect_predictions."predictedValue", connect_predictions."confidenceMin",
+              connect_predictions."confidenceMax")
+             IS DISTINCT FROM
+             (EXCLUDED."predictedValue", EXCLUDED."confidenceMin", EXCLUDED."confidenceMax")`,
       [hourKey(target), Math.round(mean * 100) / 100, Math.max(0, Math.round((mean - ci) * 100) / 100),
        Math.round((mean + ci) * 100) / 100, n, now],
     );
