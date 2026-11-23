@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import Matricula from "../components/Matricula";
 import { fetchVehiculoHistorial } from "../modules/roadsideAssistanceApi";
 import { apiFetch } from "../modules/apiFetch";
 import { abrirPdfConSesion } from "../modules/pdfConSesion";
@@ -69,7 +70,7 @@ export default function VehiculoHistorialPage() {
         {data && (
           <div className="space-y-4">
             <div className="rounded-lg border border-slate-200 bg-white p-4">
-              <div className="text-2xl font-black">{data.plate}</div>
+              <div className="text-2xl font-black"><Matricula plate={data.plate} size="lg" /></div>
               <div className="mt-1 text-sm text-slate-600">
                 {data.resumen.totalAsistencias} asistencias · {data.resumen.totalTrabajosOtf} trabajos OTF
                 {data.resumen.clientes?.length ? ` · ${data.resumen.clientes.join(", ")}` : ""}

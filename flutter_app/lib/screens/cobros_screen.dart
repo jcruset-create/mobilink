@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
+import '../widgets/plate_badge.dart';
 
 const _estadoColors = {
   'pendiente': Colors.orange,
@@ -410,7 +411,13 @@ class _CobroDetailSheetState extends State<CobroDetailSheet> {
             if ((cobro['telefono'] as String? ?? '').isNotEmpty)
               _infoRow(Icons.phone, cobro['telefono'] as String? ?? ''),
             if ((cobro['plate'] as String? ?? '').isNotEmpty)
-              _infoRow(Icons.directions_car, cobro['plate'] as String? ?? ''),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 5),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: PlateBadge(plate: cobro['plate'] as String? ?? '', fontSize: 15),
+                ),
+              ),
             if ((cobro['address'] as String? ?? '').isNotEmpty)
               _infoRow(Icons.location_on, cobro['address'] as String? ?? ''),
             _infoRow(

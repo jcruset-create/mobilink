@@ -662,7 +662,7 @@ class _InfoCard extends StatelessWidget {
           // La matrícula manda: si viene informada, en grande y arriba del
           // todo. Si no, ni se pinta (antes dejaba una línea vacía).
           if ((a['plate'] as String? ?? '').trim().isNotEmpty) ...[
-            PlateBadge(plate: a['plate'] as String),
+            PlateBadge(plate: a['plate'] as String, pais: a['paisMatricula']?.toString()),
             const SizedBox(height: 12),
           ],
           _row(Icons.business, a['customerName'] ?? ''),

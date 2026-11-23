@@ -1043,6 +1043,7 @@ function normalizeRoadsideAssistanceRow(row: any) {
     fotosTotal: row.fotosTotal != null ? Number(row.fotosTotal) : 0,
     fotosMiniaturas: Array.isArray(row.fotosMiniaturas) ? row.fotosMiniaturas : [],
     plateRemolque: row.plateRemolque ?? null,
+    paisMatricula: row.paisMatricula ?? null,
     esRemolque: row.esRemolque === true || row.esRemolque === "true",
     origen: row.origen === "central" ? "central" : "taller",
     tipo: row.tipo === TIPO_SALIDA ? TIPO_SALIDA : "asistencia",
@@ -9355,6 +9356,11 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
     );
 
     const assistance = normalizeRoadsideAssistanceRow(result.rows[0]);
+    // País de la matrícula: aparte, para no renumerar el INSERT de arriba.
+    if (paisMatriculaDe(body.paisMatricula)) {
+      assistance.paisMatricula = paisMatriculaDe(body.paisMatricula);
+      await db.query(`UPDATE roadside_assistances SET "paisMatricula" = $2 WHERE id = $1`, [assistance.id, assistance.paisMatricula]);
+    }
 
     /*
      * Primera línea del diario. Va aquí y no dentro del INSERT porque anotar
@@ -9481,6 +9487,11 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
      * entra detrás de la que él lleva. Se pasa su propio id para que reasignar
      * la que ya estaba en curso no la ponga a esperarse a sí misma.
      */
+    // País de la matrícula: solo si viene, y antes del UPDATE grande para que
+    // lo que este devuelve ya lo traiga.
+    if (Object.prototype.hasOwnProperty.call(body, "paisMatricula")) {
+      await db.query(`UPDATE roadside_assistances SET "paisMatricula" = $2 WHERE id = $1`, [id, paisMatriculaDe(body.paisMatricula)]);
+    }
     const esperaTrasId = await trasQueEspera(
       id,
       body.assignedTechName ? String(body.assignedTechName).trim() : null
@@ -19008,11 +19019,22 @@ function normalizeOtf(row: any) {
   };
 }
 
+/**
+ * El «País de la matrícula» que llega del panel: la letra de la banda («F»,
+ * «NL»…) o «X» para fuera de la UE. Vacío o raro es null: se deduce de la
+ * forma. Solo decide cómo se dibuja la placa (src/modules/matriculaEs.ts).
+ */
+function paisMatriculaDe(v: unknown): string | null {
+  const t = String(v ?? "").trim().toUpperCase();
+  return /^[A-Z]{1,3}$/.test(t) ? t : null;
+}
+
 function normalizeOtfTrabajo(row: any) {
   return {
     id: Number(row.id),
     otfId: Number(row.otfId),
     plate: row.plate ?? null,
+    paisMatricula: row.paisMatricula ?? null,
     plateRemolque: row.plateRemolque ?? null,
     tipoVehiculo: row.tipoVehiculo ?? null,
     trabajoPlantilla: row.trabajoPlantilla ?? null,
@@ -19631,6 +19653,10 @@ app.post("/api/otf/:id/trabajos", requireSupervisorRole, async (req, res) => {
        b.tipoVehiculo ?? neumaticos?.tipoNombre ?? null, b.trabajoPlantilla ?? null, detalle, trabajo,
        b.status ?? null, b.observaciones ?? null, neumaticos ? JSON.stringify(neumaticos) : null, now]
     );
+    if (paisMatriculaDe(b.paisMatricula)) {
+      r.rows[0].paisMatricula = paisMatriculaDe(b.paisMatricula);
+      await db.query(`UPDATE otf_trabajos SET "paisMatricula" = $2 WHERE id = $1`, [r.rows[0].id, r.rows[0].paisMatricula]);
+    }
     // El neumático también es material del trabajo: sale en el informe y en el presupuesto.
     if (neumaticos) {
       await db.query(
@@ -19672,6 +19698,9 @@ app.put("/api/otf/trabajos/:tid", requireSupervisorRole, async (req, res) => {
     // Un trabajo ya registrado en TyreControl no cambia de ruedas: allí ya están montadas.
     if (b.neumaticos !== undefined && previo.tcMontaje?.estado === "hecho") {
       return res.status(409).json({ error: "El montaje ya está registrado en TyreControl: no se pueden cambiar las ruedas" });
+    }
+    if (b.paisMatricula !== undefined) {
+      await db.query(`UPDATE otf_trabajos SET "paisMatricula" = $2 WHERE id = $1`, [tid, paisMatriculaDe(b.paisMatricula)]);
     }
     const plantilla = b.trabajoPlantilla !== undefined ? (String(b.trabajoPlantilla ?? "").trim() || null) : previo.trabajoPlantilla;
     const detalle = tocaTexto

@@ -76,6 +76,17 @@ import BuscadorCliente from "./BuscadorCliente";
 import { nombreDe, telefonoDe, type ClienteFrecuente, type ContactoCliente } from "../modules/clientesFrecuentes";
 import { nombreDeFoto, tiraDeFotos } from "../modules/roadsideFotosTarjeta";
 import { etiquetaMatricula, matriculasDe } from "../modules/roadsideMatricula";
+import Matricula from "./Matricula";
+
+/**
+ * El «País de la matrícula» guardado es el de la matrícula del vehículo
+ * (`plate`). La del remolque no lo hereda: una tractora francesa puede llevar
+ * un remolque español.
+ */
+function paisDeLaPlaca(a: { plate?: string | null; paisMatricula?: string | null }, placa: string): string | null {
+  return placa && placa === (a.plate ?? "") ? a.paisMatricula ?? null : null;
+}
+import { FUERA_UE, PAISES_MATRICULA } from "../modules/matriculaEs";
 import { filtrar as filtrarAsistencias, hayCriterios, operariosDe, SIN_OPERARIO } from "../modules/roadsideFiltro";
 import SubcontratacionExterna from "./SubcontratacionExterna";
 import TimelineAsistencia from "./TimelineAsistencia";
@@ -490,6 +501,7 @@ function buildEditDraft(
     googleMapsUrl: assistance.googleMapsUrl || "",
     plate: assistance.plate || "",
     plateRemolque: assistance.plateRemolque || "",
+    paisMatricula: assistance.paisMatricula || "",
     esRemolque: assistance.esRemolque === true,
     descripcionAveria: assistance.descripcionAveria || "",
     trabajosARealizar: assistance.trabajosARealizar || "",
@@ -556,7 +568,13 @@ function ClosedAssistanceCard({
     <div className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2.5">
       <div className="flex items-center justify-between gap-3">
         <div className="truncate text-sm font-bold text-slate-100">
-          {etiquetaMatricula(assistance, "") || assistance.customerName}
+          {/* La placa ya dice si es remolque (va en rojo): sobra la palabra. */}
+          {matriculasDe(assistance).principal ? (
+            <Matricula
+              plate={matriculasDe(assistance).principal}
+              pais={paisDeLaPlaca(assistance, matriculasDe(assistance).principal)}
+            />
+          ) : assistance.customerName}
         </div>
         <span className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-bold ${STATUS_BADGES[assistance.status]}`}>
           {ROADSIDE_ASSISTANCE_STATUS_LABELS[assistance.status]}
@@ -2263,6 +2281,26 @@ export default function RoadsideAssistanceView({
                   />
                 </label>
 
+                {/* Solo hace falta cuando la forma no dice el país (una francesa
+                    y una italiana son iguales). Decide cómo se dibuja la placa. */}
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
+                    País de la matrícula
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={draft.paisMatricula ?? ""}
+                      onChange={(event) => setDraft((prev) => ({ ...prev, paisMatricula: event.target.value }))}
+                      className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-orange-500"
+                    >
+                      <option value="">Automático</option>
+                      {PAISES_MATRICULA.map((pais) => <option key={pais.codigo} value={pais.codigo}>{pais.codigo} · {pais.nombre}</option>)}
+                      <option value={FUERA_UE}>Fuera de la UE</option>
+                    </select>
+                    {draft.plate.trim() && <Matricula plate={draft.plate} pais={draft.paisMatricula} />}
+                  </div>
+                </label>
+
                 <label className="flex items-center gap-2 pt-1">
                   <input
                     type="checkbox"
@@ -2532,12 +2570,16 @@ export default function RoadsideAssistanceView({
                                 href={`/vehiculo?plate=${encodeURIComponent(matriculasDe(assistance).principal)}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="text-slate-100 underline decoration-dotted hover:text-red-400"
+                                className="hover:opacity-80"
                                 title="Ver historial del vehículo"
                               >
-                                {matriculasDe(assistance).principal}
+                                <Matricula
+                                  plate={matriculasDe(assistance).principal}
+                                  pais={paisDeLaPlaca(assistance, matriculasDe(assistance).principal)}
+                                  size="md"
+                                />
                               </a>
-                            ) : "Sin matricula"}
+                            ) : <span className="text-slate-400">Sin matrícula</span>}
                           </h3>
                           {/* Una matrícula suelta no dice si es tractora o
                              * remolque, y aquí importa: el operario tiene que
@@ -2574,10 +2616,14 @@ export default function RoadsideAssistanceView({
                               href={`/vehiculo?plate=${encodeURIComponent(matriculasDe(assistance).secundaria)}`}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="underline decoration-dotted hover:text-red-400"
+                              className="hover:opacity-80"
                               title="Ver historial del vehículo"
                             >
-                              {matriculasDe(assistance).secundaria}
+                              <Matricula
+                                plate={matriculasDe(assistance).secundaria}
+                                pais={paisDeLaPlaca(assistance, matriculasDe(assistance).secundaria)}
+                                size="xs"
+                              />
                             </a>
                           </div>
                         )}
@@ -3316,7 +3362,7 @@ export default function RoadsideAssistanceView({
                               {new Date(item.createdAtMs).toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit", year: "2-digit" })}
                               <div className="text-[10px] text-slate-500">{formatTime(item.createdAtMs)}</div>
                             </td>
-                            <td className="px-3 py-2 font-bold text-slate-100">{item.plate || "—"}</td>
+                            <td className="px-3 py-2 font-bold text-slate-100">{item.plate ? <Matricula plate={item.plate} /> : "—"}</td>
                             <td className="px-3 py-2 text-slate-300 max-w-[140px] truncate">{item.customerName || "—"}</td>
                             <td
                               className="px-3 py-2 text-slate-400 max-w-[150px] truncate"
@@ -3696,6 +3742,26 @@ export default function RoadsideAssistanceView({
                     placeholder="Opcional"
                     className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm uppercase text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                   />
+                </label>
+
+                {/* Solo hace falta cuando la forma no dice el país (una francesa
+                    y una italiana son iguales). Decide cómo se dibuja la placa. */}
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold text-slate-400">
+                    País de la matrícula
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={editDraft.paisMatricula ?? ""}
+                      onChange={(event) => setEditDraft((prev) => ({ ...prev, paisMatricula: event.target.value }))}
+                      className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-orange-500"
+                    >
+                      <option value="">Automático</option>
+                      {PAISES_MATRICULA.map((pais) => <option key={pais.codigo} value={pais.codigo}>{pais.codigo} · {pais.nombre}</option>)}
+                      <option value={FUERA_UE}>Fuera de la UE</option>
+                    </select>
+                    {editDraft.plate.trim() && <Matricula plate={editDraft.plate} pais={editDraft.paisMatricula} />}
+                  </div>
                 </label>
 
                 <label className="flex items-center gap-2 pt-1">
