@@ -53,6 +53,7 @@ import type {
   InformeGasto,
   InformeProveedores,
   PagoDeProveedor,
+  ResultadoClasificarProveedor,
   EquivalenciaErp,
   ResultadoCotejo,
   Liquidacion,
@@ -1109,6 +1110,23 @@ export const pagosDeProveedor = (p: FiltroProveedores, clave: string | null) => 
   if (clave) q.set("clave", clave);
   return pedir<{ pagos: PagoDeProveedor[] }>(`/expense-stats/suppliers/payments?${q.toString()}`);
 };
+
+/** Un gasto, desde el detalle. `lineaId` = el ticket, si el pago es de una liquidación. */
+export const clasificarGasto = (operacionId: number, datos: { lineaId: number | null; conceptoId: number }) =>
+  pedir<{ destinoQuitado: boolean }>(`/operations/${operacionId}/expense-concept`, {
+    ...json(datos),
+    method: "PATCH",
+  });
+
+/** «Clasificar como…»: lo sin clasificar de un proveedor en el periodo consultado. */
+export const clasificarProveedor = (
+  p: FiltroProveedores,
+  datos: { clave: string; conceptoId: number; recordar: boolean }
+) =>
+  pedir<ResultadoClasificarProveedor>(
+    `/expense-stats/suppliers/classify?${consultaDeProveedores(p).toString()}`,
+    json(datos)
+  );
 
 // ── AutoScan ───────────────────────────────────────────────────────────────
 

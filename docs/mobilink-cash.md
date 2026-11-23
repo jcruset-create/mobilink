@@ -827,6 +827,27 @@ código sin base (`server/cash/domain/proveedores.ts`, con sus pruebas); la
 agrupación se hace en el servidor y no en SQL, porque son las filas de un
 periodo de una empresa.
 
+**Clasificar desde aquí** (`server/cash/clasificarGasto.ts`). Responsable y
+admin (`cash.operation.reclassify`, el mismo permiso que reclasificar la
+sección) pueden ponerle concepto a lo que quedó sin clasificar:
+
+- **«Clasificar como…»** en la fila de un proveedor rellena **solo** sus
+  gastos sin concepto del periodo; lo ya clasificado no se pisa. Con
+  «Recordar para este proveedor» se guarda además una regla de concepto
+  (por NIF, o por el nombre limpio de forma jurídica) para que los próximos
+  tickets de ese establecimiento lo propongan. Un proveedor de la ERP no tiene
+  regla: ya viene identificado. Un nombre de menos de 4 letras tampoco: «bar»
+  casaría con medio país.
+- **Pago a pago** en el detalle, también para corregir uno ya clasificado.
+
+El pago de una liquidación no tiene concepto propio: se clasifica **ticket a
+ticket**. Si el concepto nuevo no admite el destino que tenía (de «Dietas», a
+una persona, a «Ferretería», a un centro de coste), el destino se quita y se
+dice. Lo anulado no se toca, ni se mueve dinero: vale también en jornadas
+cerradas. Cada cambio queda en la auditoría (`cash.expense.classify`), con el
+concepto de antes y el de después. El ámbito de taller se comprueba operación
+a operación sobre la misma lista que se clasifica.
+
 ## 7 decies. Reabrir una jornada
 
 Se cierra la caja y aparece una factura que se cobró y no se apuntó. El
