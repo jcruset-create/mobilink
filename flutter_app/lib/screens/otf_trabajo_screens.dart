@@ -864,7 +864,7 @@ class _CabeceraTrabajo extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(children: [
-            if (plate.isNotEmpty) PlateBadge(plate: plate),
+            if (plate.isNotEmpty) PlateBadge(plate: plate, pais: trabajo['paisMatricula']?.toString()),
             const SizedBox(width: 8),
             Flexible(
               child: Text(trabajo['tipoVehiculo']?.toString() ?? '',

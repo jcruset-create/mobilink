@@ -82,6 +82,8 @@ export type RoadsideAssistance = {
   longitude?: number | null;
   plate: string;
   plateRemolque?: string | null;
+  /** País de la matrícula, si se indicó: solo decide cómo se dibuja la placa. */
+  paisMatricula?: string | null;
   /**
    * El servicio lo hace un taller de la red y nadie va a ir mandando los ocho
    * estados. Marca ORTOGONAL: el estado operativo sigue siendo el que era.
@@ -200,6 +202,8 @@ export type RoadsideAssistanceDraft = {
   longitude: string;
   plate: string;
   plateRemolque: string;
+  /** «» es automático: se deduce de la forma de la matrícula. */
+  paisMatricula?: string;
   esRemolque: boolean;
   descripcionAveria: string;
   trabajosARealizar: string;

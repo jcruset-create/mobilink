@@ -20,6 +20,7 @@ import type { KnownPlace } from "../modules/roadsideAssistanceTypes";
 import KnownPlaceMapModal from "../components/KnownPlaceMapModal";
 import TyreControlVehiculo from "../components/TyreControlVehiculo";
 import Matricula from "../components/Matricula";
+import { FUERA_UE, PAISES_MATRICULA } from "../modules/matriculaEs";
 import OtfNeumaticos, { PlanoRuedas, type NeumaticosTrabajo } from "../components/OtfNeumaticos";
 import AssistSidebar from "../components/AssistSidebar";
 import MensajesOperario from "../components/MensajesOperario";
@@ -607,6 +608,8 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
   const [trabajoPlantilla, setTP] = useState("");
   const [detalle, setDetalle] = useState("");
   const [observaciones, setObservaciones] = useState("");
+  // País de la matrícula: «» es automático (se deduce de la forma).
+  const [paisMatricula, setPaisMatricula] = useState("");
   const [adding, setAdding] = useState(false);
   const [errorAlta, setErrorAlta] = useState<string | null>(null);
   // Cambio de neumáticos: plano de TyreControl para marcar ruedas y catálogo.
@@ -625,6 +628,7 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
     // Con neumáticos, el detalle lo escribe el plano: no se arrastra el texto viejo.
     setDetalle(t.neumaticos ? "" : t.detalleManual ?? "");
     setObservaciones(t.observaciones ?? "");
+    setPaisMatricula(t.paisMatricula ?? "");
     setConNeumaticos(!!t.neumaticos);
     setNeumaticos(null);
     setErrorAlta(null);
@@ -634,6 +638,7 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
   function limpiarFormulario() {
     setEditando(null);
     setPlate(""); setTP(""); setDetalle(""); setObservaciones(""); setConNeumaticos(false); setNeumaticos(null);
+    setPaisMatricula("");
     setErrorAlta(null);
   }
   useEffect(() => {
@@ -676,6 +681,7 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
         detalleManual: detalle,
         observaciones: observaciones.trim() || null,
         neumaticos: conNeumaticos ? neumaticos : null,
+        paisMatricula: paisMatricula || null,
       };
       if (editando) await updateOtfTrabajo(editando.id, datos);
       else await addOtfTrabajo(otf.id, datos);
@@ -808,7 +814,7 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 flex-wrap">
                 {t.plate ? (
-                  <a href={`/vehiculo?plate=${encodeURIComponent(t.plate)}`} target="_blank" rel="noopener noreferrer" title="Ver el historial del vehículo" className="hover:opacity-80"><Matricula plate={t.plate} /></a>
+                  <a href={`/vehiculo?plate=${encodeURIComponent(t.plate)}`} target="_blank" rel="noopener noreferrer" title="Ver el historial del vehículo" className="hover:opacity-80"><Matricula plate={t.plate} pais={t.paisMatricula} /></a>
                 ) : <span className="font-black text-slate-100">—</span>}
                 <span className="text-xs text-slate-400">{t.tipoVehiculo}</span>
                 {t.origen === "tecnico_campo" && (
@@ -915,6 +921,19 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
             {plantillas.map((p) => <option key={p.id} value={p.nombre}>{p.nombre}</option>)}
           </select>
           <input placeholder="Detalle manual" value={detalle} onChange={(e) => setDetalle(e.target.value)} className={inputCls} />
+          <div className="col-span-2 flex items-center gap-2">
+            <select
+              value={paisMatricula}
+              onChange={(e) => setPaisMatricula(e.target.value)}
+              aria-label="País de la matrícula"
+              className={inputCls}
+            >
+              <option value="">País de la matrícula: automático</option>
+              {PAISES_MATRICULA.map((p) => <option key={p.codigo} value={p.codigo}>{p.codigo} · {p.nombre}</option>)}
+              <option value={FUERA_UE}>Fuera de la UE</option>
+            </select>
+            {plate.trim() && <Matricula plate={plate} pais={paisMatricula} />}
+          </div>
           <input
             placeholder="Observaciones (p. ej. remolque en plaza 27)"
             value={observaciones}

@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../services/matricula_es.dart';
 
-/// Matrícula del vehículo en grande, dibujada como la placa.
+/// Matrícula del vehículo, dibujada como la placa de su país.
 ///
 /// El técnico identifica el vehículo por la matrícula, así que cuando viene
 /// informada tiene que leerse de un vistazo (también con guantes y a pleno sol,
@@ -10,36 +10,46 @@ import '../services/matricula_es.dart';
 /// quien la use debe envolverla en `if (plate.isNotEmpty)`.
 ///
 /// Las españolas se dibujan como son —la actual con su banda azul y la «E», la
-/// de remolque en rojo, la antigua de provincia sin banda—, que es como el
-/// operario las ve en el vehículo. Cualquier otra, tal cual está escrita.
+/// de remolque en rojo, la antigua de provincia sin banda—, y las de otro país
+/// de la UE con su letra, o sin letra si el país no se sabe. Qué es cada una
+/// lo decide [dibujoMatricula]; [pais] es el que indicó la oficina, si lo hizo.
 class PlateBadge extends StatelessWidget {
   final String plate;
 
-  const PlateBadge({super.key, required this.plate});
+  /// El «País de la matrícula» guardado. Sin él se deduce de la forma.
+  final String? pais;
+
+  /// Tamaño de letra. Sin él, grande (el de las tarjetas); en listas, ~15.
+  final double? fontSize;
+
+  const PlateBadge({super.key, required this.plate, this.pais, this.fontSize});
 
   static const _negro = Color(0xFF111111);
   static const _azulUe = Color(0xFF003399);
   static const _rojoRemolque = Color(0xFFD52B1E);
+  static const _rojoLetras = Color(0xFFB42318);
 
   @override
   Widget build(BuildContext context) {
     // titleLarge sigue el modo exterior (24 normal / 28 exterior).
     final base = Theme.of(context).textTheme.titleLarge?.fontSize ?? 24;
-    final fuente = base + 4;
-    final d = dibujoMatricula(plate);
-    final conBanda = d.tipo == TipoMatricula.actual || d.tipo == TipoMatricula.remolque;
-    final fondo = switch (d.tipo) {
-      TipoMatricula.remolque => _rojoRemolque,
-      TipoMatricula.otra => const Color(0xFFE8ECF5),
-      _ => Colors.white,
+    final fuente = fontSize ?? base + 4;
+    final compacta = fuente < 20;
+    final d = dibujoMatricula(plate, pais);
+    final fondo = switch (d.fondo) {
+      FondoMatricula.rojo => _rojoRemolque,
+      FondoMatricula.amarillo => const Color(0xFFF7C600),
+      FondoMatricula.liso => const Color(0xFFE8ECF5),
+      FondoMatricula.blanco => Colors.white,
     };
     final estilo = TextStyle(
-      color: _negro,
+      color: d.letrasRojas ? _rojoLetras : _negro,
       fontSize: fuente,
       fontWeight: FontWeight.w900,
-      letterSpacing: 2,
+      letterSpacing: compacta ? 1 : 2,
       height: 1.1,
     );
+    final hueco = d.separador == ' ' ? fuente * 0.35 : fuente * 0.12;
 
     return Semantics(
       label: 'Matrícula ${d.partes.join(' ')}',
@@ -50,16 +60,16 @@ class PlateBadge extends StatelessWidget {
             clipBehavior: Clip.antiAlias,
             decoration: BoxDecoration(
               color: fondo,
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: _negro, width: 2),
+              borderRadius: BorderRadius.circular(compacta ? 4 : 6),
+              border: Border.all(color: _negro, width: compacta ? 1.5 : 2),
             ),
             child: IntrinsicHeight(
               child: Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                if (conBanda)
+                if (d.banda)
                   Container(
                     width: fuente * 0.72,
                     color: _azulUe,
-                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    padding: EdgeInsets.symmetric(vertical: compacta ? 2 : 4),
                     child: Column(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                       // El círculo de estrellas, en pequeño.
                       Container(
@@ -67,19 +77,30 @@ class PlateBadge extends StatelessWidget {
                         height: fuente * 0.36,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          border: Border.all(color: const Color(0xFFFFCC00), width: 1.5),
+                          border: Border.all(color: const Color(0xFFFFCC00), width: compacta ? 1 : 1.5),
                         ),
                       ),
-                      Text('E',
-                          style: TextStyle(
-                              color: Colors.white, fontSize: fuente * 0.36, fontWeight: FontWeight.w900, height: 1)),
+                      // La letra del país; si no se sabe, la banda va sola.
+                      if (d.pais.isNotEmpty)
+                        FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(d.pais,
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: fuente * 0.36,
+                                  fontWeight: FontWeight.w900,
+                                  height: 1)),
+                        ),
                     ]),
                   ),
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  padding: EdgeInsets.symmetric(horizontal: compacta ? 7 : 12, vertical: compacta ? 3 : 6),
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
                     for (var i = 0; i < d.partes.length; i++) ...[
-                      if (i > 0) SizedBox(width: fuente * 0.35),
+                      if (i > 0) ...[
+                        SizedBox(width: hueco),
+                        if (d.separador != ' ') ...[Text(d.separador, style: estilo), SizedBox(width: hueco)],
+                      ],
                       Text(d.partes[i], maxLines: 1, style: estilo),
                     ],
                   ]),

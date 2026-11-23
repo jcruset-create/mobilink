@@ -452,7 +452,7 @@ class _OtfDetailScreenState extends State<OtfDetailScreen> {
         if ((t['plate']?.toString() ?? '').trim().isNotEmpty) ...[
           Align(
             alignment: Alignment.centerLeft,
-            child: PlateBadge(plate: t['plate'].toString()),
+            child: PlateBadge(plate: t['plate'].toString(), pais: t['paisMatricula']?.toString()),
           ),
           const SizedBox(height: 6),
         ],
@@ -791,7 +791,11 @@ class _OtfFirmaScreenState extends State<OtfFirmaScreen> {
           Padding(
             padding: const EdgeInsets.only(bottom: 6),
             child: Row(children: [
-              Expanded(child: Text('${t['plate'] ?? '—'} · ${t['trabajo'] ?? ''}',
+              if ((t['plate']?.toString() ?? '').trim().isNotEmpty) ...[
+                PlateBadge(plate: t['plate'].toString(), pais: t['paisMatricula']?.toString(), fontSize: 14),
+                const SizedBox(width: 8),
+              ],
+              Expanded(child: Text('${t['trabajo'] ?? ''}',
                   maxLines: 1, overflow: TextOverflow.ellipsis,
                   style: const TextStyle(color: AppColors.textPrimary, fontSize: 14))),
               const SizedBox(width: 8),

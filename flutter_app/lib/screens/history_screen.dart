@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
+import '../widgets/plate_badge.dart';
 
 const _statusLabels = {
   'finalizada': 'Finalizada',
@@ -128,7 +129,17 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                   ),
                                   const SizedBox(height: 6),
                                   if ((a['plate'] as String? ?? '').isNotEmpty)
-                                    _row(Icons.directions_car, a['plate']),
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 6),
+                                      child: Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: PlateBadge(
+                                          plate: a['plate'] as String,
+                                          pais: a['paisMatricula']?.toString(),
+                                          fontSize: 15,
+                                        ),
+                                      ),
+                                    ),
                                   if ((a['address'] as String? ?? '').isNotEmpty)
                                     _row(Icons.location_on, a['address'],
                                         small: true),
