@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BookOpen, FileScan, Loader2, Send, Trash2, Upload, Wand2 } from "lucide-react";
+import { BookOpen, CheckCircle2, FileScan, Loader2, Send, Trash2, Upload, Wand2 } from "lucide-react";
 import {
   CLAVE_MATERIAL,
   claveArticulo,
@@ -8,7 +8,17 @@ import {
   type LineaParte,
   type MapaArticulos,
   type ParteTrabajo,
+  type TrabajoPropuesto,
 } from "../parteTrabajoATrabajos";
+import {
+  autorizar,
+  conApoyo,
+  conResponsable,
+  etiquetaDeTecnico,
+  motivoNoAutorizable,
+  sinApoyo,
+  tecnicosParaElegir,
+} from "../autorizarDesdeParte";
 import { allocateJobPure } from "../assignment";
 import { buildTechLoadStats, buildTechStats } from "../workshopReports";
 import { getOperationKey } from "../jobHelpers";
@@ -18,6 +28,7 @@ import {
   loadQuickTemplatesFromBackend,
   loadTechsFromBackend,
   saveJobToBackend,
+  saveTechToBackend,
 } from "../workshopApi";
 import { getAdminHeaders } from "../adminHeaders";
 import { DEFAULT_WORKSHOP_ID, normalizeWorkshopId } from "../workshops";
@@ -314,7 +325,82 @@ export default function PartesTrabajoPage() {
     }
   }
 
-  async function crearTrabajos() {
+  /**
+   * La propuesta de técnicos de cada trabajo, calculada ya al leer el parte
+   * con el motor de asignación de siempre, y editable: el responsable y los
+   * apoyos se cambian aquí mismo (src/modules/autorizarDesdeParte.ts).
+   */
+  const propuestas = useMemo(() => {
+    const out = new Map<number, { asignados: string[]; porQue: string }>();
+    if (!conversion) return out;
+    let jobsAcumulados = [...jobs];
+    let techsAcumulados = [...techs];
+    let idLocal = -1;
+    for (const propuesto of conversion.trabajos) {
+      const base = trabajoBase(propuesto, idLocal);
+      const resultado = allocateJobPure(
+        base,
+        techsAcumulados,
+        [base, ...jobsAcumulados],
+        plantillasDelTaller,
+        techStats,
+        techLoadStats
+      );
+      const conPropuesta = resultado.jobs.find((j) => j.id === base.id) ?? base;
+      const asignados = conPropuesta.assignedNames ?? [];
+      out.set(propuesto.indiceLinea, {
+        asignados,
+        porQue: explicaPropuesta(asignados, base, techStats, techLoadStats),
+      });
+      jobsAcumulados = [conPropuesta, ...jobsAcumulados];
+      techsAcumulados = resultado.techs;
+      idLocal -= 1;
+    }
+    return out;
+  }, [conversion, jobs, techs, plantillasDelTaller, techStats, techLoadStats]);
+
+  /** Lo que ha tocado la persona; si no ha tocado nada, manda la propuesta. */
+  const [elegidos, setElegidos] = useState<Record<number, string[]>>({});
+  useEffect(() => { setElegidos({}); }, [parte]);
+
+  function asignadosDe(indiceLinea: number): string[] {
+    return elegidos[indiceLinea] ?? propuestas.get(indiceLinea)?.asignados ?? [];
+  }
+
+  function trabajoBase(propuesto: TrabajoPropuesto, id: number): Job {
+    return {
+      id,
+      workshopId,
+      area: propuesto.area,
+      plate: propuesto.plate,
+      urgent: false,
+      status: "validacion",
+      assignedNames: [],
+      reason: `Parte ${propuesto.ptNumero}: ${propuesto.descripcionOriginal}.`,
+      customerName: propuesto.customerName,
+      customerPhone: propuesto.customerPhone,
+      createdAtMs: Date.now(),
+      startedAtMs: null,
+      template: null,
+      quickEntryLabel: propuesto.label,
+      quickEntryMode: "team",
+      includedTasks: propuesto.tareasIncluidas,
+      materiales: propuesto.materiales,
+      quantity: propuesto.quantity,
+      unitMinutes: propuesto.unitMinutes,
+      ptNumero: propuesto.ptNumero,
+      // La hora del parte, no la de volcarlo: es cuando entró el vehículo.
+      ptEntradaMs: propuesto.arrivedAtMs,
+    };
+  }
+
+  /**
+   * Crea los trabajos del parte. En modo «proponer» entran en «Pendientes de
+   * validar» de Operativo 2 con los técnicos elegidos; en modo «autorizar»
+   * arrancan ya, con los técnicos ocupados, igual que el ✓ Autorizar del
+   * operativo.
+   */
+  async function crearTrabajos(modo: "proponer" | "autorizar") {
     if (!conversion || conversion.trabajos.length === 0) return;
 
     // Una línea sin clasificar no viaja al trabajo: ni como tarea ni como
@@ -331,74 +417,46 @@ export default function PartesTrabajoPage() {
       if (!ok) return;
     }
 
+    if (modo === "autorizar") {
+      // Un mismo técnico no puede empezar dos trabajos del mismo parte.
+      const vistos = new Set<string>();
+      for (const propuesto of conversion.trabajos) {
+        const asignados = asignadosDe(propuesto.indiceLinea);
+        const motivo = motivoNoAutorizable(asignados, techs, propuesto.area);
+        if (motivo) {
+          setError(`${propuesto.plate} · ${propuesto.label}: ${motivo}`);
+          return;
+        }
+        for (const n of asignados) {
+          if (vistos.has(n)) {
+            setError(`${n} está elegido en dos trabajos del parte: solo puede empezar uno.`);
+            return;
+          }
+          vistos.add(n);
+        }
+      }
+    }
+
     setEstado("creando");
     setError("");
 
     try {
       const material = resumenMateriales(conversion.materiales);
-
-      // El id lo pone el servidor preguntando a la tabla: aquí solo se ve la
-      // lista viva, y «el mayor + 1» chocaba con trabajos cerrados hace días
-      // («Conflicto de ID»). Para proponer técnico hace falta un id local que
-      // no se confunda con ninguno: negativos, que nunca se envían.
-      let siguienteId = -1;
-
-      let jobsAcumulados = [...jobs];
-      let techsAcumulados = [...techs];
       const creados: string[] = [];
+      let techsActuales = [...techs];
 
       for (const propuesto of conversion.trabajos) {
-        const base: Job = {
-          id: siguienteId,
-          workshopId,
-          area: propuesto.area,
-          plate: propuesto.plate,
-          urgent: false,
-          status: "validacion",
-          assignedNames: [],
-          reason: `Parte ${propuesto.ptNumero}: ${propuesto.descripcionOriginal}.`,
-          customerName: propuesto.customerName,
-          customerPhone: propuesto.customerPhone,
-          createdAtMs: Date.now(),
-          startedAtMs: null,
-          template: null,
-          quickEntryLabel: propuesto.label,
-          quickEntryMode: "team",
-          includedTasks: propuesto.tareasIncluidas,
-          materiales: propuesto.materiales,
-          quantity: propuesto.quantity,
-          unitMinutes: propuesto.unitMinutes,
-          ptNumero: propuesto.ptNumero,
-          // La hora del parte, no la de volcarlo: es cuando entró el vehículo.
-          ptEntradaMs: propuesto.arrivedAtMs,
-        };
+        const asignados = asignadosDe(propuesto.indiceLinea);
+        const porQue = elegidos[propuesto.indiceLinea]
+          ? `Técnicos elegidos a mano en Partes de trabajo: ${asignados.join(" + ") || "ninguno"}.`
+          : propuestas.get(propuesto.indiceLinea)?.porQue ?? "";
 
-        // El motor de asignación de siempre: competencias, orden del área,
-        // quién es más rápido en esa operación y quién lleva menos carga.
-        const resultado = allocateJobPure(
-          base,
-          techsAcumulados,
-          [base, ...jobsAcumulados],
-          plantillasDelTaller,
-          techStats,
-          techLoadStats
-        );
-
-        const conPropuesta =
-          resultado.jobs.find((j) => j.id === base.id) ?? base;
-
-        const porQue = explicaPropuesta(
-          conPropuesta.assignedNames ?? [],
-          base,
-          techStats,
-          techLoadStats
-        );
-
-        const jobFinal: Job = {
-          ...conPropuesta,
-          status: "validacion",
+        // Con id 0 el servidor asigna el siguiente libre de la tabla.
+        const propuestoJob: Job = {
+          ...trabajoBase(propuesto, 0),
+          assignedNames: asignados,
           reason: [
-            conPropuesta.reason,
+            `Parte ${propuesto.ptNumero}: ${propuesto.descripcionOriginal}.`,
             porQue,
             material ? `Material: ${material}.` : "",
           ]
@@ -406,26 +464,34 @@ export default function PartesTrabajoPage() {
             .join(" "),
         };
 
-        // Con id 0 el servidor asigna el siguiente libre de la tabla.
-        await saveJobToBackend({ ...jobFinal, id: 0 });
+        const guardado = (await saveJobToBackend(propuestoJob)) as Job | null;
+        const idReal = Number(guardado?.id);
+        if (!Number.isFinite(idReal) || idReal <= 0) {
+          throw new Error(`El servidor no ha devuelto el número del trabajo ${propuesto.plate}.`);
+        }
 
-        jobsAcumulados = [jobFinal, ...jobsAcumulados];
-        techsAcumulados = resultado.techs;
-        siguienteId -= 1;
+        if (modo === "autorizar") {
+          const r = autorizar({ ...propuestoJob, id: idReal }, asignados, techsActuales, Date.now());
+          await saveJobToBackend(r.job);
+          for (const t of r.techs) await saveTechToBackend(t);
+          techsActuales = techsActuales.map((t) => r.techs.find((x) => x.name === t.name) ?? t);
+        }
 
         creados.push(
-          `${jobFinal.plate} · ${propuesto.label} ×${propuesto.quantity}` +
-            (jobFinal.assignedNames?.length
-              ? ` → ${jobFinal.assignedNames.join(" + ")}`
-              : " → sin técnico libre")
+          `${propuesto.plate} · ${propuesto.label} ×${propuesto.quantity}` +
+            (asignados.length ? ` → ${asignados.join(" + ")}` : " → sin técnico libre")
         );
       }
 
-      setAviso(
-        creados.length === 1
-          ? `Trabajo creado y pendiente de validar:\n${creados[0]}`
-          : `${creados.length} trabajos creados y pendientes de validar:\n${creados.join("\n")}`
-      );
+      const titulo =
+        modo === "autorizar"
+          ? creados.length === 1
+            ? "Trabajo autorizado y en marcha:"
+            : `${creados.length} trabajos autorizados y en marcha:`
+          : creados.length === 1
+            ? "Trabajo creado y pendiente de validar:"
+            : `${creados.length} trabajos creados y pendientes de validar:`;
+      setAviso(`${titulo}\n${creados.join("\n")}`);
 
       setParte(null);
       setEstado("vacio");
@@ -433,6 +499,7 @@ export default function PartesTrabajoPage() {
     } catch (e: any) {
       setError(e?.message || "No se pudieron crear los trabajos.");
       setEstado("revisando");
+      await cargarBase();
     }
   }
 
@@ -687,24 +754,96 @@ export default function PartesTrabajoPage() {
                 </p>
               ) : (
                 <div className="space-y-1 text-sm">
-                  {conversion.trabajos.map((t) => (
-                    <div key={t.indiceLinea} className="rounded-lg bg-slate-900 px-3 py-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-semibold">{t.plate}</span>
-                        <span className="flex-1 truncate">{t.label}</span>
-                        <span className="text-slate-400">×{t.quantity}</span>
-                        <span className="text-slate-500">{t.estimatedMinutes} min</span>
-                      </div>
-
-                      {t.tareasIncluidas.length > 0 && (
-                        <div className="mt-1 text-xs text-slate-400">
-                          + {t.tareasIncluidas
-                            .map((tarea) => `${tarea.label} ×${tarea.quantity ?? 1}`)
-                            .join(" · ")}
+                  {conversion.trabajos.map((t) => {
+                    const asignados = asignadosDe(t.indiceLinea);
+                    const responsable = asignados[0] ?? "";
+                    const apoyos = asignados.slice(1);
+                    const elegibles = tecnicosParaElegir(techs);
+                    const motivo = motivoNoAutorizable(asignados, techs, t.area);
+                    const porQue = elegidos[t.indiceLinea]
+                      ? "Técnicos elegidos a mano."
+                      : propuestas.get(t.indiceLinea)?.porQue ?? "";
+                    return (
+                      <div key={t.indiceLinea} className="rounded-lg bg-slate-900 px-3 py-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-semibold">{t.plate}</span>
+                          <span className="flex-1 truncate">{t.label}</span>
+                          <span className="text-slate-400">×{t.quantity}</span>
+                          <span className="text-slate-500">{t.estimatedMinutes} min</span>
                         </div>
-                      )}
-                    </div>
-                  ))}
+
+                        {t.tareasIncluidas.length > 0 && (
+                          <div className="mt-1 text-xs text-slate-400">
+                            + {t.tareasIncluidas
+                              .map((tarea) => `${tarea.label} ×${tarea.quantity ?? 1}`)
+                              .join(" · ")}
+                          </div>
+                        )}
+
+                        {/* Técnicos: la propuesta del motor, editable aquí mismo */}
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <select
+                            value={responsable}
+                            onChange={(e) =>
+                              setElegidos((prev) => ({
+                                ...prev,
+                                [t.indiceLinea]: conResponsable(asignados, e.target.value),
+                              }))
+                            }
+                            className="rounded border border-slate-600 bg-slate-800 px-2 py-1 text-xs font-semibold"
+                            title="Responsable del trabajo"
+                          >
+                            <option value="">Resp: sin técnico</option>
+                            {elegibles.map((tech) => (
+                              <option key={tech.name} value={tech.name}>
+                                Resp: {etiquetaDeTecnico(tech)}
+                              </option>
+                            ))}
+                          </select>
+                          {apoyos.map((n) => (
+                            <span
+                              key={n}
+                              className="inline-flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[11px] text-amber-300"
+                            >
+                              {n}
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setElegidos((prev) => ({ ...prev, [t.indiceLinea]: sinApoyo(asignados, n) }))
+                                }
+                                className="font-bold"
+                                title="Quitar apoyo"
+                              >
+                                ✕
+                              </button>
+                            </span>
+                          ))}
+                          <select
+                            value=""
+                            onChange={(e) => {
+                              if (!e.target.value) return;
+                              setElegidos((prev) => ({ ...prev, [t.indiceLinea]: conApoyo(asignados, e.target.value) }));
+                            }}
+                            className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-1 text-[11px] text-amber-300"
+                            title="Añadir apoyo"
+                          >
+                            <option value="">+ Apoyo…</option>
+                            {elegibles
+                              .filter((tech) => !asignados.includes(tech.name))
+                              .map((tech) => (
+                                <option key={tech.name} value={tech.name}>{etiquetaDeTecnico(tech)}</option>
+                              ))}
+                          </select>
+                          {motivo ? (
+                            <span className="text-[11px] text-amber-400">{motivo}</span>
+                          ) : (
+                            <span className="text-[11px] text-emerald-400">Se puede autorizar ya.</span>
+                          )}
+                        </div>
+                        {porQue && <div className="mt-1 text-[11px] text-slate-500">{porQue}</div>}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
 
@@ -717,16 +856,32 @@ export default function PartesTrabajoPage() {
               <div className="mt-4 flex flex-wrap items-center gap-3">
                 <button
                   type="button"
-                  onClick={() => void crearTrabajos()}
-                  disabled={estado === "creando" || conversion.trabajos.length === 0}
+                  onClick={() => void crearTrabajos("autorizar")}
+                  disabled={
+                    estado === "creando" ||
+                    conversion.trabajos.length === 0 ||
+                    conversion.trabajos.some((t) => motivoNoAutorizable(asignadosDe(t.indiceLinea), techs, t.area))
+                  }
+                  title="Los técnicos elegidos empiezan ya, como el ✓ Autorizar de Operativo 2"
                   className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
                 >
                   {estado === "creando" ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
-                    <Send className="h-4 w-4" />
+                    <CheckCircle2 className="h-4 w-4" />
                   )}
-                  Crear y proponer técnico
+                  ✓ Autorizar y empezar
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => void crearTrabajos("proponer")}
+                  disabled={estado === "creando" || conversion.trabajos.length === 0}
+                  title="Entra en «Pendientes de validar» de Operativo 2 con estos técnicos"
+                  className="flex items-center gap-2 rounded-lg border border-emerald-600/60 bg-emerald-600/10 px-4 py-2 text-sm font-semibold text-emerald-300 hover:bg-emerald-600/20 disabled:opacity-50"
+                >
+                  <Send className="h-4 w-4" />
+                  Crear y dejar pendiente de validar
                 </button>
 
                 <button
@@ -739,7 +894,7 @@ export default function PartesTrabajoPage() {
 
                 <span className="flex items-center gap-1 text-xs text-slate-500">
                   <Wand2 className="h-3.5 w-3.5" />
-                  Entran como propuesta en «Pendientes de validar» de Operativo 2.
+                  Autorizar arranca el trabajo ya con esos técnicos; dejarlo pendiente lo manda a Operativo 2.
                 </span>
               </div>
             </div>
