@@ -164,11 +164,40 @@ export async function confirmarMapeo(
  * El PIN nunca se guarda: se hashea con `core/credentials.ts`, el mismo
  * PBKDF2 que usan los operarios de Connect Lite.
  */
-export async function crearOperario(ctx: Contexto, datos: { nombre: string; centroId?: string | null; pin: string }): Promise<repo.Operario> {
-  const nombre = String(datos.nombre ?? "").trim();
-  if (!nombre) throw new ErrorRecepciones("NOMBRE_REQUERIDO", "El operario necesita un nombre.");
+/*
+ * ## Con Core, el operario es una persona que ya existe
+ *
+ * Si la base tiene Core (`sea_employees`), dar de alta un operario es elegir a
+ * una persona de Core y ponerle centro y PIN: el nombre lo pone Core y aquí no
+ * se teclea. Se guarda también en `rcp_operarios.nombre` porque la columna es
+ * obligatoria y es el respaldo si un día se desenlaza, pero lo que se enseña
+ * es el de Core (ver `repo.Operario`). Sin Core, como siempre: con nombre.
+ */
+export async function crearOperario(
+  ctx: Contexto,
+  datos: { nombre: string; centroId?: string | null; pin: string; employeeId?: string | null }
+): Promise<repo.Operario> {
   const pin = String(datos.pin ?? "").trim();
   if (!pinValido(pin)) throw new ErrorRecepciones("PIN_INVALIDO", `El PIN son entre ${PIN_MIN} y ${PIN_MAX} dígitos.`);
+
+  let nombre = String(datos.nombre ?? "").trim();
+  let employeeId: string | null = null;
+  const deCore = await repo.empleadosCoreParaOperario(ctx.empresaId);
+  if (deCore) {
+    const id = String(datos.employeeId ?? "").trim();
+    if (!id) {
+      throw new ErrorRecepciones("PERSONA_REQUERIDA", "Elige la persona de Core: los operarios se dan de alta sobre la plantilla.");
+    }
+    const persona = deCore.find((e) => e.id === id);
+    if (!persona) throw new ErrorRecepciones("PERSONA_NO_ENCONTRADA", "Esa persona no existe en Core o está de baja.", 404);
+    if (persona.yaEsOperario) {
+      throw new ErrorRecepciones("OPERARIO_DUPLICADO", `${persona.nombre} ya es operario del muelle.`, 409);
+    }
+    nombre = persona.nombre;
+    employeeId = persona.id;
+  }
+  if (!nombre) throw new ErrorRecepciones("NOMBRE_REQUERIDO", "El operario necesita un nombre.");
+
   const salt = newSalt();
   try {
     return await repo.crearOperario(ctx.empresaId, {
@@ -178,6 +207,7 @@ export async function crearOperario(ctx: Contexto, datos: { nombre: string; cent
       pinSalt: salt,
       creadoPor: ctx.userId,
       creadoNombre: ctx.userNombre,
+      employeeId,
     });
   } catch (e) {
     if ((e as { code?: string }).code === "23505") {
@@ -199,6 +229,12 @@ export async function actualizarOperario(
     if (!pinValido(pin)) throw new ErrorRecepciones("PIN_INVALIDO", `El PIN son entre ${PIN_MIN} y ${PIN_MAX} dígitos.`);
     pinSalt = newSalt();
     pinHash = hashSecret(pin, pinSalt);
+  }
+  if (datos.nombre !== undefined) {
+    const actual = await repo.operarioPorId(ctx.empresaId, id);
+    if (actual?.enlazado) {
+      throw new ErrorRecepciones("NOMBRE_EN_CORE", `El nombre de ${actual.nombre} viene de Core: se cambia en su ficha de empleado.`, 409);
+    }
   }
   const operario = await repo.actualizarOperario(ctx.empresaId, id, {
     nombre: datos.nombre?.trim() || undefined,
