@@ -25,13 +25,19 @@ import { registrarAuditoria } from "./auditoria.ts";
 import { clienteTwilio, hayCredencialesTwilio } from "./twilio.ts";
 import { hayIA, pedirIA } from "./openaiService.ts";
 import {
+  ESQUEMA_ESQUINAS,
+  INSTRUCCIONES_ESQUINAS,
+  enderezar,
+  esquinasValidas,
+  tamanoDeSalida,
+  type Esquinas,
+} from "./recorteDocumento.ts";
+import {
   CAMPOS_TALLA,
   CAMPOS_VERIFICABLES,
   ESQUEMA_LECTURA,
-  ESQUEMA_RECORTE,
   ESQUEMA_VERIFICACION,
   INSTRUCCIONES_LECTURA,
-  INSTRUCCIONES_RECORTE,
   INSTRUCCIONES_VERIFICACION,
   caducidadDesde,
   esTipoDocumento,
@@ -48,10 +54,8 @@ import {
   validarFicha,
   certificacionesDeLectura,
   fichaDeLectura,
-  recorteEnPixeles,
   type Consentimiento,
   type Lectura,
-  type LecturaRecorte,
   type MotivoInvitacion,
   type Verificacion,
 } from "./altaOperario.ts";
@@ -656,9 +660,12 @@ async function documentosConUrl(employeeId: string): Promise<DocumentoRevision[]
 /**
  * De la foto de un móvil a algo que parece un documento escaneado.
  *
- * El modelo NO recorta: devuelve coordenadas. El recorte, el enderezado y la
- * mejora los hace `sharp` aquí, que es instantáneo y no cuesta nada. Y la
- * original no se toca: si el recorte sale mal, sigue estando entera.
+ * El modelo NO dibuja: dice dónde están las cuatro esquinas del documento y
+ * el enderezado lo hace `recorteDocumento.ts` muestreando la foto original,
+ * píxel a píxel. Así el número del DNI que acaba en la ficha es el que había
+ * en el documento, y no uno que un modelo de imagen haya repintado.
+ *
+ * Y la original no se toca: si el enderezado sale mal, sigue estando entera.
  */
 async function mejorarDocumento(
   employeeId: string,
@@ -670,9 +677,17 @@ async function mejorarDocumento(
   const { data, error } = await supabase.storage.from(BUCKET).download(rutaOriginal);
   if (error || !data) throw new Error("no se ha podido leer la foto");
 
-  // Primero se normaliza la orientación EXIF: así las coordenadas que dé el
-  // modelo valen sobre los mismos píxeles que luego se recortan.
-  const derecha = await sharp(Buffer.from(await data.arrayBuffer())).rotate().toBuffer();
+  /*
+   * Se normaliza la orientación EXIF y se baja a 2400 px antes de nada.
+   *
+   * Lo segundo es por memoria: el enderezado trabaja sobre el búfer crudo, y
+   * una foto de 4032x3024 en crudo son 36 MB. A 2400 se queda en 13, y la
+   * salida son 1600 de todas formas, así que no se pierde nada visible.
+   */
+  const derecha = await sharp(Buffer.from(await data.arrayBuffer()))
+    .rotate()
+    .resize({ width: 2400, withoutEnlargement: true })
+    .toBuffer();
   const meta = await sharp(derecha).metadata();
   const ancho = meta.width ?? 0;
   const alto = meta.height ?? 0;
@@ -683,23 +698,23 @@ async function mejorarDocumento(
     .jpeg({ quality: 80 })
     .toBuffer();
 
-  const r = await pedirIA<LecturaRecorte>({
+  const r = await pedirIA<{ encontrado: boolean; esquinas: Esquinas; nota: string }>({
     operacion: "core.alta.recortar",
     proposito: "documento",
-    prompt: INSTRUCCIONES_RECORTE,
+    prompt: INSTRUCCIONES_ESQUINAS,
     imagenes: [{ url: `data:image/jpeg;base64,${paraModelo.toString("base64")}` }],
     esquema: {
-      nombre: "recuadro_documento",
-      schema: ESQUEMA_RECORTE as unknown as Record<string, unknown>,
+      nombre: "esquinas_documento",
+      schema: ESQUEMA_ESQUINAS as unknown as Record<string, unknown>,
     },
     maxTokens: 500,
     timeoutMs: 60_000,
   });
 
-  const lectura = r.datos;
-  const caja = r.ok && lectura?.encontrado ? recorteEnPixeles(lectura.recuadro, ancho, alto) : null;
+  const respuesta = r.datos;
+  const esquinas = r.ok && respuesta?.encontrado ? respuesta.esquinas : null;
 
-  if (!caja) {
+  if (!esquinasValidas(esquinas)) {
     // Se anota por qué no, y se deja la original: la ficha la enseña igual.
     await db.query(
       `UPDATE sea_employee_documents
@@ -709,33 +724,43 @@ async function mejorarDocumento(
         employeeId,
         tipo,
         JSON.stringify({
-          nota: lectura?.nota ?? r.error?.slice(0, 200) ?? "no se ha encontrado el documento",
           encontrado: false,
+          nota:
+            respuesta?.nota ??
+            r.error?.slice(0, 200) ??
+            "no se han encontrado las esquinas del documento",
         }),
       ]
     );
     return false;
   }
 
+  const salida = tamanoDeSalida(esquinas, ancho, alto);
+  if (!salida.ancho || !salida.alto) return false;
+
   /*
-   * A partir de aquí nada puede tumbar la petición.
-   *
-   * `sharp` se queja de un recorte imposible con un error técnico —el famoso
-   * «bad extract area»— y lo que vio el encargado la primera vez fue esa
-   * frase en rojo encima de la ficha. La foto original está entera: si el
-   * recorte no sale, se dice y se sigue con ella.
+   * A partir de aquí nada puede tumbar la petición: si el enderezado o la
+   * subida fallan, la foto original sigue entera y la ficha la enseña igual.
+   * Lo que no puede pasar es que un error técnico acabe en rojo encima de la
+   * ficha del trabajador, que es lo que pasó el primer día.
    */
-  let limpia: Buffer;
   const rutaRecorte = `empleados/${employeeId}/recorte-${tipo}.jpg`;
   try {
-    limpia = await sharp(derecha)
-      .extract(caja)
-      .rotate(lectura!.giro)
-      // `normalise` estira el histograma: el gris de una foto con sombra pasa a
-      // blanco y negro de verdad, que es lo que hace legible un DNI a contraluz.
+    const { data: crudo, info } = await sharp(derecha)
+      .removeAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+
+    const enderezada = enderezar(crudo, info.width, info.height, info.channels, esquinas, salida);
+
+    const limpia = await sharp(enderezada, {
+      raw: { width: salida.ancho, height: salida.alto, channels: info.channels as 1 | 2 | 3 | 4 },
+    })
+      // `normalise` estira el histograma: el gris de una foto con sombra pasa
+      // a blanco y negro de verdad, que es lo que hace legible un DNI a
+      // contraluz.
       .normalise()
       .sharpen()
-      .resize({ width: 1600, withoutEnlargement: true })
       .jpeg({ quality: 88 })
       .toBuffer();
 
@@ -743,6 +768,26 @@ async function mejorarDocumento(
       .from(BUCKET)
       .upload(rutaRecorte, limpia, { contentType: "image/jpeg", upsert: true });
     if (subida.error) throw new Error(subida.error.message);
+
+    await db.query(
+      `UPDATE sea_employee_documents
+          SET recorte_path = $3, recorte_at = now(), recorte_meta = $4
+        WHERE employee_id = $1 AND tipo = $2`,
+      [
+        employeeId,
+        tipo,
+        rutaRecorte,
+        JSON.stringify({
+          encontrado: true,
+          esquinas,
+          nota: respuesta!.nota,
+          salida,
+          bytes: limpia.length,
+          modelo: r.modelo,
+        }),
+      ]
+    );
+    return true;
   } catch (e) {
     const motivo = e instanceof Error ? e.message : "error desconocido";
     console.error("[Core alta] recorte fallido:", motivo);
@@ -750,30 +795,14 @@ async function mejorarDocumento(
       `UPDATE sea_employee_documents
           SET recorte_path = NULL, recorte_at = now(), recorte_meta = $3
         WHERE employee_id = $1 AND tipo = $2`,
-      [employeeId, tipo, JSON.stringify({ encontrado: false, nota: `No se ha podido recortar: ${motivo}` })]
+      [
+        employeeId,
+        tipo,
+        JSON.stringify({ encontrado: false, nota: `No se ha podido recortar: ${motivo}` }),
+      ]
     );
     return false;
   }
-
-  await db.query(
-    `UPDATE sea_employee_documents
-        SET recorte_path = $3, recorte_at = now(), recorte_meta = $4
-      WHERE employee_id = $1 AND tipo = $2`,
-    [
-      employeeId,
-      tipo,
-      rutaRecorte,
-      JSON.stringify({
-        encontrado: true,
-        recuadro: lectura!.recuadro,
-        giro: lectura!.giro,
-        nota: lectura!.nota,
-        bytes: limpia.length,
-        modelo: r.modelo,
-      }),
-    ]
-  );
-  return true;
 }
 
 /**
