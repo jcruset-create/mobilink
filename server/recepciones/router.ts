@@ -541,6 +541,9 @@ export function createRecepcionesRouter(): Router {
         asumirExpedicionCompleta: await asumirExpedicionCompleta(ctx.empresaId),
         enRevision: await repo.contarCorreosEnRevision(ctx.empresaId),
         pasadas: await repo.ultimasPasadas(ctx.empresaId),
+        // La última vez que se miró, aunque esa pasada no se guardara por no
+        // traer nada nuevo (ver core/pasadasDeBuzon.ts).
+        ultimaComprobacion: buzon.ultimaComprobacion(ctx.empresaId),
       });
     })
   );

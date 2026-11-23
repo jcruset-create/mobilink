@@ -62,7 +62,9 @@ function runCatalogSyncForAllTenants(): Promise<void> {
 function runOrdersSyncForAllTenants(): Promise<void> {
   return forEachBcTenant("pedidos", async (tenantId) => {
     const r = await runSalesOrderSync({ tenantId });
-    return `${r.mode}, ${r.pedidos} pedidos, ${r.lineas} líneas`;
+    return r.pedidos === 0 && r.mode === "incremental"
+      ? "sin pedidos nuevos"
+      : `${r.mode}, ${r.pedidos} pedidos, ${r.lineas} líneas`;
   });
 }
 

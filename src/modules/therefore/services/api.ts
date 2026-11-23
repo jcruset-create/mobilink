@@ -300,6 +300,11 @@ export type EstadoBuzon = {
   activadoEl: string | null;
   remitentes: string[];
   pasadas: PasadaBuzon[];
+  /**
+   * La última vez que se miró, aunque esa pasada no se guardara: las que no
+   * traen nada nuevo ya no dejan fila. `null` desde que arrancó el servidor.
+   */
+  ultimaComprobacion?: { at: number; error: string | null } | null;
 };
 
 export function estadoBuzon(): Promise<EstadoBuzon> {

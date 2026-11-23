@@ -13,6 +13,10 @@ let lineas: Record<string, any> = {};
 let syncState: any = null;
 let bcOrders: any[] = [];
 let corSeq = 0;
+/** Cuántas operaciones se han abierto: cada una son filas en integration_operations y sus logs. */
+let operaciones = 0;
+/** Si se pone, BC falla las N primeras veces que se le pregunta. */
+let fallosBc = 0;
 
 vi.mock("../../connectors/ConnectorRegistry.ts", () => ({
   resolveErpConnector: async () => ({
@@ -20,7 +24,13 @@ vi.mock("../../connectors/ConnectorRegistry.ts", () => ({
     usingDefault: false,
     config: {},
     connector: {
-      getSalesOrdersForSync: async () => bcOrders,
+      getSalesOrdersForSync: async () => {
+        if (fallosBc > 0) {
+          fallosBc -= 1;
+          throw new Error("BC no contesta");
+        }
+        return bcOrders;
+      },
     },
   }),
 }));
@@ -68,13 +78,14 @@ vi.mock("../../infrastructure/repositories.ts", () => ({
 
 vi.mock("./IntegrationOperationsService.ts", () => ({
   runOperation: async (_ctx: any, _opts: any, work: any) => {
+    operaciones += 1;
     const logger = { info: async () => {}, warn: async () => {}, error: async () => {} };
     const { result } = await work(logger);
     return { operation: { status: "COMPLETED" }, result };
   },
 }));
 
-const { runSalesOrderSync } = await import("./SalesOrderSyncService.ts");
+const { runSalesOrderSync, ultimaComprobacionDePedidos } = await import("./SalesOrderSyncService.ts");
 
 const TENANT = "default";
 
@@ -109,6 +120,8 @@ beforeEach(() => {
   lineas = {};
   syncState = null;
   bcOrders = [];
+  operaciones = 0;
+  fallosBc = 0;
 });
 
 describe("runSalesOrderSync", () => {
@@ -203,4 +216,49 @@ describe("runSalesOrderSync", () => {
     expect(r.canceladas).toBe(0);
     expect(ordenes["o1"].wp_status).toBe("finalizada");
   });
+
+  it("una pasada incremental SIN pedidos no escribe nada: ni operación, ni correlación, ni estado", async () => {
+    bcOrders = [pedido("o1", "PV-001")];
+    await runSalesOrderSync({ tenantId: TENANT, full: true });
+    const estadoAntes = { ...syncState };
+    const operacionesAntes = operaciones;
+    const corAntes = corSeq;
+    bcOrders = [];
+
+    const r = await runSalesOrderSync({ tenantId: TENANT });
+
+    expect(r).toMatchObject({ mode: "incremental", pedidos: 0 });
+    expect(operaciones).toBe(operacionesAntes);
+    expect(corSeq).toBe(corAntes);
+    // `last_sync_ms` no avanza: la siguiente pregunta sigue siendo «desde la última vez que hubo algo».
+    expect(syncState).toEqual(estadoAntes);
+    // Pero se sabe que se ha mirado.
+    expect(ultimaComprobacionDePedidos(TENANT)).toBeGreaterThan(0);
+  });
+
+  it("con pedidos, la pasada incremental abre su operación como siempre, sin preguntar dos veces", async () => {
+    bcOrders = [pedido("o1", "PV-001")];
+    await runSalesOrderSync({ tenantId: TENANT, full: true });
+    const operacionesAntes = operaciones;
+    bcOrders = [pedido("o1", "PV-001", [linea("l9", 3)])];
+
+    const r = await runSalesOrderSync({ tenantId: TENANT });
+
+    expect(r).toMatchObject({ mode: "incremental", pedidos: 1, lineas: 1 });
+    expect(operaciones).toBe(operacionesAntes + 1);
+  });
+
+  it("si BC falla al preguntar, sigue por la operación de siempre y el error queda registrado", async () => {
+    bcOrders = [pedido("o1", "PV-001")];
+    await runSalesOrderSync({ tenantId: TENANT, full: true });
+    const operacionesAntes = operaciones;
+    fallosBc = 1;
+
+    const r = await runSalesOrderSync({ tenantId: TENANT });
+
+    // La primera pregunta falló; la operación volvió a preguntar y esta vez contestó.
+    expect(operaciones).toBe(operacionesAntes + 1);
+    expect(r.pedidos).toBe(1);
+  });
 });
+
