@@ -76,7 +76,7 @@ import BuscadorCliente from "./BuscadorCliente";
 import { nombreDe, telefonoDe, type ClienteFrecuente, type ContactoCliente } from "../modules/clientesFrecuentes";
 import { nombreDeFoto, tiraDeFotos } from "../modules/roadsideFotosTarjeta";
 import { etiquetaMatricula, matriculasDe } from "../modules/roadsideMatricula";
-import { filtrar as filtrarAsistencias, hayCriterios } from "../modules/roadsideFiltro";
+import { filtrar as filtrarAsistencias, hayCriterios, operariosDe, SIN_OPERARIO } from "../modules/roadsideFiltro";
 import SubcontratacionExterna from "./SubcontratacionExterna";
 import TimelineAsistencia from "./TimelineAsistencia";
 import KilometrosDelRastro from "./KilometrosDelRastro";
@@ -820,11 +820,13 @@ export default function RoadsideAssistanceView({
   // lo suyo, así que el nombre del cliente no se cuela como matrícula.
   const [buscMatricula, setBuscMatricula] = useState("");
   const [buscCliente, setBuscCliente] = useState("");
+  const [buscOperario, setBuscOperario] = useState("");
   const [fechaDesde, setFechaDesde] = useState("");
   const [fechaHasta, setFechaHasta] = useState("");
   const criteriosBusqueda = {
     matricula: buscMatricula,
     cliente: buscCliente,
+    operario: buscOperario,
     desde: fechaDesde,
     hasta: fechaHasta,
   };
@@ -833,6 +835,7 @@ export default function RoadsideAssistanceView({
   const limpiarBusqueda = () => {
     setBuscMatricula("");
     setBuscCliente("");
+    setBuscOperario("");
     setFechaDesde("");
     setFechaHasta("");
   };
@@ -1090,12 +1093,15 @@ export default function RoadsideAssistanceView({
       return filtrarAsistencias(porEstado, {
         matricula: buscMatricula,
         cliente: buscCliente,
+        operario: buscOperario,
         desde: fechaDesde,
         hasta: fechaHasta,
       });
     },
-    [assistances, activeAssistances, estadoFiltro, buscMatricula, buscCliente, fechaDesde, fechaHasta]
+    [assistances, activeAssistances, estadoFiltro, buscMatricula, buscCliente, buscOperario, fechaDesde, fechaHasta]
   );
+  // Las opciones del filtro de operario: los que aparecen en las asistencias.
+  const operariosDelListado = useMemo(() => operariosDe(assistances), [assistances]);
   // Un estado cerrado se pinta con la tarjeta compacta de cerradas: no tiene
   // sentido ofrecer "siguiente estado" en una asistencia ya terminada.
   const filtroEsCerrado = estadoFiltro != null && isClosed(estadoFiltro);
@@ -1796,6 +1802,21 @@ export default function RoadsideAssistanceView({
                   placeholder="Autocares Plana"
                   className="w-full rounded-lg border border-slate-600 bg-slate-950 px-3 py-1.5 text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-orange-500"
                 />
+              </div>
+              <div className="min-w-[150px]">
+                <label htmlFor="filtro-operario" className="mb-1 block text-[11px] font-bold uppercase text-slate-500">
+                  Operario
+                </label>
+                <select
+                  id="filtro-operario"
+                  value={buscOperario}
+                  onChange={(e) => setBuscOperario(e.target.value)}
+                  className="w-full rounded-lg border border-slate-600 bg-slate-950 px-2 py-1.5 text-sm text-slate-100 outline-none focus:border-orange-500"
+                >
+                  <option value="">Todos</option>
+                  {operariosDelListado.map((nombre) => <option key={nombre} value={nombre}>{nombre}</option>)}
+                  <option value={SIN_OPERARIO}>Sin asignar</option>
+                </select>
               </div>
               <div>
                 <label className="mb-1 block text-[11px] font-bold uppercase text-slate-500">
