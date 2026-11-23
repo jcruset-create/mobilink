@@ -87,18 +87,44 @@ export function montajesDeCondicion(
 // ── Inventario ──────────────────────────────────────────────────────────────
 
 /** Los estados que tienen cuadro en el inventario. */
-export type EstadoInventario = "montado" | "almacen" | "reparacion" | "descartado";
+/**
+ * Los cuadros del inventario. Cada estado de la ficha cae en UNO, así que la
+ * suma de los cuadros es el total: antes solo había cuatro y lo que estaba
+ * pendiente de clasificar o en la papelera contaba en el total y en ningún
+ * cuadro (6.097 controlados, 4.495 montados y el resto «a cero»).
+ */
+export type EstadoInventario =
+  | "montado" | "pendiente_clasificacion" | "almacen" | "reparacion" | "descartado" | "papelera" | "otros";
+
+export const ESTADOS_INVENTARIO: EstadoInventario[] = [
+  "montado", "pendiente_clasificacion", "almacen", "reparacion", "descartado", "papelera", "otros",
+];
 
 export const NOMBRE_ESTADO_INVENTARIO: Record<EstadoInventario, string> = {
-  montado: "Montados", almacen: "En almacén", reparacion: "En reparación", descartado: "Descartados",
+  montado: "Montados", pendiente_clasificacion: "Pendientes de clasificar", almacen: "En almacén",
+  reparacion: "En reparación", descartado: "Descartados", papelera: "Papelera (reciclaje)",
+  otros: "Otros",
 };
+
+/** En qué cuadro cae un estado de la ficha. Lo que no tiene cuadro propio
+ *  (reservado, no localizado, sin estado…) va a «Otros», nunca a ninguno. */
+export function grupoInventario(estado: string): EstadoInventario {
+  switch (estado) {
+    case "montado": case "pendiente_clasificacion": case "almacen": case "reparacion": case "descartado":
+      return estado;
+    case "pendiente_reciclaje": return "papelera";
+    default: return "otros";
+  }
+}
 
 /** Los números de los cuadros: todos los neumáticos, los del histórico también. */
 export function cuadrosDelInventario(celdas: CeldaInventario[]): Record<"total" | EstadoInventario, number> {
-  const n = { total: 0, montado: 0, almacen: 0, reparacion: 0, descartado: 0 };
+  const n: Record<"total" | EstadoInventario, number> = {
+    total: 0, montado: 0, pendiente_clasificacion: 0, almacen: 0, reparacion: 0, descartado: 0, papelera: 0, otros: 0,
+  };
   for (const c of celdas) {
     n.total += c.n;
-    if (c.estado in n && c.estado !== "total") n[c.estado as EstadoInventario] += c.n;
+    n[grupoInventario(c.estado)] += c.n;
   }
   return n;
 }
@@ -137,7 +163,7 @@ export interface TablasInventario {
  * filas que dan esas funciones, sin una diferencia.
  */
 export function tablasDelInventario(celdas: CeldaInventario[], estado: EstadoInventario | null): TablasInventario {
-  const suyas = estado === null ? celdas : celdas.filter((c) => c.estado === estado);
+  const suyas = estado === null ? celdas : celdas.filter((c) => grupoInventario(c.estado) === estado);
   const propias = suyas.filter((c) => !c.de_lote);
 
   const mm = new Map<string, MarcaMedidaTotal>();

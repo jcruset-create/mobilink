@@ -75,3 +75,81 @@ describe("las peticiones esperan a que la sesión esté leída", () => {
     expect(vistas).toEqual(["Bearer otro"]);
   });
 });
+
+/**
+ * La pestaña que lleva horas abierta: el token guardado ha caducado y Supabase
+ * no lo ha renovado porque el navegador frena sus temporizadores. Al crear una
+ * OTF así, el panel decía «No autorizado» a quien tenía la sesión abierta.
+ */
+describe("un token caducado se renueva antes de enviar", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  const jwt = (expSeg: number) => `x.${btoa(JSON.stringify({ exp: expSeg }))}.y`;
+  const ahoraSeg = Math.floor(Date.now() / 1000);
+
+  const montar = async (respuestas: number[]) => {
+    vi.stubGlobal("window", { setTimeout, clearTimeout });
+    vi.stubGlobal("localStorage", { getItem: () => null });
+    const vistas: Array<string | null> = [];
+    vi.stubGlobal("fetch", async (_url: string, init?: RequestInit) => {
+      vistas.push(new Headers(init?.headers).get("Authorization"));
+      return new Response("{}", { status: respuestas.shift() ?? 200 });
+    });
+    const sesion = await import("./sesionToken.ts");
+    const { fetchWithTimeout, getAdminHeaders } = await import("./workshopApi.ts");
+    return { sesion, fetchWithTimeout, getAdminHeaders, vistas };
+  };
+
+  it("sabe cuándo caduca", async () => {
+    const { sesion } = await montar([]);
+    expect(sesion.tokenCaducado(jwt(ahoraSeg - 60))).toBe(true);
+    expect(sesion.tokenCaducado(jwt(ahoraSeg + 10))).toBe(true); // a punto: también
+    expect(sesion.tokenCaducado(jwt(ahoraSeg + 3600))).toBe(false);
+    expect(sesion.tokenCaducado("no-es-un-jwt")).toBe(false);
+  });
+
+  it("caducado: la petición sale con el nuevo, aunque las cabeceras llevaran el viejo", async () => {
+    const { sesion, fetchWithTimeout, getAdminHeaders, vistas } = await montar([200]);
+    const viejo = jwt(ahoraSeg - 600), nuevo = jwt(ahoraSeg + 3600);
+    sesion.guardarTokenSesion(viejo);
+    let pedidas = 0;
+    sesion.registrarRenovador(async () => { pedidas++; return nuevo; });
+    await fetchWithTimeout("/api/otf", { method: "POST", headers: getAdminHeaders() });
+    expect(vistas).toEqual([`Bearer ${nuevo}`]);
+    expect(pedidas).toBe(1);
+  });
+
+  it("401 con un token que parecía bueno: se renueva y se reintenta una vez", async () => {
+    const { sesion, fetchWithTimeout, getAdminHeaders, vistas } = await montar([401, 200]);
+    const bueno = jwt(ahoraSeg + 3600), nuevo = jwt(ahoraSeg + 7200);
+    sesion.guardarTokenSesion(bueno);
+    const forzados: boolean[] = [];
+    sesion.registrarRenovador(async (forzar) => { forzados.push(forzar); return nuevo; });
+    const r = await fetchWithTimeout("/api/otf", { method: "POST", headers: getAdminHeaders() });
+    expect(r.status).toBe(200);
+    expect(vistas).toEqual([`Bearer ${bueno}`, `Bearer ${nuevo}`]);
+    expect(forzados).toEqual([true]);
+  });
+
+  it("401 de verdad (la renovación da el mismo token): no se insiste", async () => {
+    const { sesion, fetchWithTimeout, getAdminHeaders, vistas } = await montar([401, 200]);
+    const bueno = jwt(ahoraSeg + 3600);
+    sesion.guardarTokenSesion(bueno);
+    sesion.registrarRenovador(async () => bueno);
+    const r = await fetchWithTimeout("/api/otf", { headers: getAdminHeaders() });
+    expect(r.status).toBe(401);
+    expect(vistas).toHaveLength(1);
+  });
+
+  it("varias peticiones a la vez comparten una sola renovación", async () => {
+    const { sesion, fetchWithTimeout, getAdminHeaders } = await montar([200, 200, 200]);
+    sesion.guardarTokenSesion(jwt(ahoraSeg - 600));
+    let pedidas = 0;
+    sesion.registrarRenovador(async () => { pedidas++; await new Promise((r) => setTimeout(r, 10)); return jwt(ahoraSeg + 3600); });
+    await Promise.all([1, 2, 3].map(() => fetchWithTimeout("/api/x", { headers: getAdminHeaders() })));
+    expect(pedidas).toBe(1);
+  });
+});

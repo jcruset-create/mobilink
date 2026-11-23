@@ -24,6 +24,8 @@ import FichaTecnicaItv from "../components/FichaTecnicaItv";
 import SeccionTacografo from "../components/SeccionTacografo";
 import WebfleetVehiculo from "../components/WebfleetVehiculo";
 import KilometrajeMensual from "../components/KilometrajeMensual";
+import { BloqueRendimientoVehiculo, DialogoSeguirRendimiento } from "../components/RendimientoNeumaticos";
+import { estadoSeguimientoRendimiento } from "../services/rendimiento";
 import PlanMantenimientoVehiculo from "../components/PlanMantenimiento";
 import EditorVehiculo from "../components/EditorVehiculo";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
@@ -52,6 +54,10 @@ export default function VehiculoDetalle() {
   // igual que validar un vehículo. La base lo exige también: aquí solo se
   // esconde el botón para no ofrecer algo que va a dar error.
   const esAdmin = !!(perfil?.es_superadmin || perfil?.rol === "administrador");
+  // Seguimiento de RENDIMIENTO kilométrico (no es el «en seguimiento» de informes).
+  const [rendActivo, setRendActivo] = useState(false);
+  const [dialogoRend, setDialogoRend] = useState(false);
+  const [recargaRend, setRecargaRend] = useState(0);
   const volver = destinoVolver(origen, esCliente
     ? { ruta: "/tyrecontrol/mis-vehiculos", etiqueta: "Mis vehículos" }
     : { ruta: "/tyrecontrol/vehiculos", etiqueta: "Vehículos" });
@@ -221,6 +227,12 @@ export default function VehiculoDetalle() {
     } finally { setCargandoFicha(false); }
   }
   useEffect(() => { void cargar(); /* eslint-disable-next-line */ }, [id]);
+  useEffect(() => {
+    if (!id) return;
+    let vivo = true;
+    estadoSeguimientoRendimiento(id).then((e) => { if (vivo) setRendActivo(!!e?.activo); }).catch(() => undefined);
+    return () => { vivo = false; };
+  }, [id]);
 
   const dato = (l: string, val?: string | null) => (
     <div><div className="text-[10px] text-slate-400">{l}</div><div className="text-sm text-slate-200">{val || "—"}</div></div>
@@ -358,6 +370,18 @@ export default function VehiculoDetalle() {
         )}
         {esAdmin && (
           <button
+            onClick={() => (rendActivo
+              ? document.getElementById("rendimiento-neumaticos")?.scrollIntoView({ behavior: "smooth" })
+              : setDialogoRend(true))}
+            title={rendActivo ? "Ver el rendimiento de sus neumáticos" : "Seguir los km por mm y la vida proyectada de sus neumáticos"}
+            className={`ml-auto rounded-lg border px-3 py-1.5 text-[12px] font-bold ${
+              rendActivo ? "border-amber-500 bg-amber-500/10 text-amber-300" : "border-amber-600 text-amber-300 hover:bg-amber-500/10"}`}
+          >
+            {rendActivo ? "★ En seguimiento · Ver rendimiento" : "★ Seguir rendimiento"}
+          </button>
+        )}
+        {esAdmin && (
+          <button
             onClick={cambiarSeguimientoDeEsteVehiculo}
             disabled={guardandoSeguimiento}
             title={
@@ -365,7 +389,7 @@ export default function VehiculoDetalle() {
                 ? "Devolverlo al mantenimiento integral: volverá a contar en revisiones e informes"
                 : "Sacarlo del mantenimiento integral: dejará de contar en revisiones e informes, pero seguirá activo y en la telemática"
             }
-            className={`ml-auto rounded-lg border px-3 py-1.5 text-[12px] font-bold disabled:opacity-50 ${
+            className={`rounded-lg border px-3 py-1.5 text-[12px] font-bold disabled:opacity-50 ${
               v.en_seguimiento === false
                 ? "border-emerald-600 text-emerald-300 hover:bg-emerald-500/10"
                 : "border-amber-600 text-amber-300 hover:bg-amber-500/10"
@@ -464,6 +488,20 @@ export default function VehiculoDetalle() {
       {/* Kilómetros mensuales desde la telemática: se leen de nuestra base,
           nunca del proveedor al abrir la ficha. Sin telemática no se enseña. */}
       <KilometrajeMensual vehiculoId={v.id} />
+
+      {dialogoRend && (
+        <DialogoSeguirRendimiento
+          vehiculoId={v.id} matricula={v.matricula} kmActual={v.km_actual ?? null}
+          onClose={() => setDialogoRend(false)}
+          onHecho={() => { setDialogoRend(false); setRendActivo(true); setRecargaRend((x) => x + 1); }}
+        />
+      )}
+      <div id="rendimiento-neumaticos">
+        <BloqueRendimientoVehiculo
+          key={recargaRend} vehiculoId={v.id} activo={rendActivo} esAdmin={esAdmin}
+          onCambio={() => { setRendActivo(false); setRecargaRend((x) => x + 1); }}
+        />
+      </div>
 
       {/* Plan de mantenimiento (revisiones periódicas) + historial */}
       <PlanMantenimientoVehiculo vehiculo={v} puedeEditar={!esCliente} />

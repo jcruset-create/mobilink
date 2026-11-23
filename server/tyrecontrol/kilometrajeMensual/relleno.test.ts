@@ -17,6 +17,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  rellenaPorMes, tandaDeLaVuelta, vueltasPendientes,
   clavePaso, desenlaceDe, enPalabras, intervaloValido, mesDesdeClave, minutosRestantes, pasosPendientes,
   INTERVALO_SEGUNDOS_POR_DEFECTO,
 } from "./relleno.ts";
@@ -150,5 +151,26 @@ describe("intervaloValido", () => {
 
   it("tiene tope por arriba, para que no se quede parado un día", () => {
     expect(intervaloValido(99_999)).toBe(3600);
+  });
+});
+
+describe("Webfleet se rellena por mes; Movertis, de uno en uno", () => {
+  const paso = (id: string, month: number) => ({ mobilinkId: id, externalCode: id, etiqueta: id, year: 2026, month });
+  const pendientes = [paso("a", 1), paso("b", 1), paso("c", 1), paso("a", 2), paso("b", 2)];
+
+  it("solo Webfleet va por mes", () => {
+    expect(rellenaPorMes("webfleet")).toBe(true);
+    expect(rellenaPorMes("movertis")).toBe(false);
+  });
+
+  it("por mes pide todos los pendientes del primer mes; si no, solo el primero", () => {
+    expect(tandaDeLaVuelta(pendientes, true).map((p) => p.mobilinkId)).toEqual(["a", "b", "c"]);
+    expect(tandaDeLaVuelta(pendientes, false).map((p) => p.mobilinkId)).toEqual(["a"]);
+    expect(tandaDeLaVuelta([], true)).toEqual([]);
+  });
+
+  it("las vueltas que quedan son meses si va por mes", () => {
+    expect(vueltasPendientes(pendientes, true)).toBe(2);
+    expect(vueltasPendientes(pendientes, false)).toBe(5);
   });
 });

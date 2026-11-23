@@ -945,6 +945,11 @@ export async function initDb() {
     -- Cambio de neumáticos: posiciones, neumático del catálogo de TyreControl
     -- (server/otf/neumaticosTc.ts) y el resultado de registrar el montaje allí.
     ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS neumaticos JSONB;
+    -- País de la matrícula, cuando la forma no lo dice (una francesa y una
+    -- italiana son iguales). Solo decide cómo se dibuja la placa. NULL = se
+    -- deduce. Ver src/modules/matriculaEs.ts.
+    ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS "paisMatricula" TEXT;
+    ALTER TABLE roadside_assistances ADD COLUMN IF NOT EXISTS "paisMatricula" TEXT;
     ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS "tcMontaje" JSONB;
     ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS "matriculaLeida" TEXT;
     ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS "matriculaNoCoincide" BOOLEAN NOT NULL DEFAULT false;
@@ -953,6 +958,14 @@ export async function initDb() {
     -- Aviso al responsable de la base al llegar, y correo del informe.
     ALTER TABLE otf ADD COLUMN IF NOT EXISTS "telefonoAviso" TEXT;
     ALTER TABLE otf ADD COLUMN IF NOT EXISTS "emailInforme" TEXT;
+    -- Persona de contacto en la base: la tablet la muestra con «Llamar» y
+    -- «WhatsApp». También se guarda en la base, para la siguiente OTF.
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "contactoNombre" TEXT;
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "contactoTelefono" TEXT;
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "contactoCargo" TEXT;
+    ALTER TABLE roadside_known_places ADD COLUMN IF NOT EXISTS "contactoNombre" TEXT;
+    ALTER TABLE roadside_known_places ADD COLUMN IF NOT EXISTS "contactoTelefono" TEXT;
+    ALTER TABLE roadside_known_places ADD COLUMN IF NOT EXISTS "contactoCargo" TEXT;
     ALTER TABLE otf ADD COLUMN IF NOT EXISTS "avisoLlegadaAtMs" BIGINT;
     ALTER TABLE otf ADD COLUMN IF NOT EXISTS "avisoLlegadaResultado" TEXT;
     ALTER TABLE otf ADD COLUMN IF NOT EXISTS "informeEnviadoAtMs" BIGINT;

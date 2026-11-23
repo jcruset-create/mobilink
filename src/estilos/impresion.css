@@ -55,6 +55,14 @@
     overflow: visible !important;
     max-height: none !important;
   }
+  /* El layout de TyreControl es de alto fijo con scroll interno; impreso,
+     recortaría el informe a la altura de la ventana. */
+  .tc-layout {
+    height: auto !important;
+    overflow: visible !important;
+    display: block !important;
+  }
+
   .zona-impresion {
     position: static !important;
     width: 100% !important;

@@ -42,6 +42,7 @@ import {
   vincularLote,
   type Ambito,
 } from "./acciones.ts";
+import { cambiarDeVehiculo } from "./cambioVehiculo.ts";
 
 /** Perfil del que llama, resuelto contra la base. Nunca contra la petición. */
 export interface Solicitante {
@@ -143,9 +144,9 @@ function fallo(res: Response, e: unknown) {
  * pasando: alguien lo está enlazando a mano.
  */
 function metodoPedido(valor: unknown): MetodoVinculo {
-  return valor === METODOS_VINCULO.MATRICULA_EXACTA
-    ? METODOS_VINCULO.MATRICULA_EXACTA
-    : METODOS_VINCULO.MANUAL;
+  if (valor === METODOS_VINCULO.MATRICULA_EXACTA) return METODOS_VINCULO.MATRICULA_EXACTA;
+  if (valor === METODOS_VINCULO.ID_WEBFLEET_ANTIGUO) return METODOS_VINCULO.ID_WEBFLEET_ANTIGUO;
+  return METODOS_VINCULO.MANUAL;
 }
 
 /** Ámbito común a todas las acciones, ya validado. */
@@ -196,14 +197,33 @@ export function createConciliacionRouter(): Router {
       const { resolveTelematicsConnectors } = await import(
         "../../integration-hub/connectors/ConnectorRegistry.ts"
       );
-      const cuentas = await resolveTelematicsConnectors(empresaId);
+      const { heredadasQueFaltan } = await import(
+        "../../integration-hub/domain/telematics.ts"
+      );
+      const { cuentasHeredadasDe } = await import("../presencia/heredadas.ts");
+
+      // Las heredadas también se ofrecen: un cliente de Webfleet anterior al
+      // Hub tiene que poder conciliar su flota sin inscribirse antes, que es
+      // justo lo que vendría a hacer aquí si le faltaran enlaces.
+      const delHub = await resolveTelematicsConnectors(empresaId);
+      const heredadas = heredadasQueFaltan(delHub, await cuentasHeredadasDe(empresaId));
+
       res.json({
         empresaId,
-        cuentas: cuentas.map((c) => ({
-          connectorKey: c.key,
-          accountKey: c.accountKey,
-          nombre: c.nombre,
-        })),
+        cuentas: [
+          ...delHub.map((c) => ({
+            connectorKey: c.key,
+            accountKey: c.accountKey,
+            nombre: c.nombre,
+            heredada: false,
+          })),
+          ...heredadas.map((h) => ({
+            connectorKey: h.key,
+            accountKey: h.accountKey,
+            nombre: h.nombre,
+            heredada: true,
+          })),
+        ],
       });
     } catch (e) {
       fallo(res, e);
@@ -283,9 +303,16 @@ export function createConciliacionRouter(): Router {
       const connectorKey = req.query.connector ? String(req.query.connector) : undefined;
       const accountKey = req.query.cuenta ? String(req.query.cuenta) : undefined;
 
+      const { cuentasHeredadasDe } = await import("../presencia/heredadas.ts");
       const resultado = await conciliarFlota(
         { tenantId: empresaId, correlationId: await nextCorrelationId() },
-        { connectorKey, accountKey, leerFlotaInterna, normalizarMatricula },
+        {
+          connectorKey,
+          accountKey,
+          leerFlotaInterna,
+          normalizarMatricula,
+          cuentasHeredadas: await cuentasHeredadasDe(empresaId),
+        },
       );
 
       // Los ignorados no salen en los cuadrantes, pero la pantalla tiene que
@@ -518,6 +545,35 @@ export function createConciliacionRouter(): Router {
         tcVehicleId: String(req.body?.tcVehicleId ?? ""),
         neumaticosMontadosVistos: Number(req.body?.neumaticosMontadosVistos ?? -1),
         desvincularTambien: req.body?.desvincularTambien === true,
+      });
+      res.json({ ok: true, ...r });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /**
+   * «El equipo está ahora en otro vehículo»: uno o varios avisos de cambio de
+   * matrícula en el proveedor. Solo llegan identificadores; matrículas, nombres
+   * y qué es cada aviso salen de una conciliación en vivo (cambioVehiculo.ts).
+   */
+  router.post("/cambio-vehiculo", async (req, res) => {
+    try {
+      const { solicitante } = req as PeticionConciliacion;
+      const empresaId = empresaDe(solicitante, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const brutos: unknown[] = Array.isArray(req.body?.cambios) ? req.body.cambios : [];
+      const cambios = brutos.map((x) => {
+        const c = (x ?? {}) as Record<string, unknown>;
+        return {
+          tcVehicleId: String(c.tcVehicleId ?? ""),
+          externalVehicleId: String(c.externalVehicleId ?? ""),
+          neumaticosMontadosVistos: Number(c.neumaticosMontadosVistos ?? -1),
+        };
+      }).filter((c) => c.tcVehicleId && c.externalVehicleId);
+      const r = await cambiarDeVehiculo(ambitoDe(empresaId, req.body), {
+        cambios,
+        darDeBajaAntiguo: req.body?.darDeBajaAntiguo === true,
       });
       res.json({ ok: true, ...r });
     } catch (e) {

@@ -33,7 +33,8 @@
 
 import type { OperationContext } from "../../domain/identifiers.ts";
 import type { VehicleTelemetry } from "../../domain/telematics.ts";
-import { sabeDarPosicionesDeFlota } from "../../domain/telematics.ts";
+import { heredadasQueFaltan, sabeDarPosicionesDeFlota } from "../../domain/telematics.ts";
+import type { CuentaHeredada } from "../../domain/telematics.ts";
 import {
   ESTADOS_PRESENCIA,
   evaluarPresencia,
@@ -122,6 +123,20 @@ export interface OpcionesBarrido {
   /** Sin escritor, el barrido calcula y devuelve sin guardar (previsualización). */
   guardar?: EscritorPresencia;
   distanciaMetros: DistanciaMetros;
+  /**
+   * Cuentas que NO están dadas de alta en el Hub y aun así existen.
+   *
+   * Son los clientes de un proveedor anterior al Hub —hoy, Webfleet—: tienen
+   * credenciales y flota enlazada desde antes de que esto existiera. Quien
+   * llama decide quién cumple eso (`server/tyrecontrol/presencia/heredadas.ts`);
+   * aquí solo se usan, y SIEMPRE por detrás de las del Hub.
+   *
+   * La precedencia es por PROVEEDOR, no por cuenta: si el cliente tiene su
+   * Webfleet dado de alta, se usa el suyo y la heredada no entra. Mezclar las
+   * dos preguntaría dos veces a la misma cuenta y contaría sus vehículos por
+   * duplicado.
+   */
+  cuentasHeredadas?: CuentaHeredada[];
   /** Minutos a partir de los que una posición es `STALE_POSITION`. */
   antiguedadMaxMin?: number;
   /** Reloj, inyectado para poder probar. */
@@ -224,7 +239,21 @@ export async function barrerPresenciaBases(
   const propias = bases.filter((b) => b.empresaId === ctx.tenantId);
   if (propias.length === 0) return vacio("sin_bases");
 
-  let conectores = await resolveTelematicsConnectors(ctx.tenantId);
+  const delHub = await resolveTelematicsConnectors(ctx.tenantId);
+
+  // El filtro por `connectorKey`/`accountKey` se aplica DESPUÉS de juntarlas,
+  // para que «barrer solo esta cuenta» siga valiendo también para una heredada.
+  const heredadas = heredadasQueFaltan(delHub, opciones.cuentasHeredadas)
+    .map((h) => ({
+      key: h.key,
+      accountKey: h.accountKey,
+      nombre: h.nombre,
+      connector: h.connector as (typeof delHub)[number]["connector"],
+      usingDefault: false,
+      config: {} as Record<string, unknown>,
+    }));
+
+  let conectores = [...delHub, ...heredadas];
   if (opciones.connectorKey) {
     conectores = conectores.filter((c) => c.key === opciones.connectorKey);
   }

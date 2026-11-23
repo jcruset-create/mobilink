@@ -6,6 +6,7 @@ import type { MontajeActual, Neumatico, OperacionNeumatico, CatTipoReparacion, C
 import { ESTADO_NEUMATICO_LABELS, TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, presionTxt } from "../types";
 import { Modal, Field, inputCls } from "../components/ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
+import { TarjetaRendimientoNeumatico } from "../components/RendimientoNeumaticos";
 
 type CamposEditables = "dot" | "rfid_epc" | "marca" | "modelo" | "medida" | "indice_carga" | "indice_velocidad" | "proveedor" | "fecha_compra" | "coste_compra";
 
@@ -240,6 +241,9 @@ export default function NeumaticoDetalle() {
           <div className="mt-2 text-[11px] text-slate-500">El stock físico y los movimientos se gestionan en el módulo de Almacén.</div>
         </div>
       </div>
+
+      {/* Si su vehículo está en seguimiento de rendimiento: km/mm y proyección. */}
+      <TarjetaRendimientoNeumatico neumaticoId={n.id} />
 
       {/* ── Lo que ha durado ───────────────────────────────────────────────
           Es la pregunta que justifica anotar los kilómetros en cada montaje y

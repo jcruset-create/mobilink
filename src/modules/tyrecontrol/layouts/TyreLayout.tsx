@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useNavigate, useLocation } from "react-router-dom";
-import { Menu, LogOut, Home } from "lucide-react";
+import { Menu, LogOut, Home, ChevronDown, ChevronRight, Search, X } from "lucide-react";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
-import { NAV, navVisible, siempreVisibles } from "../config/navigation";
+import { NAV, agruparNav, buscarEnMenu, grupoDeRuta, navVisible, siempreVisibles, type GrupoKey, type NavItem } from "../config/navigation";
 import { PERFIL_CLIENTE_LABELS, ROL_LABELS, perfilClienteDe } from "../types";
 import CampanaAvisos from "../components/CampanaAvisos";
 import AsistenteChat from "../components/AsistenteChat";
@@ -10,15 +10,59 @@ import AccesosCabecera from "../../../components/AccesosCabecera";
 import VersionDesplegada from "../../../components/VersionDesplegada";
 import { pendientes } from "../services/conciliacion";
 
+/** Dónde se recuerdan los grupos abiertos del menú, en este navegador. */
+const CLAVE_MENU = "tc-menu-grupos-abiertos";
+
 export default function TyreLayout() {
   const { perfil, pantallas, signOut } = useTyreAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [open, setOpen] = useState(false);
+  // El menú y el contenido tienen cada uno su scroll (ver el `return`).
+  const menuRef = useRef<HTMLDivElement>(null);
+  const contenidoRef = useRef<HTMLElement>(null);
 
   const esSuperadmin = Boolean(perfil?.es_superadmin);
   const soloInformes = perfilClienteDe(perfil) === "director";
   const items = NAV.filter((i) => navVisible(i, perfil?.rol, esSuperadmin, pantallas, soloInformes));
+  const { grupos, pie } = agruparNav(items);
+  // Buscador del menú: con algo escrito, la lista plana de lo que coincide.
+  const [busqueda, setBusqueda] = useState("");
+  const encontrados = buscarEnMenu(items, busqueda);
+
+  /*
+   * Grupos abiertos del menú. Lo que el usuario abre o cierra se recuerda en
+   * este navegador; el grupo de la pantalla en la que está se abre solo, para
+   * que la pantalla marcada siempre se vea.
+   */
+  const [abiertos, setAbiertos] = useState<Set<GrupoKey>>(() => {
+    try {
+      const g = JSON.parse(localStorage.getItem(CLAVE_MENU) ?? "[]");
+      return new Set(Array.isArray(g) ? (g as GrupoKey[]) : []);
+    } catch {
+      return new Set();
+    }
+  });
+  // Al cambiar de pantalla se abre su grupo. Se ajusta durante el render (el
+  // patrón de React para «estado que sigue a una prop»), no en un efecto.
+  const grupoActual = grupoDeRuta(items, location.pathname);
+  const [grupoVisto, setGrupoVisto] = useState<GrupoKey | null>(null);
+  if (grupoActual !== grupoVisto) {
+    setGrupoVisto(grupoActual);
+    if (grupoActual && grupoActual !== "pie" && !abiertos.has(grupoActual)) {
+      setAbiertos(new Set(abiertos).add(grupoActual));
+    }
+  }
+  useEffect(() => {
+    try { localStorage.setItem(CLAVE_MENU, JSON.stringify([...abiertos])); } catch { /* sin memoria, igual funciona */ }
+  }, [abiertos]);
+  function alternar(g: GrupoKey) {
+    setAbiertos((a) => {
+      const n = new Set(a);
+      if (n.has(g)) n.delete(g); else n.add(g);
+      return n;
+    });
+  }
 
   /*
    * Distintivo de la conciliación telemática.
@@ -50,15 +94,61 @@ export default function TyreLayout() {
     !siempreVisibles(soloInformes).includes(pantallaActual) &&
     !pantallas.includes(pantallaActual);
 
+  function enlace(item: NavItem, dentro: boolean) {
+    const Icon = item.icon;
+    return (
+      <NavLink
+        key={item.key}
+        to={`/tyrecontrol/${item.path}`}
+        onClick={() => setOpen(false)}
+        className={({ isActive }) =>
+          `flex items-center gap-2 rounded-xl ${dentro ? "py-1.5 pl-8 pr-3" : "px-3 py-2"} text-[13px] font-medium ${
+            isActive ? "bg-sky-600 text-white" : "text-slate-300 hover:bg-slate-800"
+          }`
+        }
+      >
+        {!dentro && <Icon className="h-4 w-4" />}
+        <span className="min-w-0 flex-1 truncate">{item.label}</span>
+        {item.key === "conciliacion-telematica" && porRevisar ? (
+          <span
+            title={`${porRevisar} vehículos por revisar en la última conciliación`}
+            className="rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold leading-none text-slate-900"
+          >
+            {porRevisar > 99 ? "99+" : porRevisar}
+          </span>
+        ) : null}
+      </NavLink>
+    );
+  }
+
+  /*
+   * Con el scroll dentro de <main> y no en la ventana, al cambiar de pantalla
+   * hay que volver arriba a mano (antes lo hacía la ventana al navegar). Y la
+   * opción activa del menú se trae a la vista dentro del propio menú, sin
+   * mover la página: `block: "nearest"` no hace nada si ya se ve.
+   */
+  useEffect(() => {
+    contenidoRef.current?.scrollTo({ top: 0 });
+    const activo = menuRef.current?.querySelector<HTMLElement>('[aria-current="page"]');
+    activo?.scrollIntoView({ block: "nearest" });
+  }, [location.pathname]);
+
   async function handleSignOut() {
     await signOut();
     navigate("/tyrecontrol/login", { replace: true });
   }
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100">
+    /*
+     * Layout de alto fijo: cabecera arriba y, debajo, menú y contenido con un
+     * scroll CADA UNO. Antes la que hacía scroll era la ventana y el menú se
+     * iba con la página. `h-screen` es el respaldo de `h-dvh` (alto visible
+     * de verdad en Safari de iPhone, sin la barra que aparece y desaparece).
+     * Al imprimir se deshace (estilos/impresion.css: .tc-layout).
+     */
+    <div className="tc-layout flex h-screen h-dvh flex-col overflow-hidden bg-slate-900 text-slate-100">
       {/* Topbar */}
-      <header className="no-imprimir sticky top-0 z-30 flex items-center justify-between border-b border-slate-700 bg-slate-900/95 px-3 py-2 backdrop-blur">
+      <header className="no-imprimir z-30 flex shrink-0 items-center justify-between border-b border-slate-700 bg-slate-900/95 px-3 py-2 backdrop-blur">
         <div className="flex items-center gap-2 md:gap-3">
           <button className="rounded-lg p-1.5 hover:bg-slate-800 md:hidden" onClick={() => setOpen((v) => !v)}>
             <Menu className="h-5 w-5" />
@@ -98,42 +188,107 @@ export default function TyreLayout() {
         </div>
       </header>
 
-      <div className="mx-auto flex max-w-[1500px]">
-        {/* Sidebar */}
-        <aside className={`no-imprimir ${open ? "block" : "hidden"} w-52 shrink-0 border-r border-slate-700 bg-slate-900 p-2 md:block`}>
+      <div className="mx-auto flex min-h-0 w-full max-w-[1500px] flex-1">
+        {/* Sidebar: el buscador fijo arriba y, debajo, el menú con su scroll.
+            `overscroll-contain` impide que al llegar al final arrastre la
+            página; el relleno inferior salva la barra de Safari en el iPhone. */}
+        <aside className={`no-imprimir ${open ? "flex" : "hidden"} h-full w-52 shrink-0 flex-col overflow-hidden border-r border-slate-700 bg-slate-900 md:flex`}>
+          <div className="shrink-0 p-2 pb-0">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
+            <input
+              id="buscador-menu"
+              type="search"
+              value={busqueda}
+              onChange={(e) => setBusqueda(e.target.value)}
+              onKeyDown={(e) => {
+                // Intro abre la primera; Escape borra.
+                if (e.key === "Enter" && encontrados[0]) {
+                  navigate(`/tyrecontrol/${encontrados[0].path}`);
+                  setBusqueda("");
+                  setOpen(false);
+                }
+                if (e.key === "Escape") setBusqueda("");
+              }}
+              placeholder="Buscar pantalla…"
+              aria-label="Buscar una pantalla del menú"
+              className="w-full rounded-lg border border-slate-700 bg-slate-800 py-1.5 pl-8 pr-7 text-[13px] text-slate-100 placeholder:text-slate-500 focus:border-sky-500 focus:outline-none"
+            />
+            {busqueda && (
+              <button type="button" onClick={() => setBusqueda("")} aria-label="Borrar la búsqueda"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-400 hover:text-slate-200">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+          </div>
+          <div
+            ref={menuRef}
+            className="mt-2 min-h-0 flex-1 overflow-y-auto overscroll-contain px-2"
+            style={{ WebkitOverflowScrolling: "touch", paddingBottom: "calc(0.5rem + env(safe-area-inset-bottom, 0px))" }}
+          >
+          {busqueda.trim() ? (
+            <nav className="flex flex-col gap-0.5" aria-label="Resultados de la búsqueda">
+              {encontrados.length === 0 ? (
+                <p className="px-3 py-2 text-[12px] text-slate-500">Ninguna pantalla se llama así.</p>
+              ) : (
+                encontrados.map((item) => (
+                  <div key={item.key} onClick={() => setBusqueda("")}>{enlace(item, false)}</div>
+                ))
+              )}
+            </nav>
+          ) : (
           <nav className="flex flex-col gap-1">
-            {items.map((item) => {
-              const Icon = item.icon;
+            {grupos.map((g) => {
+              const Icono = g.icon;
+              const abierto = abiertos.has(g.key);
+              const avisos = g.items.some((it) => it.key === "conciliacion-telematica") ? porRevisar : null;
               return (
-                <NavLink
-                  key={item.key}
-                  to={`/tyrecontrol/${item.path}`}
-                  onClick={() => setOpen(false)}
-                  className={({ isActive }) =>
-                    `flex items-center gap-2 rounded-xl px-3 py-2 text-[13px] font-medium ${
-                      isActive ? "bg-sky-600 text-white" : "text-slate-300 hover:bg-slate-800"
-                    }`
-                  }
-                >
-                  <Icon className="h-4 w-4" />
-                  <span className="min-w-0 flex-1 truncate">{item.label}</span>
-                  {item.key === "conciliacion-telematica" && porRevisar ? (
-                    <span
-                      title={`${porRevisar} vehículos por revisar en la última conciliación`}
-                      className="rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold leading-none text-slate-900"
-                    >
-                      {porRevisar > 99 ? "99+" : porRevisar}
-                    </span>
-                  ) : null}
-                </NavLink>
+                <div key={g.key}>
+                  <button
+                    type="button"
+                    onClick={() => alternar(g.key)}
+                    aria-expanded={abierto}
+                    className={`flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-[13px] font-semibold ${
+                      abierto ? "bg-slate-800 text-slate-100" : "text-slate-300 hover:bg-slate-800"
+                    }`}
+                  >
+                    <Icono className="h-4 w-4 text-slate-400" />
+                    <span className="min-w-0 flex-1 truncate">{g.label}</span>
+                    {/* Con el grupo cerrado, el aviso de la conciliación sube al grupo. */}
+                    {!abierto && avisos ? (
+                      <span className="rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold leading-none text-slate-900">
+                        {avisos > 99 ? "99+" : avisos}
+                      </span>
+                    ) : null}
+                    <span className="rounded-full bg-slate-800 px-1.5 text-[10px] text-slate-400">{g.items.length}</span>
+                    {abierto ? <ChevronDown className="h-3.5 w-3.5 text-slate-500" /> : <ChevronRight className="h-3.5 w-3.5 text-slate-500" />}
+                  </button>
+                  {abierto && (
+                    <div className="mt-0.5 flex flex-col gap-0.5">
+                      {g.items.map((item) => enlace(item, true))}
+                    </div>
+                  )}
+                </div>
               );
             })}
+            {pie.length > 0 && (
+              <div className="mt-2 flex flex-col gap-0.5 border-t border-slate-700 pt-2">
+                {pie.map((item) => enlace(item, false))}
+              </div>
+            )}
           </nav>
+          )}
+          </div>
         </aside>
 
         {/* Contenido */}
         {/* `zona-impresion` es lo ÚNICO que sale en papel. Ver estilos/impresion.css. */}
-        <main className="zona-impresion min-w-0 flex-1 p-3">
+        <main
+          ref={contenidoRef}
+          className="zona-impresion min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain p-3"
+          style={{ paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom, 0px))" }}
+        >
           {bloqueada ? (
             <div className="max-w-md rounded-2xl border border-amber-500/40 bg-amber-500/10 p-6 text-sm text-amber-300">
               No tienes acceso a esta pantalla. Contacta con un administrador.

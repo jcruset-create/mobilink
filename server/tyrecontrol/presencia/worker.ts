@@ -18,6 +18,13 @@
  * vehículos. Preguntando vehículo a vehículo serían 108.000, y de ahí la
  * capacidad `FLEET_POSITIONS`.
  *
+ * ── A quién se barre ────────────────────────────────────────────────────────
+ *
+ * A las empresas con un conector de telemática dado de alta en el Hub, y
+ * además a los clientes de Webfleet anteriores al Hub, que no lo tienen y aun
+ * así son clientes de Webfleet con todo puesto. El criterio está en
+ * `heredadas.ts`, con su regla y sus pruebas.
+ *
  * ── Un cliente que falla no puede dejar sin barrer a los siguientes ─────────
  *
  * Las empresas se recorren en serie y cada una va en su `try`. Y `barrerBases`
@@ -49,7 +56,19 @@ export async function tickPresenciaBases(): Promise<{
     "../../integration-hub/connectors/ConnectorRegistry.ts"
   );
 
-  const empresas = await listTenantsWithConnectors(knownTelematicsConnectorKeys());
+  const { empresasConTelematicaHeredada } = await import("./heredadas.ts");
+
+  // Dos orígenes, y los dos hacen falta. Las del Hub son las que alguien dio
+  // de alta; las heredadas son los clientes de Webfleet de toda la vida, que
+  // tienen credenciales y flota enlazada desde antes de que el Hub existiera y
+  // sin esto no se barrerían nunca. `Set` porque una empresa puede salir en
+  // las dos listas, y barrerla dos veces sería preguntarle al proveedor dos
+  // veces por lo mismo.
+  const [delHub, heredadas] = await Promise.all([
+    listTenantsWithConnectors(knownTelematicsConnectorKeys()),
+    empresasConTelematicaHeredada(),
+  ]);
+  const empresas = [...new Set([...delHub, ...heredadas])];
   const barridas: string[] = [];
   let sinBases = 0;
   let fallos = 0;

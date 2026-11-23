@@ -32,6 +32,15 @@ export const METODOS_VINCULO = {
    * eran indistinguibles.
    */
   MATRICULA_EXACTA_AUTO: "automatic_plate_exact",
+  /**
+   * Por el número de equipo de Webfleet que ya tenía la ficha del vehículo
+   * (`tc_vehiculos.webfleet_vehicle_id`, el enlace de la sincronización de
+   * siempre), confirmado por una persona. Webfleet no da matrícula en el Hub,
+   * así que sin esto sus vehículos no tendrían ninguna propuesta.
+   */
+  ID_WEBFLEET_ANTIGUO: "legacy_webfleet_id",
+  /** Lo mismo, pero lo enlazó el repaso quincenal sin que nadie lo mirara. */
+  ID_WEBFLEET_ANTIGUO_AUTO: "automatic_legacy_webfleet_id",
   /** Lo eligió una persona en la pantalla de conciliación. */
   MANUAL: "manual",
   /** El vehículo se creó en TyreControl a partir del proveedor. */
@@ -63,6 +72,12 @@ export interface VehiculoInterno {
    * desmonta sus gomas, y quien pulse el botón tiene que verlo antes.
    */
   neumaticosMontados: number;
+  /**
+   * El número de equipo de Webfleet que ya tenía la ficha (`objectno`), del
+   * enlace de la sincronización de siempre. Solo se usa para proponer cuando
+   * el proveedor no da matrícula.
+   */
+  idWebfleetAntiguo?: string | null;
 }
 
 /** Un enlace ya guardado, tal como lo devuelve `integration_mappings`. */
@@ -153,6 +168,11 @@ export interface FilaSoloProveedor {
    * un enlace por el hecho de que coincida una matrícula.
    */
   propuesta?: VehiculoInterno;
+  /**
+   * La propuesta sale del número de Webfleet de la ficha y no de la
+   * matrícula (el proveedor no la da). Decide con qué método se guarda.
+   */
+  porIdAntiguo?: boolean;
 }
 
 /** C. Solo en TyreControl: sin correspondencia en la cuenta telemática. */
@@ -239,6 +259,12 @@ export interface EntradaClasificacion {
   puedeAfirmarAusencias?: boolean;
   /** Normalizador de matrícula. Se inyecta para no duplicar el de TyreControl. */
   normalizarMatricula: (valor: unknown) => string;
+  /**
+   * Los `providerVehicleId` que vienen de una cuenta de Webfleet. Solo a esos
+   * se les busca candidato por el número de Webfleet antiguo de la ficha: en
+   * otro proveedor el mismo «001» sería otro equipo.
+   */
+  externosWebfleet?: Set<string>;
 }
 
 /**
@@ -491,15 +517,35 @@ export function clasificarFlota(entrada: EntradaClasificacion): Cuadrantes {
     else librePorMatricula.set(clave, [interno]);
   }
 
+  // Los libres por su número de Webfleet antiguo, para los externos de
+  // Webfleet que llegan sin matrícula.
+  const librePorIdWebfleet = new Map<string, VehiculoInterno[]>();
+  for (const interno of internos) {
+    if (internosEnlazados.has(interno.id)) continue;
+    const id = String(interno.idWebfleetAntiguo ?? "").trim();
+    if (!id) continue;
+    const lista = librePorIdWebfleet.get(id);
+    if (lista) lista.push(interno);
+    else librePorIdWebfleet.set(id, [interno]);
+  }
+
   // Primera pasada: candidatos por externo, sin decidir nada todavía.
-  const pendientes: Array<{ externo: ProviderVehicle; candidatos: VehiculoInterno[] }> = [];
+  const pendientes: Array<{ externo: ProviderVehicle; candidatos: VehiculoInterno[]; porIdAntiguo: boolean }> = [];
   for (const externo of externos) {
     if (externosEnlazados.has(externo.providerVehicleId)) continue;
     if (ignorados.has(externo.providerVehicleId)) continue;
     const clave = normalizarMatricula(externo.plate);
-    // Sin matrícula no se adivina por alias (regla 2).
-    const candidatos = clave ? (librePorMatricula.get(clave) ?? []) : [];
-    pendientes.push({ externo, candidatos });
+    if (clave) {
+      pendientes.push({ externo, candidatos: librePorMatricula.get(clave) ?? [], porIdAntiguo: false });
+      continue;
+    }
+    // Sin matrícula no se adivina por alias (regla 2). La excepción es un
+    // identificador, no un alias: el número de equipo de Webfleet que la
+    // ficha ya tenía guardado de la sincronización de siempre.
+    const porId = entrada.externosWebfleet?.has(externo.providerVehicleId)
+      ? (librePorIdWebfleet.get(externo.providerVehicleId.trim()) ?? [])
+      : [];
+    pendientes.push({ externo, candidatos: porId, porIdAntiguo: porId.length > 0 });
   }
 
   // Segunda pasada: dos externos que proponen el MISMO interno no pueden
@@ -513,7 +559,7 @@ export function clasificarFlota(entrada: EntradaClasificacion): Cuadrantes {
   }
 
   const internosPropuestos = new Set<string>();
-  for (const { externo, candidatos: todos } of pendientes) {
+  for (const { externo, candidatos: todos, porIdAntiguo } of pendientes) {
     /*
      * Un vehículo de baja no compite por la coincidencia.
      *
@@ -564,7 +610,9 @@ export function clasificarFlota(entrada: EntradaClasificacion): Cuadrantes {
     }
     if (candidatos.length === 1) {
       internosPropuestos.add(candidatos[0].id);
-      cuadrantes.soloProveedor.push({ externo, propuesta: candidatos[0] });
+      cuadrantes.soloProveedor.push({
+        externo, propuesta: candidatos[0], ...(porIdAntiguo ? { porIdAntiguo: true } : {}),
+      });
       continue;
     }
     cuadrantes.soloProveedor.push({ externo });

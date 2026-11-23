@@ -12,6 +12,7 @@ import '../services/navegar.dart';
 import '../widgets/conversacion_oficina.dart';
 import 'otf_trabajo_screens.dart';
 import '../services/orden_trabajos.dart';
+import '../widgets/contacto_base.dart';
 
 const _tipos = ['Tractora', 'Remolque', 'Camión rígido', 'Furgoneta', 'Turismo', 'Maquinaria', 'Otros'];
 
@@ -344,6 +345,8 @@ class _OtfDetailScreenState extends State<OtfDetailScreen> {
                       ]),
                     ),
                     const SizedBox(height: 16),
+                    // A quién llamar en la base, a mano antes de los trabajos.
+                    ContactoBase(otf: o),
                     ...trabajos.asMap().entries.map((e) => _trabajoCard(e.value, e.key + 1, trabajos.length)),
                     const SizedBox(height: 16),
                     if (o['status'] != 'finalizada' && o['status'] != 'cancelada') ...[
@@ -393,12 +396,20 @@ class _OtfDetailScreenState extends State<OtfDetailScreen> {
     if (ok == true) _load();
   }
 
+  /// El trabajo con el contacto de la base de su OTF, para que las pantallas
+  /// del trabajo tengan el botón «Llamar» sin volver atrás.
+  Map<String, dynamic> _conContacto(Map<String, dynamic> t) => {
+        ...t,
+        'contactoNombre': _otf?['contactoNombre'],
+        'contactoTelefono': _otf?['contactoTelefono'],
+      };
+
   Future<void> _abrirTrabajo(Map<String, dynamic> t, int numero, int total, {required bool enCurso}) async {
     final api = widget.api;
     var cambio = await Navigator.of(context).push<bool>(MaterialPageRoute(
       builder: (_) => enCurso
-          ? OtfTrabajoEnCursoScreen(api: api, trabajo: t, numero: numero, total: total)
-          : OtfInicioTrabajoScreen(api: api, trabajo: t, numero: numero, total: total),
+          ? OtfTrabajoEnCursoScreen(api: api, trabajo: _conContacto(t), numero: numero, total: total)
+          : OtfInicioTrabajoScreen(api: api, trabajo: _conContacto(t), numero: numero, total: total),
     ));
     // Recién empezado: directo a «en curso», con el tiempo ya corriendo.
     if (cambio == true && !enCurso) {
@@ -409,7 +420,7 @@ class _OtfDetailScreenState extends State<OtfDetailScreen> {
       if (!mounted) return;
       if (mounted) setState(() => _otf = otf);
       cambio = await Navigator.of(context).push<bool>(MaterialPageRoute(
-        builder: (_) => OtfTrabajoEnCursoScreen(api: api, trabajo: actualizado, numero: numero, total: total),
+        builder: (_) => OtfTrabajoEnCursoScreen(api: api, trabajo: _conContacto(actualizado), numero: numero, total: total),
       ));
     }
     _load();
@@ -417,7 +428,7 @@ class _OtfDetailScreenState extends State<OtfDetailScreen> {
 
   Future<void> _corregirNoRealizado(Map<String, dynamic> t, int numero, int total) async {
     await Navigator.of(context).push<bool>(MaterialPageRoute(
-      builder: (_) => OtfNoRealizadoScreen(api: widget.api, trabajo: t, numero: numero, total: total),
+      builder: (_) => OtfNoRealizadoScreen(api: widget.api, trabajo: _conContacto(t), numero: numero, total: total),
     ));
     _load();
   }
@@ -441,7 +452,7 @@ class _OtfDetailScreenState extends State<OtfDetailScreen> {
         if ((t['plate']?.toString() ?? '').trim().isNotEmpty) ...[
           Align(
             alignment: Alignment.centerLeft,
-            child: PlateBadge(plate: t['plate'].toString()),
+            child: PlateBadge(plate: t['plate'].toString(), pais: t['paisMatricula']?.toString()),
           ),
           const SizedBox(height: 6),
         ],
@@ -780,7 +791,11 @@ class _OtfFirmaScreenState extends State<OtfFirmaScreen> {
           Padding(
             padding: const EdgeInsets.only(bottom: 6),
             child: Row(children: [
-              Expanded(child: Text('${t['plate'] ?? '—'} · ${t['trabajo'] ?? ''}',
+              if ((t['plate']?.toString() ?? '').trim().isNotEmpty) ...[
+                PlateBadge(plate: t['plate'].toString(), pais: t['paisMatricula']?.toString(), fontSize: 14),
+                const SizedBox(width: 8),
+              ],
+              Expanded(child: Text('${t['trabajo'] ?? ''}',
                   maxLines: 1, overflow: TextOverflow.ellipsis,
                   style: const TextStyle(color: AppColors.textPrimary, fontSize: 14))),
               const SizedBox(width: 8),

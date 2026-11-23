@@ -1,5 +1,6 @@
 // @ts-nocheck — maintenance functions kept for future re-activation (UI removed in v2.2.10)
 import { apiFetch } from "../modules/apiFetch";
+import Matricula from "./Matricula";
 import { useEffect, useState } from "react";
 import { formatoEntradaParte, resumenTarjeta } from "../modules/tarjetaTrabajo";
 import PuntoEnCola from "./PuntoEnCola";
@@ -1420,7 +1421,7 @@ export default function OperariosTVView({
                       <div className="text-xl font-black leading-tight text-slate-950">{destinoDeSalida(a)}</div>
                     ) : (
                       <>
-                        <div className="text-3xl font-black text-slate-950">{a.plate || "—"}</div>
+                        <div className="text-3xl font-black text-slate-950">{a.plate ? <Matricula plate={a.plate} pais={a.paisMatricula} size="xl" /> : "—"}</div>
                         {a.customerName && (
                           <div className="text-sm font-semibold text-emerald-900">{a.customerName}</div>
                         )}

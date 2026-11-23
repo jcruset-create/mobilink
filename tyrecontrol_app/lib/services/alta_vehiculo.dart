@@ -172,3 +172,34 @@ List<String> marcasDe(List<Map<String, dynamic>> refs) {
   }
   return vistas;
 }
+
+/// Los tipos de vehículo con los más usados en la flota primero (los que
+/// llevan más vehículos de esa empresa) y, a igualdad, por nombre.
+List<Map<String, dynamic>> ordenarTiposPorUso(
+  List<Map<String, dynamic>> tipos,
+  Map<String, int> vehiculosPorTipo,
+) {
+  String nombre(Map<String, dynamic> t) =>
+      ((t['descripcion'] ?? t['nombre']) as String? ?? '').toLowerCase();
+  final lista = [...tipos];
+  lista.sort((a, b) {
+    final v = (vehiculosPorTipo[b['id']] ?? 0).compareTo(vehiculosPorTipo[a['id']] ?? 0);
+    return v != 0 ? v : nombre(a).compareTo(nombre(b));
+  });
+  return lista;
+}
+
+/// Pone la medida de la ficha del vehículo en los ejes que aún no tienen
+/// ninguna. Devuelve cuántos ha rellenado. Los que ya tienen medida no se
+/// tocan: lo que eligió el técnico manda sobre la ficha.
+int precargarMedida(List<EjeAlta> ejes, String? medidaFicha) {
+  if (medidaFicha == null || medidaFicha.isEmpty) return 0;
+  var n = 0;
+  for (final e in ejes) {
+    if (e.medidaId == null) {
+      e.medidaId = medidaFicha;
+      n++;
+    }
+  }
+  return n;
+}

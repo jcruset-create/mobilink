@@ -133,6 +133,37 @@ export function pasosPendientes(params: {
 }
 
 /**
+ * ¿Este proveedor se rellena por MES (toda la flota en una petición) en vez de
+ * vehículo a vehículo?
+ *
+ * Solo Webfleet. Su resumen de viajes (`showTripSummaryReportExtern`) devuelve
+ * la cuenta entera en una llamada, y sus flotas son de decenas de furgonetas,
+ * no de 751 autobuses: pedir de uno en uno solo alarga la espera (9 vehículos ×
+ * 10 meses = 90 peticiones, media hora) sin aliviar a nadie. Movertis se queda
+ * como estaba, a gotas, que es lo que su cupo necesita.
+ */
+export function rellenaPorMes(connectorKey: string): boolean {
+  return connectorKey === "webfleet";
+}
+
+/**
+ * Lo que se pide en una vuelta: el primer paso pendiente y, si el proveedor se
+ * rellena por mes, todos los pendientes de ese mismo mes.
+ */
+export function tandaDeLaVuelta(pendientes: Paso[], porMes: boolean): Paso[] {
+  const primero = pendientes[0];
+  if (!primero) return [];
+  if (!porMes) return [primero];
+  return pendientes.filter((p) => p.year === primero.year && p.month === primero.month);
+}
+
+/** Cuántas vueltas faltan: meses distintos si va por mes, pasos si no. */
+export function vueltasPendientes(pendientes: Paso[], porMes: boolean): number {
+  if (!porMes) return pendientes.length;
+  return new Set(pendientes.map((p) => `${p.year}-${p.month}`)).size;
+}
+
+/**
  * Cuánto queda, en tiempo de reloj.
  *
  * Se enseña porque «faltan 612» no le dice nada a nadie y «faltan 3 h 24 min»

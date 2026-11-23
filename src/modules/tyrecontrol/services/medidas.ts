@@ -9,4 +9,4 @@
  * Este fichero se queda como puente para no tocar los ocho sitios que ya la
  * importaban desde aquí.
  */
-export { baseMedida, medidaCanonica, mismaMedida } from "../../../../shared/medidas";
+export { baseMedida, medidaCanonica, mismaMedida, sufijoComercial } from "../../../../shared/medidas";

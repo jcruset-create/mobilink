@@ -49,6 +49,15 @@ export interface PeticionIA {
   proposito?: Proposito;
   /** Esquema JSON estricto. Si se indica, la respuesta viene validada. */
   esquema?: { nombre: string; schema: Record<string, unknown> };
+  /**
+   * Herramientas alojadas de la Responses API: hoy, `[{ type: "web_search" }]`.
+   *
+   * Va aquí y no en un cliente aparte por la regla de este módulo: el modelo y
+   * la clave se eligen en un solo sitio. Lo que la herramienta consulte queda
+   * en `citas`, que es lo que permite a quien llame comprobar que la búsqueda
+   * ocurrió de verdad en vez de fiarse de que el modelo diga que buscó.
+   */
+  herramientas?: Array<Record<string, unknown>>;
   maxTokens?: number;
   temperatura?: number;
   /** Identificador de la operación, solo para métricas y logs. */
@@ -60,6 +69,24 @@ export interface RespuestaIA<T = string> {
   ok: boolean;
   texto: string;
   datos?: T;
+  /**
+   * URLs que la respuesta consultó de verdad.
+   *
+   * Salen de dos sitios y hacen falta los dos: las anotaciones `url_citation`
+   * del texto, y las páginas de los `web_search_call` de la salida. Con un
+   * esquema JSON estricto la respuesta final NO es prosa anotada, así que las
+   * anotaciones vienen vacías aunque el modelo haya buscado: mirar solo ahí
+   * daba por «contestado de memoria» una búsqueda real.
+   */
+  citas?: string[];
+  /**
+   * ¿Llegó a usar la herramienta de búsqueda?
+   *
+   * Es la pregunta que de verdad importa cuando se le da una herramienta: un
+   * modelo puede no usarla y contestar igual de seguro. `undefined` si no se
+   * pidieron herramientas.
+   */
+  buscoEnWeb?: boolean;
   modelo: string;
   tokensEntrada?: number;
   tokensSalida?: number;
@@ -138,6 +165,15 @@ export async function pedirIA<T = string>(req: PeticionIA): Promise<RespuestaIA<
       : req.prompt,
   };
   if (req.temperatura != null) cuerpo.temperature = req.temperatura;
+  if (req.herramientas?.length) {
+    cuerpo.tools = req.herramientas;
+    // Sin esto, el `web_search_call` de la salida no trae las páginas que
+    // visitó, y con esquema estricto tampoco hay anotaciones: nos quedaríamos
+    // sin saber qué leyó.
+    if (req.herramientas.some((h) => String(h?.type ?? "").startsWith("web_search"))) {
+      cuerpo.include = ["web_search_call.action.sources"];
+    }
+  }
   if (req.esquema) {
     cuerpo.text = {
       format: { type: "json_schema", name: req.esquema.nombre, strict: true, schema: req.esquema.schema },
@@ -159,6 +195,8 @@ export async function pedirIA<T = string>(req: PeticionIA): Promise<RespuestaIA<
         const salida: RespuestaIA<T> = {
           ok: true,
           texto,
+          citas: extraerCitas(r),
+          buscoEnWeb: req.herramientas?.length ? usoBusquedaWeb(r) : undefined,
           modelo: m,
           tokensEntrada: r?.usage?.input_tokens,
           tokensSalida: r?.usage?.output_tokens,
@@ -225,6 +263,42 @@ export async function transcribirAudio(
     });
     throw e;
   }
+}
+
+/**
+ * Las URLs que la respuesta cita.
+ *
+ * La Responses API las cuelga de cada trozo de texto como anotaciones
+ * `url_citation`. Se devuelven sin repetir y en el orden en que aparecen.
+ */
+function extraerCitas(r: any): string[] {
+  const urls: string[] = [];
+  const vistas = new Set<string>();
+  const anota = (u: unknown) => {
+    const url = typeof u === "string" ? u.trim() : "";
+    if (!url || vistas.has(url)) return;
+    vistas.add(url);
+    urls.push(url);
+  };
+
+  for (const o of r?.output ?? []) {
+    // Las páginas que visitó la herramienta. Es la vía que funciona cuando la
+    // respuesta final es un JSON y no lleva anotaciones.
+    if (o?.type === "web_search_call") {
+      anota(o?.action?.url);                       // open_page / find_in_page
+      for (const f of o?.action?.sources ?? []) anota(f?.url);
+    }
+    // Y las citas del texto, cuando la respuesta es prosa.
+    for (const c of o?.content ?? []) {
+      for (const a of c?.annotations ?? []) anota(a?.url);
+    }
+  }
+  return urls;
+}
+
+/** ¿Hay alguna llamada a la búsqueda web en la salida? */
+function usoBusquedaWeb(r: any): boolean {
+  return (r?.output ?? []).some((o: any) => o?.type === "web_search_call");
 }
 
 /** La Responses API devuelve el texto en output[].content[].text. */

@@ -558,3 +558,45 @@ describe("discrepancias de matrícula con snapshot", () => {
     expect(r.enlazados).toHaveLength(1);
   });
 });
+
+describe("Webfleet sin matrícula: el nº de equipo que ya tenía la ficha", () => {
+  const internos = [
+    interno({ id: "a", matricula: "2321HZT", idWebfleetAntiguo: "003" }),
+    interno({ id: "b", matricula: "6133LXF", idWebfleetAntiguo: "001" }),
+    interno({ id: "c", matricula: "1111ABC" }),
+  ];
+
+  it("propone por el nº de Webfleet cuando el externo es de Webfleet y no trae matrícula", () => {
+    const r = clasificarFlota({
+      externos: [externo({ providerVehicleId: "003", name: "Furgo 3" }), externo({ providerVehicleId: "009" })],
+      internos, enlaces: [], normalizarMatricula, externosWebfleet: new Set(["003", "009"]),
+    });
+    const con = r.soloProveedor.find((f) => f.externo.providerVehicleId === "003")!;
+    expect(con.propuesta?.id).toBe("a");
+    expect(con.porIdAntiguo).toBe(true);
+    // Sin ficha con ese número, no se inventa nada.
+    expect(r.soloProveedor.find((f) => f.externo.providerVehicleId === "009")!.propuesta).toBeUndefined();
+  });
+
+  it("de otro proveedor, el mismo número no propone nada", () => {
+    const r = clasificarFlota({
+      externos: [externo({ providerVehicleId: "003" })],
+      internos, enlaces: [], normalizarMatricula, externosWebfleet: new Set(),
+    });
+    expect(r.soloProveedor[0].propuesta).toBeUndefined();
+  });
+
+  it("con matrícula manda la matrícula, y un interno ya enlazado no se vuelve a proponer", () => {
+    const r = clasificarFlota({
+      externos: [externo({ providerVehicleId: "001", plate: "6133 LXF" }), externo({ providerVehicleId: "003" })],
+      internos,
+      enlaces: [{ mobilinkId: "a", externalCode: "777", activo: true }],
+      normalizarMatricula,
+      externosWebfleet: new Set(["001", "003"]),
+    });
+    const porMatricula = r.soloProveedor.find((f) => f.externo.providerVehicleId === "001")!;
+    expect(porMatricula.propuesta?.id).toBe("b");
+    expect(porMatricula.porIdAntiguo).toBeUndefined();
+    expect(r.soloProveedor.find((f) => f.externo.providerVehicleId === "003")?.propuesta).toBeUndefined();
+  });
+});

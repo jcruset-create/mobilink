@@ -17,7 +17,11 @@ export type Filtrable = {
    * a adivinar en qué casilla va es regalarle una forma de no encontrarla.
    */
   autorizacionTaller?: string | null;
+  assignedTechName?: string | null;
 };
+
+/// El valor del filtro de operario para las que no tienen a nadie asignado.
+export const SIN_OPERARIO = "__sin_operario__";
 
 export type Criterios = {
   /// Matrícula —del camión o del remolque— o la autorización del taller.
@@ -28,6 +32,9 @@ export type Criterios = {
   matricula?: string;
   /// Nombre del cliente.
   cliente?: string;
+  /// El operario asignado, por su nombre exacto (sale de un desplegable), o
+  /// SIN_OPERARIO para las que no tienen a nadie.
+  operario?: string;
   /// «AAAA-MM-DD», tal cual lo dan los <input type="date">.
   desde?: string;
   hasta?: string;
@@ -86,6 +93,13 @@ export function coincide(item: Filtrable, criterios: Criterios): boolean {
     if (!normalizar(String(item.customerName ?? "")).includes(aguja)) return false;
   }
 
+  const operario = (criterios.operario ?? "").trim();
+  if (operario) {
+    const suyo = String(item.assignedTechName ?? "").trim();
+    // Exacto y no «contiene»: «Iván» no puede traer también a «Iván G.».
+    if (operario === SIN_OPERARIO ? suyo !== "" : normalizar(suyo) !== normalizar(operario)) return false;
+  }
+
   const creada = item.createdAtMs;
 
   if (criterios.desde) {
@@ -118,7 +132,20 @@ export function hayCriterios(criterios: Criterios): boolean {
   return Boolean(
     (criterios.matricula ?? "").trim() ||
       (criterios.cliente ?? "").trim() ||
+      (criterios.operario ?? "").trim() ||
       (criterios.desde ?? "").trim() ||
       (criterios.hasta ?? "").trim()
   );
+}
+
+/// Los operarios que aparecen en una lista, en orden alfabético y sin
+/// repetir: las opciones del desplegable. Salen de las propias asistencias y
+/// no de la plantilla actual, para poder buscar también las de quien ya no está.
+export function operariosDe(lista: Filtrable[]): string[] {
+  const vistos = new Map<string, string>();
+  for (const item of lista) {
+    const nombre = String(item.assignedTechName ?? "").trim();
+    if (nombre && !vistos.has(normalizar(nombre))) vistos.set(normalizar(nombre), nombre);
+  }
+  return [...vistos.values()].sort((a, b) => a.localeCompare(b, "es"));
 }

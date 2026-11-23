@@ -108,12 +108,27 @@ describe("inventario: las tablas salen de las celdas", () => {
   ];
 
   it("los cuadros cuentan todos los neumáticos, los del histórico también", () => {
-    expect(cuadrosDelInventario(celdas)).toEqual({ total: 96, montado: 65, almacen: 20, reparacion: 0, descartado: 2 });
+    expect(cuadrosDelInventario(celdas)).toEqual({
+      total: 96, montado: 65, pendiente_clasificacion: 9, almacen: 20, reparacion: 0, descartado: 2, papelera: 0, otros: 0,
+    });
   });
 
-  it("un estado sin cuadro cuenta en el total y en ningún otro", () => {
-    const n = cuadrosDelInventario([c({ estado: "pendiente_reciclaje", n: 4 }), c({ estado: "total", n: 1 })]);
-    expect(n).toEqual({ total: 5, montado: 0, almacen: 0, reparacion: 0, descartado: 0 });
+  it("la suma de los cuadros es siempre el total: cada estado cae en uno", () => {
+    const n = cuadrosDelInventario([
+      ...celdas,
+      c({ estado: "pendiente_reciclaje", n: 4 }), c({ estado: "no_localizado", n: 3 }),
+      c({ estado: "reservado", n: 2 }), c({ estado: "—", n: 1 }), c({ estado: "total", n: 1 }),
+    ]);
+    expect(n.papelera).toBe(4);
+    expect(n.otros).toBe(7);
+    const { total, ...resto } = n;
+    expect(Object.values(resto).reduce((a, b) => a + b, 0)).toBe(total);
+  });
+
+  it("el cuadro de pendientes de clasificar filtra las tablas; «otros» junta los estados sin cuadro", () => {
+    expect(tablasDelInventario(celdas, "pendiente_clasificacion").porMarca).toEqual([{ etiqueta: "Insa", total: 9 }]);
+    const t = tablasDelInventario([c({ estado: "no_localizado", n: 3 }), c({ estado: "reservado", n: 2 })], "otros");
+    expect(t.porEstado).toEqual([{ etiqueta: "no_localizado", total: 3 }, { etiqueta: "reservado", total: 2 }]);
   });
 
   it("sin filtro: las tablas por marca y por estado no cuentan las fichas del histórico", () => {

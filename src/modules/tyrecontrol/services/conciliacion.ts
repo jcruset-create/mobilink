@@ -18,6 +18,11 @@ export interface CuentaTelematica {
   connectorKey: string;
   accountKey: string;
   nombre?: string | null;
+  /**
+   * `true` = no está dada de alta en el Hub y aun así se puede conciliar con
+   * ella: es un cliente de Webfleet anterior al Hub, con credenciales puestas.
+   */
+  heredada?: boolean;
 }
 
 export interface VehiculoInterno {
@@ -77,7 +82,8 @@ export interface Conciliacion {
     /** Las matrículas difieren, y difieren desde que se creó el vínculo. */
     diferenciaAceptada?: boolean;
   }>;
-  soloProveedor: Array<{ externo: VehiculoProveedor; propuesta?: VehiculoInterno }>;
+  /** `porIdAntiguo`: la propuesta sale del nº de Webfleet de la ficha, no de la matrícula. */
+  soloProveedor: Array<{ externo: VehiculoProveedor; propuesta?: VehiculoInterno; porIdAntiguo?: boolean }>;
   soloTyreControl: Array<{
     interno: VehiculoInterno;
     ultimaVezVistoMs?: number | null;
@@ -185,6 +191,14 @@ export const crearVehiculo = (b: Record<string, unknown>) =>
   post<{ ok: true; vehiculo: { id: string; matricula: string } }>("/crear-vehiculo", b);
 export const darDeBaja = (b: Record<string, unknown>) =>
   post<{ ok: true; matricula: string; neumaticosMontados: number; aviso: string | null }>("/dar-de-baja", b);
+
+/** «El equipo está ahora en otro vehículo» (uno o varios). */
+export interface ResultadoCambioVehiculo {
+  hechos: Array<{ antigua: string; nueva: string; nuevo: "reactivar_y_vincular" | "vincular" | "alta_pendiente"; bajaAntiguo: boolean }>;
+  fallidos: Array<{ tcVehicleId: string; error: string }>;
+}
+export const cambioVehiculo = (b: Record<string, unknown>) =>
+  post<{ ok: true } & ResultadoCambioVehiculo>("/cambio-vehiculo", b);
 
 /** Un número de flota que el proveedor dice y TyreControl no tiene, o tiene distinto. */
 export interface CambioNumeroFlota {

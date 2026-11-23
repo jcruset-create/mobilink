@@ -16,7 +16,7 @@ import { fallaAlFirmar, firmarEnFilas, firmarUrls } from "./core/fotosFirmadas.t
 import { descargarMedioTwilio, rescatarMedioDeTwilio } from "./core/medioTwilio.ts";
 import { elegirPosicion, horaWebfleet, type PosicionElegida } from "./core/posicionDoble.ts";
 import { crearCacheEta, ESTADOS_ETA_ESTIMADA, type EtaEstimada } from "./core/etaEstimada.ts";
-import { sqlActualizarOtf, sqlEstadoTrabajo } from "./otf/actualizar.ts";
+import { sqlActualizarOtf, sqlContactoDeBase, sqlEstadoTrabajo } from "./otf/actualizar.ts";
 import {
   codigoMaterial,
   emailValido,
@@ -64,6 +64,7 @@ import {
 import { startWebfleetSync, syncWebfleetOnce, startMantenimientoAvisos } from "./webfleetSync.ts";
 import { getMailTransport } from "./mail.ts";
 import { startCheckpointMail, revisarBuzonCheckpoint } from "./checkpointMail.ts";
+import { createCatalogoIARouter } from "./tyrecontrol/catalogoIA/router.ts";
 import {
   fetchSeguro,
   ErrorRedSegura,
@@ -139,6 +140,7 @@ import {
 import { createTyreControlRouter } from "./tyrecontrol/router.ts";
 import { createConciliacionRouter } from "./tyrecontrol/conciliacion/router.ts";
 import { createPresenciaRouter } from "./tyrecontrol/presencia/router.ts";
+import { createSateliteRouter } from "./tyrecontrol/satelite/router.ts";
 import { createUbicacionRouter } from "./tyrecontrol/ubicacion/router.ts";
 import { createKilometrajeMensualRouter } from "./tyrecontrol/kilometrajeMensual/router.ts";
 import { createAltaOperativaRouter } from "./tyrecontrol/altaOperativa/router.ts";
@@ -166,6 +168,10 @@ import { createExcepcionesRouter } from "./excepciones/router.ts";
 import { initSatisfaction } from "./satisfaction/schema.ts";
 import { startSatisfactionWorker } from "./satisfaction/worker.ts";
 import { createSatisfactionPublicRouter } from "./satisfaction/routerPublico.ts";
+import {
+  createAltaOperarioAdminRouter,
+  createAltaOperarioPublicRouter,
+} from "./core/altaOperarioRouter.ts";
 import { createCalidadRouter } from "./satisfaction/routerInterno.ts";
 import { createSatisfactionCallbackRouter } from "./satisfaction/routerCallback.ts";
 import { RUTA_CALLBACK } from "./satisfaction/urlPublica.ts";
@@ -1037,6 +1043,7 @@ function normalizeRoadsideAssistanceRow(row: any) {
     fotosTotal: row.fotosTotal != null ? Number(row.fotosTotal) : 0,
     fotosMiniaturas: Array.isArray(row.fotosMiniaturas) ? row.fotosMiniaturas : [],
     plateRemolque: row.plateRemolque ?? null,
+    paisMatricula: row.paisMatricula ?? null,
     esRemolque: row.esRemolque === true || row.esRemolque === "true",
     origen: row.origen === "central" ? "central" : "taller",
     tipo: row.tipo === TIPO_SALIDA ? TIPO_SALIDA : "asistencia",
@@ -9349,6 +9356,11 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
     );
 
     const assistance = normalizeRoadsideAssistanceRow(result.rows[0]);
+    // País de la matrícula: aparte, para no renumerar el INSERT de arriba.
+    if (paisMatriculaDe(body.paisMatricula)) {
+      assistance.paisMatricula = paisMatriculaDe(body.paisMatricula);
+      await db.query(`UPDATE roadside_assistances SET "paisMatricula" = $2 WHERE id = $1`, [assistance.id, assistance.paisMatricula]);
+    }
 
     /*
      * Primera línea del diario. Va aquí y no dentro del INSERT porque anotar
@@ -9475,6 +9487,11 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
      * entra detrás de la que él lleva. Se pasa su propio id para que reasignar
      * la que ya estaba en curso no la ponga a esperarse a sí misma.
      */
+    // País de la matrícula: solo si viene, y antes del UPDATE grande para que
+    // lo que este devuelve ya lo traiga.
+    if (Object.prototype.hasOwnProperty.call(body, "paisMatricula")) {
+      await db.query(`UPDATE roadside_assistances SET "paisMatricula" = $2 WHERE id = $1`, [id, paisMatriculaDe(body.paisMatricula)]);
+    }
     const esperaTrasId = await trasQueEspera(
       id,
       body.assignedTechName ? String(body.assignedTechName).trim() : null
@@ -18741,6 +18758,10 @@ function normalizeKnownPlace(row: any) {
     clientId: row.clientId != null ? Number(row.clientId) : null,
     clientName: row.clientName ?? null,
     notas: row.notas ?? null,
+    // La persona de contacto de la base: se propone al crear una OTF aquí.
+    contactoNombre: row.contactoNombre ?? null,
+    contactoTelefono: row.contactoTelefono ?? null,
+    contactoCargo: row.contactoCargo ?? null,
     active: row.active !== false,
     createdAtMs: row.createdAtMs != null ? Number(row.createdAtMs) : null,
   };
@@ -18987,6 +19008,9 @@ function normalizeOtf(row: any) {
     // Aviso al responsable de la base al llegar y correo del informe.
     telefonoAviso: row.telefonoAviso ?? null,
     emailInforme: row.emailInforme ?? null,
+    contactoNombre: row.contactoNombre ?? null,
+    contactoTelefono: row.contactoTelefono ?? null,
+    contactoCargo: row.contactoCargo ?? null,
     avisoLlegadaAtMs: row.avisoLlegadaAtMs != null ? Number(row.avisoLlegadaAtMs) : null,
     avisoLlegadaResultado: row.avisoLlegadaResultado ?? null,
     informeEnviadoAtMs: row.informeEnviadoAtMs != null ? Number(row.informeEnviadoAtMs) : null,
@@ -18995,11 +19019,22 @@ function normalizeOtf(row: any) {
   };
 }
 
+/**
+ * El «País de la matrícula» que llega del panel: la letra de la banda («F»,
+ * «NL»…) o «X» para fuera de la UE. Vacío o raro es null: se deduce de la
+ * forma. Solo decide cómo se dibuja la placa (src/modules/matriculaEs.ts).
+ */
+function paisMatriculaDe(v: unknown): string | null {
+  const t = String(v ?? "").trim().toUpperCase();
+  return /^[A-Z]{1,3}$/.test(t) ? t : null;
+}
+
 function normalizeOtfTrabajo(row: any) {
   return {
     id: Number(row.id),
     otfId: Number(row.otfId),
     plate: row.plate ?? null,
+    paisMatricula: row.paisMatricula ?? null,
     plateRemolque: row.plateRemolque ?? null,
     tipoVehiculo: row.tipoVehiculo ?? null,
     trabajoPlantilla: row.trabajoPlantilla ?? null,
@@ -19463,13 +19498,18 @@ app.post("/api/otf", requireSupervisorRole, async (req, res) => {
         b.webfleetVehicleId ?? null, b.notas ?? null, now, disp.esperaAsistenciaId ?? null,
       ]
     );
-    // Teléfono de aviso y correo del informe (columnas añadidas después).
-    if (b.telefonoAviso !== undefined || b.emailInforme !== undefined) {
-      const u = sqlActualizarOtf(Number(r.rows[0].id), {
-        ...(b.telefonoAviso !== undefined ? { telefonoAviso: b.telefonoAviso } : {}),
-        ...(b.emailInforme !== undefined ? { emailInforme: b.emailInforme } : {}),
-      }, now);
+    // Teléfono de aviso, correo del informe y persona de contacto (columnas añadidas después).
+    {
+      const extra: Record<string, unknown> = {};
+      for (const c of ["telefonoAviso", "emailInforme", "contactoNombre", "contactoTelefono", "contactoCargo"]) {
+        if (b[c] !== undefined) extra[c] = b[c];
+      }
+      const u = sqlActualizarOtf(Number(r.rows[0].id), extra, now);
       if (u) await db.query(u.sql, u.params);
+      if (b.guardarContactoEnBase === true) {
+        const c = sqlContactoDeBase(b.knownPlaceId, extra, now);
+        if (c) await db.query(c.sql, c.params);
+      }
     }
     res.json({ ...normalizeOtf((await db.query(`SELECT * FROM otf WHERE id = $1`, [r.rows[0].id])).rows[0]), enEspera: disp.esperaAsistenciaId != null });
   } catch (e) {
@@ -19531,6 +19571,12 @@ app.put("/api/otf/:id", requireSupervisorRole, async (req, res) => {
     // Solo los campos que llegan: ver otf/actualizar.ts.
     const update = sqlActualizarOtf(id, b, Date.now());
     if (update) await db.query(update.sql, update.params);
+    // El contacto, también en la base (la que llega, o la que ya tenía la OTF).
+    if (b.guardarContactoEnBase === true) {
+      const base = Object.prototype.hasOwnProperty.call(b, "knownPlaceId") ? b.knownPlaceId : actual.rows[0].knownPlaceId;
+      const c = sqlContactoDeBase(base, b, Date.now());
+      if (c) await db.query(c.sql, c.params);
+    }
     // Otro operario: para él es una OTF nueva, y su tablet tiene que avisarle.
     if (
       Object.prototype.hasOwnProperty.call(b, "assignedTechName") &&
@@ -19607,6 +19653,10 @@ app.post("/api/otf/:id/trabajos", requireSupervisorRole, async (req, res) => {
        b.tipoVehiculo ?? neumaticos?.tipoNombre ?? null, b.trabajoPlantilla ?? null, detalle, trabajo,
        b.status ?? null, b.observaciones ?? null, neumaticos ? JSON.stringify(neumaticos) : null, now]
     );
+    if (paisMatriculaDe(b.paisMatricula)) {
+      r.rows[0].paisMatricula = paisMatriculaDe(b.paisMatricula);
+      await db.query(`UPDATE otf_trabajos SET "paisMatricula" = $2 WHERE id = $1`, [r.rows[0].id, r.rows[0].paisMatricula]);
+    }
     // El neumático también es material del trabajo: sale en el informe y en el presupuesto.
     if (neumaticos) {
       await db.query(
@@ -19648,6 +19698,9 @@ app.put("/api/otf/trabajos/:tid", requireSupervisorRole, async (req, res) => {
     // Un trabajo ya registrado en TyreControl no cambia de ruedas: allí ya están montadas.
     if (b.neumaticos !== undefined && previo.tcMontaje?.estado === "hecho") {
       return res.status(409).json({ error: "El montaje ya está registrado en TyreControl: no se pueden cambiar las ruedas" });
+    }
+    if (b.paisMatricula !== undefined) {
+      await db.query(`UPDATE otf_trabajos SET "paisMatricula" = $2 WHERE id = $1`, [tid, paisMatriculaDe(b.paisMatricula)]);
     }
     const plantilla = b.trabajoPlantilla !== undefined ? (String(b.trabajoPlantilla ?? "").trim() || null) : previo.trabajoPlantilla;
     const detalle = tocaTexto
@@ -23110,6 +23163,11 @@ mountTcFleetcheck(app, authenticate, requireModule("tyrecontrol"));
  */
 app.use("/api/tyrecontrol/conciliacion", createConciliacionRouter());
 app.use("/api/tyrecontrol/presencia-bases", createPresenciaRouter());
+// Búsqueda de modelos de neumático con IA. Solo propone: crear sigue siendo
+// cosa del panel, con la sesión de la persona y la RLS del catálogo.
+app.use("/api/tyrecontrol/catalogo-ia", createCatalogoIARouter());
+// Satélite de Google para el mapa de una base: la clave no sale del servidor.
+app.use("/api/tyrecontrol/satelite", createSateliteRouter());
 // La tablet dice dónde está. Solo escribe: el panel lo lee por Supabase.
 app.use("/api/tyrecontrol/ubicacion", createUbicacionRouter());
 // Kilómetros mensuales: mismo motivo que la conciliación para ir ANTES del router general.
@@ -23130,6 +23188,14 @@ app.use("/api/excepciones", createExcepcionesRouter(requireSupervisorRole));
  * lleva su límite de peticiones y su límite de tamaño de cuerpo.
  */
 app.use("/api/public/satisfaction", createSatisfactionPublicRouter());
+
+/*
+ * Alta de operario por enlace. Dos montajes y a propósito: el del
+ * encargado exige sesión de administrador y el del operario no exige
+ * nada más que el token que lleva en la URL.
+ */
+app.use("/api/core/alta", createAltaOperarioAdminRouter());
+app.use("/api/public/alta", createAltaOperarioPublicRouter());
 
 /*
  * Calidad: la ficha la puede ver quien ya ve la asistencia; la bandeja y las

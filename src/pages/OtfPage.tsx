@@ -19,6 +19,8 @@ import {
 import type { KnownPlace } from "../modules/roadsideAssistanceTypes";
 import KnownPlaceMapModal from "../components/KnownPlaceMapModal";
 import TyreControlVehiculo from "../components/TyreControlVehiculo";
+import Matricula from "../components/Matricula";
+import { FUERA_UE, PAISES_MATRICULA } from "../modules/matriculaEs";
 import OtfNeumaticos, { PlanoRuedas, type NeumaticosTrabajo } from "../components/OtfNeumaticos";
 import AssistSidebar from "../components/AssistSidebar";
 import MensajesOperario from "../components/MensajesOperario";
@@ -250,7 +252,29 @@ function NewOtfModal({ otf, places, techs, vehicles, onPlaceCreated, onClose, on
   const horaInicial = horaAInput(otf?.fechaProgramadaMs);
   const [hora, setHora] = useState(horaInicial);
   const [notas, setNotas] = useState<string>(otf?.notas ?? "");
-  const [telefonoAviso, setTelefonoAviso] = useState<string>(otf?.telefonoAviso ?? "");
+  // Persona de contacto en la base. Su teléfono es también el del aviso por
+  // WhatsApp al llegar (antes era un campo suelto): una OTF antigua que solo
+  // tenía ese teléfono lo trae aquí.
+  const contactoInicial = {
+    nombre: otf?.contactoNombre ?? "",
+    telefono: otf?.contactoTelefono ?? otf?.telefonoAviso ?? "",
+    cargo: otf?.contactoCargo ?? "",
+  };
+  const [contactoNombre, setContactoNombre] = useState<string>(contactoInicial.nombre);
+  const [contactoTelefono, setContactoTelefono] = useState<string>(contactoInicial.telefono);
+  const [contactoCargo, setContactoCargo] = useState<string>(contactoInicial.cargo);
+  const [avisarContacto, setAvisarContacto] = useState<boolean>(otf ? !!otf.telefonoAviso : true);
+  const [guardarEnBase, setGuardarEnBase] = useState(true);
+  const telefonoAviso = avisarContacto ? contactoTelefono : "";
+  // Al elegir una base con contacto guardado, se propone (sin pisar lo escrito).
+  function elegirBase(id: string) {
+    setPlaceId(id);
+    const p = places.find((x) => String(x.id) === id);
+    if (!p || contactoNombre.trim() || contactoTelefono.trim()) return;
+    setContactoNombre(p.contactoNombre ?? "");
+    setContactoTelefono(p.contactoTelefono ?? "");
+    setContactoCargo(p.contactoCargo ?? "");
+  }
   const [emailInforme, setEmailInforme] = useState<string>(otf?.emailInforme ?? "");
   const [saving, setSaving] = useState(false);
   const [showPlaceMap, setShowPlaceMap] = useState(false);
@@ -281,6 +305,16 @@ function NewOtfModal({ otf, places, techs, vehicles, onPlaceCreated, onClose, on
         if (fecha !== fechaInicial || hora !== horaInicial) cambios.fechaProgramadaMs = inputAFecha(fecha, hora);
         if (notas.trim() !== (otf.notas ?? "").trim()) cambios.notas = notas.trim() || null;
         if (telefonoAviso.trim() !== (otf.telefonoAviso ?? "").trim()) cambios.telefonoAviso = telefonoAviso.trim() || null;
+        const cambiaContacto =
+          contactoNombre.trim() !== (otf.contactoNombre ?? "").trim() ||
+          contactoTelefono.trim() !== (otf.contactoTelefono ?? "").trim() ||
+          contactoCargo.trim() !== (otf.contactoCargo ?? "").trim();
+        if (cambiaContacto) {
+          cambios.contactoNombre = contactoNombre.trim() || null;
+          cambios.contactoTelefono = contactoTelefono.trim() || null;
+          cambios.contactoCargo = contactoCargo.trim() || null;
+          if (guardarEnBase && place) cambios.guardarContactoEnBase = true;
+        }
         if (emailInforme.trim() !== (otf.emailInforme ?? "").trim()) cambios.emailInforme = emailInforme.trim() || null;
         if (Object.keys(cambios).length === 0) { onClose(); return; }
         onCreated(await updateOtf(otf.id, cambios));
@@ -300,6 +334,10 @@ function NewOtfModal({ otf, places, techs, vehicles, onPlaceCreated, onClose, on
         notas: notas.trim() || null,
         telefonoAviso: telefonoAviso.trim() || null,
         emailInforme: emailInforme.trim() || null,
+        contactoNombre: contactoNombre.trim() || null,
+        contactoTelefono: contactoTelefono.trim() || null,
+        contactoCargo: contactoCargo.trim() || null,
+        guardarContactoEnBase: guardarEnBase && !!place && !!(contactoNombre.trim() || contactoTelefono.trim()),
       });
       onCreated(o);
     } catch (e) {
@@ -317,7 +355,7 @@ function NewOtfModal({ otf, places, techs, vehicles, onPlaceCreated, onClose, on
           <Field label="Cliente *"><input value={clientName} onChange={(e) => setClientName(e.target.value)} className={inputCls} /></Field>
           <Field label="Base (lugar conocido)">
             <div className="flex gap-2">
-              <select value={placeId} onChange={(e) => setPlaceId(e.target.value)} className={inputCls}>
+              <select value={placeId} onChange={(e) => elegirBase(e.target.value)} className={inputCls}>
                 <option value="">{editando && !placeInicial && otf.baseName ? `${otf.baseName} (actual, sin lugar conocido)` : "— Elegir base —"}</option>
                 {places.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
               </select>
@@ -356,14 +394,34 @@ function NewOtfModal({ otf, places, techs, vehicles, onPlaceCreated, onClose, on
           <Field label="Notas">
             <textarea value={notas} onChange={(e) => setNotas(e.target.value)} rows={3} className={`${inputCls} resize-none`} placeholder="Para el operario o la oficina" />
           </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="WhatsApp del responsable (aviso al llegar)">
-              <input type="tel" value={telefonoAviso} onChange={(e) => setTelefonoAviso(e.target.value)} className={inputCls} placeholder="600 11 22 33" />
+          <div className="space-y-2 rounded-xl border border-emerald-700 bg-emerald-950/30 p-3">
+            <div className="text-xs font-black text-emerald-200">Persona de contacto en la base</div>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Nombre">
+                <input value={contactoNombre} onChange={(e) => setContactoNombre(e.target.value)} className={inputCls} placeholder="Jordi Martí" />
+              </Field>
+              <Field label="Teléfono">
+                <input type="tel" value={contactoTelefono} onChange={(e) => setContactoTelefono(e.target.value)} className={inputCls} placeholder="600 11 22 33" />
+              </Field>
+            </div>
+            <Field label="Cargo o nota (opcional)">
+              <input value={contactoCargo} onChange={(e) => setContactoCargo(e.target.value)} className={inputCls} placeholder="Encargado de la base" />
             </Field>
-            <Field label="Correo para el informe">
-              <input type="email" value={emailInforme} onChange={(e) => setEmailInforme(e.target.value)} className={inputCls} placeholder="flota@cliente.es" />
-            </Field>
+            <label className="flex items-center gap-2 text-sm text-emerald-100">
+              <input type="checkbox" checked={avisarContacto} onChange={(e) => setAvisarContacto(e.target.checked)} className="h-4 w-4" />
+              Avisarle por WhatsApp cuando el operario llegue a la base
+            </label>
+            {placeId && (
+              <label className="flex items-center gap-2 text-sm text-emerald-100">
+                <input type="checkbox" checked={guardarEnBase} onChange={(e) => setGuardarEnBase(e.target.checked)} className="h-4 w-4" />
+                Guardarlo como contacto de «{places.find((p) => String(p.id) === placeId)?.nombre ?? "la base"}»
+              </label>
+            )}
+            <p className="text-[11px] text-emerald-200/80">El operario lo ve en la tablet con los botones «Llamar» y «WhatsApp».</p>
           </div>
+          <Field label="Correo para el informe">
+            <input type="email" value={emailInforme} onChange={(e) => setEmailInforme(e.target.value)} className={inputCls} placeholder="flota@cliente.es" />
+          </Field>
         </div>
         {error && (
           <div className="mt-3 rounded-lg border border-red-500/40 bg-red-500/15 px-3 py-2 text-sm font-bold text-red-300">
@@ -550,6 +608,8 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
   const [trabajoPlantilla, setTP] = useState("");
   const [detalle, setDetalle] = useState("");
   const [observaciones, setObservaciones] = useState("");
+  // País de la matrícula: «» es automático (se deduce de la forma).
+  const [paisMatricula, setPaisMatricula] = useState("");
   const [adding, setAdding] = useState(false);
   const [errorAlta, setErrorAlta] = useState<string | null>(null);
   // Cambio de neumáticos: plano de TyreControl para marcar ruedas y catálogo.
@@ -568,6 +628,7 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
     // Con neumáticos, el detalle lo escribe el plano: no se arrastra el texto viejo.
     setDetalle(t.neumaticos ? "" : t.detalleManual ?? "");
     setObservaciones(t.observaciones ?? "");
+    setPaisMatricula(t.paisMatricula ?? "");
     setConNeumaticos(!!t.neumaticos);
     setNeumaticos(null);
     setErrorAlta(null);
@@ -577,6 +638,7 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
   function limpiarFormulario() {
     setEditando(null);
     setPlate(""); setTP(""); setDetalle(""); setObservaciones(""); setConNeumaticos(false); setNeumaticos(null);
+    setPaisMatricula("");
     setErrorAlta(null);
   }
   useEffect(() => {
@@ -619,6 +681,7 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
         detalleManual: detalle,
         observaciones: observaciones.trim() || null,
         neumaticos: conNeumaticos ? neumaticos : null,
+        paisMatricula: paisMatricula || null,
       };
       if (editando) await updateOtfTrabajo(editando.id, datos);
       else await addOtfTrabajo(otf.id, datos);
@@ -643,6 +706,14 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
         <div>
           <h2 className="text-lg font-black text-slate-100">{otf.clientName}</h2>
           <div className="text-sm text-slate-400">{otf.baseName || otf.direccion || "—"}{otf.assignedTechName ? ` · ${otf.assignedTechName}` : ""}</div>
+          {(otf.contactoNombre || otf.contactoTelefono) && (
+            <div className="text-xs font-semibold text-emerald-300">
+              Contacto: {[otf.contactoNombre, otf.contactoCargo].filter(Boolean).join(" · ")}
+              {otf.contactoTelefono && (
+                <> · <a href={`tel:${String(otf.contactoTelefono).replace(/\s/g, "")}`} className="underline decoration-dotted">{otf.contactoTelefono}</a></>
+              )}
+            </div>
+          )}
         </div>
         <div className="text-right">
           {otf.enEspera ? (
@@ -743,7 +814,7 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 flex-wrap">
                 {t.plate ? (
-                  <a href={`/vehiculo?plate=${encodeURIComponent(t.plate)}`} target="_blank" rel="noopener noreferrer" className="font-black text-slate-100 underline decoration-dotted hover:text-orange-400">{t.plate}</a>
+                  <a href={`/vehiculo?plate=${encodeURIComponent(t.plate)}`} target="_blank" rel="noopener noreferrer" title="Ver el historial del vehículo" className="hover:opacity-80"><Matricula plate={t.plate} pais={t.paisMatricula} /></a>
                 ) : <span className="font-black text-slate-100">—</span>}
                 <span className="text-xs text-slate-400">{t.tipoVehiculo}</span>
                 {t.origen === "tecnico_campo" && (
@@ -850,6 +921,19 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
             {plantillas.map((p) => <option key={p.id} value={p.nombre}>{p.nombre}</option>)}
           </select>
           <input placeholder="Detalle manual" value={detalle} onChange={(e) => setDetalle(e.target.value)} className={inputCls} />
+          <div className="col-span-2 flex items-center gap-2">
+            <select
+              value={paisMatricula}
+              onChange={(e) => setPaisMatricula(e.target.value)}
+              aria-label="País de la matrícula"
+              className={inputCls}
+            >
+              <option value="">País de la matrícula: automático</option>
+              {PAISES_MATRICULA.map((p) => <option key={p.codigo} value={p.codigo}>{p.codigo} · {p.nombre}</option>)}
+              <option value={FUERA_UE}>Fuera de la UE</option>
+            </select>
+            {plate.trim() && <Matricula plate={plate} pais={paisMatricula} />}
+          </div>
           <input
             placeholder="Observaciones (p. ej. remolque en plaza 27)"
             value={observaciones}

@@ -5,7 +5,9 @@
  */
 export function baseMedida(s?: string | null): string {
   const t = (s ?? "").toUpperCase().replace(/\s+/g, "");
-  const m = t.match(/(\d{2,3})(?:\/(\d{2,3}))?R?(\d{1,2}(?:[.,]\d)?)/);
+  // La «Z» de «245/45ZR18» (alta velocidad) va delante de la R y no cambia la
+  // medida. Sin contemplarla, la expresión casaba basura («24R5»).
+  const m = t.match(/(\d{2,3})(?:\/(\d{2,3}))?Z?R?(\d{1,2}(?:[.,]\d)?)/);
   if (!m) return t;
   return `${m[1]}${m[2] ? "/" + m[2] : ""}R${m[3].replace(",", ".")}`;
 }
@@ -39,4 +41,19 @@ export function medidaCanonica(s?: string | null): string {
 export function mismaMedida(a?: string | null, b?: string | null): boolean {
   if (!a || !b) return false;
   return baseMedida(a) === baseMedida(b);
+}
+
+/**
+ * «C» si la rueda es comercial (furgoneta): medida métrica de llanta entera
+ * hasta 17" con índice de carga DOBLE. Gemela de `tc_sufijo_comercial()` en la
+ * base, que es quien pone el nombre: aquí se repite para que el panel busque
+ * la combinación por el mismo nombre que tendrá.
+ *
+ *   205/75R16 113/111R → C        205/55R16 91V → (turismo, índice simple)
+ *   315/80R22.5 156/150L → (camión, llanta .5)
+ */
+export function sufijoComercial(medida?: string | null, indiceDoble?: string | null): "C" | "" {
+  if (!String(indiceDoble ?? "").trim()) return "";
+  const m = String(medida ?? "").toUpperCase().replace(/\s+/g, "");
+  return /^\d{3}(\/\d{2})?R1[0-7]$/.test(m) ? "C" : "";
 }

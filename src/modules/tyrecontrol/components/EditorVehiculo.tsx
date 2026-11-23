@@ -12,6 +12,7 @@ import type {
 } from "../types";
 import { ORIGEN_KM_LABELS, tipoLlantaLabel } from "../types";
 import { Modal, inputCls, TextField, Field } from "./ui";
+import { idConfigFija } from "../services/configEjesPorTipo";
 
 /*
  * El formulario del vehículo, uno solo.
@@ -115,6 +116,20 @@ export default function EditorVehiculo({
   }
 
   const set = (p: Partial<VehiculoInput>) => setDraft((d) => ({ ...d, ...p }));
+
+  // Tipos con configuración de ejes fija (un autocar es siempre 2x4x2 Bus).
+  const nombreTipo = tipos.find((t) => t.id === draft.tipo_vehiculo_id)?.nombre ?? null;
+  const configFijaId = idConfigFija(nombreTipo, configEjes);
+  function cambiarTipo(tipoId: string | null) {
+    setMarcaLibre(false);
+    set({ tipo_vehiculo_id: tipoId });
+    const fija = idConfigFija(tipos.find((t) => t.id === tipoId)?.nombre, configEjes);
+    if (fija) cambiarConfig(fija);
+  }
+  // Un autocar que ya tenía otra configuración se corrige al abrirlo (ajuste
+  // durante el render, con guarda); se guarda cuando la persona pulse
+  // «Guardar», no antes.
+  if (configFijaId && draft.config_ejes_id !== configFijaId) cambiarConfig(configFijaId);
   const setEje = (eje: number, p: Partial<VehiculoEje>) =>
     setEjes((prev) => prev.map((e) => (e.eje === eje ? { ...e, ...p } : e)));
 
@@ -189,7 +204,7 @@ export default function EditorVehiculo({
           <TextField label="Matrícula *" value={draft.matricula ?? ""} onChange={(v) => set({ matricula: v })} />
           <TextField label="Nº de unidad (flota)" value={draft.numero_unidad ?? ""} onChange={(v) => set({ numero_unidad: v })} />
           <Field label="Tipo de vehículo">
-            <select className={inputCls} value={draft.tipo_vehiculo_id ?? ""} onChange={(e) => { setMarcaLibre(false); set({ tipo_vehiculo_id: e.target.value || null }); }}>
+            <select className={inputCls} value={draft.tipo_vehiculo_id ?? ""} onChange={(e) => cambiarTipo(e.target.value || null)}>
               <option value="">—</option>
               {tipos.map((t) => <option key={t.id} value={t.id}>{t.descripcion ?? t.nombre}</option>)}
             </select>
@@ -239,10 +254,14 @@ export default function EditorVehiculo({
 
           {/* Configuración de neumáticos */}
           <Field label="Configuración de ejes">
-            <select className={inputCls} value={draft.config_ejes_id ?? ""} onChange={(e) => cambiarConfig(e.target.value || null)}>
+            <select className={inputCls} value={draft.config_ejes_id ?? ""} onChange={(e) => cambiarConfig(e.target.value || null)}
+                    disabled={!!configFijaId}>
               <option value="">—</option>
               {configEjes.map((c) => <option key={c.id} value={c.id}>{c.nombre}{c.descripcion ? ` · ${c.descripcion}` : ""}</option>)}
             </select>
+            {configFijaId && (
+              <div className="mt-1 text-[11px] text-slate-400">Fija por el tipo de vehículo: un autocar 2x4x2 es siempre «2x4x2 Bus».</div>
+            )}
           </Field>
           <Field label="Medidas diferentes por eje">
             <select className={inputCls} value={draft.medidas_por_eje ? "1" : "0"} onChange={(e) => cambiarPorEje(e.target.value === "1")}>

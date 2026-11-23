@@ -59,6 +59,7 @@ import InformeControlRevisiones from "./pages/informes/InformeControlRevisiones"
 import InformeHistorialNeumatico from "./pages/informes/InformeHistorialNeumatico";
 import InformeHistorialVehiculo from "./pages/informes/InformeHistorialVehiculo";
 import InformeEconomico from "./pages/informes/InformeEconomico";
+import InformeRendimiento from "./pages/informes/InformeRendimiento";
 import InformeRankings from "./pages/informes/InformeRankings";
 import InformeDesgaste from "./pages/informes/InformeDesgaste";
 import InformeKmPorMm from "./pages/informes/InformeKmPorMm";
@@ -112,6 +113,7 @@ export default function TyreControlApp() {
               <Route path="historial-vehiculo" element={<InformeHistorialVehiculo />} />
               <Route path="desgaste" element={<InformeDesgaste />} />
               <Route path="km-por-mm" element={<InformeKmPorMm />} />
+              <Route path="rendimiento" element={<InformeRendimiento />} />
               <Route path="prevision" element={<InformePrevision />} />
               <Route path="presiones" element={<InformePresiones />} />
               {/* Informes INTERNOS: costes, productividad de técnicos y códigos
@@ -136,6 +138,26 @@ export default function TyreControlApp() {
               <Route path="mis-neumaticos" element={<MisNeumaticos />} />
             </Route>
 
+            {/* Administrador y técnico (operador): las pantallas de su trabajo
+                diario. Lo que escribe cada una lo sigue decidiendo la base
+                (RLS y funciones), no este menú. */}
+            <Route element={<RoleRoute roles={["administrador", "operador"]} />}>
+              <Route path="vehiculos-en-bases" element={<VehiculosEnBases />} />
+              <Route path="disponibles-revisar" element={<DisponiblesRevisar />} />
+              <Route path="planificacion" element={<PlanificacionRevisiones />} />
+              <Route path="incidencias" element={<Incidencias />} />
+              <Route path="historico-revisiones" element={<HistoricoRevisiones />} />
+              {/* Etiquetado de números de serie. Las tres pantallas cuelgan de
+                  la misma raíz para que «← Etiquetas» y el `imprimir` relativo
+                  funcionen sin repetir la ruta en cada enlace. */}
+              <Route path="etiquetas" element={<Etiquetas />} />
+              <Route path="etiquetas/calibrar" element={<EtiquetasCalibrar />} />
+              <Route path="etiquetas/:loteId" element={<EtiquetasLote />} />
+              <Route path="etiquetas/:loteId/imprimir" element={<EtiquetasImprimir />} />
+              <Route path="sonda" element={<SondaTLGX />} />
+              <Route path="partes-papel" element={<ImportarPartesPapel />} />
+            </Route>
+
             {/* Administrador / super-admin */}
             <Route element={<RoleRoute roles={["administrador"]} />}>
               <Route path="empresas" element={<Empresas />} />
@@ -144,24 +166,12 @@ export default function TyreControlApp() {
               <Route path="usuarios" element={<Usuarios />} />
               <Route path="vehiculos" element={<Vehiculos />} />
               <Route path="conciliacion-telematica" element={<ConciliacionTelematica />} />
-              <Route path="vehiculos-en-bases" element={<VehiculosEnBases />} />
               <Route path="ranking-kilometraje" element={<RankingKilometraje />} />
-              <Route path="disponibles-revisar" element={<DisponiblesRevisar />} />
               <Route path="control-tacografos" element={<ControlTacografos />} />
               <Route path="propuestas-medida" element={<PropuestasMedida />} />
-              <Route path="planificacion" element={<PlanificacionRevisiones />} />
-              <Route path="incidencias" element={<Incidencias />} />
               <Route path="tipos-incidencia" element={<TiposIncidencia />} />
-              <Route path="historico-revisiones" element={<HistoricoRevisiones />} />
               <Route path="plantillas-mantenimiento" element={<PlantillasMantenimiento />} />
               <Route path="lotes-revision" element={<LotesRevision />} />
-              {/* Etiquetado de números de serie. Las tres pantallas cuelgan de
-                  la misma raíz para que «← Etiquetas» y el `imprimir` relativo
-                  funcionen sin repetir la ruta en cada enlace. */}
-              <Route path="etiquetas" element={<Etiquetas />} />
-              <Route path="etiquetas/calibrar" element={<EtiquetasCalibrar />} />
-              <Route path="etiquetas/:loteId" element={<EtiquetasLote />} />
-              <Route path="etiquetas/:loteId/imprimir" element={<EtiquetasImprimir />} />
               <Route path="neumaticos" element={<Neumaticos />} />
               <Route path="neumaticos/:id" element={<NeumaticoDetalle />} />
               <Route path="almacen-usados" element={<AlmacenUsados />} />
@@ -169,12 +179,10 @@ export default function TyreControlApp() {
               <Route path="enlace-almacen" element={<EnlaceAlmacen />} />
               <Route path="medidas-neumaticos" element={<MedidasNeumaticos />} />
               <Route path="catalogo-neumaticos" element={<CatalogoNeumaticos />} />
-              <Route path="sonda" element={<SondaTLGX />} />
               <Route path="configuracion" element={<Configuracion />} />
               <Route path="importar" element={<Importar />} />
               <Route path="importar/identificar" element={<UnidadesPorIdentificar />} />
               <Route path="parte-proveedor" element={<ParteProveedor />} />
-              <Route path="partes-papel" element={<ImportarPartesPapel />} />
             </Route>
           </Route>
         </Route>

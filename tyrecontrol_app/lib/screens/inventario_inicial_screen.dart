@@ -27,12 +27,18 @@ class InventarioInicialScreen extends StatefulWidget {
   final String vehiculoId;
   final String matricula;
   final String tipoVehiculoId;
+  /// Los km de hoy si ya se pidieron antes (la primera revisión los trae de la
+  /// pantalla de confirmación): así no se vuelven a preguntar.
+  final num? kmIniciales;
+  final String origenKmInicial;
 
   const InventarioInicialScreen({
     super.key,
     required this.vehiculoId,
     required this.matricula,
     required this.tipoVehiculoId,
+    this.kmIniciales,
+    this.origenKmInicial = 'manual',
   });
 
   @override
@@ -75,8 +81,8 @@ class _InventarioInicialScreenState extends State<InventarioInicialScreen> {
   Map<String, dynamic>? _copiando;
   final Set<String> _seleccion = {};
   /// Los km que se guardarán con la revisión inicial, y de dónde salieron.
-  num? _km;
-  String _origenKm = 'manual';
+  late num? _km = widget.kmIniciales;
+  late String _origenKm = widget.origenKmInicial;
 
   @override
   void initState() {
@@ -406,11 +412,15 @@ class _InventarioInicialScreenState extends State<InventarioInicialScreen> {
       // no hay, el técnico los teclea. No impiden terminar el alta: un camión
       // sin telemática y sin nadie que mire el cuadro se puede inventariar
       // igual, y sus gomas se siguen midiendo.
-      KmTelematica(
-        vehiculoId: widget.vehiculoId,
-        matricula: widget.matricula,
-        onConfirmado: (km, origen) => setState(() { _km = km; _origenKm = origen; }),
-      ),
+      if (widget.kmIniciales != null)
+        Text('Km de hoy: ${widget.kmIniciales}',
+            style: const TextStyle(color: AppColors.textSecondary, fontSize: 14))
+      else
+        KmTelematica(
+          vehiculoId: widget.vehiculoId,
+          matricula: widget.matricula,
+          onConfirmado: (km, origen) => setState(() { _km = km; _origenKm = origen; }),
+        ),
     ]);
   }
 

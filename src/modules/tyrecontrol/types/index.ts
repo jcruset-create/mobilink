@@ -692,6 +692,8 @@ export interface Neumatico {
   id: string;
   empresa_id: string;
   reesculturado?: boolean | null;
+  /** Banda nueva sobre carcasa usada. La marca recauchutadora (Insa) la marca sola. */
+  recauchutado?: boolean | null;
   girado_en_llanta?: boolean | null;
   numero_interno?: string | null;
   control_individual?: boolean;

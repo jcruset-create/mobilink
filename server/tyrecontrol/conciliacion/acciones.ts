@@ -681,6 +681,19 @@ export async function vincularLote(
    * una foto incompleta» tiene que estar escrita donde se autoenlaza, no
    * deducirse de tres módulos más abajo.
    */
+  // Ninguna cuenta del Hub con ese proveedor y esa cuenta: lo que la pantalla
+  // concilia es la cuenta HEREDADA (la sincronización de siempre), que se puede
+  // mirar pero no enlazar. Se dice tal cual, no como «no respondió».
+  if (resultado.resumen.cuentas.length === 0) {
+    throw new ErrorConciliacion(
+      "CUENTA_NO_CONFIGURADA",
+      `Esta empresa no tiene dada de alta la cuenta de ${ambito.connectorKey} en Integraciones: ` +
+        "lo que ves es la cuenta heredada, que se puede consultar pero no enlazar. " +
+        "Dala de alta en Integraciones → Conectores y vuelve a conciliar.",
+      409,
+    );
+  }
+
   if (resultado.resumen.status !== "complete") {
     const fallando = resultado.resumen.cuentas.filter((c) => !c.ok).map((c) => c.accountKey);
     throw new ErrorConciliacion(
@@ -748,9 +761,9 @@ export async function vincularLote(
           await vincular(ambito, {
             tcVehicleId,
             externalVehicleId,
-            matchMethod: datos.automatico
-              ? METODOS_VINCULO.MATRICULA_EXACTA_AUTO
-              : METODOS_VINCULO.MATRICULA_EXACTA,
+            matchMethod: f.porIdAntiguo
+              ? (datos.automatico ? METODOS_VINCULO.ID_WEBFLEET_ANTIGUO_AUTO : METODOS_VINCULO.ID_WEBFLEET_ANTIGUO)
+              : (datos.automatico ? METODOS_VINCULO.MATRICULA_EXACTA_AUTO : METODOS_VINCULO.MATRICULA_EXACTA),
             externalPlate: f.externo.plate ?? null,
             externalName: f.externo.name ?? null,
           }, preparada);

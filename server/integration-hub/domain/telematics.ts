@@ -218,7 +218,7 @@ export interface TripSummary {
  * Proveedores que saben resumir distancias.
  *
  * Es una interfaz APARTE de `ITelematicsConnector`, no un método opcional
- * dentro: así Webfleet, que no lo implementa, ni se entera de que existe, y
+ * dentro: así un conector que no lo implemente ni se entera de que existe, y
  * quien lo necesite comprueba `TRIP_SUMMARY` en las capacidades y hace el
  * cast, en vez de encontrarse un `undefined` a mitad de una sincronización.
  */
@@ -267,6 +267,43 @@ export interface IFleetPositionProvider {
    * que sin esa fecha no se puede decidir si la posición sigue valiendo.
    */
   getFleetPositions(ctx: OperationContext): Promise<VehicleTelemetry[]>;
+}
+
+/**
+ * Una cuenta que existe de verdad aunque nadie la haya inscrito en el Hub.
+ *
+ * Son los clientes de un proveedor anterior al Hub —hoy, Webfleet—: tienen
+ * credenciales y flota enlazada desde antes de que esto existiera. Quién cumple
+ * eso lo decide TyreControl (`server/tyrecontrol/presencia/heredadas.ts`); el
+ * Hub solo las recibe ya construidas.
+ */
+export interface CuentaHeredada {
+  /** Clave del conector: `webfleet`. */
+  key: string;
+  accountKey: string;
+  nombre: string | null;
+  /** Ya construido por quien llama, con las credenciales que ya tenía. */
+  connector: unknown;
+}
+
+/**
+ * De las heredadas, las de proveedores que el Hub no conoce.
+ *
+ * **El Hub manda**: si el cliente tiene su Webfleet dado de alta, se usa el
+ * suyo y la heredada no entra. Y la precedencia es por PROVEEDOR, no por
+ * cuenta — mezclar las dos preguntaría dos veces a la misma cuenta y contaría
+ * sus vehículos por duplicado.
+ *
+ * Vive aquí, y no en cada servicio, porque la usan el barrido de presencia y
+ * la conciliación de flota: dos copias de una regla de precedencia acabarían
+ * divergiendo, y entonces una pantalla diría una cosa y la otra, otra.
+ */
+export function heredadasQueFaltan(
+  delHub: Array<{ key: string }>,
+  heredadas: CuentaHeredada[] = [],
+): CuentaHeredada[] {
+  const proveedores = new Set(delHub.map((c) => c.key));
+  return heredadas.filter((h) => !proveedores.has(h.key));
 }
 
 /** Comprueba en tiempo de ejecución si un conector sabe barrer la flota. */

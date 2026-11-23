@@ -13,7 +13,7 @@ import type {
   EconomicoInformes, RankingVehiculo, RankingMarca, CosteKmNeumatico, DesgasteNeumatico,
   PresionNeumatico, ProductividadTecnico, OperacionesInforme, InformeEjecutivo,
   ControlRevision, MontajesInforme, OrigenMontajes, InventarioResumen, KmPorMmFila,
-  PrevisionMedida, RuedaAlerta,
+  PrevisionMedida, RuedaAlerta, PlanosIncompletos,
 } from "../types/informes";
 
 function params(f: FiltrosInformes) {
@@ -66,6 +66,20 @@ export async function inventarioCubo(f: FiltrosInformes): Promise<CeldaInventari
     const { data, error } = await supabase.rpc("tc_informes_inventario_cubo", { p_empresa: f.empresaId ?? null });
     if (error || !Array.isArray(data)) return null;
     return data as CeldaInventario[];
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Vehículos con el plano a medias y fichas «montado» sin posición. Si la base
+ * aún no tiene la función, `null`: el aviso simplemente no sale.
+ */
+export async function planosIncompletos(f: FiltrosInformes): Promise<PlanosIncompletos | null> {
+  try {
+    const { data, error } = await supabase.rpc("tc_informes_planos_incompletos", { p_empresa: f.empresaId ?? null });
+    if (error || !data || !Array.isArray((data as PlanosIncompletos).vehiculos)) return null;
+    return data as PlanosIncompletos;
   } catch {
     return null;
   }

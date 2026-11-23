@@ -694,7 +694,7 @@ class _ActiveAssistancesTab extends StatelessWidget {
                           if (plate.isNotEmpty) ...[
                             Align(
                               alignment: Alignment.centerLeft,
-                              child: PlateBadge(plate: plate),
+                              child: PlateBadge(plate: plate, pais: a['paisMatricula']?.toString()),
                             ),
                             const SizedBox(height: 8),
                           ],

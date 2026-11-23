@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, CheckCircle2, Link2, Link2Off, Plus, RefreshCw, Trash2, XCircle } from "lucide-react";
 import {
-  conciliar, crearVehiculo, crearVehiculosLote, darDeBaja, dejarDeIgnorar, desvincular, ignorar,
+  cambioVehiculo, conciliar, crearVehiculo, crearVehiculosLote, darDeBaja, dejarDeIgnorar, desvincular, ignorar,
   ignorarLote, listarCuentas, vincular, vincularLote,
   type ResultadoLoteExternos,
   type Conciliacion, type CuentaTelematica, type VehiculoInterno,
@@ -251,6 +251,47 @@ export default function ConciliacionTelematica() {
   const r = datos?.resumen;
   const completa = r?.status === "complete";
 
+  /*
+   * «El equipo está ahora en otro vehículo»: los avisos de matrícula cambiada en
+   * el proveedor. La buena es la del proveedor; el antiguo se da de baja (sus
+   * neumáticos se quedan en él) y el equipo pasa al vehículo de esa matrícula.
+   */
+  type Cambio = { tcVehicleId: string; externalVehicleId: string; antigua: string; nueva: string; nombre: string | null; montados: number };
+  const cambiosPend: Cambio[] = (datos?.discrepancias ?? [])
+    .filter((d) => d.motivo === "plate_changed_on_provider" && d.interno && d.enlace && d.externo?.plate)
+    .map((d) => ({
+      tcVehicleId: d.enlace!.mobilinkId, externalVehicleId: d.enlace!.externalCode,
+      antigua: d.interno!.matricula, nueva: String(d.externo!.plate), nombre: d.externo!.name ?? null,
+      montados: d.interno!.neumaticosMontados,
+    }));
+  const [cambio, setCambio] = useState<{ lista: Cambio[]; baja: boolean } | null>(null);
+  const [cambiando, setCambiando] = useState(false);
+
+  async function confirmarCambio() {
+    if (!cambio || !base) return;
+    setCambiando(true); setError(""); setMsg("");
+    try {
+      const res = await cambioVehiculo({
+        ...base,
+        darDeBajaAntiguo: cambio.baja,
+        cambios: cambio.lista.map((c) => ({ tcVehicleId: c.tcVehicleId, externalVehicleId: c.externalVehicleId, neumaticosMontadosVistos: c.montados })),
+      });
+      const altas = res.hechos.filter((h) => h.nuevo === "alta_pendiente").length;
+      const reac = res.hechos.filter((h) => h.nuevo === "reactivar_y_vincular").length;
+      const partes = [`✔ ${res.hechos.length} equipo${res.hechos.length === 1 ? "" : "s"} pasado${res.hechos.length === 1 ? "" : "s"} a su vehículo`];
+      if (reac) partes.push(`${reac} reactivado${reac === 1 ? "" : "s"}`);
+      if (altas) partes.push(`${altas} dado${altas === 1 ? "" : "s"} de alta (pendiente${altas === 1 ? "" : "s"} de validar)`);
+      if (res.fallidos.length) setError(`${partes.join(" · ")} · ${res.fallidos.length} con error: ${res.fallidos[0].error}`);
+      else setMsg(partes.join(" · ") + ".");
+      setCambio(null);
+      await cargar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error");
+    } finally {
+      setCambiando(false);
+    }
+  }
+
   const TARJETAS: Array<{ key: Cuadrante; rotulo: string; n: number }> = [
     { key: "enlazados", rotulo: "Enlazados", n: r?.linkedCount ?? 0 },
     { key: "soloProveedor", rotulo: "Solo proveedor", n: r?.providerOnlyCount ?? 0 },
@@ -456,8 +497,9 @@ export default function ConciliacionTelematica() {
               {propuestas > 0 && (
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-sky-700 bg-sky-500/10 p-4">
                   <div className="text-sm">
-                    <b>{propuestas}</b> de estos vehículos coinciden por matrícula exacta con uno de
-                    TyreControl.
+                    <b>{propuestas}</b> de estos vehículos coinciden con uno de TyreControl: por
+                    matrícula exacta o, si el proveedor no da matrícula, por el nº de Webfleet que
+                    ya tenía la ficha.
                     <div className="text-xs text-slate-400">
                       Se puede deshacer: desvincular conserva el enlace desactivado.
                     </div>
@@ -572,6 +614,11 @@ export default function ConciliacionTelematica() {
                           {f.propuesta.matricula}
                           {f.propuesta.numeroUnidad ? ` · Flota ${f.propuesta.numeroUnidad}` : ""}
                         </div>
+                        {f.porIdAntiguo && (
+                          <div className="text-slate-400">
+                            Por su nº de Webfleet ({f.externo.providerVehicleId}), el de la ficha
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <span className="text-slate-500">
@@ -590,7 +637,7 @@ export default function ConciliacionTelematica() {
                                 ...base,
                                 tcVehicleId: f.propuesta!.id,
                                 externalVehicleId: f.externo.providerVehicleId,
-                                matchMethod: "plate_exact",
+                                matchMethod: f.porIdAntiguo ? "legacy_webfleet_id" : "plate_exact",
                                 externalPlate: f.externo.plate ?? null,
                                 externalName: f.externo.name ?? null,
                               }),
@@ -700,6 +747,19 @@ export default function ConciliacionTelematica() {
           {tab === "discrepancias" && (
             <div className={`${CAJA} divide-y divide-slate-700`}>
               {datos!.discrepancias.length === 0 && <div className="p-6 text-center text-slate-400">Ninguna.</div>}
+              {cambiosPend.length > 0 && (
+                <div className="flex flex-wrap items-center justify-between gap-2 bg-sky-500/10 p-3 text-xs text-sky-200">
+                  <span>
+                    <b>{cambiosPend.length}</b> equipo{cambiosPend.length === 1 ? "" : "s"} del proveedor con otra matrícula: se han
+                    pasado a otro vehículo. La buena es la del proveedor.
+                  </span>
+                  <button disabled={!completa} title={completa ? "" : "Solo con la sincronización completa"}
+                    className={`${BOTON} border-sky-500 text-sky-200 hover:bg-sky-500/10`}
+                    onClick={() => setCambio({ lista: cambiosPend, baja: true })}>
+                    Hacerlo en todos ({cambiosPend.length})
+                  </button>
+                </div>
+              )}
               {datos!.discrepancias.map((d, i) => (
                 <div key={i} className="p-4">
                   <div className="mb-2 flex items-center gap-2 text-xs font-bold text-amber-300">
@@ -759,6 +819,16 @@ export default function ConciliacionTelematica() {
                           Vincular con {c.matricula}{c.activo === false ? " (de baja)" : ""}
                         </button>
                       ))}
+                      {(() => {
+                        const c = d.enlace ? cambiosPend.find((x) => x.tcVehicleId === d.enlace!.mobilinkId && x.externalVehicleId === d.enlace!.externalCode) : undefined;
+                        return c && (
+                          <button disabled={!completa} title={completa ? "" : "Solo con la sincronización completa"}
+                            className={`${BOTON} border-sky-500 text-sky-200 hover:bg-sky-500/10`}
+                            onClick={() => setCambio({ lista: [c], baja: true })}>
+                            ↪ El equipo está ahora en otro vehículo
+                          </button>
+                        );
+                      })()}
                       {d.interno && d.enlace && (
                         <button
                           className={`${BOTON} border-slate-600 text-slate-300 hover:bg-slate-700`}
@@ -822,6 +892,55 @@ export default function ConciliacionTelematica() {
           vehículo sin tipo no tiene plano de ruedas, así que no se puede ni
           revisar hasta que alguien se lo pone: con 53 de golpe, eso son 53
           fichas que abrir para escribir lo mismo. */}
+      {cambio && (
+        <Modal
+          title={cambio.lista.length === 1
+            ? `Pasar el equipo ${cambio.lista[0].externalVehicleId} de ${cambio.lista[0].antigua} a ${cambio.lista[0].nueva}`
+            : `Pasar ${cambio.lista.length} equipos a su vehículo`}
+          onClose={() => !cambiando && setCambio(null)}
+          size="lg"
+          footer={
+            <div className="flex justify-end gap-2">
+              <button className={`${BOTON} border-slate-600 text-slate-300`} disabled={cambiando} onClick={() => setCambio(null)}>Cancelar</button>
+              <button className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-500 disabled:opacity-40"
+                disabled={cambiando} onClick={() => void confirmarCambio()}>
+                {cambiando ? "Cambiando…" : "Confirmar el cambio"}
+              </button>
+            </div>
+          }
+        >
+          <div className="space-y-3 text-sm text-slate-300">
+            <ol className="list-decimal space-y-1.5 pl-5">
+              <li><b className="text-slate-100">Baja del vehículo antiguo</b>{cambio.baja ? "" : " (desmarcada: solo se desvincula)"}. Sus neumáticos <b>se quedan montados en él</b> y sus revisiones, como historial. Desaparece de la tablet; sigue en el panel y en los informes.</li>
+              <li><b className="text-slate-100">Se desvincula</b> el equipo del proveedor del vehículo antiguo.</li>
+              <li>El vehículo con la <b className="text-slate-100">matrícula del proveedor</b>: si ya existe en TyreControl <b>se reactiva</b>; si no, <b>se da de alta</b> con esa matrícula, el nº de flota del proveedor y el tipo del antiguo, <span className="text-amber-300">pendiente de validar</span>.</li>
+              <li><b className="text-slate-100">Se vincula</b> el equipo a él: los kilómetros van a ese vehículo desde ahora.</li>
+            </ol>
+            <div className="max-h-56 overflow-auto rounded-lg border border-slate-700">
+              <table className="w-full text-xs">
+                <thead className="bg-slate-900/60 text-[10px] uppercase text-slate-400">
+                  <tr><th className="p-2 text-left">Antiguo (TyreControl)</th><th className="p-2 text-right">Montados</th><th className="p-2 text-left">Proveedor ahora</th></tr>
+                </thead>
+                <tbody>
+                  {cambio.lista.map((c) => (
+                    <tr key={c.tcVehicleId} className="border-t border-slate-700/60">
+                      <td className="p-2 font-mono">{c.antigua}</td>
+                      <td className="p-2 text-right tabular-nums">{c.montados}</td>
+                      <td className="p-2 font-mono text-slate-100">{c.nueva}{c.nombre ? <span className="ml-2 font-sans text-slate-400">· {c.nombre}</span> : null}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <label className="flex items-center gap-2">
+              <input id="cambio-baja" type="checkbox" checked={cambio.baja} disabled={cambiando}
+                onChange={(e) => setCambio({ ...cambio, baja: e.target.checked })} />
+              Dar de baja el vehículo antiguo (si sigue circulando sin telemetría, desmárcalo)
+            </label>
+          </div>
+        </Modal>
+      )}
+
       {altaLote && (
         <Modal
           title={`Crear ${creables} vehículos en TyreControl`}

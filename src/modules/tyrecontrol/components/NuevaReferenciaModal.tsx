@@ -88,6 +88,12 @@ export default function NuevaReferenciaModal({ prefill, onClose, onCreada }: {
   const idModelo = (nombre: string) =>
     modelosMarca.find((m) => m.nombre.toLowerCase() === nombre.trim().toLowerCase())?.id ?? null;
   const ofertaForm = nuevaRef ? ofertaDelModelo(oferta, modeloExistente?.id, nuevaRef.medida) : null;
+  // Lo que impide crear, dicho: con el botón apagado y nada más no se sabe qué falta.
+  const faltan = [
+    !nuevaRef.marca.trim() && "la marca",
+    !nuevaRef.modelo.trim() && "el modelo",
+    !nuevaRef.medida.trim() && "la medida",
+  ].filter(Boolean) as string[];
 
   /**
    * Al elegir modelo o medida: si el fabricante solo da un IC y un CV para esa
@@ -142,8 +148,11 @@ export default function NuevaReferenciaModal({ prefill, onClose, onCreada }: {
   return (
       <Modal title="Nueva referencia de catálogo" onClose={onClose}
         footer={<div className="flex justify-end gap-2">
+          {faltan.length > 0 && (
+            <span className="mr-auto self-center text-[12px] text-amber-300">Falta {faltan.join(", ")}</span>
+          )}
           <button onClick={onClose} className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200">Cancelar</button>
-          <button onClick={() => void guardar()} disabled={creando || !nuevaRef.marca.trim() || !nuevaRef.modelo.trim() || !nuevaRef.medida.trim()} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{creando ? "Creando…" : "Crear referencia"}</button>
+          <button onClick={() => void guardar()} disabled={creando || faltan.length > 0} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{creando ? "Creando…" : "Crear referencia"}</button>
         </div>}>
         <p className="mb-3 text-xs text-slate-400">
           Se elige de la lista; lo que no esté se añade con el botón <b>＋</b> de al lado y queda elegido.

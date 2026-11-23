@@ -27,6 +27,7 @@
  */
 
 import type { MontajeActual, Neumatico, PosicionVehiculo } from "../types";
+import { baseMedida } from "./medidas";
 
 // Los mismos límites que valida la función de la base. Repetirlos aquí no es
 // duplicar la regla: es poder decírselo al usuario antes de ir y volver, con
@@ -64,6 +65,13 @@ export interface BorradorFila {
   /** Si no está dada de alta y se elige del catálogo: la referencia (trae IC y CV). */
   referenciaCorreccionId: string;
   motivo: string;
+  /**
+   * Casillas de la goma que se informa. Solo SUMAN: la base nunca le quita a
+   * una goma lo que ya fuera. Si la marca es recauchutadora, la base la marca
+   * recauchutada aunque aquí venga en false.
+   */
+  recauchutado: boolean;
+  reesculturado: boolean;
 }
 
 export function borradorVacio(): BorradorFila {
@@ -71,6 +79,7 @@ export function borradorVacio(): BorradorFila {
     referenciaId: "", profundidadMm: "", presionBar: "", numeroSerie: "", dot: "",
     observaciones: "", coincide: true, correccion: "ficha", neumaticoCorrectoId: "",
     marca: "", modelo: "", medida: "", referenciaCorreccionId: "", motivo: "",
+    recauchutado: false, reesculturado: false,
   };
 }
 
@@ -188,6 +197,8 @@ export function datosMedicion(b: BorradorFila): Record<string, string> {
   if (dot) datos.dot = dot;
   const obs = (b.observaciones ?? "").trim();
   if (obs) datos.observaciones = obs;
+  if (b.recauchutado) datos.recauchutado = "true";
+  if (b.reesculturado) datos.reesculturado = "true";
   return datos;
 }
 
@@ -241,4 +252,93 @@ export function etiquetaNeumatico(n: Neumatico | null): string {
 export function descripcionNeumatico(n: Neumatico | null): string {
   if (!n) return "—";
   return [n.marca, n.modelo, n.medida].filter(Boolean).join(" · ") || "—";
+}
+
+// ── Qué ruedas del catálogo se ofrecen en cada posición ─────────────────────
+//
+// Un vehículo puede llevar medidas distintas por eje: una tractora monta
+// 385/65R22.5 en la dirección y 315/80R22.5 en la tracción. Filtrar todas
+// las posiciones por UNA medida escondía en la tracción justo las ruedas que
+// lleva (una DH51 no existe en 385/65). Cada posición filtra por la suya.
+
+/** Lo mínimo de una referencia del catálogo que hace falta para filtrarla. */
+export interface RefCatalogo {
+  id: string;
+  referencia_completa?: string | null;
+  tyre_size?: { medida?: string | null } | null;
+}
+
+/** La medida configurada de una posición: la de su eje y, si no, la del vehículo. */
+export function medidaDePosicion(
+  posicionId: string,
+  medidaPorPosicion: Record<string, string> | null | undefined,
+  medidaVehiculo: string | null | undefined,
+): string | null {
+  return medidaPorPosicion?.[posicionId] || medidaVehiculo || null;
+}
+
+/** ¿La referencia es de alguna de estas medidas? Sin medidas, encaja todo. */
+export function encajaEnMedidas(ref: RefCatalogo, medidas: (string | null | undefined)[]): boolean {
+  const validas = medidas.filter((m): m is string => !!m);
+  if (validas.length === 0) return true;
+  const suya = baseMedida(ref.tyre_size?.medida);
+  return validas.some((m) => baseMedida(m) === suya);
+}
+
+/**
+ * El catálogo filtrado para un desplegable: por las medidas (si se pide) y
+ * por el texto buscado, con tope. La referencia ya elegida se conserva
+ * siempre aunque no encaje: si no, el desplegable la «borraría» a la vista.
+ */
+export function filtrarCatalogo<R extends RefCatalogo>(
+  referencias: R[],
+  opts: { medidas: (string | null | undefined)[]; soloMedida: boolean; busqueda: string; max: number; elegida?: string },
+): R[] {
+  const t = opts.busqueda.trim().toLowerCase();
+  const lista = referencias
+    .filter((r) => !opts.soloMedida || encajaEnMedidas(r, opts.medidas))
+    .filter((r) => !t || (r.referencia_completa ?? "").toLowerCase().includes(t))
+    .slice(0, opts.max);
+  if (opts.elegida && !lista.some((r) => r.id === opts.elegida)) {
+    const r = referencias.find((x) => x.id === opts.elegida);
+    if (r) lista.unshift(r);
+  }
+  return lista;
+}
+
+/** Las medidas distintas de las posiciones, en el orden del plano. */
+export function medidasDelPlano(
+  filas: Pick<FilaMontada, "posicionId">[],
+  medidaPorPosicion: Record<string, string> | null | undefined,
+  medidaVehiculo: string | null | undefined,
+): string[] {
+  const vistas = new Map<string, string>();
+  for (const f of filas) {
+    const m = medidaDePosicion(f.posicionId, medidaPorPosicion, medidaVehiculo);
+    if (m && !vistas.has(baseMedida(m))) vistas.set(baseMedida(m), m);
+  }
+  return [...vistas.values()];
+}
+
+/**
+ * «Poner en todas»: a qué posiciones libres va la referencia elegida. Con el
+ * filtro de medida puesto, solo a las de SU medida (o a las que no tienen
+ * medida configurada): poner una de dirección en la tracción es un error que
+ * luego nadie ve. Sin el filtro, a todas las libres, como pidió el usuario.
+ */
+export function libresParaReferencia(
+  filas: FilaMontada[],
+  ref: RefCatalogo | undefined,
+  medidaPorPosicion: Record<string, string> | null | undefined,
+  medidaVehiculo: string | null | undefined,
+  soloMedida: boolean,
+): string[] {
+  return filas
+    .filter((f) => !f.montajeId)
+    .filter((f) => {
+      if (!soloMedida || !ref) return true;
+      const m = medidaDePosicion(f.posicionId, medidaPorPosicion, medidaVehiculo);
+      return !m || encajaEnMedidas(ref, [m]);
+    })
+    .map((f) => f.posicionId);
 }

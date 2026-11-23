@@ -415,3 +415,82 @@ describe("enlace heredado", () => {
     expect(r.filas[0].motivo).toBe("sin_enlace");
   });
 });
+
+/**
+ * Las cuentas heredadas: el cliente de Webfleet anterior al Hub.
+ *
+ * Tiene credenciales y flota enlazada desde antes de que el Hub existiera,
+ * pero nadie le dio de alta una cuenta, así que el barrido no le preguntaba a
+ * nadie y su pantalla salía en blanco. Quién cumple eso lo decide
+ * `server/tyrecontrol/presencia/heredadas.ts`; aquí se fija cómo se usan.
+ */
+describe("cuentas heredadas", () => {
+  const flotaConEnlaceViejo = async () => [
+    {
+      id: "v1",
+      matricula: "1234ABC",
+      delegacionId: "base-reus",
+      activo: true,
+      enlaceHeredado: { connectorKey: "webfleet", externo: "WF-1" },
+    },
+  ];
+
+  it("sin cuenta en el Hub, barre con la heredada", async () => {
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([] as any);
+    const heredada = cuenta("webfleet", "default", [
+      posicion("WF-1", { provider: "webfleet", accountKey: "default" }),
+    ]);
+
+    const r = await barrerPresenciaBases(
+      CTX,
+      opciones({ leerFlota: flotaConEnlaceViejo, cuentasHeredadas: [heredada] }) as any,
+    );
+
+    expect(r.estado).toBe("completo");
+    expect(r.cuentas.map((c) => c.connectorKey)).toEqual(["webfleet"]);
+    expect(r.filas[0].estado).toBe(ESTADOS_PRESENCIA.IN_BASE);
+    expect(r.filas[0].proveedor).toBe("webfleet");
+  });
+
+  it("si el Hub ya tiene ese proveedor, manda el Hub y la heredada NO se usa", async () => {
+    // Que alguien diera de alta su Webfleet es una decisión: heredarle otra
+    // cuenta por detrás preguntaría dos veces a la misma y contaría sus
+    // vehículos por duplicado.
+    const delHub = cuenta("webfleet", "la-suya", [
+      posicion("WF-1", { provider: "webfleet", accountKey: "la-suya" }),
+    ]);
+    const heredada = cuenta("webfleet", "default", []);
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([delHub] as any);
+
+    const r = await barrerPresenciaBases(
+      CTX,
+      opciones({ leerFlota: flotaConEnlaceViejo, cuentasHeredadas: [heredada] }) as any,
+    );
+
+    expect(r.cuentas.map((c) => c.accountKey)).toEqual(["la-suya"]);
+    expect(heredada.connector.getFleetPositions).not.toHaveBeenCalled();
+  });
+
+  it("una cuenta del Hub de OTRO proveedor no estorba a la heredada", async () => {
+    const movertis = cuenta("movertis", "buses", []);
+    const heredada = cuenta("webfleet", "default", [
+      posicion("WF-1", { provider: "webfleet", accountKey: "default" }),
+    ]);
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([movertis] as any);
+
+    const r = await barrerPresenciaBases(
+      CTX,
+      opciones({ leerFlota: flotaConEnlaceViejo, cuentasHeredadas: [heredada] }) as any,
+    );
+
+    expect(r.cuentas.map((c) => c.connectorKey).sort()).toEqual(["movertis", "webfleet"]);
+    expect(r.filas[0].estado).toBe(ESTADOS_PRESENCIA.IN_BASE);
+  });
+
+  it("sin cuentas de ningún tipo, no se escribe nada", async () => {
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([] as any);
+    const r = await barrerPresenciaBases(CTX, opciones({ cuentasHeredadas: [] }) as any);
+    expect(r.estado).toBe("sin_cuentas");
+    expect(r.filas).toEqual([]);
+  });
+});
