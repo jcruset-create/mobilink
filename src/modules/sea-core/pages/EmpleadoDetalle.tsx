@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import CoreLayout from "../layouts/CoreLayout";
 import { supabase } from "../../almacen-neumaticos/services/supabase";
 import { apiFetch } from "../../apiFetch";
+import { Bike, Bus, Car, Caravan, Truck } from "lucide-react";
 import AccesoEmpleado from "../components/AccesoEmpleado";
 import HorarioEmpleado from "../components/HorarioEmpleado";
 import { useEsSuperadmin } from "../../esSuperadmin";
@@ -83,6 +84,41 @@ const VEREDICTO: Record<string, { label: string; clase: string }> = {
   no_coincide: { label: "No cuadra",  clase: "bg-red-500/20 text-red-300" },
   ilegible:    { label: "No se lee",  clase: "bg-amber-500/20 text-amber-300" },
 };
+
+/**
+ * El vehículo de cada clase del permiso.
+ *
+ * Una lista de «AM A1 A2 A B C1 C» no dice nada a quien no se las sabe de
+ * memoria, y quien revisa una ficha normalmente no se las sabe: lo que
+ * necesita ver de un vistazo es si el tío puede llevar el camión.
+ *
+ * La letra final E significa «con remolque» en todas (BE, C1E, CE, D1E, DE),
+ * así que se dibuja el vehículo más el remolque en vez de inventar un icono
+ * por cada combinación.
+ */
+function IconoClase({ clase }: { clase: string }) {
+  const limpia = clase.toUpperCase().replace(/[\s+]/g, "");
+  const conRemolque = limpia.length > 1 && limpia.endsWith("E");
+  const base = conRemolque ? limpia.slice(0, -1) : limpia;
+
+  const porLetra: Record<string, { Icono: typeof Car; que: string }> = {
+    A: { Icono: Bike, que: limpia === "AM" ? "Ciclomotor" : "Motocicleta" },
+    B: { Icono: Car, que: "Turismo" },
+    C: { Icono: Truck, que: "Camión" },
+    D: { Icono: Bus, que: "Autobús" },
+  };
+  const elegido = porLetra[base.charAt(0)];
+  if (!elegido) return null;
+
+  const { Icono, que } = elegido;
+  const etiqueta = conRemolque ? `${que} con remolque` : que;
+  return (
+    <span className="flex items-center gap-1 text-slate-300" title={etiqueta}>
+      <Icono className="h-4 w-4" role="img" aria-label={etiqueta} />
+      {conRemolque && <Caravan className="h-3.5 w-3.5 text-slate-400" aria-hidden="true" />}
+    </span>
+  );
+}
 
 const CONSENT_LABEL: Record<string, string> = {
   normativa_interna: "Normativa interna",
@@ -1290,7 +1326,10 @@ export default function EmpleadoDetalle() {
                       ) : (
                         revision.lectura.carnet.clases.map((c) => (
                           <div key={c.clase} className="flex items-center justify-between border-b border-slate-700 pb-2 text-sm">
-                            <span className="rounded bg-slate-700 px-2 py-0.5 font-mono text-xs text-slate-200">{c.clase}</span>
+                            <span className="flex items-center gap-2">
+                              <IconoClase clase={c.clase} />
+                              <span className="rounded bg-slate-700 px-2 py-0.5 font-mono text-xs text-slate-200">{c.clase}</span>
+                            </span>
                             <span className={c.caducidad ? "font-medium" : "text-amber-300"}>
                               {c.caducidad ?? "sin fecha"}
                             </span>
