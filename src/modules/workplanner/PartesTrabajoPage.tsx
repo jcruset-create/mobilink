@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BookOpen, CheckCircle2, FileScan, Loader2, Send, Trash2, Upload, Wand2 } from "lucide-react";
+import { BookOpen, CheckCircle2, FileScan, Loader2, Trash2, Upload, Wand2 } from "lucide-react";
 import {
   CLAVE_MATERIAL,
   claveArticulo,
@@ -361,7 +361,17 @@ export default function PartesTrabajoPage() {
 
   /** Lo que ha tocado la persona; si no ha tocado nada, manda la propuesta. */
   const [elegidos, setElegidos] = useState<Record<number, string[]>>({});
-  useEffect(() => { setElegidos({}); }, [parte]);
+
+  /** Los trabajos de este parte que ya se han creado, para que la fila se quede a la vista. */
+  type FilaCreada = { indiceLinea: number; id: number; plate: string; label: string; quantity: number; asignados: string[]; estado: "activo" | "validacion" };
+  const [creadas, setCreadas] = useState<FilaCreada[]>([]);
+  const [creando, setCreando] = useState<number | null>(null);
+  useEffect(() => { setElegidos({}); setCreadas([]); }, [parte]);
+
+  const pendientes = useMemo(
+    () => (conversion?.trabajos ?? []).filter((t) => !creadas.some((c) => c.indiceLinea === t.indiceLinea)),
+    [conversion, creadas]
+  );
 
   function asignadosDe(indiceLinea: number): string[] {
     return elegidos[indiceLinea] ?? propuestas.get(indiceLinea)?.asignados ?? [];
@@ -400,8 +410,10 @@ export default function PartesTrabajoPage() {
    * arrancan ya, con los técnicos ocupados, igual que el ✓ Autorizar del
    * operativo.
    */
-  async function crearTrabajos(modo: "proponer" | "autorizar") {
+  async function crearTrabajos(modo: "proponer" | "autorizar", soloIndice?: number) {
     if (!conversion || conversion.trabajos.length === 0) return;
+    const aCrear = pendientes.filter((t) => soloIndice == null || t.indiceLinea === soloIndice);
+    if (aCrear.length === 0) return;
 
     // Una línea sin clasificar no viaja al trabajo: ni como tarea ni como
     // material. Antes se perdía en silencio, y el técnico se encontraba la
@@ -420,7 +432,7 @@ export default function PartesTrabajoPage() {
     if (modo === "autorizar") {
       // Un mismo técnico no puede empezar dos trabajos del mismo parte.
       const vistos = new Set<string>();
-      for (const propuesto of conversion.trabajos) {
+      for (const propuesto of aCrear) {
         const asignados = asignadosDe(propuesto.indiceLinea);
         const motivo = motivoNoAutorizable(asignados, techs, propuesto.area);
         if (motivo) {
@@ -438,14 +450,16 @@ export default function PartesTrabajoPage() {
     }
 
     setEstado("creando");
+    setCreando(soloIndice ?? null);
     setError("");
 
     try {
       const material = resumenMateriales(conversion.materiales);
       const creados: string[] = [];
+      const filasNuevas: FilaCreada[] = [];
       let techsActuales = [...techs];
 
-      for (const propuesto of conversion.trabajos) {
+      for (const propuesto of aCrear) {
         const asignados = asignadosDe(propuesto.indiceLinea);
         const porQue = elegidos[propuesto.indiceLinea]
           ? `Técnicos elegidos a mano en Partes de trabajo: ${asignados.join(" + ") || "ninguno"}.`
@@ -481,6 +495,15 @@ export default function PartesTrabajoPage() {
           `${propuesto.plate} · ${propuesto.label} ×${propuesto.quantity}` +
             (asignados.length ? ` → ${asignados.join(" + ")}` : " → sin técnico libre")
         );
+        filasNuevas.push({
+          indiceLinea: propuesto.indiceLinea,
+          id: idReal,
+          plate: propuesto.plate,
+          label: propuesto.label,
+          quantity: propuesto.quantity,
+          asignados,
+          estado: modo === "autorizar" ? "activo" : "validacion",
+        });
       }
 
       const titulo =
@@ -493,13 +516,17 @@ export default function PartesTrabajoPage() {
             : `${creados.length} trabajos creados y pendientes de validar:`;
       setAviso(`${titulo}\n${creados.join("\n")}`);
 
-      setParte(null);
-      setEstado("vacio");
+      // La fila se queda a la vista con su estado; el parte sigue abierto
+      // hasta que se cierra con «Hecho» o se crean todos los trabajos.
+      setCreadas((prev) => [...prev, ...filasNuevas]);
+      setEstado("revisando");
       await cargarBase();
     } catch (e: any) {
       setError(e?.message || "No se pudieron crear los trabajos.");
       setEstado("revisando");
       await cargarBase();
+    } finally {
+      setCreando(null);
     }
   }
 
@@ -740,112 +767,135 @@ export default function PartesTrabajoPage() {
               </div>
             )}
 
-            {/* Trabajos que se van a crear */}
-            <div className="rounded-2xl border border-slate-700 bg-slate-800 p-4">
-              <h2 className="mb-3 text-sm font-black uppercase tracking-wide text-slate-300">
-                {conversion.trabajos.length === 1
-                  ? "Trabajo a crear"
-                  : `Trabajos a crear (${conversion.trabajos.length})`}
+            {/* Trabajos del parte: una fila por trabajo, como «Pendientes de validar» de Operativo 2 */}
+            <div className="rounded-2xl border border-rose-900/60 bg-rose-950/20 p-4">
+              <h2 className="mb-3 text-sm font-black uppercase tracking-wide text-rose-300">
+                {pendientes.length === 0
+                  ? "Trabajos del parte"
+                  : `Pendientes de autorizar (${pendientes.length})`}
               </h2>
 
-              {conversion.trabajos.length === 0 ? (
-                <p className="text-xs text-slate-500">
-                  Ninguna línea de servicio reconocida todavía.
-                </p>
-              ) : (
-                <div className="space-y-1 text-sm">
-                  {conversion.trabajos.map((t) => {
-                    const asignados = asignadosDe(t.indiceLinea);
-                    const responsable = asignados[0] ?? "";
-                    const apoyos = asignados.slice(1);
-                    const elegibles = tecnicosParaElegir(techs);
-                    const motivo = motivoNoAutorizable(asignados, techs, t.area);
-                    const porQue = elegidos[t.indiceLinea]
-                      ? "Técnicos elegidos a mano."
-                      : propuestas.get(t.indiceLinea)?.porQue ?? "";
-                    return (
-                      <div key={t.indiceLinea} className="rounded-lg bg-slate-900 px-3 py-2">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-semibold">{t.plate}</span>
-                          <span className="flex-1 truncate">{t.label}</span>
-                          <span className="text-slate-400">×{t.quantity}</span>
-                          <span className="text-slate-500">{t.estimatedMinutes} min</span>
-                        </div>
-
-                        {t.tareasIncluidas.length > 0 && (
-                          <div className="mt-1 text-xs text-slate-400">
-                            + {t.tareasIncluidas
-                              .map((tarea) => `${tarea.label} ×${tarea.quantity ?? 1}`)
-                              .join(" · ")}
-                          </div>
-                        )}
-
-                        {/* Técnicos: la propuesta del motor, editable aquí mismo */}
-                        <div className="mt-2 flex flex-wrap items-center gap-2">
-                          <select
-                            value={responsable}
-                            onChange={(e) =>
-                              setElegidos((prev) => ({
-                                ...prev,
-                                [t.indiceLinea]: conResponsable(asignados, e.target.value),
-                              }))
-                            }
-                            className="rounded border border-slate-600 bg-slate-800 px-2 py-1 text-xs font-semibold"
-                            title="Responsable del trabajo"
-                          >
-                            <option value="">Resp: sin técnico</option>
-                            {elegibles.map((tech) => (
-                              <option key={tech.name} value={tech.name}>
-                                Resp: {etiquetaDeTecnico(tech)}
-                              </option>
-                            ))}
-                          </select>
-                          {apoyos.map((n) => (
-                            <span
-                              key={n}
-                              className="inline-flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[11px] text-amber-300"
-                            >
-                              {n}
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setElegidos((prev) => ({ ...prev, [t.indiceLinea]: sinApoyo(asignados, n) }))
-                                }
-                                className="font-bold"
-                                title="Quitar apoyo"
-                              >
-                                ✕
-                              </button>
-                            </span>
-                          ))}
-                          <select
-                            value=""
-                            onChange={(e) => {
-                              if (!e.target.value) return;
-                              setElegidos((prev) => ({ ...prev, [t.indiceLinea]: conApoyo(asignados, e.target.value) }));
-                            }}
-                            className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-1 text-[11px] text-amber-300"
-                            title="Añadir apoyo"
-                          >
-                            <option value="">+ Apoyo…</option>
-                            {elegibles
-                              .filter((tech) => !asignados.includes(tech.name))
-                              .map((tech) => (
-                                <option key={tech.name} value={tech.name}>{etiquetaDeTecnico(tech)}</option>
-                              ))}
-                          </select>
-                          {motivo ? (
-                            <span className="text-[11px] text-amber-400">{motivo}</span>
-                          ) : (
-                            <span className="text-[11px] text-emerald-400">Se puede autorizar ya.</span>
-                          )}
-                        </div>
-                        {porQue && <div className="mt-1 text-[11px] text-slate-500">{porQue}</div>}
-                      </div>
-                    );
-                  })}
-                </div>
+              {conversion.trabajos.length === 0 && (
+                <p className="text-xs text-slate-500">Ninguna línea de servicio reconocida todavía.</p>
               )}
+
+              <div className="space-y-2">
+                {pendientes.map((t) => {
+                  const asignados = asignadosDe(t.indiceLinea);
+                  const responsable = asignados[0] ?? "";
+                  const apoyos = asignados.slice(1);
+                  const elegibles = tecnicosParaElegir(techs);
+                  const motivo = motivoNoAutorizable(asignados, techs, t.area);
+                  const ocupado = estado === "creando";
+                  const porQue = elegidos[t.indiceLinea]
+                    ? "Técnicos elegidos a mano."
+                    : propuestas.get(t.indiceLinea)?.porQue ?? "";
+                  return (
+                    <div key={t.indiceLinea} className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-lg font-black tracking-wide">{t.plate}</span>
+                        <span className="rounded-lg border border-slate-600 bg-slate-800 px-3 py-1.5 text-base font-semibold">
+                          {t.label}
+                          <span className="ml-2 text-sm font-normal text-slate-400">×{t.quantity} · {t.estimatedMinutes} min</span>
+                        </span>
+
+                        <select
+                          value={responsable}
+                          onChange={(e) =>
+                            setElegidos((prev) => ({ ...prev, [t.indiceLinea]: conResponsable(asignados, e.target.value) }))
+                          }
+                          className="rounded-lg border border-slate-600 bg-slate-800 px-3 py-1.5 text-base font-semibold"
+                          title="Responsable del trabajo"
+                        >
+                          <option value="">Resp: sin técnico</option>
+                          {elegibles.map((tech) => (
+                            <option key={tech.name} value={tech.name}>Resp: {etiquetaDeTecnico(tech)}</option>
+                          ))}
+                        </select>
+
+                        {apoyos.map((n) => (
+                          <span
+                            key={n}
+                            className="inline-flex items-center gap-1 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-sm text-amber-300"
+                          >
+                            {n}
+                            <button
+                              type="button"
+                              onClick={() => setElegidos((prev) => ({ ...prev, [t.indiceLinea]: sinApoyo(asignados, n) }))}
+                              className="font-bold"
+                              title="Quitar apoyo"
+                            >
+                              ✕
+                            </button>
+                          </span>
+                        ))}
+                        <select
+                          value=""
+                          onChange={(e) => {
+                            if (!e.target.value) return;
+                            setElegidos((prev) => ({ ...prev, [t.indiceLinea]: conApoyo(asignados, e.target.value) }));
+                          }}
+                          className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-base text-amber-300"
+                          title="Añadir apoyo"
+                        >
+                          <option value="">+ Apoyo…</option>
+                          {elegibles
+                            .filter((tech) => !asignados.includes(tech.name))
+                            .map((tech) => (
+                              <option key={tech.name} value={tech.name}>{etiquetaDeTecnico(tech)}</option>
+                            ))}
+                        </select>
+
+                        <button
+                          type="button"
+                          disabled={ocupado || Boolean(motivo)}
+                          title={motivo ?? "El trabajo arranca ya con estos técnicos"}
+                          onClick={() => void crearTrabajos("autorizar", t.indiceLinea)}
+                          className="flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-base font-bold text-white hover:bg-emerald-500 disabled:opacity-40"
+                        >
+                          {creando === t.indiceLinea ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                          ✓ Autorizar
+                        </button>
+                        <button
+                          type="button"
+                          disabled={ocupado}
+                          title="Entra en «Pendientes de validar» de Operativo 2 con estos técnicos"
+                          onClick={() => void crearTrabajos("proponer", t.indiceLinea)}
+                          className="rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-1.5 text-base text-amber-300 hover:bg-amber-400/20 disabled:opacity-40"
+                        >
+                          Pendiente de validar
+                        </button>
+                      </div>
+
+                      <div className="mt-2 text-xs text-slate-400">
+                        {t.tareasIncluidas.length > 0 && (
+                          <>+ {t.tareasIncluidas.map((tarea) => `${tarea.label} ×${tarea.quantity ?? 1}`).join(" · ")}. </>
+                        )}
+                        {porQue}
+                        {motivo && <span className="ml-1 text-amber-400">{motivo}</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {creadas.map((c) => (
+                  <div key={`creada-${c.indiceLinea}`} className="rounded-xl border border-emerald-800/60 bg-emerald-950/30 px-3 py-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-lg font-black tracking-wide">{c.plate}</span>
+                      <span className="rounded-lg border border-slate-600 bg-slate-800 px-3 py-1.5 text-base font-semibold">
+                        {c.label}<span className="ml-2 text-sm font-normal text-slate-400">×{c.quantity}</span>
+                      </span>
+                      <span className="text-base">
+                        {c.asignados.length ? c.asignados.map((n, i) => (i === 0 ? `${n} - Responsable` : `${n} - Apoyo`)).join(" · ") : "Sin técnico"}
+                      </span>
+                      <span className={`rounded-full px-3 py-1 text-sm font-bold ${c.estado === "activo" ? "bg-emerald-600 text-white" : "bg-amber-500 text-amber-950"}`}>
+                        {c.estado === "activo" ? "En marcha" : "Pendiente de validar en Operativo 2"}
+                      </span>
+                      <span className="text-xs text-slate-500">Trabajo nº {c.id}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
 
               {conversion.materiales.length > 0 && (
                 <p className="mt-3 text-xs text-slate-400">
@@ -854,47 +904,34 @@ export default function PartesTrabajoPage() {
               )}
 
               <div className="mt-4 flex flex-wrap items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => void crearTrabajos("autorizar")}
-                  disabled={
-                    estado === "creando" ||
-                    conversion.trabajos.length === 0 ||
-                    conversion.trabajos.some((t) => motivoNoAutorizable(asignadosDe(t.indiceLinea), techs, t.area))
-                  }
-                  title="Los técnicos elegidos empiezan ya, como el ✓ Autorizar de Operativo 2"
-                  className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
-                >
-                  {estado === "creando" ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
+                {pendientes.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => void crearTrabajos("autorizar")}
+                    disabled={
+                      estado === "creando" ||
+                      pendientes.some((t) => motivoNoAutorizable(asignadosDe(t.indiceLinea), techs, t.area))
+                    }
+                    className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
+                  >
                     <CheckCircle2 className="h-4 w-4" />
-                  )}
-                  ✓ Autorizar y empezar
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => void crearTrabajos("proponer")}
-                  disabled={estado === "creando" || conversion.trabajos.length === 0}
-                  title="Entra en «Pendientes de validar» de Operativo 2 con estos técnicos"
-                  className="flex items-center gap-2 rounded-lg border border-emerald-600/60 bg-emerald-600/10 px-4 py-2 text-sm font-semibold text-emerald-300 hover:bg-emerald-600/20 disabled:opacity-50"
-                >
-                  <Send className="h-4 w-4" />
-                  Crear y dejar pendiente de validar
-                </button>
+                    ✓ Autorizar todos
+                  </button>
+                )}
 
                 <button
                   type="button"
                   onClick={() => { setParte(null); setEstado("vacio"); }}
                   className="rounded-lg border border-slate-600 bg-slate-800 px-4 py-2 text-sm font-semibold hover:bg-slate-700"
                 >
-                  Descartar
+                  {pendientes.length === 0 ? "Hecho" : creadas.length > 0 ? "Cerrar el parte" : "Descartar"}
                 </button>
 
                 <span className="flex items-center gap-1 text-xs text-slate-500">
                   <Wand2 className="h-3.5 w-3.5" />
-                  Autorizar arranca el trabajo ya con esos técnicos; dejarlo pendiente lo manda a Operativo 2.
+                  {pendientes.length === 0
+                    ? "Todos los trabajos del parte están creados."
+                    : "✓ Autorizar arranca el trabajo ya con esos técnicos; «Pendiente de validar» lo manda a Operativo 2."}
                 </span>
               </div>
             </div>
