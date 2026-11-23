@@ -172,6 +172,7 @@ import {
   createAltaOperarioAdminRouter,
   createAltaOperarioPublicRouter,
 } from "./core/altaOperarioRouter.ts";
+import { createNumeroTrabajadorRouter } from "./core/numeroTrabajador.ts";
 import { createCalidadRouter } from "./satisfaction/routerInterno.ts";
 import { createSatisfactionCallbackRouter } from "./satisfaction/routerCallback.ts";
 import { RUTA_CALLBACK } from "./satisfaction/urlPublica.ts";
@@ -23204,6 +23205,8 @@ app.use("/api/public/satisfaction", createSatisfactionPublicRouter());
  * nada más que el token que lleva en la URL.
  */
 app.use("/api/core/alta", createAltaOperarioAdminRouter());
+// Número de trabajador por empresa (clave para enlazar módulos con Core).
+app.use("/api/core/empleados", createNumeroTrabajadorRouter());
 app.use("/api/public/alta", createAltaOperarioPublicRouter());
 
 /*

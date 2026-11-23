@@ -189,7 +189,38 @@ export default function EmpleadoDetalle() {
   const [pinGuardando, setPinGuardando] = useState(false);
   const [pinMensaje, setPinMensaje] = useState("");
 
+  // Número de trabajador (único por empresa). Lo guarda el servidor, que es
+  // quien comprueba que no se repite y que quien lo cambia es administrador.
+  const [numeroInput, setNumeroInput] = useState("");
+  const [numeroGuardando, setNumeroGuardando] = useState(false);
+  const [numeroMensaje, setNumeroMensaje] = useState<{ ok: boolean; texto: string } | null>(null);
+
   useEffect(() => { if (id) cargar(id); }, [id]);
+
+  async function guardarNumero() {
+    if (!id) return;
+    setNumeroGuardando(true);
+    setNumeroMensaje(null);
+    try {
+      const r = await apiFetch(`/api/core/empleados/${id}/numero-trabajador`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ numeroTrabajador: numeroInput }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setNumeroMensaje({ ok: false, texto: d?.error || "No se ha podido guardar el número." });
+        return;
+      }
+      setEmpleado((e: any) => (e ? { ...e, numero_trabajador: d.numeroTrabajador } : e));
+      setNumeroInput(d.numeroTrabajador ?? "");
+      setNumeroMensaje({ ok: true, texto: d.numeroTrabajador ? "Número guardado." : "Número quitado." });
+    } catch {
+      setNumeroMensaje({ ok: false, texto: "No se ha podido guardar el número." });
+    } finally {
+      setNumeroGuardando(false);
+    }
+  }
 
   async function cargarEstadoPin(empId: string) {
     try {
@@ -269,6 +300,8 @@ export default function EmpleadoDetalle() {
       supabase.from("sea_employee_clothing").select("*").eq("employee_id", empId).maybeSingle(),
     ]);
     setEmpleado(emp as any);
+    setNumeroInput((emp as any)?.numero_trabajador ?? "");
+    setNumeroMensaje(null);
     setCompetencias(comp ?? []);
     setCertificaciones(cert ?? []);
     setAutorizaciones(aut ?? []);
@@ -793,6 +826,40 @@ export default function EmpleadoDetalle() {
               </div>
             ))}
           </div>
+
+          {/*
+            * Solo sale cuando la columna existe: hasta que se ejecuta
+            * core_numero_trabajador.sql, `select("*")` no la trae.
+            */}
+          {"numero_trabajador" in (empleado as any) && (
+            <div className="rounded-xl border border-slate-700 bg-slate-800 p-5 space-y-3 md:col-span-2">
+              <div>
+                <h2 className="font-semibold text-slate-200">Número de trabajador</h2>
+                <p className="text-xs text-slate-400">
+                  Número interno de la empresa. No se puede repetir dentro de la misma empresa; sirve para
+                  reconocer a esta persona en el resto de módulos.
+                </p>
+              </div>
+              {!empleado.company_id ? (
+                <p className="text-sm text-amber-300">Asígnale una empresa antes de darle número: el número es por empresa.</p>
+              ) : (
+                <div className="flex flex-wrap items-center gap-2">
+                  <input value={numeroInput} onChange={(e) => setNumeroInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") void guardarNumero(); }}
+                    maxLength={20} placeholder="Ej. 015"
+                    className="w-40 rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 font-mono text-sm" />
+                  <button onClick={() => void guardarNumero()}
+                    disabled={numeroGuardando || numeroInput.trim().toUpperCase() === ((empleado as any).numero_trabajador ?? "")}
+                    className="rounded-lg bg-slate-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-600 disabled:opacity-50">
+                    {numeroGuardando ? "Guardando…" : "Guardar número"}
+                  </button>
+                </div>
+              )}
+              {numeroMensaje && (
+                <p className={`text-sm ${numeroMensaje.ok ? "text-green-300" : "text-red-300"}`}>{numeroMensaje.texto}</p>
+              )}
+            </div>
+          )}
 
           <div className="rounded-xl border border-slate-700 bg-slate-800 p-5 space-y-3 md:col-span-2">
             <div className="flex items-center justify-between">
