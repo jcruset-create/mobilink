@@ -373,6 +373,42 @@ export type InformeGasto = {
   } | null;
 };
 
+/** Cómo se ha reconocido al proveedor de un gasto. Ver `server/cash/expensestats.ts`. */
+export type ViaProveedor = "ERP" | "NIF" | "NOMBRE";
+
+export type LineaProveedorGasto = {
+  /** `null` = los pagos sin proveedor reconocible. */
+  clave: string | null;
+  nombre: string;
+  via: ViaProveedor | null;
+  identificador: string | null;
+  importeCentimos: number;
+  operaciones: number;
+  conceptoPrincipal: string | null;
+};
+
+export type InformeProveedores = {
+  desde: string;
+  hasta: string;
+  centroId: string | null;
+  conceptoId: number | null;
+  totalCentimos: number;
+  operaciones: number;
+  sinProveedorCentimos: number;
+  proveedores: LineaProveedorGasto[];
+};
+
+export type PagoDeProveedor = {
+  operacionId: number;
+  numero: string;
+  fecha: string;
+  caja: string;
+  documento: string | null;
+  concepto: string | null;
+  destino: string | null;
+  importeCentimos: number;
+};
+
 // ── AutoScan ───────────────────────────────────────────────────────────────
 
 export type EstadoAutoScan =

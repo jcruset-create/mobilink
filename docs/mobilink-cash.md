@@ -160,7 +160,7 @@ operación. Una ERP caída nunca revierte un movimiento físico que ya ocurrió.
 Rutas `/cash/*`, layout propio con la misma topbar+sidebar que Administración.
 Pantallas: Jornada actual · Cobros · Pagos · Movimientos · Stock de caja ·
 Arqueo · Cierre · Histórico · Informes · Ingresos bancarios · Cambio del banco ·
-Dar cambio · Entregas · Gasto por concepto · Integración ERP · Configuración.
+Dar cambio · Entregas · Gasto (por concepto y por proveedor) · Integración ERP · Configuración.
 
 Componente central reutilizable: `DenominationGrid`, la rejilla de −/+ por
 denominación pensada para tablet, que se usa igual en cobro, pago, movimiento,
@@ -805,6 +805,27 @@ está probada aparte (`utils/periodo.ts`): el servidor va en UTC y el taller en
 Madrid, así que en verano el día 1 a las 00:30 de Madrid son todavía las 22:30
 del día anterior en UTC. Un `mesEnCurso` ingenuo enseñaría el mes pasado
 durante dos horas cada noche de cambio de mes.
+
+**Por proveedor.** La misma pantalla (en el menú, «Gasto») tiene una segunda
+pestaña: a quién se le paga. Usa las mismas filas de gasto que el reparto por
+concepto (mismo corte por fecha de jornada, anulaciones fuera, una liquidación
+contada por sus tickets) y solo cambia por qué se agrupa. El proveedor no es
+un campo de la operación, así que se reconoce con lo más fiable que haya:
+
+1. El **código de proveedor de la ERP**, si el pago salda una factura suya.
+2. El **NIF del emisor**, en los tickets de una liquidación: el proveedor es el
+   restaurante o la autopista, no el trabajador, que ya es el destino.
+3. El **nombre escrito**, en un pago a mano, sin mayúsculas, tildes,
+   puntuación ni forma jurídica: «Repsol» y «REPSOL, S.A.» son uno.
+   «Gasolinera Repsol Valls» no se une, y la pantalla lo dice.
+
+Lo que no trae nada sale como **«Sin proveedor»**, para que el total cuadre
+con el del reparto por concepto (hay una prueba que lo comprueba). Cada fila
+dice por dónde se ha reconocido y, al abrirla, enseña sus pagos con la
+operación de caja y el documento: la factura o la liquidación. La normalización es
+código sin base (`server/cash/domain/proveedores.ts`, con sus pruebas); la
+agrupación se hace en el servidor y no en SQL, porque son las filas de un
+periodo de una empresa.
 
 ## 7 decies. Reabrir una jornada
 

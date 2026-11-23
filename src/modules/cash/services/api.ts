@@ -51,6 +51,8 @@ import type {
   DestinoGasto,
   GranularidadGasto,
   InformeGasto,
+  InformeProveedores,
+  PagoDeProveedor,
   EquivalenciaErp,
   ResultadoCotejo,
   Liquidacion,
@@ -1082,6 +1084,30 @@ export const estadisticasDeGasto = (p: {
   if (p.conceptoId != null) q.set("conceptoId", String(p.conceptoId));
   if (p.comparar) q.set("comparar", "1");
   return pedir<InformeGasto>(`/expense-stats?${q.toString()}`);
+};
+
+type FiltroProveedores = {
+  desde: string;
+  hasta: string;
+  centro?: string | null;
+  conceptoId?: number | null;
+};
+
+function consultaDeProveedores(p: FiltroProveedores): URLSearchParams {
+  const q = new URLSearchParams({ desde: p.desde, hasta: p.hasta });
+  if (p.centro) q.set("centro", p.centro);
+  if (p.conceptoId != null) q.set("conceptoId", String(p.conceptoId));
+  return q;
+}
+
+export const gastoPorProveedor = (p: FiltroProveedores) =>
+  pedir<InformeProveedores>(`/expense-stats/suppliers?${consultaDeProveedores(p).toString()}`);
+
+/** `clave` `null` = los pagos sin proveedor. */
+export const pagosDeProveedor = (p: FiltroProveedores, clave: string | null) => {
+  const q = consultaDeProveedores(p);
+  if (clave) q.set("clave", clave);
+  return pedir<{ pagos: PagoDeProveedor[] }>(`/expense-stats/suppliers/payments?${q.toString()}`);
 };
 
 // ── AutoScan ───────────────────────────────────────────────────────────────

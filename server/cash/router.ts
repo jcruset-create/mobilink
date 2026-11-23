@@ -2561,6 +2561,40 @@ export function createCashRouter(): Router {
     })
   );
 
+  /*
+   * El mismo gasto, por proveedor. Mismo filtro y mismo ámbito de taller que
+   * el de arriba; `clave` vacía en el detalle = los pagos sin proveedor.
+   */
+  const filtroDeProveedores = (req: Request) => {
+    const q = req.query;
+    return {
+      empresaId: req.authCtx!.empresaId,
+      desde: String(q.desde ?? ""),
+      hasta: String(q.hasta ?? ""),
+      centroId: req.cashCentroId ?? (typeof q.centro === "string" && q.centro ? q.centro : null),
+      conceptoId: q.conceptoId ? enteroPositivo(q.conceptoId, "conceptoId") : null,
+    };
+  };
+
+  r.get(
+    "/expense-stats/suppliers",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const { gastoPorProveedor } = await import("./expensestats.ts");
+      res.json(await gastoPorProveedor(filtroDeProveedores(req)));
+    })
+  );
+
+  r.get(
+    "/expense-stats/suppliers/payments",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const { pagosDeProveedor } = await import("./expensestats.ts");
+      const clave = typeof req.query.clave === "string" && req.query.clave ? req.query.clave : null;
+      res.json({ pagos: await pagosDeProveedor(filtroDeProveedores(req), clave) });
+    })
+  );
+
   // ── Conceptos de gasto y sus destinos ────────────────────────────────────
 
   /*

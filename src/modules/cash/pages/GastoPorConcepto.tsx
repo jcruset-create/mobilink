@@ -5,6 +5,10 @@
  * tramo anterior, y por centro o consolidado de toda la empresa. Es de solo
  * lectura: desde aquí no se toca ni una operación.
  *
+ * Una segunda pestaña enseña el mismo gasto POR PROVEEDOR, a quién se le paga
+ * (`components/GastoProveedores.tsx`). Fechas, centro y concepto valen para las
+ * dos; agrupar por periodo, solo para la de conceptos.
+ *
  * ## Tres cosas que la pantalla dice en voz alta, porque callarlas engaña
  *
  * **Lo sin clasificar se enseña.** Clasificar no es obligatorio —fue la
@@ -37,8 +41,9 @@ import { Aviso, Cabecera, EmptyRow, ErrorBox, TableWrap, thCls, tdCls, inputCls,
 import { euros, eurosConSigno } from "../utils/money";
 /* El mes en curso es lo que se quiere ver al entrar nueve de cada diez veces. */
 import { mesEnCurso } from "../utils/periodo";
-import type { ConceptoGasto, GranularidadGasto, InformeGasto } from "../types";
+import type { ConceptoGasto, GranularidadGasto, InformeGasto, InformeProveedores } from "../types";
 import * as api from "../services/api";
+import GastoProveedores from "../components/GastoProveedores";
 
 const ETIQUETA_GRANULARIDAD: Record<GranularidadGasto, string> = {
   dia: "Por día",
@@ -57,7 +62,13 @@ export default function GastoPorConcepto() {
   /** `null` = todos los conceptos. Con uno, se entra en el detalle. */
   const [conceptoId, setConceptoId] = useState<number | null>(null);
 
+  /** Lo mismo, visto por concepto o por proveedor. Fechas, centro y concepto valen para las dos. */
+  const [vista, setVista] = useState<"concepto" | "proveedor">("concepto");
+
   const [informe, setInforme] = useState<InformeGasto | null>(null);
+  const [proveedores, setProveedores] = useState<InformeProveedores | null>(null);
+  /** Sube en cada consulta: remonta la tabla de proveedores y vacía su caché de detalles. */
+  const [consulta, setConsulta] = useState(0);
   const [conceptos, setConceptos] = useState<ConceptoGasto[]>([]);
   const [error, setError] = useState("");
   const [cargando, setCargando] = useState(false);
@@ -78,22 +89,28 @@ export default function GastoPorConcepto() {
     setCargando(true);
     setError("");
     try {
-      const r = await api.estadisticasDeGasto({
-        desde,
-        hasta,
-        granularidad,
-        centro: centro || null,
-        conceptoId,
-        comparar: true,
-      });
-      setInforme(r);
+      if (vista === "proveedor") {
+        setProveedores(await api.gastoPorProveedor({ desde, hasta, centro: centro || null, conceptoId }));
+        setConsulta((n) => n + 1);
+      } else {
+        const r = await api.estadisticasDeGasto({
+          desde,
+          hasta,
+          granularidad,
+          centro: centro || null,
+          conceptoId,
+          comparar: true,
+        });
+        setInforme(r);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error consultando el gasto");
-      setInforme(null);
+      if (vista === "proveedor") setProveedores(null);
+      else setInforme(null);
     } finally {
       setCargando(false);
     }
-  }, [desde, hasta, granularidad, centro, conceptoId]);
+  }, [vista, desde, hasta, granularidad, centro, conceptoId]);
 
   useEffect(() => {
     void buscar();
@@ -114,9 +131,34 @@ export default function GastoPorConcepto() {
   return (
     <div className="space-y-3">
       <Cabecera
-        titulo="Gasto por concepto"
-        descripcion="En qué se va el dinero de la caja, y a quién se le imputa."
-      />
+        titulo="Gasto"
+        descripcion={
+          vista === "proveedor"
+            ? "A quién se le paga el dinero de la caja."
+            : "En qué se va el dinero de la caja, y a quién se le imputa."
+        }
+      >
+        <div role="tablist" aria-label="Ver el gasto por" className="flex gap-1 rounded-lg border border-slate-700 bg-slate-900 p-1">
+          {(
+            [
+              ["concepto", "Por concepto"],
+              ["proveedor", "Por proveedor"],
+            ] as const
+          ).map(([v, etiqueta]) => (
+            <button
+              key={v}
+              role="tab"
+              aria-selected={vista === v}
+              onClick={() => setVista(v)}
+              className={`rounded-md px-3 py-1.5 text-[13px] font-semibold ${
+                vista === v ? "bg-sky-700 text-white" : "text-slate-300 hover:bg-slate-800"
+              }`}
+            >
+              {etiqueta}
+            </button>
+          ))}
+        </div>
+      </Cabecera>
 
       {error && <ErrorBox>{error}</ErrorBox>}
 
@@ -129,20 +171,42 @@ export default function GastoPorConcepto() {
           <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Hasta</span>
           <input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} className={inputCls} />
         </label>
-        <label className="block">
-          <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Agrupar</span>
-          <select
-            value={granularidad}
-            onChange={(e) => setGranularidad(e.target.value as GranularidadGasto)}
-            className={inputCls}
-          >
-            {(Object.keys(ETIQUETA_GRANULARIDAD) as GranularidadGasto[]).map((g) => (
-              <option key={g} value={g}>
-                {ETIQUETA_GRANULARIDAD[g]}
-              </option>
-            ))}
-          </select>
-        </label>
+        {vista === "concepto" ? (
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Agrupar</span>
+            <select
+              value={granularidad}
+              onChange={(e) => setGranularidad(e.target.value as GranularidadGasto)}
+              className={inputCls}
+            >
+              {(Object.keys(ETIQUETA_GRANULARIDAD) as GranularidadGasto[]).map((g) => (
+                <option key={g} value={g}>
+                  {ETIQUETA_GRANULARIDAD[g]}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : (
+          /*
+           * Por concepto se entra pulsando una fila; aquí no hay filas de
+           * concepto, así que es un desplegable: «¿a quién le pagamos las dietas?».
+           */
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Concepto</span>
+            <select
+              value={conceptoId ?? ""}
+              onChange={(e) => setConceptoId(e.target.value ? Number(e.target.value) : null)}
+              className={inputCls}
+            >
+              <option value="">Todos</option>
+              {conceptos.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.nombre}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         {centros.length > 1 && (
           <label className="block">
             <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Centro</span>
@@ -162,7 +226,20 @@ export default function GastoPorConcepto() {
         </button>
       </div>
 
-      {enDetalle && (
+      {vista === "proveedor" && proveedores && (
+        <GastoProveedores
+          key={consulta}
+          informe={proveedores}
+          filtro={{
+            desde: proveedores.desde,
+            hasta: proveedores.hasta,
+            centro: proveedores.centroId,
+            conceptoId: proveedores.conceptoId,
+          }}
+        />
+      )}
+
+      {vista === "concepto" && enDetalle && (
         <button
           className="inline-flex items-center gap-1 text-[12px] text-sky-400 hover:text-sky-300"
           onClick={() => setConceptoId(null)}
@@ -171,7 +248,7 @@ export default function GastoPorConcepto() {
         </button>
       )}
 
-      {informe && (
+      {vista === "concepto" && informe && (
         <>
           <Totales informe={informe} etiqueta={enDetalle ? nombreConcepto : "Gasto del periodo"} />
 

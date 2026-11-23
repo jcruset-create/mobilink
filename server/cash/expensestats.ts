@@ -31,6 +31,9 @@
 
 import pool from "../db.ts";
 import { ErrorCaja } from "./repository.ts";
+import { proveedorDeFila, type ViaProveedor } from "./domain/proveedores.ts";
+
+export type { ViaProveedor };
 
 export type Granularidad = "dia" | "mes" | "anio";
 
@@ -153,10 +156,13 @@ function tramoAnterior(desde: string, hasta: string): { desde: string; hasta: st
  */
 const GASTOS = `
   WITH pagos AS (
-    SELECT o.id, o.importe_centimos, o.expense_concept_id, o.expense_target_id, s.fecha
+    SELECT o.id, o.importe_centimos, o.expense_concept_id, o.expense_target_id, s.fecha,
+           o.numero, o.party_nombre, o.external_document_reference, r.nombre AS caja,
+           doc.party_external_id AS erp_codigo, doc.party_nombre AS erp_nombre, doc.numero AS doc_numero
       FROM cash_operations o
       JOIN cash_sessions s ON s.id = o.session_id
       JOIN cash_registers r ON r.id = s.register_id
+      LEFT JOIN cash_external_documents doc ON doc.id = o.documento_id
      WHERE o.empresa_id = $1
        AND o.tipo IN ('PAYMENT','MANUAL_OUT')
        AND o.estado = 'CONFIRMED'
@@ -173,7 +179,12 @@ const GASTOS = `
   ),
   gastos AS (
     SELECT p.id AS operacion_id, p.fecha, p.importe_centimos AS importe,
-           p.expense_concept_id AS concepto_id, p.expense_target_id AS destino_id
+           p.expense_concept_id AS concepto_id, p.expense_target_id AS destino_id,
+           /* A quién se le paga: ver «Por proveedor» más abajo. */
+           p.erp_codigo, NULL::text AS nif,
+           COALESCE(NULLIF(p.erp_nombre, ''), p.party_nombre) AS proveedor_nombre,
+           p.numero, p.caja,
+           COALESCE(NULLIF(p.doc_numero, ''), p.external_document_reference) AS documento
       FROM pagos p
      WHERE NOT EXISTS (SELECT 1 FROM cash_expense_claims cl WHERE cl.operation_pago_id = p.id)
     UNION ALL
@@ -182,7 +193,11 @@ const GASTOS = `
              WHEN 'PERSONA' THEN cl.expense_target_id
              WHEN 'CENTRO_COSTE' THEN l.expense_target_id
              ELSE NULL
-           END
+           END,
+           /* En una liquidación, el proveedor es el EMISOR de cada ticket, no el trabajador. */
+           NULL::text, l.emisor_nif, l.emisor_nombre,
+           p.numero, p.caja,
+           'Liquidación ' || cl.numero || ' · ' || cl.empleado_nombre
       FROM pagos p
       JOIN cash_expense_claims cl ON cl.operation_pago_id = p.id
       JOIN cash_expense_claim_lines l ON l.claim_id = cl.id AND l.situacion = 'INCLUIDA'
@@ -338,3 +353,208 @@ export async function informeDeGasto(
     comparacion,
   };
 }
+
+// ── Por proveedor ──────────────────────────────────────────────────────────
+//
+// A quién se le paga, con el mismo corte que el reparto por concepto: mismas
+// filas de gasto, mismo periodo por fecha de jornada, mismas anulaciones
+// fuera. Solo cambia por qué se agrupa.
+//
+// El proveedor no es un campo de la operación: hay que reconocerlo, y cada
+// origen trae lo suyo. Se usa lo más fiable que haya, en este orden:
+//
+//   1. El CÓDIGO de proveedor de la ERP, si el pago salda una factura suya.
+//      Es el único identificador que no depende de cómo se escribió nada.
+//   2. El NIF del emisor, en los tickets de una liquidación de gastos. Ahí el
+//      proveedor es el restaurante o la autopista del ticket, no el
+//      trabajador: él es el destino, y para eso ya está el desglose por
+//      destino.
+//   3. El NOMBRE escrito, en un pago a mano. Sin mayúsculas, tildes,
+//      puntuación ni forma jurídica: «Repsol» y «REPSOL, S.A.» son el mismo.
+//      Lo que no une es «Gasolinera Repsol Valls», y se dice en la pantalla.
+//
+// Lo que no trae nada —una salida de caja sin nombre— sale como «Sin
+// proveedor», igual que lo sin clasificar: el total tiene que cuadrar.
+//
+// La agrupación se hace aquí y no en SQL porque la normalización del nombre
+// es código que se prueba sin base, y son las filas de un periodo de UNA
+// empresa: cientos, no millones.
+
+export type LineaProveedor = {
+  /** `null` = los pagos sin proveedor reconocible. */
+  clave: string | null;
+  nombre: string;
+  via: ViaProveedor | null;
+  /** El código de la ERP o el NIF, tal y como se enseña. `null` si va por nombre. */
+  identificador: string | null;
+  importeCentimos: number;
+  operaciones: number;
+  /** El concepto con más importe dentro de este proveedor. `null` = sin clasificar. */
+  conceptoPrincipal: string | null;
+};
+
+export type InformeProveedores = {
+  desde: string;
+  hasta: string;
+  centroId: string | null;
+  conceptoId: number | null;
+  totalCentimos: number;
+  operaciones: number;
+  sinProveedorCentimos: number;
+  proveedores: LineaProveedor[];
+};
+
+export type PagoDeProveedor = {
+  operacionId: number;
+  numero: string;
+  fecha: string;
+  caja: string;
+  documento: string | null;
+  concepto: string | null;
+  destino: string | null;
+  importeCentimos: number;
+};
+
+type FilaProveedor = {
+  operacionId: number;
+  numero: string;
+  fecha: string;
+  caja: string;
+  documento: string | null;
+  concepto: string | null;
+  destino: string | null;
+  importeCentimos: number;
+  erpCodigo: string | null;
+  nif: string | null;
+  nombre: string | null;
+};
+
+async function filasDeProveedores(
+  f: Omit<FiltroGasto, "granularidad">
+): Promise<FilaProveedor[]> {
+  exigirFechas(f.desde, f.hasta);
+  const { rows } = await pool.query(
+    `${GASTOS}
+     SELECT g.operacion_id, g.numero, g.fecha::text AS fecha, g.caja, g.documento,
+            g.importe, g.erp_codigo, g.nif, g.proveedor_nombre,
+            c.nombre AS concepto, d.nombre AS destino
+       FROM gastos g
+       LEFT JOIN cash_expense_concepts c ON c.id = g.concepto_id
+       LEFT JOIN cash_expense_targets d ON d.id = g.destino_id
+      WHERE ($5::int IS NULL OR g.concepto_id = $5::int)
+      ORDER BY g.fecha, g.operacion_id`,
+    [f.empresaId, f.desde, f.hasta, f.centroId, f.conceptoId]
+  );
+  return rows.map((r) => ({
+    operacionId: Number(r.operacion_id),
+    numero: r.numero,
+    fecha: r.fecha,
+    caja: r.caja,
+    documento: r.documento || null,
+    concepto: r.concepto ?? null,
+    destino: r.destino ?? null,
+    importeCentimos: Number(r.importe),
+    erpCodigo: r.erp_codigo ?? null,
+    nif: r.nif ?? null,
+    nombre: r.proveedor_nombre ?? null,
+  }));
+}
+
+export async function gastoPorProveedor(
+  f: Omit<FiltroGasto, "granularidad">
+): Promise<InformeProveedores> {
+  const filas = await filasDeProveedores(f);
+
+  type Grupo = {
+    via: ViaProveedor | null;
+    identificador: string | null;
+    /** El nombre que se enseña: el más reciente. Las filas vienen por fecha. */
+    nombre: string;
+    importe: number;
+    operaciones: Set<number>;
+    porConcepto: Map<string | null, number>;
+  };
+  const grupos = new Map<string | null, Grupo>();
+  const todas = new Set<number>();
+
+  for (const fila of filas) {
+    todas.add(fila.operacionId);
+    const p = proveedorDeFila(fila);
+    const clave = p?.clave ?? null;
+    let g = grupos.get(clave);
+    if (!g) {
+      g = {
+        via: p?.via ?? null,
+        identificador: p?.identificador ?? null,
+        nombre: "",
+        importe: 0,
+        operaciones: new Set(),
+        porConcepto: new Map(),
+      };
+      grupos.set(clave, g);
+    }
+    if (fila.nombre?.trim()) g.nombre = fila.nombre.trim();
+    g.importe += fila.importeCentimos;
+    g.operaciones.add(fila.operacionId);
+    g.porConcepto.set(fila.concepto, (g.porConcepto.get(fila.concepto) ?? 0) + fila.importeCentimos);
+  }
+
+  const proveedores: LineaProveedor[] = [...grupos].map(([clave, g]) => {
+    let principal: string | null = null;
+    let maximo = -1;
+    for (const [concepto, importe] of g.porConcepto) {
+      if (importe > maximo) {
+        maximo = importe;
+        principal = concepto;
+      }
+    }
+    return {
+      clave,
+      nombre: clave == null ? "Sin proveedor" : g.nombre || g.identificador || "—",
+      via: g.via,
+      identificador: g.identificador,
+      importeCentimos: g.importe,
+      operaciones: g.operaciones.size,
+      conceptoPrincipal: principal,
+    };
+  });
+  /* De mayor a menor; a igual importe, por nombre, para que el orden no baile entre consultas. */
+  proveedores.sort((a, b) => b.importeCentimos - a.importeCentimos || a.nombre.localeCompare(b.nombre, "es"));
+
+  return {
+    desde: f.desde,
+    hasta: f.hasta,
+    centroId: f.centroId,
+    conceptoId: f.conceptoId,
+    totalCentimos: proveedores.reduce((a, p) => a + p.importeCentimos, 0),
+    operaciones: todas.size,
+    sinProveedorCentimos: grupos.get(null)?.importe ?? 0,
+    proveedores,
+  };
+}
+
+/**
+ * Los pagos de UN proveedor, para el desplegable de la tabla. `clave` `null`
+ * = los sin proveedor. Una liquidación aporta una línea por ticket de ese
+ * proveedor, con el número de la operación de caja que la pagó.
+ */
+export async function pagosDeProveedor(
+  f: Omit<FiltroGasto, "granularidad">,
+  clave: string | null
+): Promise<PagoDeProveedor[]> {
+  const filas = await filasDeProveedores(f);
+  return filas
+    .filter((fila) => (proveedorDeFila(fila)?.clave ?? null) === clave)
+    .reverse()
+    .map((p) => ({
+      operacionId: p.operacionId,
+      numero: p.numero,
+      fecha: p.fecha,
+      caja: p.caja,
+      documento: p.documento,
+      concepto: p.concepto,
+      destino: p.destino,
+      importeCentimos: p.importeCentimos,
+    }));
+}
+
