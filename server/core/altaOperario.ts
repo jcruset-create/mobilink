@@ -508,16 +508,148 @@ export function recorteEnPixeles(
   const x1 = en01(r.x1 + margen);
   const y1 = en01(r.y1 + margen);
 
-  const left = Math.round(x0 * ancho);
-  const top = Math.round(y0 * alto);
-  const width = Math.round((x1 - x0) * ancho);
-  const height = Math.round((y1 - y0) * alto);
-  if (width < 32 || height < 32) return null;
+  const left = Math.max(0, Math.floor(x0 * ancho));
+  const top = Math.max(0, Math.floor(y0 * alto));
+  const width = Math.min(Math.round((x1 - x0) * ancho), ancho - left);
+  const height = Math.min(Math.round((y1 - y0) * alto), alto - top);
 
-  return {
-    left,
-    top,
-    width: Math.min(width, ancho - left),
-    height: Math.min(height, alto - top),
+  /*
+   * Se comprueba DESPUÉS de ajustar al marco, no antes.
+   *
+   * Antes se miraba el tamaño que salía de las proporciones y luego se
+   * recortaba contra los bordes: un recuadro pegado al borde podía quedarse
+   * en nada y llegar a `sharp` como un área de cero, que es exactamente el
+   * «bad extract area» con el que esto reventó el primer día.
+   */
+  if (width < 32 || height < 32) return null;
+  if (left + width > ancho || top + height > alto) return null;
+
+  return { left, top, width, height };
+}
+
+
+// ── Lo que dice la documentación ───────────────────────────────────────────
+
+/**
+ * Una clase del permiso de conducción con SU fecha.
+ *
+ * Van por separado porque caducan por separado: el reverso del carnet es una
+ * tabla con una fila por clase, y la C profesional caduca cada cinco años
+ * mientras la B del mismo carnet dura diez. Guardar solo «caduca el día X»
+ * es perder justo el dato que hace falta para avisar a tiempo.
+ */
+export type ClaseCarnet = { clase: string; caducidad: string | null };
+
+export type Lectura = {
+  identidad: { numero: string | null; caducidad: string | null; nota: string };
+  carnet: {
+    numero: string | null;
+    caducidad: string | null;
+    clases: ClaseCarnet[];
+    capNumero: string | null;
+    capCaducidad: string | null;
+    nota: string;
   };
+};
+
+export const ESQUEMA_LECTURA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["identidad", "carnet"],
+  properties: {
+    identidad: {
+      type: "object",
+      additionalProperties: false,
+      required: ["numero", "caducidad", "nota"],
+      properties: {
+        numero: { type: ["string", "null"] },
+        caducidad: { type: ["string", "null"] },
+        nota: { type: "string" },
+      },
+    },
+    carnet: {
+      type: "object",
+      additionalProperties: false,
+      required: ["numero", "caducidad", "clases", "capNumero", "capCaducidad", "nota"],
+      properties: {
+        numero: { type: ["string", "null"] },
+        caducidad: { type: ["string", "null"] },
+        clases: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["clase", "caducidad"],
+            properties: {
+              clase: { type: "string" },
+              caducidad: { type: ["string", "null"] },
+            },
+          },
+        },
+        capNumero: { type: ["string", "null"] },
+        capCaducidad: { type: ["string", "null"] },
+        nota: { type: "string" },
+      },
+    },
+  },
+} as const;
+
+export const INSTRUCCIONES_LECTURA = [
+  "Lee los documentos de las fotos y devuelve lo que ponen. No interpretes",
+  "ni completes: si un dato no se ve, va a null y lo explicas en la nota.",
+  "",
+  "Del documento de identidad (DNI o NIE):",
+  "- numero: el número con su letra.",
+  "- caducidad: la fecha de validez del documento.",
+  "",
+  "Del permiso de conducción:",
+  "- numero: el número del permiso (suele ser el DNI).",
+  "- caducidad: la fecha de validez del documento entero, si aparece.",
+  "- clases: UNA ENTRADA POR CLASE de las que tiene concedidas (AM, A1, A2,",
+  "  A, B, BE, C1, C, CE, D1, D, DE…). El reverso es una tabla con una fila",
+  "  por clase y su fecha; copia la fecha de CADA fila en su clase. Si una",
+  "  clase no tiene fecha propia, caducidad a null.",
+  "- capNumero y capCaducidad: solo si en la foto aparece la tarjeta CAP.",
+  "",
+  "Todas las fechas en dd/mm/aaaa.",
+].join("\n");
+
+/**
+ * Lo leído → las certificaciones que tocaría anotar.
+ *
+ * Una por clase con fecha propia, más el CAP. Se construye aquí, aparte de
+ * la base, para poder enseñarle al que revisa EXACTAMENTE lo que se le va a
+ * escribir en la ficha antes de que pulse el botón.
+ */
+export function certificacionesDeLectura(
+  lectura: Lectura | null | undefined
+): Array<{ nombre: string; caducidad: string; numero: string | null }> {
+  const fuera: Array<{ nombre: string; caducidad: string; numero: string | null }> = [];
+  for (const c of lectura?.carnet?.clases ?? []) {
+    const clase = String(c?.clase ?? "").trim().toUpperCase();
+    const caducidad = fechaIso(c?.caducidad);
+    if (!clase || !caducidad) continue;
+    fuera.push({ nombre: `Carnet de conducir ${clase}`, caducidad, numero: lectura?.carnet?.numero ?? null });
+  }
+  const cap = fechaIso(lectura?.carnet?.capCaducidad);
+  if (cap) fuera.push({ nombre: "CAP", caducidad: cap, numero: lectura?.carnet?.capNumero ?? null });
+  return fuera;
+}
+
+/** Lo leído → los campos de la ficha. Solo lo que se entiende. */
+export function fichaDeLectura(lectura: Lectura | null | undefined): Record<string, string | null> {
+  const clases = (lectura?.carnet?.clases ?? [])
+    .map((c) => String(c?.clase ?? "").trim().toUpperCase())
+    .filter(Boolean);
+  const campos: Record<string, string | null> = {};
+  const poner = (campo: string, valor: string | null) => {
+    if (valor) campos[campo] = valor;
+  };
+  poner("dni_caducidad", fechaIso(lectura?.identidad?.caducidad));
+  poner("carnet_numero", lectura?.carnet?.numero ?? null);
+  poner("carnet_caducidad", fechaIso(lectura?.carnet?.caducidad));
+  poner("carnet_clases", clases.length ? clases.join(", ") : null);
+  poner("cap_numero", lectura?.carnet?.capNumero ?? null);
+  poner("cap_caducidad", fechaIso(lectura?.carnet?.capCaducidad));
+  return campos;
 }
