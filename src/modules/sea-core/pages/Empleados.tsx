@@ -79,6 +79,14 @@ export default function Empleados() {
   const [mensaje, setMensaje] = useState("");
   /** Empleado al que se le está mandando el enlace. */
   const [enviando, setEnviando] = useState<string | null>(null);
+  /**
+   * Número de trabajador por empleado. Viene del servidor y no de la consulta
+   * de arriba: si la migración aún no se ha ejecutado, la lista sale igual y
+   * solo falta esta columna (`numerosDisponibles` a false).
+   */
+  const [numeros, setNumeros] = useState<Record<string, string>>({});
+  const [numerosDisponibles, setNumerosDisponibles] = useState(false);
+  const [soloSinNumero, setSoloSinNumero] = useState(false);
 
   useEffect(() => { cargar(); }, []);
 
@@ -95,6 +103,19 @@ export default function Empleados() {
     setEmpresas(emp ?? []);
     setCentros(cent ?? []);
     setCargando(false);
+    void cargarNumeros();
+  }
+
+  async function cargarNumeros() {
+    try {
+      const r = await apiFetch("/api/core/empleados/numeros-trabajador");
+      if (!r.ok) { setNumerosDisponibles(false); return; }
+      const d = (await r.json()) as { disponible: boolean; numeros: Record<string, string> };
+      setNumeros(d.numeros ?? {});
+      setNumerosDisponibles(Boolean(d.disponible));
+    } catch {
+      setNumerosDisponibles(false);
+    }
   }
 
   const filtrados = items.filter((e) => {
@@ -102,9 +123,10 @@ export default function Empleados() {
     if (filtroCentro && e.work_center_id !== filtroCentro) return false;
     if (filtroActivo === "activos" && !e.activo) return false;
     if (filtroActivo === "inactivos" && e.activo) return false;
+    if (soloSinNumero && numeros[e.id]) return false;
     if (filtroTexto.trim()) {
       const t = filtroTexto.toLowerCase();
-      const campos = [e.nombre, e.apellidos, e.email, e.codigo_operario, e.cargo, e.dni_nie, e.num_seguridad_social].join(" ").toLowerCase();
+      const campos = [e.nombre, e.apellidos, e.email, e.codigo_operario, numeros[e.id], e.cargo, e.dni_nie, e.num_seguridad_social].join(" ").toLowerCase();
       if (!campos.includes(t)) return false;
     }
     return true;
@@ -248,7 +270,7 @@ export default function Empleados() {
       {/* Filtros */}
       <div className="flex flex-wrap gap-2 items-center">
         <input value={filtroTexto} onChange={(e) => setFiltroTexto(e.target.value)}
-          placeholder="Buscar nombre, email, código, DNI..." className="rounded-lg border border-slate-700 px-3 py-2 text-sm w-64" />
+          placeholder="Buscar nombre, email, código, nº, DNI..." className="rounded-lg border border-slate-700 px-3 py-2 text-sm w-64" />
         <select value={filtroRol} onChange={(e) => setFiltroRol(e.target.value)} className="rounded-lg border border-slate-700 px-3 py-2 text-sm">
           <option value="">Todos los roles</option>
           {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
@@ -265,8 +287,15 @@ export default function Empleados() {
             </button>
           ))}
         </div>
-        {(filtroTexto || filtroRol || filtroCentro) && (
-          <button onClick={() => { setFiltroTexto(""); setFiltroRol(""); setFiltroCentro(""); }}
+        {numerosDisponibles && (
+          <button onClick={() => setSoloSinNumero((v) => !v)}
+            title="Empleados que todavía no tienen número de trabajador"
+            className={`rounded-lg border px-3 py-2 text-sm ${soloSinNumero ? "border-amber-600 bg-amber-500/20 text-amber-200" : "border-slate-700 text-slate-300 hover:bg-slate-700/50"}`}>
+            Sin número ({items.filter((e) => e.activo && !numeros[e.id]).length})
+          </button>
+        )}
+        {(filtroTexto || filtroRol || filtroCentro || soloSinNumero) && (
+          <button onClick={() => { setFiltroTexto(""); setFiltroRol(""); setFiltroCentro(""); setSoloSinNumero(false); }}
             className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-400 hover:bg-slate-700/50">Limpiar</button>
         )}
       </div>
@@ -277,6 +306,7 @@ export default function Empleados() {
           <table className="w-full min-w-[800px] text-sm">
             <thead className="bg-slate-800 text-left">
               <tr>
+                {numerosDisponibles && <th className="p-3" title="Número de trabajador (por empresa)">Nº</th>}
                 <th className="p-3">Empleado</th>
                 <th className="p-3">Rol</th>
                 <th className="p-3">Empresa / Centro</th>
@@ -289,6 +319,9 @@ export default function Empleados() {
             <tbody>
               {filtrados.map((e) => (
                 <tr key={e.id} className="border-t border-slate-700 hover:bg-slate-700/50">
+                  {numerosDisponibles && (
+                    <td className="p-3 font-mono text-slate-300">{numeros[e.id] ?? <span className="text-slate-600">—</span>}</td>
+                  )}
                   <td className="p-3">
                     <Link to={`/core/empleados/${e.id}`} className="flex items-center gap-2 group">
                       <div className="h-8 w-8 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0">

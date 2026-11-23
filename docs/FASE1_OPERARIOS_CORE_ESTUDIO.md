@@ -1,5 +1,43 @@
 # Fase 1 — Estudio: Core como fuente única de operarios y usuarios
 
+> **2026-11-23 · Número de trabajador por empresa — Fase A hecha.**
+> Plan completo en `PROMPT_NUMERO_TRABAJADOR_CORE.md`. Sustituye al paso «el DNI
+> como identificador único», que queda aparcado: el DNI sigue siendo un dato de
+> la ficha, pero la clave para enlazar módulos es el número interno.
+>
+> **Qué se ha hecho**
+> - `sea_employees.numero_trabajador` (TEXT, opcional) con índice único parcial
+>   `(company_id, numero_trabajador)`. No se usa `codigo_operario`: es único en
+>   toda la base y es el usuario de login de ToolControl.
+> - `server/core/numeroTrabajador.ts`: `GET /api/core/empleados/numeros-trabajador`
+>   y `PUT /api/core/empleados/:id/numero-trabajador`, solo administradores.
+>   Repetido en la misma empresa → 409 diciendo con quién choca (solo se busca
+>   dentro de esa empresa); sin empresa → 400; columna sin crear → 503.
+> - Core → Empleados: columna «Nº», búsqueda por número y filtro «Sin número».
+>   Ficha: tarjeta «Número de trabajador» para ponerlo o quitarlo. Las dos
+>   pantallas funcionan igual que antes mientras la migración no esté ejecutada.
+>
+> **Orden en Supabase (SQL Editor, a mano)**
+> 1. `core_numero_trabajador_informe.sql`, consultas 1, 2 y 5: empleados sin
+>    empresa y cuántos operarios hay por enlazar en cada módulo.
+> 2. Asignar empresa a los activos que no la tengan (Core → Empleados).
+> 3. `core_numero_trabajador.sql` (idempotente; si hubiera repetidos, se para y
+>    remite a la consulta 4 del informe).
+> 4. Rellenar los números desde Core → Empleados → «Sin número». La consulta 3
+>    del informe enseña el avance.
+>
+> **Pendiente de decidir**
+> - Los ceros a la izquierda cuentan: «007» y «7» son números distintos. Si en
+>   nóminas siempre van con ceros, conviene decidir un formato fijo.
+> - `sea_companies` (empresa del empleado) no está relacionada con la empresa
+>   cliente de la plataforma (`authCtx.empresaId`): cualquier administrador ve
+>   y numera empleados de todas las `sea_companies`.
+> - La web sigue escribiendo el resto de la ficha directamente en Supabase con
+>   RLS `USING (true)`; solo el número pasa por el servidor.
+> - `perfiles_usuario` no tiene `CREATE TABLE` en `supabase/migrations/`: su
+>   esquema se ha deducido del código para el informe (consulta 5d).
+> - Siguiente paso: Fase B (pantalla «Enlazar trabajadores»), empezando por Almacén.
+
 > **Revisado el 2026-09-08.** El estudio original (secciones 1–7, más abajo) sigue siendo
 > válido como inventario, pero se escribió antes de trabajar sobre el código. Lo que se
 > aprendió después cambia el plan: **el sistema unificado ya existe y funciona**, así que
