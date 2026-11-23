@@ -10,13 +10,23 @@
  *
  * El detalle de cada proveedor se pide al abrirlo y no con el informe: con un
  * año entero serían miles de líneas para enseñar, como mucho, un par de ellas.
+ *
+ * Quien puede reclasificar (responsable y admin) clasifica desde aquí: un
+ * proveedor entero con «Clasificar como…» —solo lo que está sin clasificar—
+ * o pago a pago en el detalle. Las reglas, en `server/cash/clasificarGasto.ts`.
  */
 
 import { Fragment, useState } from "react";
 import { ChevronRight } from "lucide-react";
-import { EmptyRow, TableWrap, thCls, tdCls } from "./ui";
+import { Aviso, EmptyRow, Modal, TableWrap, btnPrimary, btnSecondary, inputCls, thCls, tdCls } from "./ui";
 import { euros } from "../utils/money";
-import type { InformeProveedores, LineaProveedorGasto, PagoDeProveedor, ViaProveedor } from "../types";
+import type {
+  ConceptoGasto,
+  InformeProveedores,
+  LineaProveedorGasto,
+  PagoDeProveedor,
+  ViaProveedor,
+} from "../types";
 import * as api from "../services/api";
 
 /** Cuántos proveedores caben en las barras; el resto sigue en la tabla. */
@@ -36,7 +46,23 @@ const COLOR_VIA: Record<ViaProveedor, string> = {
 
 type Filtro = { desde: string; hasta: string; centro: string | null; conceptoId: number | null };
 
-export default function GastoProveedores({ informe, filtro }: { informe: InformeProveedores; filtro: Filtro }) {
+/** Lo que hace falta para clasificar desde la pantalla. Sin permiso, `null`. */
+type Clasificacion = {
+  /** Los conceptos activos: a uno de baja no se clasifica nada nuevo. */
+  conceptos: ConceptoGasto[];
+  /** Se llama después de cada cambio, para que las cifras de arriba se rehagan. */
+  alCambiar: () => void;
+};
+
+export default function GastoProveedores({
+  informe,
+  filtro,
+  clasificacion,
+}: {
+  informe: InformeProveedores;
+  filtro: Filtro;
+  clasificacion: Clasificacion | null;
+}) {
   const reconocidos = informe.proveedores.filter((p) => p.clave != null);
   const primero = reconocidos[0];
   const pct = (c: number) =>
@@ -95,7 +121,7 @@ export default function GastoProveedores({ informe, filtro }: { informe: Informe
 
       <Barras informe={informe} />
 
-      <Tabla informe={informe} filtro={filtro} pct={pct} />
+      <Tabla informe={informe} filtro={filtro} pct={pct} clasificacion={clasificacion} />
 
       <p className="text-[11px] text-slate-500">
         <strong className="text-slate-400">Cómo se reconoce al proveedor.</strong> Un pago de una factura de la ERP se
@@ -146,14 +172,49 @@ function Tabla({
   informe,
   filtro,
   pct,
+  clasificacion,
 }: {
   informe: InformeProveedores;
   filtro: Filtro;
   pct: (c: number) => string;
+  clasificacion: Clasificacion | null;
 }) {
   /** La fila abierta, por clave. `""` = la de sin proveedor; `undefined` = ninguna. */
   const [abierta, setAbierta] = useState<string | undefined>(undefined);
   const [pagos, setPagos] = useState<Record<string, PagoDeProveedor[] | "cargando" | "error">>({});
+  /** «Clasificar como…» pendiente de confirmar. */
+  const [confirmar, setConfirmar] = useState<{ proveedor: LineaProveedorGasto; conceptoId: number } | null>(null);
+  const [aviso, setAviso] = useState<{ tono: "bien" | "mal"; texto: string } | null>(null);
+
+  async function cargarDetalle(p: { clave: string | null }) {
+    const k = p.clave ?? "";
+    setPagos((x) => ({ ...x, [k]: "cargando" }));
+    try {
+      const r = await api.pagosDeProveedor(filtro, p.clave);
+      setPagos((x) => ({ ...x, [k]: r.pagos }));
+    } catch {
+      setPagos((x) => ({ ...x, [k]: "error" }));
+    }
+  }
+
+  const nombreDe = (id: number) => clasificacion?.conceptos.find((c) => c.id === id)?.nombre ?? "ese concepto";
+
+  async function clasificarUno(p: LineaProveedorGasto, x: PagoDeProveedor, conceptoId: number) {
+    setAviso(null);
+    try {
+      const r = await api.clasificarGasto(x.operacionId, { lineaId: x.lineaId, conceptoId });
+      setAviso({
+        tono: "bien",
+        texto:
+          `${x.numero} clasificado como ${nombreDe(conceptoId)}.` +
+          (r.destinoQuitado ? " El destino que tenía no vale para este concepto y se ha quitado." : ""),
+      });
+      await cargarDetalle(p);
+      clasificacion?.alCambiar();
+    } catch (e) {
+      setAviso({ tono: "mal", texto: e instanceof Error ? e.message : "No se ha podido clasificar." });
+    }
+  }
 
   /*
    * La caché va por consulta: si cambian las fechas o el centro, el componente
@@ -168,83 +229,204 @@ function Tabla({
     }
     setAbierta(k);
     if (pagos[k] && pagos[k] !== "error") return;
-    setPagos((x) => ({ ...x, [k]: "cargando" }));
-    try {
-      const r = await api.pagosDeProveedor(filtro, p.clave);
-      setPagos((x) => ({ ...x, [k]: r.pagos }));
-    } catch {
-      setPagos((x) => ({ ...x, [k]: "error" }));
-    }
+    await cargarDetalle(p);
   }
 
   return (
-    <TableWrap>
-      <thead>
-        <tr>
-          <th className={thCls}>Proveedor</th>
-          <th className={thCls}>Reconocido por</th>
-          <th className={thCls}>Concepto principal</th>
-          <th className={`${thCls} text-right`}>Importe</th>
-          <th className={`${thCls} text-right`}>% del total</th>
-          <th className={`${thCls} text-right`}>Pagos</th>
-        </tr>
-      </thead>
-      <tbody>
-        {informe.proveedores.length === 0 && <EmptyRow cols={6} text="Ningún pago en este periodo." />}
-        {informe.proveedores.map((p) => {
-          const k = p.clave ?? "";
-          const abiertaEsta = abierta === k;
-          const sin = p.clave == null;
-          return (
-            <Fragment key={k || "sin"}>
-              <tr className="hover:bg-slate-800/60">
-                <td className={tdCls}>
-                  <button
-                    type="button"
-                    onClick={() => void abrir(p)}
-                    aria-expanded={abiertaEsta}
-                    className="flex items-center gap-1.5 text-left"
-                    title="Ver sus pagos"
-                  >
-                    <ChevronRight
-                      className={`h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform ${abiertaEsta ? "rotate-90" : ""}`}
-                    />
-                    <span className={sin ? "italic text-slate-500" : "font-medium text-slate-100"}>{p.nombre}</span>
-                  </button>
-                </td>
-                <td className={tdCls}>
-                  {p.via ? (
-                    <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${COLOR_VIA[p.via]}`}>
-                      {ETIQUETA_VIA[p.via]}
-                      {p.identificador ? ` · ${p.identificador}` : ""}
-                    </span>
-                  ) : (
-                    <span className="text-[11px] text-slate-500">—</span>
-                  )}
-                </td>
-                <td className={`${tdCls} text-slate-300`}>
-                  {p.conceptoPrincipal ?? <span className="italic text-slate-500">Sin clasificar</span>}
-                </td>
-                <td className={`${tdCls} text-right tabular-nums`}>{euros(p.importeCentimos)}</td>
-                <td className={`${tdCls} text-right tabular-nums text-slate-400`}>{pct(p.importeCentimos)}</td>
-                <td className={`${tdCls} text-right tabular-nums text-slate-400`}>{p.operaciones}</td>
-              </tr>
-              {abiertaEsta && (
-                <tr className="bg-slate-900/60">
-                  <td colSpan={6} className="px-3 pb-3 pl-8 pt-1">
-                    <Detalle estado={pagos[k]} />
+    <>
+      {aviso && <Aviso tono={aviso.tono}>{aviso.texto}</Aviso>}
+      {confirmar && clasificacion && (
+        <ConfirmarClasificar
+          proveedor={confirmar.proveedor}
+          concepto={nombreDe(confirmar.conceptoId)}
+          onCancelar={() => setConfirmar(null)}
+          onConfirmar={async (recordar) => {
+            const { proveedor, conceptoId } = confirmar;
+            setConfirmar(null);
+            setAviso(null);
+            try {
+              const r = await api.clasificarProveedor(filtro, { clave: proveedor.clave!, conceptoId, recordar });
+              const partes = [`${r.clasificados} gasto(s) de ${proveedor.nombre} clasificado(s) como ${nombreDe(conceptoId)}.`];
+              if (r.destinosQuitados > 0) partes.push(`A ${r.destinosQuitados} se les ha quitado un destino que no valía.`);
+              if (r.regla) partes.push("Los próximos tickets de este establecimiento ya propondrán este concepto.");
+              if (recordar && r.reglaOmitida) partes.push(`No se ha guardado la regla: ${r.reglaOmitida}`);
+              setAviso({ tono: "bien", texto: partes.join(" ") });
+              if (pagos[proveedor.clave ?? ""]) await cargarDetalle(proveedor);
+              clasificacion.alCambiar();
+            } catch (e) {
+              setAviso({ tono: "mal", texto: e instanceof Error ? e.message : "No se ha podido clasificar." });
+            }
+          }}
+        />
+      )}
+      <TableWrap>
+        <thead>
+          <tr>
+            <th className={thCls}>Proveedor</th>
+            <th className={thCls}>Reconocido por</th>
+            <th className={thCls}>Concepto principal</th>
+            <th className={`${thCls} text-right`}>Importe</th>
+            <th className={`${thCls} text-right`}>% del total</th>
+            <th className={`${thCls} text-right`}>Pagos</th>
+          </tr>
+        </thead>
+        <tbody>
+          {informe.proveedores.length === 0 && <EmptyRow cols={6} text="Ningún pago en este periodo." />}
+          {informe.proveedores.map((p) => {
+            const k = p.clave ?? "";
+            const abiertaEsta = abierta === k;
+            const sin = p.clave == null;
+            return (
+              <Fragment key={k || "sin"}>
+                <tr className="hover:bg-slate-800/60">
+                  <td className={tdCls}>
+                    <button
+                      type="button"
+                      onClick={() => void abrir(p)}
+                      aria-expanded={abiertaEsta}
+                      className="flex items-center gap-1.5 text-left"
+                      title="Ver sus pagos"
+                    >
+                      <ChevronRight
+                        className={`h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform ${abiertaEsta ? "rotate-90" : ""}`}
+                      />
+                      <span className={sin ? "italic text-slate-500" : "font-medium text-slate-100"}>{p.nombre}</span>
+                    </button>
                   </td>
+                  <td className={tdCls}>
+                    {p.via ? (
+                      <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${COLOR_VIA[p.via]}`}>
+                        {ETIQUETA_VIA[p.via]}
+                        {p.identificador ? ` · ${p.identificador}` : ""}
+                      </span>
+                    ) : (
+                      <span className="text-[11px] text-slate-500">—</span>
+                    )}
+                  </td>
+                  <td className={`${tdCls} text-slate-300`}>
+                    {p.conceptoPrincipal ?? <span className="italic text-slate-500">Sin clasificar</span>}
+                    {/*
+                     * Solo cuando hay algo sin clasificar, y nunca en «Sin
+                     * proveedor»: ahí no hay un proveedor al que darle un
+                     * concepto, son pagos sueltos que se clasifican uno a uno.
+                     */}
+                    {clasificacion && !sin && p.pendientesDeClasificar > 0 && (
+                      <select
+                        aria-label={`Clasificar los pagos sin clasificar de ${p.nombre}`}
+                        value=""
+                        onChange={(e) =>
+                          e.target.value && setConfirmar({ proveedor: p, conceptoId: Number(e.target.value) })
+                        }
+                        className={`${inputCls} mt-1 block w-full max-w-[220px] py-1 text-[12px]`}
+                      >
+                        <option value="">
+                          Clasificar como… ({p.pendientesDeClasificar} sin clasificar)
+                        </option>
+                        {clasificacion.conceptos.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.nombre}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </td>
+                  <td className={`${tdCls} text-right tabular-nums`}>{euros(p.importeCentimos)}</td>
+                  <td className={`${tdCls} text-right tabular-nums text-slate-400`}>{pct(p.importeCentimos)}</td>
+                  <td className={`${tdCls} text-right tabular-nums text-slate-400`}>{p.operaciones}</td>
                 </tr>
-              )}
-            </Fragment>
-          );
-        })}
-      </tbody>
-    </TableWrap>
+                {abiertaEsta && (
+                  <tr className="bg-slate-900/60">
+                    <td colSpan={6} className="px-3 pb-3 pl-8 pt-1">
+                      <Detalle
+                        estado={pagos[k]}
+                        conceptos={clasificacion?.conceptos ?? null}
+                        onClasificar={(x, conceptoId) => void clasificarUno(p, x, conceptoId)}
+                      />
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            );
+          })}
+        </tbody>
+      </TableWrap>
+    </>
   );
 }
 
-function Detalle({ estado }: { estado: PagoDeProveedor[] | "cargando" | "error" | undefined }) {
+// ── Confirmar «Clasificar como…» ───────────────────────────────────────────
+
+function ConfirmarClasificar({
+  proveedor,
+  concepto,
+  onCancelar,
+  onConfirmar,
+}: {
+  proveedor: LineaProveedorGasto;
+  concepto: string;
+  onCancelar: () => void;
+  onConfirmar: (recordar: boolean) => void;
+}) {
+  /*
+   * Por defecto, SÍ recordar: es lo que evita volver a clasificar a mano el
+   * mes que viene. Un proveedor de la ERP no tiene regla —ya viene
+   * identificado—, así que no se ofrece.
+   */
+  const ofreceRegla = proveedor.via === "NIF" || proveedor.via === "NOMBRE";
+  const [recordar, setRecordar] = useState(ofreceRegla);
+
+  return (
+    <Modal
+      title={`Clasificar ${proveedor.nombre}`}
+      onClose={onCancelar}
+      footer={
+        <>
+          <button className={btnSecondary} onClick={onCancelar}>
+            Cancelar
+          </button>
+          <button className={btnPrimary} onClick={() => onConfirmar(ofreceRegla && recordar)}>
+            Clasificar como {concepto}
+          </button>
+        </>
+      }
+    >
+      <p className="text-[13px] text-slate-300">
+        Se clasificará{proveedor.pendientesDeClasificar === 1 ? "" : "n"}{" "}
+        <strong className="text-slate-100">{proveedor.pendientesDeClasificar}</strong> gasto(s) sin clasificar de{" "}
+        {proveedor.nombre} en este periodo como <strong className="text-slate-100">{concepto}</strong>. Los que ya
+        tienen concepto no se tocan. No se mueve dinero: solo cambia la categoría.
+      </p>
+      {ofreceRegla && (
+        <label className="mt-3 flex items-start gap-2 text-[13px] text-slate-300">
+          <input
+            type="checkbox"
+            checked={recordar}
+            onChange={(e) => setRecordar(e.target.checked)}
+            className="mt-0.5 h-4 w-4"
+          />
+          <span>
+            Recordar para este proveedor
+            <span className="block text-[11px] text-slate-500">
+              Los próximos tickets de gastos de trabajadores de este establecimiento propondrán este concepto. Se puede
+              cambiar en Configuración › reglas de concepto.
+            </span>
+          </span>
+        </label>
+      )}
+    </Modal>
+  );
+}
+
+function Detalle({
+  estado,
+  conceptos,
+  onClasificar,
+}: {
+  estado: PagoDeProveedor[] | "cargando" | "error" | undefined;
+  /** `null` = sin permiso para reclasificar: se enseña el concepto, sin desplegable. */
+  conceptos: ConceptoGasto[] | null;
+  onClasificar: (x: PagoDeProveedor, conceptoId: number) => void;
+}) {
   if (estado === undefined || estado === "cargando") {
     return <div className="py-2 text-[12px] text-slate-500">Cargando sus pagos…</div>;
   }
@@ -272,8 +454,33 @@ function Detalle({ estado }: { estado: PagoDeProveedor[] | "cargando" | "error" 
               <td className="px-2 py-1.5 font-mono">{x.numero}</td>
               <td className="px-2 py-1.5">{x.documento ?? "—"}</td>
               <td className="px-2 py-1.5">
-                {x.concepto ?? <span className="italic text-slate-500">Sin clasificar</span>}
-                {x.destino ? ` · ${x.destino}` : ""}
+                {conceptos ? (
+                  <div className="flex flex-wrap items-center gap-1">
+                    <select
+                      aria-label={`Concepto de ${x.numero}`}
+                      value={x.conceptoId ?? ""}
+                      onChange={(e) => e.target.value && onClasificar(x, Number(e.target.value))}
+                      className={`${inputCls} py-1 text-[12px]`}
+                    >
+                      {x.conceptoId == null && <option value="">Sin clasificar</option>}
+                      {/* El de ahora, aunque esté de baja: si no, el desplegable mentiría. */}
+                      {x.conceptoId != null && !conceptos.some((c) => c.id === x.conceptoId) && (
+                        <option value={x.conceptoId}>{x.concepto ?? "—"}</option>
+                      )}
+                      {conceptos.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.nombre}
+                        </option>
+                      ))}
+                    </select>
+                    {x.destino && <span className="text-slate-400">· {x.destino}</span>}
+                  </div>
+                ) : (
+                  <>
+                    {x.concepto ?? <span className="italic text-slate-500">Sin clasificar</span>}
+                    {x.destino ? ` · ${x.destino}` : ""}
+                  </>
+                )}
               </td>
               <td className="py-1.5 pl-2 text-right tabular-nums text-slate-100">{euros(x.importeCentimos)}</td>
             </tr>

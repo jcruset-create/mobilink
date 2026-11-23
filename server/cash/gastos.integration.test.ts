@@ -610,4 +610,98 @@ describe.runIf(RUN)("gasto por proveedor", () => {
     const r = await stats.gastoPorProveedor({ ...filtro, empresaId: "00000000-0000-4000-a000-0000000000ff" });
     expect(r.totalCentimos).toBe(0);
   });
+
+  it("«Clasificar como…» rellena SOLO lo sin clasificar del proveedor, y recuerda la regla", async () => {
+    const clasificar = await import("./clasificarGasto.ts");
+    const combustible = (await config.crearConcepto(ctx, { nombre: `Combustible ${sufijo}` })).id;
+
+    const pendientes = await stats.pendientesDeProveedor(filtro, "NOMBRE:repsol");
+    expect(pendientes.gastos).toHaveLength(2);
+    expect(pendientes.proveedor).toMatchObject({ via: "NOMBRE" });
+
+    const r = await clasificar.clasificarProveedor(ctx, pendientes, combustible, true);
+    expect(r).toMatchObject({
+      clasificados: 2,
+      destinosQuitados: 0,
+      // El nombre limpio, sin «S.A.»: la regla casa por trozos.
+      regla: { campo: "NOMBRE_EMISOR", patron: "repsol" },
+    });
+
+    const tras = await stats.gastoPorProveedor(filtro);
+    const repsol = tras.proveedores.find((p) => p.clave === "NOMBRE:repsol")!;
+    expect(repsol.conceptoPrincipal).toBe(`Combustible ${sufijo}`);
+    expect(repsol.pendientesDeClasificar).toBe(0);
+
+    // Y se ve también en el reparto por concepto: ya no es «sin clasificar».
+    const porConcepto = await stats.informeDeGasto({ ...filtro, granularidad: "dia" }, false);
+    expect(porConcepto.conceptos.find((c) => c.conceptoId === combustible)?.importeCentimos).toBe(4000);
+
+    // La regla está, apuntando a ese concepto.
+    const { rows } = await db.query(
+      `SELECT expense_concept_id FROM cash_expense_rules
+        WHERE empresa_id = $1 AND campo = 'NOMBRE_EMISOR' AND patron = 'repsol'`,
+      [EMPRESA]
+    );
+    expect(rows[0]?.expense_concept_id).toBe(combustible);
+
+    // Repetirlo no hace nada: ya no queda nada sin clasificar.
+    const otra = await clasificar.clasificarProveedor(
+      ctx,
+      await stats.pendientesDeProveedor(filtro, "NOMBRE:repsol"),
+      combustible,
+      false
+    );
+    expect(otra.clasificados).toBe(0);
+  });
+
+  it("un pago se reclasifica a mano; si el destino no vale para el concepto nuevo, se quita y se dice", async () => {
+    const clasificar = await import("./clasificarGasto.ts");
+    const dietas = (await config.crearConcepto(ctx, { nombre: `DietasP ${sufijo}`, tipoDestino: "PERSONA" })).id;
+    const obras = (await config.crearConcepto(ctx, { nombre: `ObrasP ${sufijo}`, tipoDestino: "CENTRO_COSTE" })).id;
+    const pepa = (await config.crearDestino(ctx, { nombre: `Pepa ${sufijo}`, tipo: "PERSONA" })).id;
+
+    const op = await pagarP(2000, { partyNombre: "Bar Pepa", expenseConceptId: dietas, expenseTargetId: pepa });
+    const r = await clasificar.clasificarGasto(ctx, { operacionId: op.operacionId, lineaId: null, conceptoId: obras });
+    expect(r).toMatchObject({ conceptoAntes: dietas, conceptoId: obras, destinoQuitado: true });
+
+    const { rows } = await db.query(
+      `SELECT expense_concept_id, expense_target_id FROM cash_operations WHERE id = $1`,
+      [op.operacionId]
+    );
+    expect(rows[0]).toEqual({ expense_concept_id: obras, expense_target_id: null });
+
+    // Volver a uno de persona no se inventa destino: queda sin él.
+    const vuelta = await clasificar.clasificarGasto(ctx, { operacionId: op.operacionId, lineaId: null, conceptoId: dietas });
+    expect(vuelta.destinoQuitado).toBe(false);
+  });
+
+  it("lo anulado, un concepto de baja o un cobro no se clasifican", async () => {
+    const clasificar = await import("./clasificarGasto.ts");
+    const vivo = (await config.crearConcepto(ctx, { nombre: `VivoClasif ${sufijo}` })).id;
+    const baja = (await config.crearConcepto(ctx, { nombre: `DeBajaParaClasificar ${sufijo}` })).id;
+    await config.actualizarConcepto(ctx, baja, { activo: false });
+
+    const op = await pagarP(2000, { partyNombre: "Anulable" });
+    await expect(
+      clasificar.clasificarGasto(ctx, { operacionId: op.operacionId, lineaId: null, conceptoId: baja })
+    ).rejects.toMatchObject({ codigo: "CONCEPTO_INACTIVO" });
+
+    await servicio.anularOperacion(ctx, op.operacionId, "prueba");
+    await expect(
+      clasificar.clasificarGasto(ctx, { operacionId: op.operacionId, lineaId: null, conceptoId: vivo })
+    ).rejects.toMatchObject({ codigo: "OPERACION_ANULADA" });
+
+    const cobro = await servicio.registrarOperacion(ctx, {
+      sessionId: sesionP,
+      tipo: "COLLECTION",
+      importeCentimos: 2000,
+      formasPago: [{ forma: "CASH", importe: 2000 }],
+      efectivoRecibido: [{ valor: 2000, cantidad: 1 }],
+      concepto: "cobro",
+    });
+    await expect(
+      clasificar.clasificarGasto(ctx, { operacionId: cobro.operacionId, lineaId: null, conceptoId: vivo })
+    ).rejects.toMatchObject({ codigo: "NO_ES_GASTO" });
+  });
 });
+

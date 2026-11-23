@@ -385,6 +385,8 @@ export type LineaProveedorGasto = {
   importeCentimos: number;
   operaciones: number;
   conceptoPrincipal: string | null;
+  /** Cuántos de sus gastos están sin clasificar: lo que «Clasificar como…» rellenaría. */
+  pendientesDeClasificar: number;
 };
 
 export type InformeProveedores = {
@@ -400,6 +402,9 @@ export type InformeProveedores = {
 
 export type PagoDeProveedor = {
   operacionId: number;
+  /** El ticket, si sale de una liquidación: se clasifica ticket a ticket. */
+  lineaId: number | null;
+  conceptoId: number | null;
   numero: string;
   fecha: string;
   caja: string;
@@ -407,6 +412,14 @@ export type PagoDeProveedor = {
   concepto: string | null;
   destino: string | null;
   importeCentimos: number;
+};
+
+export type ResultadoClasificarProveedor = {
+  clasificados: number;
+  destinosQuitados: number;
+  regla: { campo: string; patron: string } | null;
+  /** Por qué no se ha guardado la regla aunque se pidiera. */
+  reglaOmitida: string | null;
 };
 
 // ── AutoScan ───────────────────────────────────────────────────────────────

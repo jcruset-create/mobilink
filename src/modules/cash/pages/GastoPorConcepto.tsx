@@ -52,7 +52,7 @@ const ETIQUETA_GRANULARIDAD: Record<GranularidadGasto, string> = {
 };
 
 export default function GastoPorConcepto() {
-  const { cajas } = useCash();
+  const { cajas, puede } = useCash();
   const inicial = useMemo(mesEnCurso, []);
 
   const [desde, setDesde] = useState(inicial.desde);
@@ -124,6 +124,24 @@ export default function GastoPorConcepto() {
         /* El catálogo solo pone nombre al filtro; sin él el informe se ve igual. */
       });
   }, []);
+
+  /*
+   * Después de clasificar, se rehacen las cifras SIN remontar la tabla: así
+   * la fila que se estaba mirando sigue abierta. Con el filtro de la consulta
+   * que se está enseñando, no con lo que haya en los campos ahora.
+   */
+  const refrescarProveedores = useCallback(() => {
+    if (!proveedores) return;
+    void api
+      .gastoPorProveedor({
+        desde: proveedores.desde,
+        hasta: proveedores.hasta,
+        centro: proveedores.centroId,
+        conceptoId: proveedores.conceptoId,
+      })
+      .then(setProveedores)
+      .catch((e) => setError(e instanceof Error ? e.message : "Error consultando el gasto"));
+  }, [proveedores]);
 
   const enDetalle = conceptoId != null;
   const nombreConcepto = conceptos.find((c) => c.id === conceptoId)?.nombre ?? "";
@@ -236,6 +254,11 @@ export default function GastoPorConcepto() {
             centro: proveedores.centroId,
             conceptoId: proveedores.conceptoId,
           }}
+          clasificacion={
+            puede("cash.operation.reclassify")
+              ? { conceptos: conceptos.filter((c) => c.activo), alCambiar: refrescarProveedores }
+              : null
+          }
         />
       )}
 

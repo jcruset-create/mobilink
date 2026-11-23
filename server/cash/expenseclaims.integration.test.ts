@@ -700,6 +700,45 @@ describe.runIf(RUN)("Liquidaciones · el pago", () => {
     await servicio.anularOperacion(ctxJefe, r.pago.operacionId, "prueba de proveedores");
   });
 
+  it("un pago de liquidación se clasifica ticket a ticket, también desde «Clasificar como…»", async () => {
+    const clasificar = await import("./clasificarGasto.ts");
+    const l = await aprobada82();
+    const r = await pago.pagarLiquidacion(ctxJefe, l.id, enEfectivo(`clasif-${randomUUID()}`));
+    const filtro = { empresaId: EMPRESA, desde: fecha, hasta: fecha, centroId: null, conceptoId: null };
+    const { rows: lineas } = await db.query(
+      `SELECT id FROM cash_expense_claim_lines WHERE claim_id = $1 ORDER BY id`,
+      [l.id]
+    );
+    const [a, b] = [lineas[0].id as number, lineas[1].id as number];
+
+    // La operación entera no: lleva una dieta y un peaje.
+    await expect(
+      clasificar.clasificarGasto(ctxJefe, { operacionId: r.pago.operacionId, lineaId: null, conceptoId: peajes })
+    ).rejects.toMatchObject({ codigo: "CLASIFICAR_POR_TICKET" });
+
+    // Un ticket sí, y solo ese.
+    await clasificar.clasificarGasto(ctxJefe, { operacionId: r.pago.operacionId, lineaId: a, conceptoId: peajes });
+    const { rows: tras } = await db.query(
+      `SELECT id, expense_concept_id FROM cash_expense_claim_lines WHERE id = ANY($1::int[]) ORDER BY id`,
+      [[a, b]]
+    );
+    expect(tras.map((x) => x.expense_concept_id)).toEqual([peajes, dietas]);
+
+    // Un ticket que llegó sin concepto (de antes de que se pidiera) se rellena desde el proveedor.
+    await db.query(`UPDATE cash_expense_claim_lines SET expense_concept_id = NULL WHERE id = $1`, [b]);
+    const pendientes = await stats.pendientesDeProveedor(filtro, `NOMBRE:establecimiento ${b}`);
+    expect(pendientes.gastos).toEqual([{ operacionId: r.pago.operacionId, lineaId: b }]);
+    const hecho = await clasificar.clasificarProveedor(ctxJefe, pendientes, dietas, true);
+    expect(hecho).toMatchObject({ clasificados: 1, regla: { campo: "NOMBRE_EMISOR", patron: `establecimiento ${b}` } });
+
+    // Un ticket de otro pago no se cuela por este.
+    await expect(
+      clasificar.clasificarGasto(ctxJefe, { operacionId: r.pago.operacionId, lineaId: 999_999_999, conceptoId: dietas })
+    ).rejects.toMatchObject({ codigo: "LINEA_NO_ENCONTRADA" });
+
+    await servicio.anularOperacion(ctxJefe, r.pago.operacionId, "prueba de clasificar");
+  });
+
   it("sale UN pago por el total, del cajón, y los tickets quedan como sus justificantes", async () => {
     const l = await aprobada82();
     const operacionesAntes = await contar("cash_operations");

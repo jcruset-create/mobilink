@@ -184,7 +184,8 @@ const GASTOS = `
            p.erp_codigo, NULL::text AS nif,
            COALESCE(NULLIF(p.erp_nombre, ''), p.party_nombre) AS proveedor_nombre,
            p.numero, p.caja,
-           COALESCE(NULLIF(p.doc_numero, ''), p.external_document_reference) AS documento
+           COALESCE(NULLIF(p.doc_numero, ''), p.external_document_reference) AS documento,
+           NULL::int AS linea_id
       FROM pagos p
      WHERE NOT EXISTS (SELECT 1 FROM cash_expense_claims cl WHERE cl.operation_pago_id = p.id)
     UNION ALL
@@ -197,7 +198,8 @@ const GASTOS = `
            /* En una liquidación, el proveedor es el EMISOR de cada ticket, no el trabajador. */
            NULL::text, l.emisor_nif, l.emisor_nombre,
            p.numero, p.caja,
-           'Liquidación ' || cl.numero || ' · ' || cl.empleado_nombre
+           'Liquidación ' || cl.numero || ' · ' || cl.empleado_nombre,
+           l.id
       FROM pagos p
       JOIN cash_expense_claims cl ON cl.operation_pago_id = p.id
       JOIN cash_expense_claim_lines l ON l.claim_id = cl.id AND l.situacion = 'INCLUIDA'
@@ -391,6 +393,8 @@ export type LineaProveedor = {
   operaciones: number;
   /** El concepto con más importe dentro de este proveedor. `null` = sin clasificar. */
   conceptoPrincipal: string | null;
+  /** Cuántos de sus gastos están sin clasificar: lo que «Clasificar como…» rellenaría. */
+  pendientesDeClasificar: number;
 };
 
 export type InformeProveedores = {
@@ -406,6 +410,9 @@ export type InformeProveedores = {
 
 export type PagoDeProveedor = {
   operacionId: number;
+  /** El ticket, si el gasto sale de una liquidación: se clasifica ticket a ticket. */
+  lineaId: number | null;
+  conceptoId: number | null;
   numero: string;
   fecha: string;
   caja: string;
@@ -417,6 +424,8 @@ export type PagoDeProveedor = {
 
 type FilaProveedor = {
   operacionId: number;
+  lineaId: number | null;
+  conceptoId: number | null;
   numero: string;
   fecha: string;
   caja: string;
@@ -435,18 +444,20 @@ async function filasDeProveedores(
   exigirFechas(f.desde, f.hasta);
   const { rows } = await pool.query(
     `${GASTOS}
-     SELECT g.operacion_id, g.numero, g.fecha::text AS fecha, g.caja, g.documento,
+     SELECT g.operacion_id, g.linea_id, g.concepto_id, g.numero, g.fecha::text AS fecha, g.caja, g.documento,
             g.importe, g.erp_codigo, g.nif, g.proveedor_nombre,
             c.nombre AS concepto, d.nombre AS destino
        FROM gastos g
        LEFT JOIN cash_expense_concepts c ON c.id = g.concepto_id
        LEFT JOIN cash_expense_targets d ON d.id = g.destino_id
       WHERE ($5::int IS NULL OR g.concepto_id = $5::int)
-      ORDER BY g.fecha, g.operacion_id`,
+      ORDER BY g.fecha, g.operacion_id, g.linea_id`,
     [f.empresaId, f.desde, f.hasta, f.centroId, f.conceptoId]
   );
   return rows.map((r) => ({
     operacionId: Number(r.operacion_id),
+    lineaId: r.linea_id == null ? null : Number(r.linea_id),
+    conceptoId: r.concepto_id == null ? null : Number(r.concepto_id),
     numero: r.numero,
     fecha: r.fecha,
     caja: r.caja,
@@ -473,6 +484,7 @@ export async function gastoPorProveedor(
     importe: number;
     operaciones: Set<number>;
     porConcepto: Map<string | null, number>;
+    pendientes: number;
   };
   const grupos = new Map<string | null, Grupo>();
   const todas = new Set<number>();
@@ -490,6 +502,7 @@ export async function gastoPorProveedor(
         importe: 0,
         operaciones: new Set(),
         porConcepto: new Map(),
+        pendientes: 0,
       };
       grupos.set(clave, g);
     }
@@ -497,6 +510,7 @@ export async function gastoPorProveedor(
     g.importe += fila.importeCentimos;
     g.operaciones.add(fila.operacionId);
     g.porConcepto.set(fila.concepto, (g.porConcepto.get(fila.concepto) ?? 0) + fila.importeCentimos);
+    if (fila.conceptoId == null) g.pendientes += 1;
   }
 
   const proveedores: LineaProveedor[] = [...grupos].map(([clave, g]) => {
@@ -516,6 +530,7 @@ export async function gastoPorProveedor(
       importeCentimos: g.importe,
       operaciones: g.operaciones.size,
       conceptoPrincipal: principal,
+      pendientesDeClasificar: g.pendientes,
     };
   });
   /* De mayor a menor; a igual importe, por nombre, para que el orden no baile entre consultas. */
@@ -548,6 +563,8 @@ export async function pagosDeProveedor(
     .reverse()
     .map((p) => ({
       operacionId: p.operacionId,
+      lineaId: p.lineaId,
+      conceptoId: p.conceptoId,
       numero: p.numero,
       fecha: p.fecha,
       caja: p.caja,
@@ -556,5 +573,31 @@ export async function pagosDeProveedor(
       destino: p.destino,
       importeCentimos: p.importeCentimos,
     }));
+}
+
+/**
+ * Lo que «Clasificar como…» rellenaría de un proveedor: sus gastos SIN
+ * concepto en el periodo, con lo necesario para recordar la regla. Los ya
+ * clasificados no se tocan nunca desde aquí: eso es cosa del detalle, pago a
+ * pago.
+ */
+export async function pendientesDeProveedor(
+  f: Omit<FiltroGasto, "granularidad">,
+  clave: string
+): Promise<{
+  proveedor: { via: ViaProveedor; identificador: string | null; nombre: string } | null;
+  gastos: { operacionId: number; lineaId: number | null }[];
+}> {
+  const filas = (await filasDeProveedores({ ...f, conceptoId: null })).filter(
+    (fila) => proveedorDeFila(fila)?.clave === clave
+  );
+  const ultima = filas[filas.length - 1];
+  const p = ultima ? proveedorDeFila(ultima) : null;
+  return {
+    proveedor: p && ultima ? { via: p.via, identificador: p.identificador, nombre: ultima.nombre ?? "" } : null,
+    gastos: filas
+      .filter((fila) => fila.conceptoId == null)
+      .map((fila) => ({ operacionId: fila.operacionId, lineaId: fila.lineaId })),
+  };
 }
 
