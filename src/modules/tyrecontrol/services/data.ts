@@ -966,6 +966,8 @@ export async function historialNeumatico(neumaticoId: string): Promise<Historial
 // revisiones de vehículo, con la fecha de cada revisión, para la línea
 // temporal del neumático.
 export interface MedicionNeumatico {
+  /** La revisión: su km vale para todos los neumáticos medidos en ella. */
+  revision_id?: string | null;
   fecha_revision: string;
   created_at?: string | null;
   profundidad_mm: number | null;
@@ -978,11 +980,12 @@ export interface MedicionNeumatico {
 
 export async function medicionesNeumatico(neumaticoId: string): Promise<MedicionNeumatico[]> {
   const { data, error } = await supabase.from("revisiones_neumaticos_detalle")
-    .select("profundidad_mm, presion_bar, estado_visual, posicion:tc_posiciones_vehiculo(codigo_posicion), revision:revisiones_vehiculo(fecha_revision, created_at, km_vehiculo, estado_revision)")
+    .select("profundidad_mm, presion_bar, estado_visual, posicion:tc_posiciones_vehiculo(codigo_posicion), revision:revisiones_vehiculo(id, fecha_revision, created_at, km_vehiculo, estado_revision)")
     .eq("neumatico_id", neumaticoId);
   if (error) throw new Error(error.message);
   return (data ?? [])
     .map((d: any): MedicionNeumatico => ({
+      revision_id: d.revision?.id ?? null,
       fecha_revision: d.revision?.fecha_revision ?? "",
       created_at: d.revision?.created_at ?? null,
       profundidad_mm: d.profundidad_mm ?? null,
