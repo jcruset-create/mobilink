@@ -77,4 +77,13 @@ describe("informe de rendimiento", () => {
     expect(e1.kmPorMm).toBe(10749);
     expect(g.find((x) => x.tipo === "recauchutado")?.gomas).toBe(1);
   });
+
+  it("une por la referencia del catálogo: COACHZ y X COACH Z son el mismo", () => {
+    const ref = { ref_marca: "Michelin", ref_modelo: "X COACH Z", ref_medida: "295/80R22.5" };
+    const g = agruparRendimiento([fila({ ...ref }), fila({ modelo: "COACHZ", ...ref }), fila({ modelo: "XCOACH" })]);
+    expect(g.map((x) => [x.modelo, x.gomas])).toEqual([
+      ["Michelin X COACH Z 295/80R22.5", 2],
+      ["Michelin XCOACH 295/80R22.5", 1], // sin referencia: por su texto
+    ]);
+  });
 });

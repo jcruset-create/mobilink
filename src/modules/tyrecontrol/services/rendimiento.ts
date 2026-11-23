@@ -33,6 +33,10 @@ export interface DatosRendimiento {
   marca: string | null;
   modelo: string | null;
   medida: string | null;
+  /** La referencia del catálogo de esa goma (por equivalencia o por texto), si la hay. */
+  ref_marca?: string | null;
+  ref_modelo?: string | null;
+  ref_medida?: string | null;
   recauchutado: boolean | null;
   reesculturado: boolean | null;
   profundidad_actual_mm: number | null;
@@ -150,7 +154,10 @@ export function agruparRendimiento(filas: DatosRendimiento[]): GrupoRendimiento[
   const grupos = new Map<string, GrupoRendimiento & { _kmmm: number[]; _vida: number[] }>();
   for (const f of filas) {
     const tipo = f.reesculturado ? "reesculturado" : f.recauchutado ? "recauchutado" : "nuevo";
-    const modelo = [f.marca, f.modelo, f.medida].filter(Boolean).join(" ") || "Sin modelo";
+    // Por la referencia del catálogo cuando la hay: «COACHZ» y «X COACH Z» son la misma.
+    const modelo = (f.ref_modelo
+      ? [f.ref_marca, f.ref_modelo, f.ref_medida]
+      : [f.marca, f.modelo, f.medida]).filter(Boolean).join(" ") || "Sin modelo";
     const clave = `${modelo}|${f.eje ?? "-"}|${tipo}`;
     const g = grupos.get(clave) ?? {
       clave, modelo, eje: f.eje, tipo, gomas: 0, conProyeccion: 0, kmPorMm: null, vidaKm: null, vehiculos: [],
