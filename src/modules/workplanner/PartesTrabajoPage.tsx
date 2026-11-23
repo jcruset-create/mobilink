@@ -10,7 +10,6 @@ import {
   type ParteTrabajo,
 } from "../parteTrabajoATrabajos";
 import { allocateJobPure } from "../assignment";
-import { idDeTrabajoNuevo } from "../idDeTrabajoNuevo";
 import { buildTechLoadStats, buildTechStats } from "../workshopReports";
 import { getOperationKey } from "../jobHelpers";
 import {
@@ -338,9 +337,11 @@ export default function PartesTrabajoPage() {
     try {
       const material = resumenMateriales(conversion.materiales);
 
-      // Ver idDeTrabajoNuevo.ts: «mayor id + 1» chocaba con trabajos ya
-      // cerrados que no están en la lista viva («Conflicto de ID»).
-      let siguienteId = idDeTrabajoNuevo(jobs);
+      // El id lo pone el servidor preguntando a la tabla: aquí solo se ve la
+      // lista viva, y «el mayor + 1» chocaba con trabajos cerrados hace días
+      // («Conflicto de ID»). Para proponer técnico hace falta un id local que
+      // no se confunda con ninguno: negativos, que nunca se envían.
+      let siguienteId = -1;
 
       let jobsAcumulados = [...jobs];
       let techsAcumulados = [...techs];
@@ -405,11 +406,12 @@ export default function PartesTrabajoPage() {
             .join(" "),
         };
 
-        await saveJobToBackend(jobFinal);
+        // Con id 0 el servidor asigna el siguiente libre de la tabla.
+        await saveJobToBackend({ ...jobFinal, id: 0 });
 
         jobsAcumulados = [jobFinal, ...jobsAcumulados];
         techsAcumulados = resultado.techs;
-        siguienteId += 1;
+        siguienteId -= 1;
 
         creados.push(
           `${jobFinal.plate} · ${propuesto.label} ×${propuesto.quantity}` +
