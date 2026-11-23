@@ -1,5 +1,39 @@
 # Fase 1 — Estudio: Core como fuente única de operarios y usuarios
 
+> **2026-11-23 · Fase C en Taller (9/9 enlazados) — solo lo que no toca el nombre.**
+> En el taller el nombre del técnico (`techs.name`) es la clave con la que se
+> apunta todo: partes, pausas, cobros, asistencias, ausencias y el login de
+> las tablets. Por eso aquí la fase C es más corta que en Recepciones: **el
+> nombre del técnico no cambia ni se sustituye por el de Core.**
+>
+> **Qué se ha hecho**
+> - `GET /api/techs` trae, de cada técnico enlazado, quién es en Core
+>   (`coreNombre`, `coreNumero`) y si allí está de baja (`bajaEnCore`). Sin
+>   Core en la base, como antes (`server/core/hayCore.ts`, compartido con
+>   Recepciones).
+> - Pantalla Técnicos: bajo el nombre del taller sale el nombre completo de
+>   Core y su Nº; si en Core está de baja, un aviso para darle de baja también
+>   en el taller.
+> - Alta de técnico: primero se elige la persona de la plantilla (por Nº o
+>   nombre) y el técnico nace enlazado. El nombre del taller se sigue
+>   escribiendo (se propone el de pila). Quien ya es técnico no se ofrece.
+>   Si Core no responde, el alta sigue como antes, solo con nombre.
+> - `GET /api/techs/vinculo-core` devuelve además el número de trabajador y
+>   de qué técnico es ya cada empleado.
+>
+> **Lo que NO se ha tocado (y por qué)**
+> - El nombre del técnico, el histórico por nombre y los logins de tablet/APK.
+> - El teléfono: `techs.phone` es el que ve el cliente en el seguimiento de
+>   una asistencia; puede ser un móvil de empresa distinto del personal que
+>   hay en Core. Sigue siendo del taller.
+> - La baja: estar de baja en Core **avisa**, no da de baja sola en el taller
+>   (la baja del taller libera el trabajo en curso y retira los PIN; hacerlo
+>   sin que nadie lo vea en mitad de un trabajo es peor que avisar).
+>
+> **Pendiente de decidir**
+> - Si la baja en Core debe dar de baja sola en el taller.
+> - Si el teléfono del técnico debe leerse de Core.
+
 > **2026-11-23 · Fase C empezada por Recepciones (el más pequeño, 3/3 enlazados).**
 > Recepciones era el caso limpio: el operario del muelle no teclea su nombre
 > para firmar (lo elige de la lista y pone el PIN), así que leer el nombre de
