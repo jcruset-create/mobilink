@@ -55,6 +55,7 @@ import { simpleParser, type ParsedMail } from "mailparser";
 import { fechaDeActivacion, guardarProgresoBuzon, leerProgresoBuzon, type ProgresoBuzon } from "./config.ts";
 import { procesarCorreo, remitenteCasa, type AdjuntoPdf, type ResultadoIngesta } from "./ingesta.ts";
 import * as repo from "./repository.ts";
+import { hayQueGuardarPasada, type Comprobacion } from "../core/pasadasDeBuzon.ts";
 
 const MIN_POR_DEFECTO = 5;
 const LOTE = 20;
@@ -286,6 +287,13 @@ async function procesarUno(cliente: ClienteBuzon, uid: number, cfg: Pick<ConfigB
   return procesarFuente(msg.source, cfg, remitentes, desde, "buzon", `uid-${uid}`);
 }
 
+/** Cuándo se miró el buzón por última vez, se guardara la pasada o no. */
+const comprobaciones = new Map<string, Comprobacion>();
+
+export function ultimaComprobacion(empresaId: string): Comprobacion | null {
+  return comprobaciones.get(empresaId) ?? null;
+}
+
 export type OpcionesPasada = {
   cliente?: ClienteBuzon;
   config?: ConfigBuzon;
@@ -301,14 +309,28 @@ export async function revisarBuzon(opciones: OpcionesPasada = {}): Promise<Pasad
   if (!cfg) return { error: "Sin configurar (faltan RECEPCIONES_IMAP_HOST/USER/PASS/EMPRESA_ID)" };
 
   const pasada: PasadaBuzon = { correos: 0, procesados: 0, ignorados: 0, errores: 0, detalle: [] };
-  const pasadaId = await repo.abrirPasada(cfg.empresaId, opciones.origen ?? (opciones.historico ? "historico" : "temporizador"));
-  const cerrar = (error: string | null) =>
-    repo.cerrarPasada(pasadaId, {
-      ...pasada,
-      error,
-      // El asunto sí; el cuerpo no. La pasada dice QUÉ llegó, no qué decía.
-      detalle: pasada.detalle.map((d) => ({ ...d, asunto: d.asunto.slice(0, 200) })),
-    });
+  const origen = opciones.origen ?? (opciones.historico ? "historico" : "temporizador");
+  const iniciada = new Date();
+  /*
+   * La fila se escribe al TERMINAR, y solo si cuenta algo (ver
+   * `core/pasadasDeBuzon.ts`). Sin remitentes configurados, cada pasada
+   * guardaba el mismo error cada cinco minutos, para siempre.
+   */
+  const cerrar = async (error: string | null) => {
+    try {
+      comprobaciones.set(cfg.empresaId, { at: Date.now(), error });
+      const ultima = await repo.ultimaPasadaGuardada(cfg.empresaId);
+      if (!hayQueGuardarPasada({ origen, correos: pasada.correos, error }, ultima)) return;
+      await repo.guardarPasadaTerminada(cfg.empresaId, origen, iniciada, {
+        ...pasada,
+        error,
+        // El asunto sí; el cuerpo no. La pasada dice QUÉ llegó, no qué decía.
+        detalle: pasada.detalle.map((d) => ({ ...d, asunto: d.asunto.slice(0, 200) })),
+      });
+    } catch (e) {
+      console.error("[Recepciones] no se ha podido guardar la pasada:", (e as Error).message);
+    }
+  };
 
   const remitentes = (await repo.remitentesAdmitidos(cfg.empresaId)).map((r) => r.remitente);
   if (remitentes.length === 0) {

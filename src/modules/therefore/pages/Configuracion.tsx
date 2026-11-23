@@ -516,6 +516,18 @@ function Buzon() {
             </p>
           )}
 
+          {/*
+            Las pasadas que no traen nada nuevo ya no se guardan: la tabla
+            enseña solo las que hicieron algo. Esto dice que, aun así, se
+            sigue mirando.
+          */}
+          {estado.ultimaComprobacion && (
+            <p className="mb-2 text-[12px] text-slate-400">
+              Última comprobación: {fecha(new Date(estado.ultimaComprobacion.at).toISOString())}
+              {estado.ultimaComprobacion.error ? " · sigue fallando" : " · sin correos nuevos"}
+            </p>
+          )}
+
           {estado.pasadas.length > 0 && (
             <table className="w-full text-[12px]">
               <thead>

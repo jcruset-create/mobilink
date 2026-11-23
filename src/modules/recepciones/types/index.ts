@@ -428,6 +428,11 @@ export type EstadoBuzon = {
   asumirExpedicionCompleta: boolean;
   enRevision: number;
   pasadas: PasadaBuzon[];
+  /**
+   * La última vez que se miró, aunque esa pasada no se guardara: las que no
+   * traen nada nuevo ya no dejan fila. `null` desde que arrancó el servidor.
+   */
+  ultimaComprobacion?: { at: number; error: string | null } | null;
 };
 
 export type ResultadoPasada = { correos: number; procesados: number; ignorados: number; errores: number; detalle: PasadaBuzon["detalle"] };

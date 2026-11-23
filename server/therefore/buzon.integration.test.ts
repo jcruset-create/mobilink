@@ -276,7 +276,7 @@ describe.runIf(RUN)("El buzón de Therefore", () => {
     expect(buzon.mensajes[0].seen).toBe(true);
   });
 
-  it("cada pasada deja su fila, y un buzón que no abre también, diciendo por qué", async () => {
+  it("un buzón que no abre deja su fila, diciendo por qué", async () => {
     /*
      * Tal y como lo lanza ImapFlow cuando el servidor rechaza el LOGIN: el
      * mensaje es «Command failed» —el mismo para cualquier NO— y lo que dice
@@ -301,6 +301,39 @@ describe.runIf(RUN)("El buzón de Therefore", () => {
     expect(rows[0].cerrada).toBe(true);
     expect(rows[0].error).toBe(r.error);
   });
+  it("las pasadas sin nada nuevo no dejan fila; un fallo, una vuelta a funcionar o un fallo distinto, sí", async () => {
+    const { ultimaComprobacion } = await import("./buzon.ts");
+    const filas = async () =>
+      (
+        await db.query<{ error: string | null }>(
+          `SELECT error FROM thf_buzon_pasadas WHERE empresa_id = $1 ORDER BY iniciada_at`,
+          [EMPRESA]
+        )
+      ).rows.map((r) => r.error);
+
+    // La primera vacía se guarda (no hay ninguna); las siguientes vacías, no.
+    await revisarBuzon({ cliente: buzonFalso([]), config: CFG });
+    await revisarBuzon({ cliente: buzonFalso([]), config: CFG });
+    await revisarBuzon({ cliente: buzonFalso([]), config: CFG });
+    expect(await filas()).toEqual([null]);
+    // Pero se sabe que se ha mirado.
+    expect(ultimaComprobacion(EMPRESA)).toMatchObject({ error: null });
+
+    // Empieza a fallar: se guarda. El mismo fallo otra vez: no.
+    await revisarBuzon({ cliente: buzonFalso([], { falloAlAbrir: "sin red" }), config: CFG });
+    await revisarBuzon({ cliente: buzonFalso([], { falloAlAbrir: "sin red" }), config: CFG });
+    expect((await filas()).length).toBe(2);
+    expect(ultimaComprobacion(EMPRESA)?.error).toBeTruthy();
+
+    // Vuelve a funcionar: se guarda, o la pantalla seguiría diciendo que no se lee.
+    await revisarBuzon({ cliente: buzonFalso([]), config: CFG });
+    expect(await filas()).toEqual([null, expect.any(String), null]);
+
+    // «Revisar ahora» se guarda siempre: es la respuesta a lo que alguien pidió.
+    await revisarBuzon({ cliente: buzonFalso([]), config: CFG, origen: "manual" });
+    expect((await filas()).length).toBe(4);
+  });
+
   it("si no se puede cerrar la sesión, el socket se cierra a las bravas", async () => {
     /*
      * Una pasada cada cinco minutos que deja el socket abierto acaba dando

@@ -21,7 +21,7 @@ import { sendCommunication } from "../application/services/CommunicationService.
 import { acceptQuote } from "../application/services/QuoteAcceptanceService.ts";
 import { runWorkerCycle } from "../workers/IntegrationWorker.ts";
 import { runCatalogSync, getCatalogStatus } from "../application/services/CatalogSyncService.ts";
-import { runSalesOrderSync } from "../application/services/SalesOrderSyncService.ts";
+import { runSalesOrderSync, ultimaComprobacionDePedidos } from "../application/services/SalesOrderSyncService.ts";
 import { registerExecution, confirmReturn } from "../application/services/ExecutionReturnService.ts";
 import {
   resolveErpConnector,
@@ -527,6 +527,9 @@ export function createIntegrationHubRouter(): Router {
       res.json({
         tenantId,
         lastSyncMs: state?.last_sync_ms ? Number(state.last_sync_ms) : null,
+        // La última vez que se miró BC sin encontrar nada: esas pasadas ya no
+        // escriben en la base, así que solo lo sabe la memoria del proceso.
+        lastCheckMs: ultimaComprobacionDePedidos(tenantId),
         syncStatus: state?.status ?? null,
         orders,
       });

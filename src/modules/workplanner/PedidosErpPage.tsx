@@ -318,6 +318,8 @@ function ParteDeTrabajo({
 export default function PedidosErpPage() {
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [lastSyncMs, setLastSyncMs] = useState<number | null>(null);
+  /** Última vez que se miró BC sin pedidos nuevos (esas pasadas no dejan rastro en la base). */
+  const [lastCheckMs, setLastCheckMs] = useState<number | null>(null);
   const [sel, setSel] = useState<{ order: OrderRow; lines: OrderLine[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sincronizando, setSincronizando] = useState(false);
@@ -330,11 +332,12 @@ export default function PedidosErpPage() {
       const params = new URLSearchParams();
       if (filtroEstado) params.set("estado", filtroEstado);
       if (busqueda.trim()) params.set("search", busqueda.trim());
-      const data = await hubApi<{ orders: OrderRow[]; lastSyncMs: number | null }>(
+      const data = await hubApi<{ orders: OrderRow[]; lastSyncMs: number | null; lastCheckMs?: number | null }>(
         `/api/v1/erp/sales-orders?${params}`
       );
       setOrders(data.orders);
       setLastSyncMs(data.lastSyncMs);
+      setLastCheckMs(data.lastCheckMs ?? null);
     } catch (e: any) {
       setError(e.message);
     }
@@ -386,6 +389,9 @@ export default function PedidosErpPage() {
         </h1>
         <span className="text-[11px] text-slate-500">
           {lastSyncMs ? `Última sync: ${fmtFecha(lastSyncMs)}` : "Sin sincronizar todavía"}
+          {lastCheckMs != null && (!lastSyncMs || lastCheckMs > lastSyncMs)
+            ? ` · comprobado ${fmtFecha(lastCheckMs)}, sin pedidos nuevos`
+            : ""}
         </span>
         <button
           onClick={sincronizar}

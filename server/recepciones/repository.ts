@@ -2396,6 +2396,33 @@ export async function cerrarPasada(
     .catch((e) => console.error("[Recepciones] no se ha podido cerrar la pasada:", (e as Error).message));
 }
 
+/** El error de la última pasada guardada (`null` si fue bien), o `null` si no hay ninguna. */
+export async function ultimaPasadaGuardada(empresaId: string): Promise<{ error: string | null } | null> {
+  const { rows } = await pool.query<{ error: string | null }>(
+    `SELECT error FROM rcp_buzon_pasadas WHERE empresa_id = $1 ORDER BY iniciada_at DESC LIMIT 1`,
+    [empresaId]
+  );
+  return rows[0] ?? null;
+}
+
+/**
+ * Una pasada ya terminada, en una sola escritura. Es la del temporizador: se
+ * guarda al acabar y solo si cuenta algo (ver `core/pasadasDeBuzon.ts`).
+ */
+export async function guardarPasadaTerminada(
+  empresaId: string,
+  origen: "temporizador" | "manual" | "historico",
+  iniciada: Date,
+  datos: { correos: number; procesados: number; ignorados: number; errores: number; error: string | null; detalle: unknown[] }
+): Promise<void> {
+  await pool.query(
+    `INSERT INTO rcp_buzon_pasadas
+       (empresa_id, origen, iniciada_at, terminada_at, correos, procesados, ignorados, errores, error, detalle)
+     VALUES ($1, $2, $3, now(), $4, $5, $6, $7, $8, $9)`,
+    [empresaId, origen, iniciada, datos.correos, datos.procesados, datos.ignorados, datos.errores, datos.error, JSON.stringify(datos.detalle)]
+  );
+}
+
 export async function ultimasPasadas(empresaId: string, limite = 10): Promise<Record<string, unknown>[]> {
   const { rows } = await pool.query(
     `SELECT id, iniciada_at, terminada_at, correos, procesados, ignorados, errores, error, origen, detalle
