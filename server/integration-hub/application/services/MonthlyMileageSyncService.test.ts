@@ -310,6 +310,21 @@ describe("meses cerrados", () => {
     expect(llamadas).toHaveLength(1);
   });
 
+  it("mesesQueTocan() la primera semana del mes: el anterior PRIMERO, para cerrarlo", () => {
+    const dia1 = new Date("2026-11-01T01:30:00Z"); // 02:30 en Madrid, día 1
+    expect(mesesQueTocan(dia1, "Europe/Madrid", 2)).toEqual([
+      { year: 2026, month: 10 }, { year: 2026, month: 11 }, { year: 2026, month: 9 },
+    ]);
+  });
+
+  it("la madrugada del día 1 el mes anterior ya se pide y se guarda CERRADO", async () => {
+    cuenta({});
+    vi.mocked(listVehicleMappings).mockResolvedValue(enlaces(1) as any);
+    const dia1 = new Date("2026-11-01T01:30:00Z"); // 02:30 en Madrid
+    await syncMonthlyMileage({ tenantId: "empresa-A", meses: [{ year: 2026, month: 10 }], ahora: dia1 });
+    expect(vi.mocked(upsertMonthlyMileage).mock.calls[0][0]).toMatchObject({ month: 10, closed: true, syncStatus: "ok" });
+  });
+
   it("mesesQueTocan(): el en curso, el anterior y el histórico, en ese orden", () => {
     const m = mesesQueTocan(AHORA, "Europe/Madrid", 3);
     expect(m).toEqual([
@@ -450,6 +465,47 @@ describe("errores", () => {
     expect(r.cuentas[0].abandonada).toBeUndefined();
     expect(r.cuentas[0].peticiones).toBe(10);
     expect(r.cuentas[0].vehiculosConKm).toBe(2);
+  });
+
+  it("un lote rechazado por UNA unidad se parte hasta aislarla: los demás sí tienen km", async () => {
+    // Lo de octubre de 2026: «Cannot read properties of undefined» a todo el
+    // lote por culpa de una unidad.
+    const llamadas = cuenta({
+      config: { unidadesPorPeticion: 8 },
+      responder: (ids, w) => {
+        if (ids.includes("E3")) throw IntegrationError.permanent("MOVERTIS_PETICION", "Movertis rechazó la petición: Cannot read properties of undefined (reading 'toString')");
+        return ids.map((id) => ({ provider: "movertis", accountKey: "buses", providerVehicleId: id, window: w, distanceKm: 10 }));
+      },
+    });
+    vi.mocked(listVehicleMappings).mockResolvedValue(enlaces(8) as any);
+
+    const r = await syncMonthlyMileage({ tenantId: "empresa-A", meses: [{ year: 2026, month: 8 }], ahora: AHORA });
+
+    expect(r.cuentas[0].vehiculosConKm).toBe(7);
+    expect(r.cuentas[0].errores).toBe(1);
+    expect(r.cuentas[0].abandonada).toBeUndefined();
+    // 1 (lote) + 2 (mitades de 4) + 2 (de 2) + 2 (de 1) = 7, todas contadas.
+    expect(llamadas).toHaveLength(7);
+    expect(r.cuentas[0].peticiones).toBe(7);
+    const malo = vi.mocked(upsertMonthlyMileage).mock.calls.find((c) => c[0].mobilinkId === "v3");
+    expect(malo?.[0]).toMatchObject({ syncStatus: "error", closed: false });
+  });
+
+  it("si las dos mitades fallan enteras es el proveedor: no se sigue partiendo", async () => {
+    const llamadas = cuenta({
+      config: { unidadesPorPeticion: 8 },
+      fallo: IntegrationError.permanent("MOVERTIS_PETICION", "Movertis rechazó la petición: Core Error: 4"),
+    });
+    vi.mocked(listVehicleMappings).mockResolvedValue(enlaces(8) as any);
+    await syncMonthlyMileage({ tenantId: "empresa-A", meses: [{ year: 2026, month: 8 }], ahora: AHORA });
+    expect(llamadas).toHaveLength(3);
+  });
+
+  it("un fallo pasajero (503) no se parte: partir no lo arregla", async () => {
+    const llamadas = cuenta({ config: { unidadesPorPeticion: 8 }, fallo: IntegrationError.transient("MOVERTIS_UNAVAILABLE", "HTTP 503") });
+    vi.mocked(listVehicleMappings).mockResolvedValue(enlaces(8) as any);
+    await syncMonthlyMileage({ tenantId: "empresa-A", meses: [{ year: 2026, month: 8 }], ahora: AHORA });
+    expect(llamadas).toHaveLength(1);
   });
 
   it("con la credencial rechazada se abandona la cuenta: seguir es quemar cupo", async () => {

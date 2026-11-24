@@ -149,10 +149,16 @@ export function claveDeMes(m: Mes): string {
  *
  * Con un margen: el proveedor cierra sus resúmenes con retraso, y pedir
  * agosto a las 00:05 del 1 de septiembre puede dar un agosto al que le falta
- * la última noche. Seis horas es suficiente para cualquier viaje que acabe de
- * madrugada, y no retrasa nada que alguien vaya a mirar.
+ * la última noche.
+ *
+ * Dos horas, no seis: el job de km mensuales pasa de 2:00 a 6:00, y con seis
+ * horas el mes anterior aún no estaba «terminado» en ninguna pasada del día 1:
+ * el cierre se iba al día 2, y si esa noche fallaba, más allá (octubre de 2026
+ * se quedó sin cerrar así). Con dos, la madrugada del día 1 ya lo pide cerrado.
+ * La ventana del resumen acaba a las 00:00 igualmente: lo que entra después de
+ * medianoche no es del mes.
  */
-export const MARGEN_CIERRE_MS = 6 * 60 * 60 * 1000;
+export const MARGEN_CIERRE_MS = 2 * 60 * 60 * 1000;
 
 export function mesCerrado(mes: Mes, zona: string, ahora: Date): boolean {
   const { hasta } = limitesDelMes(mes, zona);

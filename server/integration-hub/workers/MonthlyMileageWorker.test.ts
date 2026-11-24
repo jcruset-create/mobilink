@@ -52,6 +52,17 @@ describe("tocaAhora()", () => {
   });
 });
 
+describe("tocaAhora() tras una pasada abandonada", () => {
+  it("se reintenta a la hora siguiente, si sigue siendo de madrugada", () => {
+    expect(tocaAhora(MADRUGADA.getTime() - 3_600_000, MADRUGADA, undefined, true)).toBe(true);
+    expect(tocaAhora(MADRUGADA.getTime() - 3_600_000, MADRUGADA, undefined, false)).toBe(false);
+  });
+  it("pero no dos veces en la misma hora, ni fuera de la madrugada", () => {
+    expect(tocaAhora(MADRUGADA.getTime() - 20 * 60_000, MADRUGADA, undefined, true)).toBe(false);
+    expect(tocaAhora(MEDIODIA.getTime() - 3_600_000, MEDIODIA, undefined, true)).toBe(false);
+  });
+});
+
 describe("tickMonthlyMileage()", () => {
   beforeEach(() => {
     vi.clearAllMocks();
