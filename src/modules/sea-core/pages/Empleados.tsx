@@ -200,8 +200,28 @@ export default function Empleados() {
     setModal(true);
   }
 
+  /** «Taller (Albert), Almacén (albert@…)», para decir dónde ha tenido efecto. */
+  function enQueModulos(lista: { nombre: string; usuarios: string[] }[]): string {
+    return lista.map((m) => `${m.nombre} (${m.usuarios.join(", ")})`).join(", ");
+  }
+
   async function guardar() {
     if (!form.nombre?.trim()) { setError("El nombre es obligatorio."); return; }
+
+    /*
+     * El alta y la baja de alguien que ya existe no se escriben desde aquí:
+     * van por el servidor, que en el mismo paso le da de baja en todos los
+     * módulos donde está enlazado (Taller, Almacén, TyreControl, acceso web).
+     */
+    const anterior = editId ? items.find((i) => i.id === editId) : undefined;
+    const cambiaActivo = anterior !== undefined && anterior.activo !== form.activo;
+    if (cambiaActivo && !form.activo && !confirm(
+      `Vas a dar de baja a ${form.nombre.trim()}.\n\n` +
+      "Quedará de baja en Core y también en todos los módulos donde esté: Taller, Almacén, " +
+      "TyreControl, Recepciones y su acceso web. No podrá entrar en ninguna app.\n\n" +
+      "Su histórico se conserva. ¿Seguimos?"
+    )) return;
+
     setGuardando(true);
     const payload = {
       nombre:          form.nombre.trim(),
@@ -219,7 +239,6 @@ export default function Empleados() {
       rol:             form.rol,
       codigo_operario:  form.codigo_operario || null,
       fecha_alta:       form.fecha_alta || null,
-      activo:           form.activo,
       roadside_capable: form.roadside_capable,
       company_id:       form.company_id || null,
       work_center_id:  form.work_center_id || null,
@@ -234,20 +253,49 @@ export default function Empleados() {
       ? await supabase.from("sea_employees").update(payload).eq("id", editId).select("id").single()
       : await supabase
           .from("sea_employees")
-          .insert({ ...payload, estado_alta: alta ? "pendiente" : "completa" })
+          .insert({ ...payload, activo: form.activo, estado_alta: alta ? "pendiente" : "completa" })
           .select("id")
           .single();
+    if (err) { setGuardando(false); setError(err.message); return; }
+
+    let efecto = "";
+    if (cambiaActivo && editId) {
+      try {
+        const r = await apiFetch(`/api/core/empleados/${editId}/activo`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ activo: form.activo }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d?.error ?? "No se ha podido cambiar el alta del empleado.");
+        if (!form.activo) {
+          efecto = d.bajaEn?.length
+            ? ` Dado de baja también en: ${enQueModulos(d.bajaEn)}.`
+            : " Dado de baja. No tenía usuario activo en ningún otro módulo.";
+        } else {
+          efecto = d.sigueDeBajaEn?.length
+            ? ` Vuelve a estar activo en Core, pero sigue de baja en: ${enQueModulos(d.sigueDeBajaEn)}. Hay que reactivarle allí a mano.`
+            : " Vuelve a estar activo.";
+        }
+      } catch (e) {
+        // El resto de la ficha ya está guardado; lo que no ha entrado es el alta/baja.
+        setGuardando(false);
+        setError(e instanceof Error ? e.message : "No se ha podido cambiar el alta del empleado.");
+        cargar();
+        return;
+      }
+    }
     setGuardando(false);
-    if (err) { setError(err.message); return; }
     setModal(false);
-    setTimeout(() => setMensaje(""), 5000);
+    // Lo que dice dónde ha tenido efecto una baja se deja más rato a la vista.
+    setTimeout(() => setMensaje(""), efecto ? 20000 : 5000);
 
     if (alta && creado?.id) {
       setMensaje("Empleado creado. Mandando el enlace…");
       await enviarEnlace({ id: creado.id, nombre: payload.nombre } as Empleado);
       return;
     }
-    setMensaje(editId ? "Empleado actualizado." : "Empleado creado.");
+    setMensaje((editId ? "Empleado actualizado." : "Empleado creado.") + efecto);
     cargar();
   }
 
