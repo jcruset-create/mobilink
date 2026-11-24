@@ -614,6 +614,8 @@ export default function VehiculoDetalle() {
           onChanged={cargar}
           onTipoChanged={cargar}
           onOperaciones={() => setModalOps(true)}
+          onRevisarResto={esCliente ? undefined : (actuadas) =>
+            navigate(`/tyrecontrol/revision-vehiculo?vehiculo=${v.id}&empresa=${v.empresa_id}${actuadas.length ? `&actuadas=${actuadas.join(",")}` : ""}`)}
         />
       </div>
 

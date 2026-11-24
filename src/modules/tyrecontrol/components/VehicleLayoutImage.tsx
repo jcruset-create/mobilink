@@ -86,6 +86,8 @@ interface Props {
   onChanged?: () => void;
   onTipoChanged?: () => void;
   onOperaciones?: () => void; // abre el histórico de operaciones del vehículo
+  /** Tras aplicar el plan: revisar las ruedas que no se han tocado (recibe las posiciones tocadas). */
+  onRevisarResto?: (posicionesActuadas: string[]) => void;
 }
 
 // Acciones del plan de trabajo (mismo catálogo y orden que la APK).
@@ -106,7 +108,7 @@ function esDireccional(modelo?: string | null): boolean {
 }
 
 export default function VehicleLayoutImage({
-  tipo, posiciones, vehiculoId, empresaId, montajes, editable, puedeCalibrar, imagenConfig, medidaPorPosicionId, matricula, kmActual, onFicha, onChanged, onTipoChanged, onOperaciones,
+  tipo, posiciones, vehiculoId, empresaId, montajes, editable, puedeCalibrar, imagenConfig, medidaPorPosicionId, matricula, kmActual, onFicha, onChanged, onTipoChanged, onOperaciones, onRevisarResto,
 }: Props) {
   // Imagen efectiva del plano: manda la de la CONFIGURACIÓN DE EJES (un 2x4
   // se dibuja igual sea tractora o camión); la del tipo solo si la
@@ -251,6 +253,8 @@ export default function VehicleLayoutImage({
   // ♻ Sustituir: montajeId → a dónde va la vieja y qué se monta.
   const [planSust, setPlanSust] = useState<Record<string, SustitucionPlan>>({});
   const [ordenSust, setOrdenSust] = useState<string[]>([]); // en el orden en que se tocaron
+  // Plan ya aplicado: ¿revisar ahora las ruedas que no se han tocado?
+  const [preguntaRevision, setPreguntaRevision] = useState<{ actuadas: string[]; resumen: string } | null>(null);
 
   // Marcas de recauchutado (INSA…): distintivo RECAUCH. heredado de la marca.
   const [marcasRecau, setMarcasRecau] = useState<Set<string>>(new Set());
@@ -404,6 +408,14 @@ export default function VehicleLayoutImage({
       setModalAplicar(false); setAccionActiva("sustituir");
       return;
     }
+    // Las posiciones en las que se actúa: las que se mueven (origen y destino),
+    // las marcadas con alguna acción y las que se sustituyen.
+    const actuadas = new Set<string>();
+    for (const mv of movimientosPlan) { actuadas.add(mv.origenId); actuadas.add(mv.destinoId); }
+    for (const mid of [...Object.keys(marcasPlan), ...Object.keys(planSust)]) {
+      const pid = montajePorId.get(mid)?.posicion_id;
+      if (pid) actuadas.add(pid);
+    }
     setSaving(true); setMsg("");
     try {
       if (acciones.length) await aplicarPlanTrabajo({ vehiculoId, acciones });
@@ -445,10 +457,19 @@ export default function VehicleLayoutImage({
       setPlanSust({}); setOrdenSust([]); setPlanMov({}); setMarcasPlan({}); setMmRees({});
       setMsg(`${acciones.length ? "Plan aplicado. " : ""}Sustituidas ${hechas} de ${ruedasSust.length}. No se pudo: ${fallos.join(" · ")}`);
       onChanged?.();
+      preguntarRevision(actuadas, `Plan aplicado con fallos: ${fallos.length} sustitución(es) sin hacer.`);
       return;
     }
     cerrarPlan();
     onChanged?.();
+    preguntarRevision(actuadas, "Plan aplicado.");
+  }
+
+  function preguntarRevision(actuadas: Set<string>, resumen: string) {
+    if (!onRevisarResto) return;
+    const ocupadas = posiciones.filter((p) => montajePorPosicionId.get(p.id) || actuadas.has(p.id));
+    if (!ocupadas.some((p) => !actuadas.has(p.id))) return; // se ha tocado todo
+    setPreguntaRevision({ actuadas: [...actuadas], resumen });
   }
 
   const posSeleccionada = seleccion ? posicionPorCodigo.get(seleccion) : null;
@@ -1201,6 +1222,31 @@ export default function VehicleLayoutImage({
           onCorregido={() => { setCorreccion(null); setSeleccion(null); onChanged?.(); }}
         />
       )}
+
+      {preguntaRevision && onRevisarResto && (() => {
+        const resto = posiciones.filter((p) => montajePorPosicionId.get(p.id) && !preguntaRevision.actuadas.includes(p.id));
+        return (
+          <Modal title="¿Revisar las demás ruedas?" onClose={() => setPreguntaRevision(null)}
+            footer={
+              <>
+                <button onClick={() => setPreguntaRevision(null)} className="rounded border border-slate-600 px-4 py-2 text-sm text-slate-200">No, ahora no</button>
+                <button onClick={() => { const a = preguntaRevision.actuadas; setPreguntaRevision(null); onRevisarResto(a); }}
+                  className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white">Sí, hacer la revisión</button>
+              </>
+            }>
+            <div className="space-y-2 text-[13px] text-slate-200">
+              <div className="font-semibold text-emerald-300">✔ {preguntaRevision.resumen}</div>
+              <div>
+                ¿Quieres hacer ahora la revisión de las <b>{resto.length}</b> rueda{resto.length === 1 ? "" : "s"} en las que no se ha actuado
+                {resto.length ? <> ({resto.map((p) => p.codigo_posicion).join(", ")})</> : null}?
+              </div>
+              <div className="text-[12px] text-slate-400">
+                Las {preguntaRevision.actuadas.length} del plan entran en la revisión con la profundidad de su ficha; solo hay que medir las demás.
+              </div>
+            </div>
+          </Modal>
+        );
+      })()}
 
       {modalAplicar && (
         <Modal title={`Aplicar plan (${totalPlan} acción${totalPlan === 1 ? "" : "es"})`} onClose={() => setModalAplicar(false)}
