@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CalendarDays, Loader2, MapPin, Palmtree, Save, Timer, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Bell, CalendarDays, Layers, Loader2, MapPin, MessageCircle, Palmtree, Save, Timer, Trash2 } from "lucide-react";
 import AgendaConfigModal from "../../components/AgendaConfigModal";
 import { DEFAULT_AGENDA_CONFIG, type AgendaConfig } from "../agendaConfig";
 import { loadAgendaConfig } from "../agendaConfigApi";
 import {
   AJUSTES_POR_DEFECTO,
+  ETIQUETA_AREA_TALLER,
   LIMITES,
   validarAjustes,
   type AjustesWorkplanner,
+  type AreaTaller,
+  type BloquesTv,
+  type SonidoTv,
 } from "../ajustesWorkplanner";
 import { cargarAjustesWorkplanner, guardarAjustesWorkplanner } from "../ajustesWorkplannerApi";
 import { apiFetch } from "../apiFetch";
@@ -30,13 +34,16 @@ import type { Tech } from "../workshopTypes";
  * administradores: el menú ya no la enseña a nadie más.
  */
 
-type Pestana = "tiempos" | "horario" | "talleres" | "vacaciones";
+type Pestana = "tiempos" | "horario" | "talleres" | "vacaciones" | "whatsapp" | "tv" | "areas";
 
-const PESTANAS: { key: Pestana; label: string; icon: typeof Timer; nueva?: boolean }[] = [
-  { key: "tiempos", label: "Tiempos y radios", icon: Timer, nueva: true },
-  { key: "horario", label: "Horario y festivos", icon: CalendarDays },
-  { key: "talleres", label: "Talleres y lugares", icon: MapPin },
-  { key: "vacaciones", label: "Vacaciones", icon: Palmtree },
+const PESTANAS: { key: Pestana; label: string; icon: typeof Timer; grupo: string }[] = [
+  { key: "tiempos", label: "Tiempos y radios", icon: Timer, grupo: "Taller" },
+  { key: "horario", label: "Horario y festivos", icon: CalendarDays, grupo: "Taller" },
+  { key: "talleres", label: "Talleres y lugares", icon: MapPin, grupo: "Taller" },
+  { key: "vacaciones", label: "Vacaciones", icon: Palmtree, grupo: "Taller" },
+  { key: "areas", label: "Áreas", icon: Layers, grupo: "Taller" },
+  { key: "whatsapp", label: "WhatsApp al cliente", icon: MessageCircle, grupo: "Avisos" },
+  { key: "tv", label: "Pantalla técnicos", icon: Bell, grupo: "Avisos" },
 ];
 
 const input =
@@ -59,26 +66,28 @@ export default function ConfiguracionPage() {
 
         <div className="grid gap-4 md:grid-cols-[230px_minmax(0,1fr)]">
           <nav className="rounded-2xl border border-slate-700 bg-slate-800 p-2">
-            {PESTANAS.map((p) => {
-              const Icono = p.icon;
-              const activa = p.key === pestana;
-              return (
-                <button
-                  key={p.key}
-                  type="button"
-                  onClick={() => setPestana(p.key)}
-                  className={`flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-semibold ${
-                    activa ? "bg-sky-600 text-white" : "text-slate-200 hover:bg-slate-700"
-                  }`}
-                >
-                  <Icono className="h-4 w-4" />
-                  <span className="flex-1">{p.label}</span>
-                  {p.nueva && (
-                    <span className={`text-[10px] font-bold ${activa ? "text-sky-100" : "text-amber-400"}`}>nuevo</span>
-                  )}
-                </button>
-              );
-            })}
+            {["Taller", "Avisos"].map((grupo) => (
+              <div key={grupo}>
+                <div className="px-3 pb-1 pt-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">{grupo}</div>
+                {PESTANAS.filter((p) => p.grupo === grupo).map((p) => {
+                  const Icono = p.icon;
+                  const activa = p.key === pestana;
+                  return (
+                    <button
+                      key={p.key}
+                      type="button"
+                      onClick={() => setPestana(p.key)}
+                      className={`flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-semibold ${
+                        activa ? "bg-sky-600 text-white" : "text-slate-200 hover:bg-slate-700"
+                      }`}
+                    >
+                      <Icono className="h-4 w-4" />
+                      <span className="flex-1">{p.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
           </nav>
 
           <div className="min-w-0">
@@ -86,6 +95,9 @@ export default function ConfiguracionPage() {
             {pestana === "horario" && <HorarioYFestivos />}
             {pestana === "talleres" && <TalleresYLugares />}
             {pestana === "vacaciones" && <Vacaciones />}
+            {pestana === "whatsapp" && <WhatsAppCliente />}
+            {pestana === "tv" && <PantallaTecnicos />}
+            {pestana === "areas" && <Areas />}
           </div>
         </div>
       </div>
@@ -95,7 +107,8 @@ export default function ConfiguracionPage() {
 
 /* ── Tiempos y radios ─────────────────────────────────────────────────── */
 
-type Tecleado = Record<keyof AjustesWorkplanner, string>;
+type ClaveTiempo = "duracionCitaMin" | "bloqueoTabletMin" | "radioLlegadaM" | "radioSalidaTallerM";
+type Tecleado = Record<ClaveTiempo, string>;
 
 function aTecleado(a: AjustesWorkplanner): Tecleado {
   return {
@@ -140,6 +153,7 @@ function TiemposYRadios() {
     setGuardando(true);
     try {
       const a = await guardarAjustesWorkplanner({
+        ...guardado,
         duracionCitaMin: Number(form.duracionCitaMin),
         bloqueoTabletMin: Number(form.bloqueoTabletMin),
         radioLlegadaM: Number(form.radioLlegadaM),
@@ -155,7 +169,7 @@ function TiemposYRadios() {
     }
   }
 
-  const campo = (k: keyof AjustesWorkplanner, unidad: string) => (
+  const campo = (k: ClaveTiempo, unidad: string) => (
     <div className="flex items-center justify-end gap-2">
       <input
         id={`ajuste-${k}`}
@@ -564,6 +578,344 @@ function Vacaciones() {
       </Tarjeta>
 
       {error && <Fallo texto={error} />}
+    </div>
+  );
+}
+
+/* ── Editor común de ajustes (las pestañas nuevas) ────────────────────── */
+
+function useEditorDeAjustes() {
+  const [guardado, setGuardado] = useState<AjustesWorkplanner>(AJUSTES_POR_DEFECTO);
+  const [borrador, setBorrador] = useState<AjustesWorkplanner>(AJUSTES_POR_DEFECTO);
+  const [cargando, setCargando] = useState(true);
+  const [guardando, setGuardando] = useState(false);
+  const [error, setError] = useState("");
+  const [aviso, setAviso] = useState("");
+
+  useEffect(() => {
+    let vivo = true;
+    void cargarAjustesWorkplanner().then((a) => {
+      if (!vivo) return;
+      setGuardado(a);
+      setBorrador(a);
+      setCargando(false);
+    });
+    return () => {
+      vivo = false;
+    };
+  }, []);
+
+  const cambiado = JSON.stringify(borrador) !== JSON.stringify(guardado);
+
+  function cambiar(parche: Partial<AjustesWorkplanner>) {
+    setAviso("");
+    setBorrador((prev) => ({ ...prev, ...parche }));
+  }
+
+  async function guardar(validar?: () => string[]) {
+    setError("");
+    setAviso("");
+    const errores = validar ? validar() : [];
+    if (errores.length) {
+      setError(errores.join(" "));
+      return;
+    }
+    setGuardando(true);
+    try {
+      const a = await guardarAjustesWorkplanner(borrador);
+      setGuardado(a);
+      setBorrador(a);
+      setAviso("Guardado.");
+    } catch (e: any) {
+      setError(e?.message || "No se pudieron guardar los ajustes.");
+    } finally {
+      setGuardando(false);
+    }
+  }
+
+  function deshacer() {
+    setBorrador(guardado);
+    setError("");
+    setAviso("");
+  }
+
+  return { borrador, cargando, guardando, error, aviso, cambiado, cambiar, guardar, deshacer };
+}
+
+function PieGuardar({ e, validar }: { e: ReturnType<typeof useEditorDeAjustes>; validar?: () => string[] }) {
+  return (
+    <>
+      {e.error && <Fallo texto={e.error} />}
+      {e.aviso && <Aviso texto={e.aviso} />}
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={e.deshacer}
+          disabled={!e.cambiado || e.guardando}
+          className="rounded-lg border border-slate-600 bg-slate-800 px-4 py-2 text-sm font-semibold hover:bg-slate-700 disabled:opacity-50"
+        >
+          Deshacer
+        </button>
+        <button type="button" onClick={() => void e.guardar(validar)} disabled={!e.cambiado || e.guardando} className={btnPrimario}>
+          {e.guardando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+          Guardar
+        </button>
+      </div>
+    </>
+  );
+}
+
+function Interruptor({ id, valor, onCambiar }: { id: string; valor: boolean; onCambiar: (v: boolean) => void }) {
+  return (
+    <div className="flex justify-end">
+      <button
+        id={id}
+        type="button"
+        role="switch"
+        aria-checked={valor}
+        onClick={() => onCambiar(!valor)}
+        className={`relative h-6 w-11 rounded-full transition ${valor ? "bg-emerald-500" : "bg-slate-600"}`}
+      >
+        <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition ${valor ? "left-[22px]" : "left-0.5"}`} />
+      </button>
+    </div>
+  );
+}
+
+/* ── WhatsApp al cliente ──────────────────────────────────────────────── */
+
+function WhatsAppCliente() {
+  const e = useEditorDeAjustes();
+  const b = e.borrador;
+  const [dias1, setDias1] = useState("");
+  const [dias2, setDias2] = useState("");
+  useEffect(() => {
+    setDias1(String(b.tacografoDiasAviso));
+    setDias2(String(b.tacografoDiasAviso2));
+  }, [b.tacografoDiasAviso, b.tacografoDiasAviso2]);
+
+  function validar() {
+    const errores = validarAjustes({ tacografoDiasAviso: dias1, tacografoDiasAviso2: dias2 });
+    return errores;
+  }
+
+  return (
+    <div className="space-y-3">
+      <Cabecera
+        titulo="WhatsApp al cliente"
+        texto="Lo que va marcado por defecto al crear una cita. En cada cita se puede cambiar; esto solo decide cómo sale el formulario."
+      />
+      {e.cargando ? (
+        <p className="text-sm text-slate-400">Cargando…</p>
+      ) : (
+        <>
+          <Tarjeta titulo="Al crear una cita">
+            <Fila nombre="Enviar WhatsApp al guardar la cita" ayuda="Confirmación al cliente con día, hora y operación.">
+              <Interruptor id="wa-guardar" valor={b.waAlGuardar} onCambiar={(v) => e.cambiar({ waAlGuardar: v })} />
+            </Fila>
+            <Fila nombre="Recordatorio 24 horas antes" ayuda="Se envía solo el día anterior a la misma hora de la cita.">
+              <Interruptor id="wa-24h" valor={b.waRecordatorio24h} onCambiar={(v) => e.cambiar({ waRecordatorio24h: v })} />
+            </Fila>
+            <Fila nombre="Recordatorio 1 hora antes" ayuda="Se envía solo una hora antes de la cita.">
+              <Interruptor id="wa-1h" valor={b.waRecordatorio1h} onCambiar={(v) => e.cambiar({ waRecordatorio1h: v })} />
+            </Fila>
+          </Tarjeta>
+
+          <Tarjeta titulo="Caducidad de tacógrafo">
+            <Fila nombre="Primer aviso" ayuda="Días antes de la caducidad. Sale propuesto al crear la caducidad.">
+              <div className="flex items-center justify-end gap-2">
+                <input
+                  id="taco-dias-1"
+                  type="number"
+                  min={LIMITES.tacografoDiasAviso[0]}
+                  max={LIMITES.tacografoDiasAviso[1]}
+                  value={dias1}
+                  onChange={(ev) => {
+                    setDias1(ev.target.value);
+                    if (Number.isFinite(Number(ev.target.value)) && ev.target.value !== "") e.cambiar({ tacografoDiasAviso: Number(ev.target.value) });
+                  }}
+                  className={`w-24 text-right tabular-nums ${input}`}
+                />
+                <span className="w-8 text-sm text-slate-400">días</span>
+              </div>
+            </Fila>
+            <Fila nombre="Segundo aviso" ayuda="Días antes de la caducidad. Tiene que ser menor que el primero. 0 lo desactiva.">
+              <div className="flex items-center justify-end gap-2">
+                <input
+                  id="taco-dias-2"
+                  type="number"
+                  min={LIMITES.tacografoDiasAviso2[0]}
+                  max={LIMITES.tacografoDiasAviso2[1]}
+                  value={dias2}
+                  onChange={(ev) => {
+                    setDias2(ev.target.value);
+                    if (Number.isFinite(Number(ev.target.value)) && ev.target.value !== "") e.cambiar({ tacografoDiasAviso2: Number(ev.target.value) });
+                  }}
+                  className={`w-24 text-right tabular-nums ${input}`}
+                />
+                <span className="w-8 text-sm text-slate-400">días</span>
+              </div>
+            </Fila>
+          </Tarjeta>
+
+          <PieGuardar e={e} validar={validar} />
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ── Pantalla técnicos ────────────────────────────────────────────────── */
+
+const SONIDOS: { valor: SonidoTv; etiqueta: string; ayuda: string }[] = [
+  { valor: "apagado", etiqueta: "Apagado", ayuda: "La tele no suena." },
+  { valor: "tono", etiqueta: "Tono", ayuda: "Un aviso corto cada vez que se asigna un trabajo." },
+  { valor: "voz", etiqueta: "Voz", ayuda: "«Nuevo trabajo para José: 9 3 2 8 K B N», leído en voz alta." },
+];
+
+const BLOQUES_TV: { key: keyof BloquesTv; etiqueta: string }[] = [
+  { key: "recepciones", etiqueta: "Pendientes de recepción" },
+  { key: "llegadas", etiqueta: "Llegadas / agendados" },
+  { key: "validar", etiqueta: "Pendientes de validar" },
+  { key: "standby", etiqueta: "Trabajos en Stand by" },
+  { key: "cola", etiqueta: "Cola de trabajo" },
+];
+
+function PantallaTecnicos() {
+  const e = useEditorDeAjustes();
+  const b = e.borrador;
+  const [refresco, setRefresco] = useState("");
+  useEffect(() => setRefresco(String(b.tvRefrescoSeg)), [b.tvRefrescoSeg]);
+
+  return (
+    <div className="space-y-3">
+      <Cabecera
+        titulo="Pantalla técnicos"
+        texto="La tele del taller. Los cambios se ven en la tele en su siguiente refresco, sin tocarla."
+      />
+      {e.cargando ? (
+        <p className="text-sm text-slate-400">Cargando…</p>
+      ) : (
+        <>
+          <Tarjeta titulo="Sonido al asignar un trabajo">
+            <div className="grid gap-2 md:grid-cols-3">
+              {SONIDOS.map((s) => (
+                <button
+                  key={s.valor}
+                  type="button"
+                  onClick={() => e.cambiar({ tvSonido: s.valor })}
+                  className={`rounded-2xl border px-3 py-3 text-left text-sm ${
+                    b.tvSonido === s.valor ? "border-emerald-500 bg-emerald-500/10 text-emerald-200" : "border-slate-600 bg-slate-900 text-slate-300"
+                  }`}
+                >
+                  <span className="block font-black">{s.etiqueta}</span>
+                  <span className="mt-0.5 block text-xs opacity-80">{s.ayuda}</span>
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-xs text-slate-500">
+              El navegador de la tele solo deja sonar después de un toque: la primera vez saldrá un botón «Activar sonido» en la cabecera de Pantalla técnicos.
+            </p>
+          </Tarjeta>
+
+          <Tarjeta titulo="Refresco">
+            <Fila nombre="Cada cuánto se actualiza" ayuda="Segundos entre consultas al servidor para asistencias, salidas y OTF. Entre 5 y 300.">
+              <div className="flex items-center justify-end gap-2">
+                <input
+                  id="tv-refresco"
+                  type="number"
+                  min={LIMITES.tvRefrescoSeg[0]}
+                  max={LIMITES.tvRefrescoSeg[1]}
+                  value={refresco}
+                  onChange={(ev) => {
+                    setRefresco(ev.target.value);
+                    if (ev.target.value !== "" && Number.isFinite(Number(ev.target.value))) e.cambiar({ tvRefrescoSeg: Number(ev.target.value) });
+                  }}
+                  className={`w-24 text-right tabular-nums ${input}`}
+                />
+                <span className="w-8 text-sm text-slate-400">s</span>
+              </div>
+            </Fila>
+          </Tarjeta>
+
+          <Tarjeta titulo="Bloques que se enseñan">
+            {BLOQUES_TV.map((bl) => (
+              <Fila key={bl.key} nombre={bl.etiqueta} ayuda="">
+                <Interruptor id={`tv-${bl.key}`} valor={b.tvBloques[bl.key]} onCambiar={(v) => e.cambiar({ tvBloques: { ...b.tvBloques, [bl.key]: v } })} />
+              </Fila>
+            ))}
+            <p className="mt-2 text-xs text-slate-500">Trabajos asignados y Estado técnicos se enseñan siempre.</p>
+          </Tarjeta>
+
+          <PieGuardar e={e} validar={() => validarAjustes({ tvRefrescoSeg: refresco })} />
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ── Áreas ────────────────────────────────────────────────────────────── */
+
+function Areas() {
+  const e = useEditorDeAjustes();
+  const b = e.borrador;
+
+  function mover(area: AreaTaller, paso: -1 | 1) {
+    const orden = [...b.areasOrden];
+    const i = orden.indexOf(area);
+    const j = i + paso;
+    if (i < 0 || j < 0 || j >= orden.length) return;
+    [orden[i], orden[j]] = [orden[j], orden[i]];
+    e.cambiar({ areasOrden: orden });
+  }
+
+  const activas = b.areasOrden.filter((a) => b.areasActivas[a]).length;
+
+  return (
+    <div className="space-y-3">
+      <Cabecera
+        titulo="Áreas"
+        texto="Las áreas del taller, en el orden en que salen en las entradas rápidas de Operativo 2 y en el formulario de cita de la Agenda. Un área desactivada no sale para crear nada; lo que ya existe no cambia."
+      />
+      {e.cargando ? (
+        <p className="text-sm text-slate-400">Cargando…</p>
+      ) : (
+        <>
+          <Tarjeta titulo="Orden y activación">
+            {b.areasOrden.map((area, i) => (
+              <div key={area} className="flex items-center gap-2 border-t border-slate-700 py-2 first:border-t-0">
+                <span className="w-6 text-xs tabular-nums text-slate-500">{i + 1}</span>
+                <span className={`flex-1 text-sm font-semibold ${b.areasActivas[area] ? "" : "text-slate-500 line-through"}`}>
+                  {ETIQUETA_AREA_TALLER[area]}
+                </span>
+                <button type="button" onClick={() => mover(area, -1)} disabled={i === 0} className="rounded border border-slate-600 p-1 disabled:opacity-30" title="Subir">
+                  <ArrowUp className="h-3.5 w-3.5" />
+                </button>
+                <button type="button" onClick={() => mover(area, 1)} disabled={i === b.areasOrden.length - 1} className="rounded border border-slate-600 p-1 disabled:opacity-30" title="Bajar">
+                  <ArrowDown className="h-3.5 w-3.5" />
+                </button>
+                <Interruptor
+                  id={`area-${area}`}
+                  valor={b.areasActivas[area]}
+                  onCambiar={(v) => {
+                    if (!v && activas <= 1) return;
+                    e.cambiar({ areasActivas: { ...b.areasActivas, [area]: v } });
+                  }}
+                />
+              </div>
+            ))}
+            <p className="mt-2 text-xs text-slate-500">Siempre queda al menos un área activa. Los colores de cada área no se cambian aquí.</p>
+          </Tarjeta>
+
+          <Tarjeta titulo="Reglas">
+            <Fila nombre="Móvil exige furgoneta para autorizar" ayuda="En Operativo 2 y en Partes de trabajo no se puede autorizar un trabajo de Móvil sin furgoneta asignada.">
+              <Interruptor id="movil-furgoneta" valor={b.movilExigeFurgoneta} onCambiar={(v) => e.cambiar({ movilExigeFurgoneta: v })} />
+            </Fila>
+          </Tarjeta>
+
+          <PieGuardar e={e} />
+        </>
+      )}
     </div>
   );
 }

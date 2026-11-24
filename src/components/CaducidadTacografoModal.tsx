@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ajustesVigentes } from "../modules/ajustesWorkplannerApi";
 import {
   calcularFechaAviso,
   formatSpanishDateKey,
@@ -47,8 +48,9 @@ function emptyDraft(workshopId: string): CaducidadDraft {
     tipo_caducidad: TIPOS_CADUCIDAD[0].value,
     // La revisión de tacógrafo caduca a los 2 años → se propone hoy + 2 años (editable).
     fecha_caducidad: getFechaCaducidadPorDefecto(todayKey()),
-    dias_antelacion: 15,
-    dias_antelacion2: 7,
+    // Días de antelación de los avisos: Configuración → WhatsApp al cliente.
+    dias_antelacion: ajustesVigentes().tacografoDiasAviso,
+    dias_antelacion2: ajustesVigentes().tacografoDiasAviso2,
     enviar_whatsapp: true,
     enviar_sms: true,
     observaciones: "",
