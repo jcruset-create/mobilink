@@ -140,6 +140,7 @@ import { tipoDesdeKindAssist as tipoDocumentoDesdeKind } from "./documentos/tipo
 import { normalizarMatricula as normalizarMatriculaTc } from "./tyrecontrol/matricula.ts";
 import { INSTRUCCION_PAIS, paisParaGuardar } from "./matriculaPais.ts";
 import { horaCapturaValida, horaDeLaFirma } from "./horaCaptura.ts";
+import { hitosDeAsistencia, lineaDeTiempo, resumenMovimientos, ventanaDeAsistencia } from "./assist/movimientos.ts";
 import { decidirCambioDeDatos, mensajeDeCorreo } from "./tyrecontrol/usuarioDatos.ts";
 import { puedeVerEmpresaDeRequest as puedeVerEmpresaTc, puedeVerEmpresa as puedeVerEmpresaTcCtx, puedeOperarEnEmpresa } from "./tyrecontrol/empresaAcceso.ts";
 import {
@@ -11850,6 +11851,44 @@ app.get("/api/roadside-assistances/:id/tablet-report.pdf", requireSupervisorRole
 });
 
 // Por asistencia (recorrido durante la asistencia: salida → llegada al taller o ahora)
+// Movimientos y paradas de la furgoneta durante la asistencia, para verlos en
+// pantalla (mapa + línea de tiempo). Misma ventana y mismo mínimo de parada
+// que el PDF de seguimiento de abajo, para que digan lo mismo.
+app.get("/api/roadside-assistances/:id/movimientos", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    const r = await db.query(`SELECT * FROM roadside_assistances WHERE id = $1 LIMIT 1`, [id]);
+    if (r.rows.length === 0) return res.status(404).json({ error: "Asistencia no encontrada" });
+    const a = normalizeRoadsideAssistanceRow(r.rows[0]);
+    const hitos = hitosDeAsistencia(a as any);
+    if (!a.webfleetVehicleId) {
+      return res.json({ disponible: false, motivo: "La asistencia no tiene furgoneta Webfleet asignada", hitos });
+    }
+    const { desdeMs, hastaMs } = ventanaDeAsistencia(a);
+    const [trips, track] = await Promise.all([
+      getWebfleetTrips(a.webfleetVehicleId, desdeMs, hastaMs),
+      getWebfleetTracks(a.webfleetVehicleId, desdeMs, hastaMs).catch(() => [] as { lat: number; lng: number }[]),
+    ]);
+    const tramos = lineaDeTiempo(trips, hitos);
+    // Un mapa con miles de puntos pesa; uno de cada N basta para dibujar la línea.
+    const paso = Math.max(1, Math.ceil(track.length / 1500));
+    res.json({
+      disponible: true,
+      vehiculo: a.assignedVehicleName || a.webfleetVehicleId,
+      desdeMs,
+      hastaMs,
+      resumen: resumenMovimientos(tramos),
+      tramos,
+      hitos,
+      track: track.filter((_, i) => i % paso === 0 || i === track.length - 1).map((p) => [p.lat, p.lng]),
+    });
+  } catch (error: any) {
+    console.error("GET movimientos asistencia error:", error);
+    res.status(502).json({ error: error?.message || "No se pudieron leer los movimientos de Webfleet" });
+  }
+});
+
 app.get("/api/roadside-assistances/:id/tracking-report.pdf", requireSupervisorRole, async (req, res) => {
   try {
     const id = Number(req.params.id);

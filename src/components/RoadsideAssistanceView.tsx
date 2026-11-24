@@ -90,6 +90,7 @@ import { FUERA_UE, PAISES_MATRICULA } from "../modules/matriculaEs";
 import { filtrar as filtrarAsistencias, hayCriterios, operariosDe, SIN_OPERARIO } from "../modules/roadsideFiltro";
 import SubcontratacionExterna from "./SubcontratacionExterna";
 import TimelineAsistencia from "./TimelineAsistencia";
+import MovimientosFurgonetaModal from "./MovimientosFurgonetaModal";
 import KilometrosDelRastro from "./KilometrosDelRastro";
 import ExpedienteAdministrativo from "./ExpedienteAdministrativo";
 import TyreControlVehiculo from "./TyreControlVehiculo";
@@ -560,9 +561,11 @@ type Props = {
 function ClosedAssistanceCard({
   assistance,
   onOpenBackoffice,
+  onOpenMovimientos,
 }: {
   assistance: RoadsideAssistance;
   onOpenBackoffice: (a: RoadsideAssistance) => void;
+  onOpenMovimientos: (a: RoadsideAssistance) => void;
 }) {
   return (
     <div className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2.5">
@@ -605,6 +608,14 @@ function ClosedAssistanceCard({
             onClick={() => onOpenBackoffice(assistance)}
           >
             Back Office
+          </button>
+          <button
+            type="button"
+            title="Movimientos y paradas de la furgoneta"
+            className="shrink-0 rounded-lg border border-sky-500/40 bg-sky-500/15 px-2 py-1 text-[10px] font-semibold text-sky-300 hover:bg-sky-500/25"
+            onClick={() => onOpenMovimientos(assistance)}
+          >
+            🛰️ Recorrido
           </button>
           <button
             type="button"
@@ -770,6 +781,8 @@ export default function RoadsideAssistanceView({
   const [geocodeEditError, setGeocodeEditError] = useState("");
 
   const [backofficeAssistance, setBackofficeAssistance] = useState<RoadsideAssistance | null>(null);
+  // Movimientos y paradas de la furgoneta (mapa + línea de tiempo).
+  const [movimientosDe, setMovimientosDe] = useState<RoadsideAssistance | null>(null);
   const [showNewBackoffice, setShowNewBackoffice] = useState(false);
   const [knownPlaces, setKnownPlaces] = useState<KnownPlace[]>([]);
   const [showPlacesManager, setShowPlacesManager] = useState(false);
@@ -2538,6 +2551,7 @@ export default function RoadsideAssistanceView({
                     key={`estado-${assistance.id}`}
                     assistance={assistance}
                     onOpenBackoffice={setBackofficeAssistance}
+                    onOpenMovimientos={setMovimientosDe}
                   />
                 ))}
               </div>
@@ -3017,13 +3031,8 @@ export default function RoadsideAssistanceView({
                       {assistance.webfleetVehicleId && (
                         <button
                           type="button"
-                          onClick={() =>
-                            void abrirInforme(
-                              `${API_BASE}/api/roadside-assistances/${assistance.id}/tracking-report.pdf`,
-                              `seguimiento_${assistance.id}.pdf`,
-                              setLocalError
-                            )
-                          }
+                          onClick={() => setMovimientosDe(assistance)}
+                          title="Trayectos y paradas en el mapa, con el informe PDF aparte"
                           className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm font-bold text-slate-200 hover:bg-slate-700"
                         >
                           🛰️ Seguimiento furgoneta
@@ -3265,6 +3274,7 @@ export default function RoadsideAssistanceView({
                         key={`closed-${assistance.id}`}
                         assistance={assistance}
                         onOpenBackoffice={setBackofficeAssistance}
+                        onOpenMovimientos={setMovimientosDe}
                       />
                     ))}
                   </div>
@@ -3403,6 +3413,14 @@ export default function RoadsideAssistanceView({
                                   onClick={() => setBackofficeAssistance(item as any)}
                                 >
                                   Back Office
+                                </button>
+                                <button
+                                  type="button"
+                                  title="Movimientos y paradas de la furgoneta"
+                                  className="rounded-lg border border-sky-500/40 bg-sky-500/15 px-2 py-1 text-[10px] font-semibold text-sky-300 hover:bg-sky-500/25"
+                                  onClick={() => setMovimientosDe(item as any)}
+                                >
+                                  🛰️ Recorrido
                                 </button>
                                 <button
                                   type="button"
@@ -4360,6 +4378,15 @@ export default function RoadsideAssistanceView({
             </div>
           </div>
         </div>
+      )}
+
+      {movimientosDe && (
+        <MovimientosFurgonetaModal
+          assistanceId={movimientosDe.id}
+          titulo={`Asistencia #${movimientosDe.id}${movimientosDe.customerName ? ` · ${movimientosDe.customerName}` : ""}`}
+          conTablet={Boolean(movimientosDe.assignedTechName)}
+          onClose={() => setMovimientosDe(null)}
+        />
       )}
 
       {/* Modal Back Office */}
