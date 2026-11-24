@@ -69,6 +69,23 @@ const UNIDADES_POR_PETICION_MAXIMO = 100;
  */
 const LOTES_SEGUIDOS_FALLIDOS_MAXIMO = 5;
 
+/*
+ * Un lote rechazado se PARTE para aislar al vehículo que lo tumba.
+ *
+ * Visto en producción (octubre y noviembre de 2026, Autocares Plana): Movertis
+ * contesta «Cannot read properties of undefined (reading 'toString')» a todo
+ * el lote cuando UNA de sus unidades le sienta mal. Con 25 por petición, siete
+ * de cada nueve lotes caían enteros, el cortacircuito saltaba y el mes anterior
+ * se quedaba sin cerrar para cientos de vehículos que no tenían nada.
+ *
+ * Así que un rechazo (no un 503 ni una credencial) se parte en dos mitades y
+ * se vuelve a pedir cada una, y la que falle se vuelve a partir, hasta dejar
+ * solo al culpable con su error. Si las DOS mitades fallan enteras no es una
+ * unidad rara: es el proveedor diciendo que no a todo, y no se sigue partiendo
+ * (eso sería martillear con más peticiones). Con un culpable en 25 son unas
+ * diez peticiones más, todas por el limitador.
+ */
+
 /** Prefijo de la entrada en `integration_sync_state`; la cuenta va detrás. */
 export const ENTIDAD_SYNC = "vehicle_monthly_mileage";
 export const entidadSyncDe = (connectorKey: string, accountKey: string) =>
@@ -138,7 +155,7 @@ export interface ResumenSyncMensual {
 type Resultado =
   | { tipo: "ok"; resumen: TripSummary }
   | { tipo: "vacio" }
-  | { tipo: "error"; mensaje: string };
+  | { tipo: "error"; mensaje: string; divisible?: boolean };
 
 export async function syncMonthlyMileage(op: OpcionesSyncMensual): Promise<ResumenSyncMensual> {
   const ctx: OperationContext = { tenantId: op.tenantId, correlationId: await nextCorrelationId() };
@@ -262,7 +279,12 @@ async function sincronizarCuenta(
           return r;
         }
         r.peticiones += 1;
-        const porVehiculo = await pedirLote(ctx, conector, tanda, limites);
+        const primera = await pedirLote(ctx, conector, tanda, limites);
+        const porVehiculo = await partirSiHaceFalta(tanda, primera, async (parte) => {
+          await limitador.turno(op.esperaMaximaMs);
+          r.peticiones += 1;
+          return pedirLote(ctx, conector, parte, limites);
+        });
 
         // Un lote entero en error es una respuesta del proveedor, no un
         // vehículo raro: se cuentan seguidos y, pasado el tope, se para.
@@ -346,7 +368,21 @@ export function mesesQueTocan(ahora: Date, zona: string, mesesHistorico = MESES_
     m = mesAnterior(m);
     lista.push(m);
   }
+  // Los primeros días del mes, CERRAR el anterior va antes que actualizar el
+  // en curso (que a esas alturas apenas tiene nada): si la pasada se queda a
+  // medias, que lo que falte sea lo que mañana se vuelve a pedir de todos
+  // modos, no el cierre del mes.
+  if (total > 0 && diaDelMes(ahora, zona) <= DIAS_CIERRE_PRIMERO) [lista[0], lista[1]] = [lista[1], lista[0]];
   return lista;
+}
+
+/** Días del mes en los que el anterior se pide antes que el en curso. */
+export const DIAS_CIERRE_PRIMERO = 7;
+
+function diaDelMes(ahora: Date, zona: string): number {
+  const d = new Intl.DateTimeFormat("en-US", { timeZone: zona, day: "numeric" })
+    .formatToParts(ahora).find((p) => p.type === "day")?.value;
+  return Number(d ?? 1);
 }
 
 /** Un entero de la config, o `undefined` si no lo hay. */
@@ -359,6 +395,44 @@ function tamanoDeLote(v: unknown): number {
   const n = Number(v);
   if (!Number.isFinite(n) || n < 1) return UNIDADES_POR_PETICION_POR_DEFECTO;
   return Math.min(UNIDADES_POR_PETICION_MAXIMO, Math.floor(n));
+}
+
+/** ¿Todo el lote en error? */
+const todoError = (tanda: MappingRow[], res: Map<string, Resultado>) =>
+  tanda.length > 0 && tanda.every((e) => res.get(e.mobilink_id)?.tipo === "error");
+
+/**
+ * Si el lote entero vino rechazado, lo parte en mitades hasta aislar a quien
+ * lo tumba (ver la cabecera). `pedir` pasa por el limitador y cuenta la
+ * petición. Si el limitador no da turno a tiempo, se deja de partir y lo que
+ * falte queda con el error del lote: se reintentará en la siguiente pasada.
+ * Exportada para probarla sin proveedor.
+ */
+export async function partirSiHaceFalta(
+  tanda: MappingRow[],
+  res: Map<string, Resultado>,
+  pedir: (parte: MappingRow[]) => Promise<Map<string, Resultado>>,
+): Promise<Map<string, Resultado>> {
+  if (tanda.length < 2 || !todoError(tanda, res)) return res;
+  const primero = res.get(tanda[0].mobilink_id);
+  if (primero?.tipo !== "error" || !primero.divisible) return res;
+
+  const mitad = Math.ceil(tanda.length / 2);
+  const a = tanda.slice(0, mitad);
+  const b = tanda.slice(mitad);
+  // Sin turno a tiempo se deja de partir: lo que no se ha podido volver a
+  // pedir se queda con el error del lote.
+  const pedirSinTurno = async (parte: MappingRow[]) => {
+    try { return await pedir(parte); } catch (e) { if (e instanceof ErrorRitmo) return null; throw e; }
+  };
+  const ra = await pedirSinTurno(a);
+  if (!ra) return res;
+  const rb = await pedirSinTurno(b);
+  if (!rb) return new Map([...res, ...ra]);
+  // Las dos mitades rechazadas enteras: es el proveedor, no una unidad.
+  if (todoError(a, ra) && todoError(b, rb)) return new Map([...ra, ...rb]);
+  const [fa, fb] = [await partirSiHaceFalta(a, ra, pedir), await partirSiHaceFalta(b, rb, pedir)];
+  return new Map([...fa, ...fb]);
 }
 
 /** Una petición al proveedor por un lote, con el resultado repartido por vehículo. */
@@ -385,7 +459,10 @@ async function pedirLote(
     const mensaje = err instanceof IntegrationError && err.kind === "AUTH"
       ? `AUTH: ${err.message}`
       : String(err?.message ?? e);
-    for (const en of tanda) salida.set(en.mobilink_id, { tipo: "error", mensaje });
+    // Solo un rechazo de la petición se puede aislar partiendo el lote; un
+    // fallo pasajero (503, red) o de credencial no lo arregla partir.
+    const divisible = err instanceof IntegrationError && err.kind === "PERMANENT";
+    for (const en of tanda) salida.set(en.mobilink_id, { tipo: "error", mensaje, divisible });
   }
   return salida;
 }

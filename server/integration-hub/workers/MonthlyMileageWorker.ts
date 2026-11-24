@@ -28,6 +28,14 @@ export const ENTIDAD_JOB = "vehicle_monthly_mileage:job";
 const LATIDO_MS = 60 * 60 * 1000;
 /** Mínimo entre dos pasadas del mismo cliente. */
 const MINIMO_ENTRE_PASADAS_MS = 20 * 60 * 60 * 1000;
+/**
+ * Tras una pasada ABANDONADA (el proveedor rechazó lotes seguidos, sin
+ * cupo…) no se espera al día siguiente: se reintenta a la hora siguiente,
+ * siempre dentro de la madrugada. Es lo que deja cerrado el mes anterior el
+ * día 1 aunque la primera vuelta tropiece. Un poco menos de la hora del
+ * latido, para no perder la vuelta por unos segundos.
+ */
+const REINTENTO_TRAS_ABANDONO_MS = 50 * 60 * 1000;
 /** Ventana de madrugada, hora local: [inicio, fin). */
 const HORA_INICIO = Number(process.env.IH_KM_MENSUAL_HORA_INICIO ?? 2);
 const HORA_FIN = Number(process.env.IH_KM_MENSUAL_HORA_FIN ?? 6);
@@ -44,9 +52,12 @@ function horaLocal(ahora: Date, zona: string): number {
  * Nunca se ha pasado → sí, ya. Se pasó hace menos de 20 h → no. Si no, solo
  * dentro de la ventana de madrugada. Exportada para probarla sin reloj real.
  */
-export function tocaAhora(ultimaMs: number | null, ahora: Date, zona = ZONA_HORARIA_POR_DEFECTO): boolean {
+export function tocaAhora(
+  ultimaMs: number | null, ahora: Date, zona = ZONA_HORARIA_POR_DEFECTO, ultimaAbandonada = false,
+): boolean {
   if (ultimaMs == null) return true;
-  if (ahora.getTime() - ultimaMs < MINIMO_ENTRE_PASADAS_MS) return false;
+  const minimo = ultimaAbandonada ? REINTENTO_TRAS_ABANDONO_MS : MINIMO_ENTRE_PASADAS_MS;
+  if (ahora.getTime() - ultimaMs < minimo) return false;
   const h = horaLocal(ahora, zona);
   return h >= HORA_INICIO && h < HORA_FIN;
 }
@@ -61,7 +72,8 @@ export async function tickMonthlyMileage(ahora = new Date()): Promise<{ pasados:
   // se estorban en nuestra base.
   for (const tenantId of tenants) {
     const marca = await getSyncState(tenantId, ENTIDAD_JOB);
-    if (!tocaAhora(marca?.last_sync_ms == null ? null : Number(marca.last_sync_ms), ahora)) {
+    const ultima = marca?.last_sync_ms == null ? null : Number(marca.last_sync_ms);
+    if (!tocaAhora(ultima, ahora, ZONA_HORARIA_POR_DEFECTO, marca?.status === "error")) {
       omitidos += 1;
       continue;
     }
