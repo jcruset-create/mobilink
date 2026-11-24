@@ -11,8 +11,10 @@ import {
   cambiarPosicion, intercambiarPosiciones, aplicarPlanTrabajo, listarMarcasRecauchutadas,
   actualizarImagenChasis, guardarCoordenadasPosicion, guardarOrdenRevisionPosicion, listarUltimasMedicionesVehiculo, listarPresionesCatalogoPorModelo, leerMinimosDeEmpresa,
   listarFotosCatalogoPorModelo, claveModeloCatalogo, listarProfundidadesCatalogoPorModelo,
-  listarAlertasPresionVehiculo,
+  listarAlertasPresionVehiculo, sustituirNeumatico, montarDesdeCatalogo,
 } from "../services/data";
+import PanelSustituirPlan, { type RuedaASustituir } from "./PanelSustituirPlan";
+import { DESTINOS_SUSTITUCION, faltanPorElegir, sugerirDestino, textoChip, type SustitucionPlan } from "../services/sustitucionPlan";
 import { inputCls, Modal } from "./ui";
 import { mismaMedida } from "../services/medidas";
 import ModalMontarDesdeFicha from "./ModalMontarDesdeFicha";
@@ -94,6 +96,7 @@ const ACCIONES_PLAN: Record<string, { label: string; icono: string }> = {
   pinchazo: { label: "Reparar pinchazo", icono: "🛠" },
   valvula: { label: "Cambiar válvula", icono: "◎" },
   equilibrado: { label: "Equilibrar", icono: "⚖" },
+  sustituir: { label: "Sustituir", icono: "♻" },
 };
 const MM_REESCULTURA_DEFECTO = 8;
 
@@ -245,6 +248,9 @@ export default function VehicleLayoutImage({
   const [marcasPlan, setMarcasPlan] = useState<Record<string, string[]>>({}); // montajeId → acciones
   const [mmRees, setMmRees] = useState<Record<string, number>>({}); // montajeId → mm tras el corte
   const [modalAplicar, setModalAplicar] = useState(false);
+  // ♻ Sustituir: montajeId → a dónde va la vieja y qué se monta.
+  const [planSust, setPlanSust] = useState<Record<string, SustitucionPlan>>({});
+  const [ordenSust, setOrdenSust] = useState<string[]>([]); // en el orden en que se tocaron
 
   // Marcas de recauchutado (INSA…): distintivo RECAUCH. heredado de la marca.
   const [marcasRecau, setMarcasRecau] = useState<Set<string>>(new Set());
@@ -271,19 +277,50 @@ export default function VehicleLayoutImage({
     })
     .filter(Boolean) as Array<{ montajeId: string; origenId: string; destinoId: string }>;
   const totalMarcas = Object.values(marcasPlan).reduce((a, s) => a + s.length, 0);
-  const totalPlan = movimientosPlan.length + totalMarcas;
+  const totalSust = Object.keys(planSust).length;
+  const totalPlan = movimientosPlan.length + totalMarcas + totalSust;
+
+  // Profundidad que se enseña en el plano: la medida o, si no hay, la de fábrica.
+  function profundidadDe(neu?: Neumatico | null): number | null {
+    if (!neu) return null;
+    const clave = neu.marca && neu.modelo && neu.medida ? `${neu.marca}|${neu.modelo}|${neu.medida}`.toLowerCase().replace(/\s+/g, "") : "";
+    return profundidadVigente(medicionesActuales[neu.id], neu) ?? profundidadesCatalogo[clave] ?? null;
+  }
+
+  const ruedasSust: RuedaASustituir[] = ordenSust.filter((mid) => planSust[mid]).map((mid) => {
+    const m = montajePorId.get(mid);
+    const pos = posiciones.find((x) => x.id === m?.posicion_id);
+    const n = m?.neumatico ?? null;
+    return {
+      montajeId: mid,
+      codigo: pos?.codigo_posicion ?? "—",
+      etiqueta: pos ? etiquetaPosicion(pos) : "—",
+      goma: n ? `${n.marca ?? ""} ${n.modelo ?? ""} ${n.medida ?? ""}`.replace(/\s+/g, " ").trim() : "—",
+      medida: n?.medida ?? null,
+      mm: profundidadDe(n),
+      minimo: minimoDeLaGoma(n?.medida, minimosEmpresa),
+    };
+  });
+
+  function quitarSust(mid: string) {
+    setPlanSust((prev) => { const n = { ...prev }; delete n[mid]; return n; });
+    setOrdenSust((prev) => prev.filter((x) => x !== mid));
+  }
 
   function cerrarPlan() {
     setPlanAbierto(false); setAccionActiva(null); setPermutaA(null);
     setPlanMov({}); setMarcasPlan({}); setMmRees({}); setModalAplicar(false);
+    setPlanSust({}); setOrdenSust([]);
   }
 
   function tapPlan(p: PosicionVehiculo) {
     if (!accionActiva) { setMsg("Elige una acción del plan (botones de arriba)."); return; }
     setMsg("");
     if (accionActiva === "mover") {
+      const ocupAqui = ocupantePrevisto(p.id);
+      if (ocupAqui && planSust[ocupAqui]) { setMsg("Esa rueda está para sustituir: no se mueve en el mismo plan."); return; }
       if (!permutaA) {
-        if (!ocupantePrevisto(p.id)) { setMsg("Empieza por una rueda: toca la que quieras mover."); return; }
+        if (!ocupAqui) { setMsg("Empieza por una rueda: toca la que quieras mover."); return; }
         setPermutaA(p.id);
         return;
       }
@@ -303,6 +340,17 @@ export default function VehicleLayoutImage({
     const ocupId = ocupantePrevisto(p.id);
     if (!ocupId) { setMsg("Esa posición no tiene neumático."); return; }
     const m = montajePorId.get(ocupId);
+    if (accionActiva === "sustituir") {
+      if (planSust[ocupId]) { quitarSust(ocupId); return; }
+      const mueve = movimientosPlan.some((mv) => mv.montajeId === ocupId || mv.destinoId === p.id || mv.origenId === p.id);
+      if (mueve || m?.posicion_id !== p.id) { setMsg("Esa rueda se mueve en este plan: quita el movimiento para sustituirla."); return; }
+      if ((marcasPlan[ocupId] ?? []).length) { setMsg("Esa rueda ya tiene otras acciones en el plan: quítalas para sustituirla."); return; }
+      const neu = m?.neumatico ?? null;
+      setPlanSust((prev) => ({ ...prev, [ocupId]: { destino: sugerirDestino(profundidadDe(neu), minimoDeLaGoma(neu?.medida, minimosEmpresa)), montar: null } }));
+      setOrdenSust((prev) => [...prev.filter((x) => x !== ocupId), ocupId]);
+      return;
+    }
+    if (planSust[ocupId]) { setMsg("Esa rueda se va a sustituir: no lleva más acciones."); return; }
     const yaMarcada = (marcasPlan[ocupId] ?? []).includes(accionActiva);
     if (!yaMarcada && accionActiva === "giro" && esDireccional(m?.neumatico?.modelo)) {
       setMsg("Dibujo direccional: no se puede girar sobre la llanta.");
@@ -349,14 +397,58 @@ export default function VehicleLayoutImage({
       ...Object.entries(marcasPlan).flatMap(([mid, tipos]) =>
         tipos.map((t) => ({ tipo: t, montaje: mid, ...(t === "reescultura" ? { valor: mmRees[mid] ?? MM_REESCULTURA_DEFECTO } : {}) }))),
     ];
-    if (!acciones.length) { setMsg("El plan está vacío: marca algo primero."); return; }
+    if (!acciones.length && !totalSust) { setMsg("El plan está vacío: marca algo primero."); return; }
+    const faltan = faltanPorElegir(planSust);
+    if (faltan.length) {
+      setMsg(`Falta elegir qué se monta en ${faltan.map((mid) => ruedasSust.find((r) => r.montajeId === mid)?.codigo ?? "—").join(", ")}.`);
+      setModalAplicar(false); setAccionActiva("sustituir");
+      return;
+    }
     setSaving(true); setMsg("");
     try {
-      await aplicarPlanTrabajo({ vehiculoId, acciones });
-      cerrarPlan();
+      if (acciones.length) await aplicarPlanTrabajo({ vehiculoId, acciones });
+    } catch (e: any) { setMsg(e?.message || "No se pudo aplicar el plan"); setModalAplicar(false); setSaving(false); return; }
+
+    // Las sustituciones van rueda a rueda, con las mismas funciones que
+    // «Sustituir» de una sola rueda. Si una falla, las demás siguen.
+    const hoy = new Date().toISOString().slice(0, 10);
+    const fallos: string[] = [];
+    let hechas = 0;
+    for (const r of ruedasSust) {
+      const s = planSust[r.montajeId];
+      const m = montajePorId.get(r.montajeId);
+      if (!s?.montar || !m) continue;
+      try {
+        if (s.montar.tipo === "nuevo") {
+          await sustituirNeumatico({
+            montajeActualId: r.montajeId, productoAlmacenId: s.montar.productoId, controlIndividual: false,
+            motivoDesmontaje: "desgaste", destinoRetirado: s.destino, fecha: hoy, condicion: "nuevo",
+          });
+        } else if (s.montar.tipo === "catalogo") {
+          await montarDesdeCatalogo({
+            vehiculoId, posicionId: m.posicion_id as string, referenciaId: s.montar.referenciaId, controlIndividual: false,
+            fecha: hoy, condicion: "nuevo", montajeActualId: r.montajeId, motivoDesmontaje: "desgaste", destinoRetirado: s.destino,
+          });
+        } else {
+          // Una usada concreta: se desmonta la vieja y se monta ESA goma.
+          await desmontarNeumatico({ montajeId: r.montajeId, km: null, motivo: "desgaste", destino: s.destino, observaciones: null });
+          await montarNeumatico({ vehiculoId, neumaticoId: s.montar.neumaticoId, posicionId: m.posicion_id as string, km: null, fecha: hoy, observaciones: null });
+        }
+        hechas++;
+      } catch (e) {
+        fallos.push(`${r.codigo}: ${e instanceof Error ? e.message : "error"}`);
+      }
+    }
+    setSaving(false);
+    if (fallos.length) {
+      setModalAplicar(false);
+      setPlanSust({}); setOrdenSust([]); setPlanMov({}); setMarcasPlan({}); setMmRees({});
+      setMsg(`${acciones.length ? "Plan aplicado. " : ""}Sustituidas ${hechas} de ${ruedasSust.length}. No se pudo: ${fallos.join(" · ")}`);
       onChanged?.();
-    } catch (e: any) { setMsg(e?.message || "No se pudo aplicar el plan"); setModalAplicar(false); }
-    finally { setSaving(false); }
+      return;
+    }
+    cerrarPlan();
+    onChanged?.();
   }
 
   const posSeleccionada = seleccion ? posicionPorCodigo.get(seleccion) : null;
@@ -582,7 +674,7 @@ export default function VehicleLayoutImage({
             <div className="mt-2 flex flex-wrap gap-1.5">
               {Object.entries(ACCIONES_PLAN).map(([tipo, a]) => {
                 const activo = accionActiva === tipo;
-                const n = tipo === "mover" ? movimientosPlan.length : Object.values(marcasPlan).filter((s) => s.includes(tipo)).length;
+                const n = tipo === "mover" ? movimientosPlan.length : tipo === "sustituir" ? totalSust : Object.values(marcasPlan).filter((s) => s.includes(tipo)).length;
                 return (
                   <button key={tipo}
                     onClick={() => { setAccionActiva(activo ? null : tipo); setPermutaA(null); }}
@@ -592,8 +684,17 @@ export default function VehicleLayoutImage({
                 );
               })}
             </div>
-            {(movimientosPlan.length > 0 || totalMarcas > 0) && (
+            {accionActiva === "sustituir" && (
+              <PanelSustituirPlan empresaId={empresaId} ruedas={ruedasSust} plan={planSust} onPlan={setPlanSust} onQuitar={quitarSust} />
+            )}
+            {totalPlan > 0 && (
               <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                {ruedasSust.map((r) => (
+                  <span key={`sx-${r.montajeId}`} className={`flex items-center gap-1 rounded-full border bg-slate-900 px-2 py-0.5 text-[11px] font-bold ${planSust[r.montajeId]?.montar ? "border-sky-700 text-slate-100" : "border-amber-600 text-amber-200"}`}>
+                    {textoChip(r.codigo, planSust[r.montajeId])}
+                    <button onClick={() => quitarSust(r.montajeId)} className="ml-0.5 text-slate-400 hover:text-white">✕</button>
+                  </span>
+                ))}
                 {movimientosPlan.map((mv) => (
                   <span key={`mv-${mv.destinoId}`} className="flex items-center gap-1 rounded-full border border-sky-700 bg-slate-900 px-2 py-0.5 text-[11px] font-bold text-slate-100">
                     ⇄ {codigoPorPosId.get(mv.origenId)} → {codigoPorPosId.get(mv.destinoId)}
@@ -614,7 +715,7 @@ export default function VehicleLayoutImage({
                     </span>
                   );
                 }))}
-                <button onClick={() => { setPlanMov({}); setMarcasPlan({}); setMmRees({}); setPermutaA(null); }}
+                <button onClick={() => { setPlanMov({}); setMarcasPlan({}); setMmRees({}); setPermutaA(null); setPlanSust({}); setOrdenSust([]); }}
                   className="rounded border border-slate-600 px-2 py-1 text-[11px] text-slate-300">🗑 Vaciar plan</button>
                 <button onClick={() => setModalAplicar(true)} disabled={saving || totalPlan === 0}
                   className="rounded-lg bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white disabled:opacity-50">✓ Aplicar plan ({totalPlan})</button>
@@ -670,7 +771,7 @@ export default function VehicleLayoutImage({
               if (m && m.posicion_id !== p.id) vieneDe = codigoPorPosId.get(m.posicion_id as string) ?? null;
             }
             const ocupado = !!m?.neumatico;
-            const marcasDe = planAbierto && m ? (marcasPlan[m.id] ?? []) : [];
+            const marcasDe = planAbierto && m ? [...(marcasPlan[m.id] ?? []), ...(planSust[m.id] ? ["sustituir"] : [])] : [];
             const esOrigenPermuta = planAbierto && permutaA === p.id;
             const esArrastre = arrastrando === p.codigo_posicion;
             const esDestino = zonaSobrevolada === p.codigo_posicion;
@@ -1115,7 +1216,16 @@ export default function VehicleLayoutImage({
             {movimientosPlan.map((mv) => (
               <div key={mv.destinoId}>⇄ {codigoPorPosId.get(mv.origenId)} → {codigoPorPosId.get(mv.destinoId)}</div>
             ))}
-            {Object.keys(ACCIONES_PLAN).filter((t) => t !== "mover").map((tipo) => {
+            {ruedasSust.map((r) => {
+              const s = planSust[r.montajeId];
+              return s ? (
+                <div key={`sm-${r.montajeId}`} className="font-semibold">
+                  ♻ {r.etiqueta}: sale {r.goma}{r.mm != null ? ` (${String(Math.round(r.mm * 10) / 10).replace(".", ",")} mm)` : ""} → {DESTINOS_SUSTITUCION[s.destino].icono} {DESTINOS_SUSTITUCION[s.destino].label.toLowerCase()}
+                  {" · "}entra {s.montar ? `${s.montar.tipo === "usado" ? "usada" : s.montar.tipo === "catalogo" ? "nueva (catálogo, sin descontar stock)" : "nueva"} ${s.montar.nombre}` : <span className="text-amber-300">falta elegir</span>}
+                </div>
+              ) : null;
+            })}
+            {Object.keys(ACCIONES_PLAN).filter((t) => t !== "mover" && t !== "sustituir").map((tipo) => {
               const codigos = Object.entries(marcasPlan)
                 .filter(([, tipos]) => tipos.includes(tipo))
                 .map(([mid]) => { const m = montajePorId.get(mid); return m?.posicion_id ? codigoPorPosId.get(m.posicion_id) : "—"; });
