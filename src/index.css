@@ -32,6 +32,29 @@ select {
   font: inherit;
 }
 
+/*
+ * La lista de un desplegable: siempre fondo oscuro y letra clara.
+ *
+ * Tailwind deja el <select> con fondo transparente y la letra heredada. En una
+ * pantalla oscura eso hacía que el navegador abriera la lista en BLANCO con la
+ * letra casi blanca de la página: las opciones no se leían. En vez de arreglar
+ * cada desplegable (hay cientos), la lista lleva sus dos colores puestos aquí,
+ * así no depende de lo que herede. Vale igual en las pantallas claras.
+ *
+ * Solo la lista que se abre: los <select> con `size` o `multiple` pintan sus
+ * opciones dentro de la página y ya llevan los colores de su caja.
+ * La opción bajo el ratón la colorea el navegador (azul) y no se toca.
+ */
+select:not([multiple]):not([size]) option,
+select:not([multiple]):not([size]) optgroup {
+  background-color: #1e293b; /* slate-800 */
+  color: #f1f5f9; /* slate-100 */
+}
+
+select:not([multiple]):not([size]) option:disabled {
+  color: #64748b; /* slate-500 */
+}
+
 table {
   border-collapse: collapse;
 }
