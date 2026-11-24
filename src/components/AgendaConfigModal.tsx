@@ -30,6 +30,12 @@ type Props = {
   onSaved: (config: AgendaConfig) => void;
   /** Paleta oscura de Agenda 2 / WorkPlanner. Por defecto, tema claro. */
   dark?: boolean;
+  /**
+   * Dentro de una página (Configuración de WorkPlanner) en vez de como
+   * ventana flotante: sin fondo oscuro ni límite de alto. El contenido y el
+   * guardado son los mismos.
+   */
+  inline?: boolean;
 };
 
 function formatSpanishDateKey(dateKey: string) {
@@ -43,6 +49,7 @@ export default function AgendaConfigModal({
   config,
   onClose,
   onSaved,
+  inline = false,
   dark = false,
 }: Props) {
   const [draft, setDraft] = useState<AgendaConfig>(config);
@@ -384,8 +391,8 @@ export default function AgendaConfigModal({
   const labelClass = `mb-1 block text-xs font-medium ${th.subtitle}`;
 
   return (
-    <div className={`fixed inset-0 z-50 flex items-center justify-center p-4 ${th.overlay}`}>
-      <div className={`max-h-[90dvh] w-full max-w-3xl overflow-y-auto rounded-3xl p-6 shadow-2xl ${th.panel}`}>
+    <div className={inline ? "" : `fixed inset-0 z-50 flex items-center justify-center p-4 ${th.overlay}`}>
+      <div className={inline ? `w-full rounded-3xl p-6 ${th.panel}` : `max-h-[90dvh] w-full max-w-3xl overflow-y-auto rounded-3xl p-6 shadow-2xl ${th.panel}`}>
         <h3 className="text-xl font-semibold">Configuración de la agenda</h3>
         <p className={`mt-1 text-sm ${th.subtitle}`}>
           Define el horario de cada día y los festivos. Las horas fuera de horario y

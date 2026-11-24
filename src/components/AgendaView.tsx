@@ -77,6 +77,8 @@ import {
   type AgendaConfig,
 } from "../modules/agendaConfig";
 import { bloqueoQueChoca, bloqueosDelDia, textoDeBloqueo } from "../modules/bloqueosDeArea";
+import { cargarAjustesWorkplanner } from "../modules/ajustesWorkplannerApi";
+import { AJUSTES_POR_DEFECTO } from "../modules/ajustesWorkplanner";
 import { loadAgendaConfig } from "../modules/agendaConfigApi";
 
 import CaducidadTacografoModal from "./CaducidadTacografoModal";
@@ -297,7 +299,9 @@ type Props = {
 
 const SLOT_MINUTES = 15;
 const SLOT_HEIGHT = 24;
-const DEFAULT_ESTIMATED_MINUTES = 45;
+// Duración por defecto de una cita. Se puede cambiar en Configuración →
+// Tiempos y radios; hasta que llega el valor guardado, el de siempre.
+let DEFAULT_ESTIMATED_MINUTES = AJUSTES_POR_DEFECTO.duracionCitaMin;
 
 function timeToMinutes(time: string) {
   const [h, m] = time.split(":").map(Number);
@@ -868,6 +872,17 @@ useEffect(() => {
 
   // ---- Configuración de agenda (horario y festivos) ----
   const [agendaConfig, setAgendaConfig] = useState<AgendaConfig>(DEFAULT_AGENDA_CONFIG);
+
+  // Duración por defecto de una cita (Configuración → Tiempos y radios).
+  useEffect(() => {
+    let vivo = true;
+    void cargarAjustesWorkplanner().then((a) => {
+      if (vivo) DEFAULT_ESTIMATED_MINUTES = a.duracionCitaMin;
+    });
+    return () => {
+      vivo = false;
+    };
+  }, []);
   const [configModalOpen, setConfigModalOpen] = useState(false);
 
   // Las funciones de rejilla (horario, mediodía, días cerrados) leen el horario

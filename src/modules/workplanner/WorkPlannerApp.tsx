@@ -29,6 +29,7 @@ import AnalisisPage from "./AnalisisPage";
 import PartesTrabajoPage from "./PartesTrabajoPage";
 import RecepcionesPage from "./RecepcionesPage";
 import SalidasPage from "./SalidasPage";
+import ConfiguracionPage from "./ConfiguracionPage";
 import { supabase } from "../administracion/services/supabase";
 import { useEsAdministrador } from "../esAdministrador";
 import { seccionMarcadaEnCore, seccionVisible } from "../vistasDelModulo";
@@ -73,24 +74,10 @@ const SECCIONES = [
   // El histórico de trabajos con sus fotos. Solo administradores, como
   // Ausencias y Planning.
   { key: "estadisticas", label: "Análisis y estadísticas", icon: BarChart3, proximamente: false, soloAdmin: true },
-  { key: "configuracion", label: "Configuración", icon: Settings, proximamente: true },
+  // Los ajustes del taller en un solo sitio. Solo administradores.
+  { key: "configuracion", label: "Configuración", icon: Settings, proximamente: false, soloAdmin: true },
 ] as const;
 
-function Proximamente({ titulo }: { titulo: string }) {
-  return (
-    <div className="flex min-h-[60vh] items-center justify-center p-6">
-      <div className="max-w-md rounded-2xl border border-slate-700 bg-slate-800 p-8 text-center">
-        <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-sky-500/15">
-          <CalendarClock className="h-6 w-6 text-sky-400" />
-        </div>
-        <h2 className="text-base font-bold text-slate-100">{titulo}</h2>
-        <p className="mt-2 text-sm text-slate-400">
-          Esta sección de Mobilink WorkPlanner estará disponible próximamente.
-        </p>
-      </div>
-    </div>
-  );
-}
 
 function SinLicencia() {
   const navigate = useNavigate();
@@ -385,7 +372,16 @@ export default function WorkPlannerApp() {
               )
             }
           />
-          <Route path="configuracion" element={<Proximamente titulo="Configuración" />} />
+          <Route
+            path="configuracion"
+            element={
+              esAdmin ? (
+                <ConfiguracionPage />
+              ) : (
+                <Navigate to="/workplanner/operativo2" replace />
+              )
+            }
+          />
           <Route path="*" element={<Navigate to="/workplanner/operativo2" replace />} />
         </Routes>
       )}

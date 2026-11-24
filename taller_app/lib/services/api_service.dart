@@ -20,6 +20,10 @@ class ApiService {
 
   ApiService({required this.techName, required this.code});
 
+  /// Minutos sin tocar la pantalla hasta pedir PIN o Face ID. Lo manda el
+  /// servidor en /me (Configuración → Tiempos y radios); 5 si no dice nada.
+  int bloqueoInactividadMin = 5;
+
   // ── Sesión (Bearer) ──────────────────────────────────────────
   static String? _accessToken;
   static DateTime? _tokenExpiresAt;
@@ -104,6 +108,8 @@ class ApiService {
     );
     if (res.statusCode != 200) return false;
     final data = jsonDecode(res.body) as Map<String, dynamic>;
+    final min = (data['bloqueoTabletMin'] as num?)?.toInt();
+    if (min != null && min >= 1 && min <= 120) bloqueoInactividadMin = min;
     return data['esSupervisor'] == true;
   }
 

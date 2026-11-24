@@ -137,6 +137,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return BloqueoInactividad(
       api: widget.api,
+      limite: Duration(minutes: widget.api.bloqueoInactividadMin),
       child: DefaultTabController(
       length: tabs.length,
       child: Scaffold(

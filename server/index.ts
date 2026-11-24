@@ -206,9 +206,10 @@ import { AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "./core/ai.ts";
 import { makeSecret, safeEquals, verifySecretWithLegacy } from "./core/credentials.ts";
 import { proponerVinculos, type EmpleadoCore } from "./core/vinculoTecnicos.ts";
 import { resolverRolDelPanel, type RolResuelto } from "./core/rolDelPanel.ts";
-import { TIPO_SALIDA, esMotivoDeSalida, pasoDeSalida, validarSalida, RADIO_DESTINO_M } from "../src/modules/salidasTaller.ts";
+import { TIPO_SALIDA, esMotivoDeSalida, pasoDeSalida, validarSalida } from "../src/modules/salidasTaller.ts";
 import { pasoDeOtfGps, otfSigueEnCurso } from "../src/modules/seguimientoOtf.ts";
 import { normalizarBloqueos } from "../src/modules/bloqueosDeArea.ts";
+import { AJUSTES_POR_DEFECTO, normalizarAjustes, type AjustesWorkplanner } from "../src/modules/ajustesWorkplanner.ts";
 import { siguienteReferencia } from "./cobros/referencias.ts";
 import { saveCaptureAnalysis, reconcileCaptureAiStatus } from "./core/whatsappCapture.ts";
 import { aE164, clienteTwilio, numeroWhatsAppEmisor } from "./core/twilio.ts";
@@ -764,6 +765,57 @@ const requireOperarioRole = requireRole(["admin", "supervisor", "pantallas"]);
 // Cualquier rol del panel (incluye TVs). Usado como puerta de sesión al
 // pasar a AUTH_MODE=strict; el permiso fino llegará con el RBAC completo.
 const requirePanelRole = requireRole(["admin", "supervisor", "pantallas", "tv75"]);
+
+/*
+ * Ajustes generales de WorkPlanner (Configuración → Tiempos y radios).
+ *
+ * Se guardan en workshop_config bajo una clave y se tienen en memoria: los
+ * vigilantes del GPS los leen cada minuto y no pueden ir a la base por ellos
+ * en cada vuelta. Se refrescan al guardar y, por si otra instancia guarda,
+ * cada 5 minutos.
+ */
+const AJUSTES_WORKPLANNER_KEY = "ajustes_workplanner";
+let ajustesWorkplannerCache: AjustesWorkplanner = AJUSTES_POR_DEFECTO;
+
+async function recargarAjustesWorkplanner(): Promise<AjustesWorkplanner> {
+  try {
+    const r = await db.query(`SELECT value FROM workshop_config WHERE key = $1`, [AJUSTES_WORKPLANNER_KEY]);
+    const raw = r.rows[0]?.value ? JSON.parse(String(r.rows[0].value)) : null;
+    ajustesWorkplannerCache = normalizarAjustes(raw);
+  } catch (e) {
+    console.warn("ajustes-workplanner: no se pudieron leer, se usan los de siempre:", (e as any)?.message ?? e);
+  }
+  return ajustesWorkplannerCache;
+}
+
+/** Los ajustes vigentes, sin ir a la base. */
+function ajustesActuales(): AjustesWorkplanner {
+  return ajustesWorkplannerCache;
+}
+
+void recargarAjustesWorkplanner();
+setInterval(() => void recargarAjustesWorkplanner(), 5 * 60 * 1000);
+
+app.get("/api/ajustes-workplanner", exigirCredencial(requirePanelRole), async (_req, res) => {
+  res.json(await recargarAjustesWorkplanner());
+});
+
+app.put("/api/ajustes-workplanner", requireAdminRole, async (req, res) => {
+  try {
+    const ajustes = normalizarAjustes(req.body ?? {});
+    await db.query(
+      `INSERT INTO workshop_config(key, value) VALUES($1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+      [AJUSTES_WORKPLANNER_KEY, JSON.stringify(ajustes)]
+    );
+    ajustesWorkplannerCache = ajustes;
+    console.log("ajustes-workplanner guardados:", ajustes);
+    res.json(ajustes);
+  } catch (e) {
+    console.error("PUT /api/ajustes-workplanner error:", e);
+    res.status(500).json({ error: "Error guardando los ajustes" });
+  }
+});
 
 app.post("/api/whatsapp/send-agenda-reminder", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
@@ -4127,7 +4179,14 @@ app.get("/api/taller-operator/me", requireTallerOperator, async (req, res) => {
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
     if (!op) return res.status(404).json({ error: "Técnico no encontrado" });
-    res.json({ name: op.name, esSupervisor: op.esSupervisor, workshopId: op.workshopId });
+    res.json({
+      name: op.name,
+      esSupervisor: op.esSupervisor,
+      workshopId: op.workshopId,
+      // Minutos de inactividad hasta que la tablet pide PIN o Face ID
+      // (Configuración → Tiempos y radios).
+      bloqueoTabletMin: ajustesActuales().bloqueoTabletMin,
+    });
   } catch (error) {
     console.error("GET /api/taller-operator/me error:", error);
     res.status(500).json({ error: "Error obteniendo operario" });
@@ -16826,7 +16885,7 @@ async function checkOtfBaseArrival() {
         const pos = await posicionDeAsistencia(o);
         if (!pos || pos.antigua) continue;
         const dist = haversineDistanceM(pos.lat, pos.lng, Number(o.lat), Number(o.lng));
-        if (dist <= KNOWN_PLACE_RADIUS_M) {
+        if (dist <= radioLlegadaM()) {
           const marcada = await db.query(
             `UPDATE otf SET status = 'en_curso', "arrivedAtBaseMs" = $2, "updatedAtMs" = $2
              WHERE id = $1 AND status = 'planificada' AND "arrivedAtBaseMs" IS NULL`,
@@ -16875,7 +16934,7 @@ async function vigilarSalidas() {
           distDestinoM: dist,
           moving: typeof pos.moving === "boolean" ? pos.moving : null,
           enPuntoVisto: s.enPuntoVisto === true,
-          radioDestinoM: RADIO_DESTINO_M,
+          radioDestinoM: radioLlegadaM(),
         });
         const now = Date.now();
         // El mapa del panel en vivo, como en la vuelta al taller. Con la hora
@@ -16979,7 +17038,7 @@ async function vigilarOtfs() {
             distTallerM,
             distBaseM,
             radioTallerM: parseFloat(cfg.taller_radio_m) || 300,
-            radioBaseM: KNOWN_PLACE_RADIUS_M,
+            radioBaseM: radioLlegadaM(),
           },
           now
         );
@@ -18977,7 +19036,11 @@ app.post("/api/whatsapp-capture/sessions/:id/apply", requireAdminRole, async (re
    LUGARES CONOCIDOS (parkings, bases de cliente…)
 ========================================================= */
 
+// Radio de llegada a un lugar: Configuración → Tiempos y radios (300 m si no se ha cambiado).
 const KNOWN_PLACE_RADIUS_M = 300;
+function radioLlegadaM(): number {
+  return ajustesActuales().radioLlegadaM ?? KNOWN_PLACE_RADIUS_M;
+}
 
 function normalizeKnownPlace(row: any) {
   return {
@@ -19000,7 +19063,7 @@ function normalizeKnownPlace(row: any) {
 }
 
 // Devuelve el lugar conocido activo más cercano dentro del radio, o null
-async function findNearbyKnownPlace(lat: number, lng: number, radiusM = KNOWN_PLACE_RADIUS_M) {
+async function findNearbyKnownPlace(lat: number, lng: number, radiusM = radioLlegadaM()) {
   const r = await db.query(`SELECT * FROM roadside_known_places WHERE active = true`);
   let best: any = null;
   let bestDist = Infinity;
@@ -19060,7 +19123,7 @@ app.get("/api/roadside-known-places", requireAdminRole, async (req, res) => {
 app.get("/api/roadside-known-places/near", requireAdminRole, async (req, res) => {
   try {
     const lat = Number(req.query.lat), lng = Number(req.query.lng);
-    const radius = req.query.radius ? Number(req.query.radius) : KNOWN_PLACE_RADIUS_M;
+    const radius = req.query.radius ? Number(req.query.radius) : radioLlegadaM();
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return res.status(400).json({ error: "lat/lng requeridos" });
     res.json(await findNearbyKnownPlace(lat, lng, radius));
   } catch (e) {
@@ -23518,7 +23581,10 @@ app.use(
 // furgoneta DENTRO del radio tras la asignación ("armada"), para no marcar
 // en camino a furgonetas asignadas cuando ya estaban en ruta.
 // ─────────────────────────────────────────────────────────────
-const AUTO_EN_CAMINO_RADIO_M = 500;
+// Radio de salida del taller: Configuración → Tiempos y radios (500 m si no se ha cambiado).
+function radioSalidaTallerM(): number {
+  return ajustesActuales().radioSalidaTallerM;
+}
 let autoEnCaminoRunning = false;
 
 async function activarEnCaminoAutomatico(
@@ -23586,7 +23652,7 @@ async function activarEnCaminoAutomatico(
   }
 
   await syncTechRoadsideOccupation(updated.id, updated.status, updated.assignedTechName);
-  console.log(`Auto en-camino: asistencia #${assistanceId} activada (furgoneta a >${AUTO_EN_CAMINO_RADIO_M} m del taller)`);
+  console.log(`Auto en-camino: asistencia #${assistanceId} activada (furgoneta a >${radioSalidaTallerM()} m del taller)`);
 }
 
 async function vigilarSalidaDelTaller() {
@@ -23625,7 +23691,7 @@ async function vigilarSalidaDelTaller() {
       const wlng = parseFloat(wcfg.taller_lng);
       if (!Number.isFinite(wlat) || !Number.isFinite(wlng)) continue;
       const dist = haversineDistanceM(pos.lat, pos.lng, wlat, wlng);
-      if (dist <= AUTO_EN_CAMINO_RADIO_M) {
+      if (dist <= radioSalidaTallerM()) {
         // Furgoneta vista en el taller: se arma el disparo automático
         if (a.autoEnCaminoArmada !== true) {
           await db.query(
@@ -23647,7 +23713,7 @@ async function vigilarSalidaDelTaller() {
 function startAutoEnCaminoWatcher() {
   // Sin credenciales de Webfleet no hay posiciones: el chequeo saldrá vacío
   setInterval(() => void vigilarSalidaDelTaller(), 60_000);
-  console.log(`Auto en-camino: vigilancia activa (radio ${AUTO_EN_CAMINO_RADIO_M} m, cada 60 s)`);
+  console.log(`Auto en-camino: vigilancia activa (radio ${radioSalidaTallerM()} m, cada 60 s)`);
 }
 
 /**
