@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
  * aparece el contrario: letra oscura sobre fondo oscuro), y ninguna otra
  * prueba lo notaría.
  */
-const CSS = readFileSync(new URL("../index.css", import.meta.url), "utf8");
+const CSS = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
 
 /** El cuerpo de la regla cuyo selector contiene `selector`. */
 function regla(selector: string): string {
