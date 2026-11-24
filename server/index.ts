@@ -136,6 +136,7 @@ import {
 } from "./documentos/servicio.ts";
 import { tipoDesdeKindAssist as tipoDocumentoDesdeKind } from "./documentos/tipos.ts";
 import { normalizarMatricula as normalizarMatriculaTc } from "./tyrecontrol/matricula.ts";
+import { INSTRUCCION_PAIS, paisParaGuardar } from "./matriculaPais.ts";
 import { decidirCambioDeDatos, mensajeDeCorreo } from "./tyrecontrol/usuarioDatos.ts";
 import { puedeVerEmpresaDeRequest as puedeVerEmpresaTc, puedeVerEmpresa as puedeVerEmpresaTcCtx, puedeOperarEnEmpresa } from "./tyrecontrol/empresaAcceso.ts";
 import {
@@ -10098,28 +10099,74 @@ async function detectarMatriculaConDudas(
 
 // Detecta a la vez la matrícula BLANCA (camión) y la ROJA (remolque) de una sola foto.
 // Devuelve { white, red } con cada matrícula normalizada o null si no se lee.
+/**
+ * Como detectPlateFromImage, pero devolviendo también el país de la banda
+ * azul. La usa la foto de la matrícula de los trabajos de OTF.
+ */
+async function detectarMatriculaYPais(
+  imageUrl: string,
+  options: { preferColor?: "white" | "red" } = {}
+): Promise<{ matricula: string | null; pais: string | null }> {
+  try {
+    const remolque = options.preferColor === "red";
+    const r = await pedirIA<{ matricula: string | null; pais: string | null }>({
+      operacion: "assist.detectPlateCountry",
+      proposito: "documento",
+      prompt:
+        "Foto de la matrícula de un vehículo, normalmente español pero puede ser de otro país. " +
+        (remolque
+          ? "En España la matrícula ROJA es la del REMOLQUE: si aparecen varias, devuelve la ROJA. "
+          : "En España la matrícula BLANCA es la del camión y la ROJA la del remolque: si aparecen las dos, devuelve la BLANCA. ") +
+        "En «matricula» pon el texto de la matrícula sin espacios ni guiones, o null si no se lee. " +
+        INSTRUCCION_PAIS,
+      imagenes: [{ url: imageUrl }],
+      maxTokens: 2000,
+      esquema: {
+        nombre: "matricula_pais",
+        schema: {
+          type: "object", additionalProperties: false,
+          required: ["matricula", "pais"],
+          properties: { matricula: { type: ["string", "null"] }, pais: { type: ["string", "null"] } },
+        },
+      },
+    });
+    const p = normalizePlateText(r.datos?.matricula);
+    return { matricula: p && p !== "NONE" && p.length >= 5 ? p : null, pais: r.datos?.pais ?? null };
+  } catch (error) {
+    console.error("detectarMatriculaYPais error:", error);
+    return { matricula: null, pais: null };
+  }
+}
+
 async function detectBothPlatesFromImage(
   imageUrl: string
-): Promise<{ white: string | null; red: string | null }> {
+): Promise<{ white: string | null; red: string | null; whiteCountry: string | null }> {
   try {
-    const r = await pedirIA<{ blanca: string | null; roja: string | null }>({
+    const r = await pedirIA<{ blanca: string | null; roja: string | null; pais: string | null }>({
       operacion: "assist.detectBothPlates",
       proposito: "documento",
       prompt:
-        "Foto de matrículas de vehículos españoles. En España la matrícula BLANCA es del CAMIÓN " +
+        // Casi siempre españoles, pero no siempre: el país se lee de la banda azul.
+        "Foto de matrículas de vehículos, normalmente españoles. En España la matrícula BLANCA es del CAMIÓN " +
         "y la matrícula ROJA es del REMOLQUE. " +
         "La matrícula del REMOLQUE (roja) tiene el formato: una 'R' seguida de 4 dígitos y 3 letras (ej. R0000BBB, R1234BCD). " +
         "Identifica las matrículas que aparezcan. " +
         "La 'roja' debe empezar por R y seguir el formato R+4 dígitos+3 letras. " +
-        "Usa null en el campo si esa matrícula no aparece o no es legible. Sin espacios ni guiones.",
+        "Usa null en el campo si esa matrícula no aparece o no es legible. Sin espacios ni guiones. " +
+        "Si el camión no es español, su matrícula va igualmente en «blanca». " +
+        INSTRUCCION_PAIS.replace("la placa", "la placa del camión"),
       imagenes: [{ url: imageUrl }],
       maxTokens: 2000,
       esquema: {
         nombre: "matriculas",
         schema: {
           type: "object", additionalProperties: false,
-          required: ["blanca", "roja"],
-          properties: { blanca: { type: ["string", "null"] }, roja: { type: ["string", "null"] } },
+          required: ["blanca", "roja", "pais"],
+          properties: {
+            blanca: { type: ["string", "null"] },
+            roja: { type: ["string", "null"] },
+            pais: { type: ["string", "null"] },
+          },
         },
       },
     });
@@ -10130,10 +10177,10 @@ async function detectBothPlatesFromImage(
       const p = normalizePlateText(v);
       return p && p !== "NONE" && p.length >= 5 ? p : null;
     };
-    return { white: normOrNull(parsed.blanca), red: normOrNull(parsed.roja) };
+    return { white: normOrNull(parsed.blanca), red: normOrNull(parsed.roja), whiteCountry: parsed.pais ?? null };
   } catch (error) {
     console.error("detectBothPlatesFromImage error:", error);
-    return { white: null, red: null };
+    return { white: null, red: null, whiteCountry: null };
   }
 }
 
@@ -10182,11 +10229,13 @@ app.post(
 
       let detectedPlate: string | null = null;
       let detectedRemolquePlate: string | null = null;
+      let detectedCountry: string | null = null;
       if (kind === "matricula_camion") {
-        // Detecta blanca (camión) y roja (remolque) a la vez
+        // Detecta blanca (camión) y roja (remolque) a la vez, y el país del camión
         const both = await detectBothPlatesFromImage(publicData.publicUrl);
         detectedPlate = both.white;
         detectedRemolquePlate = both.red;
+        detectedCountry = both.whiteCountry;
       } else if (kind === "matricula_remolque") {
         detectedPlate = await detectPlateFromImage(publicData.publicUrl, { preferColor: "red" });
       }
@@ -10266,9 +10315,26 @@ app.post(
         }
       }
 
+      /*
+       * El país de la matrícula, leído de la banda azul. Solo si la matrícula
+       * leída es la de la asistencia (no la de otro vehículo de la foto) y la
+       * oficina no había puesto ya uno: lo puesto a mano no se pisa.
+       */
+      let paisLeido: string | null = null;
+      if (kind === "matricula_camion" && currentPlateAfter) {
+        paisLeido = paisParaGuardar(detectedCountry, detectedPlate, currentPlateAfter, normalizePlateText);
+        if (paisLeido) {
+          await db.query(
+            `UPDATE roadside_assistances SET "paisMatricula" = $2 WHERE id = $1 AND "paisMatricula" IS NULL`,
+            [id, paisLeido]
+          ).catch((e) => console.error("país de la matrícula:", e?.message));
+        }
+      }
+
       res.json({
         file: result.rows[0],
         plateAction,
+        paisLeido,
         detectedPlate: detectedPlate ?? null,
         currentPlate: currentPlateAfter,
         detectedRemolquePlate: detectedRemolquePlate ?? null,
@@ -20200,9 +20266,15 @@ app.post(
             `SELECT plate, "plateRemolque", "tipoVehiculo" FROM otf_trabajos WHERE id = $1`, [tid]
           )).rows[0];
           const esRemolque = /remolque/i.test(String(t?.tipoVehiculo ?? ""));
-          const leida = normalizePlateText(
-            await detectPlateFromImage(pub.publicUrl, { preferColor: esRemolque ? "red" : "white" })
-          ) || null;
+          const lectura = await detectarMatriculaYPais(pub.publicUrl, { preferColor: esRemolque ? "red" : "white" });
+          const leida = normalizePlateText(lectura.matricula) || null;
+          // El país, si la matrícula leída es la del trabajo y no tenía ya uno.
+          const pais = paisParaGuardar(lectura.pais, leida, t?.plate, normalizePlateText);
+          if (pais) {
+            await db.query(
+              `UPDATE otf_trabajos SET "paisMatricula" = $2 WHERE id = $1 AND "paisMatricula" IS NULL`, [tid, pais]
+            );
+          }
           const esperadas = [t?.plate, t?.plateRemolque].map(normalizePlateText).filter(Boolean);
           const coincide = leida && esperadas.length ? esperadas.includes(leida) : null;
           matricula = { leida, esperada: esperadas[0] ?? null, coincide };
