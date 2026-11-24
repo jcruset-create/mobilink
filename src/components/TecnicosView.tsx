@@ -134,6 +134,17 @@ export default function TecnicosView({
     });
   }
 
+  /**
+   * ¿El teléfono de quien se está editando lo pone Core? En la edición lo
+   * dice el propio técnico. En el alta sobre una persona de Core se sabe por
+   * los demás: si algún técnico ya lo lee de Core, la columna existe y el
+   * nuevo, que nace enlazado, también lo leerá de allí.
+   */
+  function telefonoEnCore(m: ModalState): boolean {
+    if (m.mode === "edit") return m.tech.phoneEnCore === true;
+    return m.persona !== null && techs.some((t) => t.phoneEnCore === true);
+  }
+
   function closeModal() {
     setModal(null);
   }
@@ -284,6 +295,11 @@ export default function TecnicosView({
                         >
                           <Phone className="h-3 w-3" />
                           {tech.phone}
+                          {tech.phoneOrigen === "personal" && (
+                            <span title="No tiene teléfono de empresa en Core: este es el personal, y solo lo ves tú como administrador">
+                              (personal)
+                            </span>
+                          )}
                         </a>
                       )}
                       <button
@@ -475,7 +491,19 @@ export default function TecnicosView({
                 )}
               </label>
 
-              {/* Teléfono */}
+              {/* Teléfono. El de un técnico enlazado lo pone Core: aquí no se edita. */}
+              {telefonoEnCore(modal) ? (
+                <div>
+                  <span className="mb-1 block text-xs font-bold text-slate-300">Teléfono</span>
+                  <div className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-300">
+                    <Phone className="h-4 w-4 shrink-0 text-slate-500" />
+                    {modal.mode === "edit" ? modal.tech.phone || "Sin teléfono de empresa" : "El de su ficha de Core"}
+                  </div>
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Sale de la ficha de Core (teléfono de empresa). Se cambia en Core → Empleados.
+                  </p>
+                </div>
+              ) : (
               <label className="block">
                 <span className="mb-1 block text-xs font-bold text-slate-300">
                   Teléfono
@@ -495,6 +523,7 @@ export default function TecnicosView({
                   />
                 </div>
               </label>
+              )}
 
               {/* ── Taller ────────────────────────────────────────────────
                   Hasta ahora esta columna no existía y todos los técnicos se

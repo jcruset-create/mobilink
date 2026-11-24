@@ -433,7 +433,7 @@ export default function Empleados() {
                   <div className="col-span-2"><label className="text-xs font-medium text-slate-300">Provincia</label>
                     <input value={form.provincia} onChange={(e) => setForm({ ...form, provincia: e.target.value })}
                       className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
-                  <div><label className="text-xs font-medium text-slate-300">Teléfono</label>
+                  <div><label className="text-xs font-medium text-slate-300">Teléfono personal</label>
                     <input value={form.telefono} onChange={(e) => setForm({ ...form, telefono: e.target.value })}
                       className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
                   <div><label className="text-xs font-medium text-slate-300">Email</label>

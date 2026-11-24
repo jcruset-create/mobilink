@@ -14,6 +14,11 @@ import db, { initDb } from "./db.ts";
 import type { PoolClient } from "pg";
 import { supabase, supabaseAnonAuth, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_BUCKET, SUPABASE_DOCS_BUCKET } from "./supabase.ts";
 import { hayCore, NOMBRE_CORE_SQL } from "./core/hayCore.ts";
+import {
+  createTelefonoEmpresaRouter,
+  telefonoDeTecnico,
+  telefonoDeTecnicoParaCliente,
+} from "./core/telefonoEmpresa.ts";
 import { fallaAlFirmar, firmarEnFilas, firmarUrls } from "./core/fotosFirmadas.ts";
 import { descargarMedioTwilio, rescatarMedioDeTwilio } from "./core/medioTwilio.ts";
 import { elegirPosicion, horaWebfleet, type PosicionElegida } from "./core/posicionDoble.ts";
@@ -2782,9 +2787,9 @@ Si no hay técnico válido, responsable debe ser null.
  * están de baja. El nombre del técnico NO cambia: es la clave con la que el
  * taller apunta todo su histórico. Sin Core en la base, como antes.
  */
-app.get("/api/techs", exigirCredencial(requirePanelRole), async (_req, res) => {
+app.get("/api/techs", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
-    const { core, numero } = await hayCore(db);
+    const { core, numero, telefonoEmpresa } = await hayCore(db);
     const result = await db.query(`
       SELECT t.name, t.status, t.blocked, t."currentJobId", t.competencies, t.priorities, t.avatar,
              t."roadsideCapable", t."compartidoCentral", t."currentRoadsideAssistanceId", t.phone,
@@ -2793,7 +2798,8 @@ app.get("/api/techs", exigirCredencial(requirePanelRole), async (_req, res) => {
                core
                  ? `, ${NOMBRE_CORE_SQL} AS core_nombre,
                     ${numero ? "e.numero_trabajador" : "NULL::text"} AS core_numero,
-                    e.activo AS core_activo`
+                    e.activo AS core_activo, (e.id IS NOT NULL) AS core_enlazado
+                    ${telefonoEmpresa ? ", e.telefono_empresa AS core_tel_empresa, e.telefono AS core_tel_personal" : ""}`
                  : ""
              }
       FROM techs t
@@ -2801,12 +2807,32 @@ app.get("/api/techs", exigirCredencial(requirePanelRole), async (_req, res) => {
       ORDER BY t.id ASC
     `);
 
-    res.json(result.rows.map(normalizeTechRow));
+    // El teléfono de un técnico enlazado lo pone Core (ver
+    // core/telefonoEmpresa.ts). El personal solo lo ve un administrador.
+    const esAdmin = telefonoEmpresa ? (await getRoleFromRequestAsync(req)) === "admin" : false;
+    res.json(
+      result.rows.map((fila: any) => {
+        const mandaCore = telefonoEmpresa && fila.core_enlazado === true;
+        const { telefono, origen } = telefonoDeTecnico(fila, mandaCore, esAdmin);
+        return { ...normalizeTechRow(fila), phone: telefono, phoneOrigen: origen, phoneEnCore: mandaCore };
+      })
+    );
   } catch (error) {
     console.error("GET /api/techs error:", error);
     res.status(500).json({ error: "Error obteniendo técnicos" });
   }
 });
+
+/** ¿El teléfono de este técnico lo pone Core? (enlazado y con la columna creada) */
+async function telefonoLoPoneCore(name: string): Promise<boolean> {
+  const { core, telefonoEmpresa } = await hayCore(db);
+  if (!core || !telefonoEmpresa) return false;
+  const { rows } = await db.query(
+    `SELECT 1 FROM techs t JOIN sea_employees e ON e.id = t.employee_id WHERE t.name = $1`,
+    [name]
+  );
+  return rows.length > 0;
+}
 
 app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
   try {
@@ -2904,7 +2930,9 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
         JSON.stringify(statusTotals ?? {}),
         normalizedRoadsideCapable,
         // Igual que el taller: sin teléfono en el cuerpo se conserva el que había.
-        phone === undefined
+        // Y el de un técnico enlazado con Core no se toca desde aquí: lo pone
+        // Core, y lo que manda el panel es el que Core le enseñó.
+        phone === undefined || (await telefonoLoPoneCore(name))
           ? existingResult.rows[0]?.phone ?? null
           : phone != null ? String(phone).trim() || null : null,
         normalizedWorkshopId,
@@ -6572,11 +6600,8 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
     let techPhone: string | null = null;
     if (assistance.assignedTechName) {
       try {
-        const tp = await db.query(`SELECT phone FROM techs WHERE name = $1 LIMIT 1`, [
-          assistance.assignedTechName,
-        ]);
-        const raw = tp.rows[0]?.phone ? String(tp.rows[0].phone).trim() : "";
-        techPhone = raw || null;
+        // De un técnico enlazado con Core, el de EMPRESA; nunca el personal.
+        techPhone = await telefonoDeTecnicoParaCliente(assistance.assignedTechName);
       } catch { /* sin teléfono */ }
     }
 
@@ -23409,6 +23434,8 @@ app.use("/api/public/satisfaction", createSatisfactionPublicRouter());
  * nada más que el token que lleva en la URL.
  */
 app.use("/api/core/alta", createAltaOperarioAdminRouter());
+// Teléfono de empresa de la ficha (el que enseñan los módulos).
+app.use("/api/core/empleados", createTelefonoEmpresaRouter());
 // Número de trabajador por empresa (clave para enlazar módulos con Core).
 app.use("/api/core/empleados", createNumeroTrabajadorRouter());
 // Enlazar los usuarios de cada módulo con su persona de Core (fase B).

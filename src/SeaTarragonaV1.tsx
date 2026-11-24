@@ -1675,6 +1675,8 @@ blocked: isUnavailableTechStatus(
       // técnico perdía su taller y su teléfono.
       workshopId: found.workshopId ?? null,
       phone: found.phone ?? null,
+      phoneOrigen: found.phoneOrigen ?? null,
+      phoneEnCore: found.phoneEnCore === true,
       employeeId: found.employeeId ?? null,
       // Quién es en Core y si allí está de baja: solo para la pantalla de
       // técnicos. El servidor no los lee al guardar.
@@ -4107,6 +4109,8 @@ async function resetAllSystem() {
       // técnico perdía su taller y su teléfono.
       workshopId: found.workshopId ?? null,
       phone: found.phone ?? null,
+      phoneOrigen: found.phoneOrigen ?? null,
+      phoneEnCore: found.phoneEnCore === true,
       employeeId: found.employeeId ?? null,
       // Quién es en Core y si allí está de baja: solo para la pantalla de
       // técnicos. El servidor no los lee al guardar.

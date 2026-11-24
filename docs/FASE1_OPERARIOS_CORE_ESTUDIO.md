@@ -1,5 +1,31 @@
 # Fase 1 — Estudio: Core como fuente única de operarios y usuarios
 
+> **2026-11-24 · Teléfono de empresa en Core; el del técnico se lee de Core.**
+> Decidido: el teléfono del técnico sale de Core, y la ficha de Core gana un
+> «teléfono de empresa» por si la persona tiene uno asignado.
+>
+> **Qué se ha hecho**
+> - `supabase/migrations/core_telefono_empresa.sql`: columna
+>   `sea_employees.telefono_empresa` y, una sola vez, pasa a ella el
+>   `techs.phone` de los técnicos enlazados que aún no tengan. Sin triggers,
+>   sin DROP; `telefono` queda como el personal.
+> - `server/core/telefonoEmpresa.ts`: `PUT /api/core/empleados/:id/telefono-empresa`
+>   (solo administradores) y la regla de qué teléfono vale para un técnico:
+>   enlazado → el de empresa de Core; si no tiene, el personal **solo para un
+>   administrador del panel**; sin enlazar → el del taller, como siempre.
+> - El cliente (página de seguimiento de una asistencia) ve **solo el de
+>   empresa**: un móvil personal no se publica.
+> - Ficha de Core: tarjeta «Teléfono de empresa». Técnicos: el teléfono de un
+>   enlazado no se edita en el taller, se cambia en Core.
+> - Antes de ejecutar la migración todo sigue igual: manda `techs.phone`.
+>
+> **Orden en Supabase**
+> 1. `core_telefono_empresa.sql` (idempotente). Si más adelante se enlaza un
+>    técnico que tenía teléfono en Taller, volver a ejecutarla se lo pasa.
+>
+> **Pendiente de decidir**
+> - Si el cliente debe ver el personal cuando no hay de empresa (hoy no).
+
 > **2026-11-23 · Fase C en Taller (9/9 enlazados) — solo lo que no toca el nombre.**
 > En el taller el nombre del técnico (`techs.name`) es la clave con la que se
 > apunta todo: partes, pausas, cobros, asistencias, ausencias y el login de

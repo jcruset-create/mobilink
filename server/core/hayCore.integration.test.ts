@@ -55,7 +55,7 @@ afterAll(async () => {
 
 describe.runIf(RUN)("hayCore y la lectura de técnicos", () => {
   it("sin Core en la base: lo dice, y los técnicos salen como siempre", async () => {
-    expect(await mod.hayCore(conexion)).toEqual({ core: false, numero: false });
+    expect(await mod.hayCore(conexion)).toEqual({ core: false, numero: false, telefonoEmpresa: false });
     const filas = await tecnicos();
     expect(filas.map((f) => f.name)).toEqual(["Albert", "Pere", "Suelto"]);
     expect(filas[0]).not.toHaveProperty("core_nombre");
@@ -70,7 +70,7 @@ describe.runIf(RUN)("hayCore y la lectura de técnicos", () => {
         ('${ALBERT}', 'Albert', 'Belles Bertran', true),
         ('${DE_BAJA}', 'Pere', NULL, false);
     `);
-    expect(await mod.hayCore(conexion)).toEqual({ core: true, numero: false });
+    expect(await mod.hayCore(conexion)).toEqual({ core: true, numero: false, telefonoEmpresa: false });
     const [albert] = await tecnicos();
     expect(albert).toMatchObject({ core_nombre: "Albert Belles Bertran", core_numero: null, core_activo: true });
   });
@@ -78,7 +78,7 @@ describe.runIf(RUN)("hayCore y la lectura de técnicos", () => {
   it("con todo: nombre completo, número, baja en Core, y el suelto sin datos", async () => {
     await conexion.query(`ALTER TABLE sea_employees ADD COLUMN numero_trabajador text`);
     await conexion.query(`UPDATE sea_employees SET numero_trabajador = '19' WHERE id = $1`, [ALBERT]);
-    expect(await mod.hayCore(conexion)).toEqual({ core: true, numero: true });
+    expect(await mod.hayCore(conexion)).toEqual({ core: true, numero: true, telefonoEmpresa: false });
 
     const [albert, pere, suelto] = await tecnicos();
     expect(albert).toMatchObject({ name: "Albert", core_nombre: "Albert Belles Bertran", core_numero: "19", core_activo: true });
