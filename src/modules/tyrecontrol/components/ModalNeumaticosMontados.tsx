@@ -32,6 +32,7 @@ import type { MontajeActual, Neumatico, PosicionVehiculo, ReferenciaNeumatico } 
 import { baseMedida } from "../services/medidas";
 import { Modal, inputCls } from "./ui";
 import NuevaReferenciaModal from "./NuevaReferenciaModal";
+import BuscadorIACatalogo from "./BuscadorIACatalogo";
 
 interface Props {
   modo: "informar" | "actualizar";
@@ -87,6 +88,8 @@ export default function ModalNeumaticosMontados({
   // La goma no está en el catálogo: se da de alta sin salir del vehículo.
   const [altaRef, setAltaRef] = useState(false);
   const [msgAlta, setMsgAlta] = useState("");
+  // «✨ Nuevo neumático con IA»: busca la goma y la da de alta sin salir de aquí.
+  const [altaIA, setAltaIA] = useState(false);
 
   useEffect(() => { listarReferenciasNeumatico().then(setReferencias).catch(() => setReferencias([])); }, []);
 
@@ -317,7 +320,26 @@ export default function ModalNeumaticosMontados({
             libres={filas.filter((f) => !f.montajeId).length}
             onAplicar={aplicarATodas}
             onNueva={() => { setMsgAlta(""); setAltaRef(true); }}
+            onNuevaIA={() => { setMsgAlta(""); setAltaIA(true); }}
             msgAlta={msgAlta}
+          />
+        )}
+
+        {altaIA && (
+          <BuscadorIACatalogo
+            inicial={{ marca: "", medida: medidaVehiculo ?? "" }}
+            onClose={() => setAltaIA(false)}
+            onCreado={(creados) => {
+              // Se relee el catálogo para que lo creado salga en los
+              // desplegables; la ventana de la IA sigue abierta (rellena la
+              // ficha técnica) y al cerrarla ya se puede elegir.
+              void listarReferenciasNeumatico().then(setReferencias).catch(() => undefined);
+              if (creados?.length) {
+                const ult = creados[creados.length - 1];
+                setBusquedaRef(ult.modelo);
+                setMsgAlta(`✔ ${creados.map((c) => `${c.marca} ${c.modelo} ${c.medida}`).join(", ")} añadido${creados.length > 1 ? "s" : ""} al catálogo: ya puedes elegirlo.`);
+              }
+            }}
           />
         )}
 
@@ -462,12 +484,12 @@ function Aviso({ modo }: { modo: "informar" | "actualizar" }) {
 
 function BloqueCatalogo({
   opciones, totalReferencias, busqueda, onBusqueda, soloMedida, onSoloMedida, medidas, libres, onAplicar,
-  onNueva, msgAlta,
+  onNueva, onNuevaIA, msgAlta,
 }: {
   opciones: ReferenciaNeumatico[]; totalReferencias: number; busqueda: string; onBusqueda: (v: string) => void;
   soloMedida: boolean; onSoloMedida: (v: boolean) => void; medidas: string[];
   libres: number; onAplicar: (referenciaId: string, profundidad: string, presion: string) => number;
-  onNueva: () => void; msgAlta: string;
+  onNueva: () => void; onNuevaIA: () => void; msgAlta: string;
 }) {
   const [refTodas, setRefTodas] = useState("");
   const [profTodas, setProfTodas] = useState("");
@@ -478,10 +500,16 @@ function BloqueCatalogo({
     <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-[11px] font-bold uppercase text-slate-400">El neumático del catálogo</div>
-        <button type="button" onClick={onNueva}
-          className="rounded border border-emerald-600 px-3 py-1 text-[12px] font-bold text-emerald-300 hover:bg-emerald-600/10">
-          + Nuevo neumático para el catálogo
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={onNuevaIA}
+            className="rounded border border-violet-500 px-3 py-1 text-[12px] font-bold text-violet-300 hover:bg-violet-600/10">
+            ✨ Nuevo neumático con IA
+          </button>
+          <button type="button" onClick={onNueva}
+            className="rounded border border-emerald-600 px-3 py-1 text-[12px] font-bold text-emerald-300 hover:bg-emerald-600/10">
+            + Nuevo neumático para el catálogo
+          </button>
+        </div>
       </div>
       {msgAlta && <div className="mt-2 text-[12px] text-emerald-300">{msgAlta}</div>}
       <div className="mt-2 grid gap-2 sm:grid-cols-2">
