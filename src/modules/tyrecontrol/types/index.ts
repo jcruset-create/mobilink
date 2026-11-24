@@ -677,7 +677,7 @@ export const ORIGEN_KM_LABELS: Record<OrigenKm, string> = {
 
 export type EstadoNeumatico = "almacen" | "reservado" | "montado" | "reparacion" | "descartado" | "pendiente_reciclaje";
 export type MotivoDesmontaje = "desgaste" | "pinchazo" | "rotura" | "preventivo" | "rotacion" | "reparacion" | "descarte";
-export type DestinoDesmontaje = "almacen" | "reparacion" | "descartado";
+export type DestinoDesmontaje = "almacen" | "reparacion" | "descartado" | "pendiente_reciclaje";
 
 export const ESTADO_NEUMATICO_LABELS: Record<EstadoNeumatico, string> = {
   almacen: "En almacén", reservado: "Reservado", montado: "Montado", reparacion: "Reparación", descartado: "Descartado",
