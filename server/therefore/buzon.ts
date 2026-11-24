@@ -53,6 +53,8 @@ import { cuerpoEnTexto, remitenteAceptado } from "./domain/correo/remitentes.ts"
 import { motivoDelFallo } from "./domain/imap.ts";
 import { aCorreoEntrante, procesarCorreo, type AdjuntoEntrante } from "./ingesta.ts";
 import { guardarDocumento, hashDeFichero, rutaDocumento } from "./storage.ts";
+import { hayQueGuardarPasada, type Comprobacion } from "../core/pasadasDeBuzon.ts";
+
 
 const MIN_POR_DEFECTO = 5;
 /** Cuántos correos por pasada. Cada uno puede traer PDF que hay que guardar. */
@@ -320,29 +322,42 @@ export async function revisarBuzon(opciones: OpcionesPasada = {}): Promise<Pasad
   if (!cfg) return { error: "Sin configurar (faltan THEREFORE_IMAP_HOST/USER/PASS/EMPRESA_ID)" };
 
   const pasada: PasadaBuzon = { correos: 0, procesados: 0, ignorados: 0, errores: 0, detalle: [] };
-  const { rows } = await pool.query<{ id: string }>(
-    `INSERT INTO thf_buzon_pasadas (empresa_id, origen) VALUES ($1, $2) RETURNING id`,
-    [cfg.empresaId, opciones.origen ?? (opciones.historico ? "historico" : "temporizador")]
-  );
-  const pasadaId = rows[0].id;
+  const origen = opciones.origen ?? (opciones.historico ? "historico" : "temporizador");
+  const iniciada = new Date();
 
+  /*
+   * La fila se escribe al TERMINAR, y solo si cuenta algo (ver
+   * `core/pasadasDeBuzon.ts`): antes se abría al empezar y se cerraba al
+   * acabar, dos escrituras cada cinco minutos para decir «0 correos».
+   */
   const cerrar = async (error: string | null) => {
-    await pool.query(
-      `UPDATE thf_buzon_pasadas
-          SET terminada_at = now(), correos = $2, procesados = $3, ignorados = $4,
-              errores = $5, error = $6, detalle = $7
-        WHERE id = $1`,
-      [
-        pasadaId,
-        pasada.correos,
-        pasada.procesados,
-        pasada.ignorados,
-        pasada.errores,
-        error,
-        // El asunto sí; el cuerpo no. La pasada dice QUÉ llegó, no qué decía.
-        JSON.stringify(pasada.detalle.map((d) => ({ ...d, asunto: d.asunto.slice(0, 200) }))),
-      ]
-    ).catch((e) => console.error("[Therefore] no se ha podido cerrar la pasada:", (e as Error).message));
+    try {
+      comprobaciones.set(cfg.empresaId, { at: Date.now(), error });
+      const { rows: ultima } = await pool.query<{ error: string | null }>(
+        `SELECT error FROM thf_buzon_pasadas WHERE empresa_id = $1 ORDER BY iniciada_at DESC LIMIT 1`,
+        [cfg.empresaId]
+      );
+      if (!hayQueGuardarPasada({ origen, correos: pasada.correos, error }, ultima[0] ?? null)) return;
+      await pool.query(
+        `INSERT INTO thf_buzon_pasadas
+           (empresa_id, origen, iniciada_at, terminada_at, correos, procesados, ignorados, errores, error, detalle)
+         VALUES ($1, $2, $3, now(), $4, $5, $6, $7, $8, $9)`,
+        [
+          cfg.empresaId,
+          origen,
+          iniciada,
+          pasada.correos,
+          pasada.procesados,
+          pasada.ignorados,
+          pasada.errores,
+          error,
+          // El asunto sí; el cuerpo no. La pasada dice QUÉ llegó, no qué decía.
+          JSON.stringify(pasada.detalle.map((d) => ({ ...d, asunto: d.asunto.slice(0, 200) }))),
+        ]
+      );
+    } catch (e) {
+      console.error("[Therefore] no se ha podido guardar la pasada:", (e as Error).message);
+    }
   };
 
   const cliente = opciones.cliente ?? clienteReal(cfg);
@@ -438,6 +453,13 @@ export async function importarEml(empresaId: string, source: Buffer): Promise<De
     ]
   ).catch((e) => console.error("[Therefore] no se ha podido cerrar la pasada del .eml:", (e as Error).message));
   return d;
+}
+
+/** Cuándo se miró el buzón por última vez, se guardara la pasada o no. */
+const comprobaciones = new Map<string, Comprobacion>();
+
+export function ultimaComprobacion(empresaId: string): Comprobacion | null {
+  return comprobaciones.get(empresaId) ?? null;
 }
 
 /** Las últimas pasadas, para la pantalla de configuración. */

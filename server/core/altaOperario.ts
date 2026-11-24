@@ -286,3 +286,265 @@ export function motivoCerrado(
   if (new Date(invitacion.caduca_at).getTime() <= ahoraMs) return "caducada";
   return null;
 }
+
+// ── Pedirle a alguien que ya está dado de alta que repase su ficha ─────────
+
+export type MotivoInvitacion = "alta" | "actualizacion";
+
+/**
+ * Para qué se manda el enlace, según cómo esté la ficha hoy.
+ *
+ * A quien ya está completo se le pide una ACTUALIZACIÓN, no un alta. La
+ * diferencia no es cosmética: decide el texto del SMS, el estado en el que
+ * queda la ficha y, sobre todo, lo que ve el encargado en la lista. Un
+ * operario de hace diez años con la etiqueta «Enlace enviado» parece un alta
+ * a medias, y no lo es.
+ */
+export function motivoDeInvitacion(estadoAlta: string | null | undefined): MotivoInvitacion {
+  return estadoAlta === "completa" ? "actualizacion" : "alta";
+}
+
+/** En qué estado queda la ficha al mandar el enlace. */
+export function estadoTrasInvitar(motivo: MotivoInvitacion): "enviado" | "actualizando" {
+  return motivo === "actualizacion" ? "actualizando" : "enviado";
+}
+
+/**
+ * El SMS de la actualización.
+ *
+ * Dice de entrada que no hay que hacer el alta otra vez, porque la primera
+ * reacción de quien lleva diez años en la empresa al recibir «completa tu
+ * alta» es pensar que es un error o una estafa.
+ */
+export function textoSmsActualizacion(p: {
+  empresa: string;
+  nombre: string;
+  url: string;
+  nota?: string | null;
+}): string {
+  const nota = p.nota?.trim() ? ` ${p.nota.trim()}` : "";
+  return (
+    `${p.empresa}: ${p.nombre}, repasa y actualiza tus datos aqui: ${p.url}${nota} ` +
+    `Ya tienes la ficha empezada, solo hay que revisarla. Caduca en ${CADUCIDAD_HORAS} h.`
+  );
+}
+
+// ── La comprobación de lo tecleado contra la foto ──────────────────────────
+
+export type Veredicto = "coincide" | "no_coincide" | "ilegible";
+
+export type CampoVerificado = {
+  campo: string;
+  tecleado: string | null;
+  leido: string | null;
+  veredicto: Veredicto;
+  nota: string;
+};
+
+export type Verificacion = { campos: CampoVerificado[]; resumen: string };
+
+/** Qué campos se contrastan, y de qué foto sale cada uno. */
+export const CAMPOS_VERIFICABLES = [
+  { campo: "nombre", documento: "dni_anverso", etiqueta: "Nombre" },
+  { campo: "apellidos", documento: "dni_anverso", etiqueta: "Apellidos" },
+  { campo: "dni_nie", documento: "dni_anverso", etiqueta: "DNI / NIE" },
+  { campo: "fecha_nacimiento", documento: "dni_anverso", etiqueta: "Fecha de nacimiento" },
+  { campo: "carnet_numero", documento: "carnet_anverso", etiqueta: "Nº de carnet" },
+  { campo: "carnet_caducidad", documento: "carnet_anverso", etiqueta: "Caducidad del carnet" },
+  { campo: "carnet_clases", documento: "carnet_reverso", etiqueta: "Clases del carnet" },
+] as const;
+
+export const ESQUEMA_VERIFICACION = {
+  type: "object",
+  additionalProperties: false,
+  required: ["campos", "resumen"],
+  properties: {
+    campos: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["campo", "tecleado", "leido", "veredicto", "nota"],
+        properties: {
+          campo: { type: "string" },
+          tecleado: { type: ["string", "null"] },
+          leido: { type: ["string", "null"] },
+          veredicto: { type: "string", enum: ["coincide", "no_coincide", "ilegible"] },
+          nota: { type: "string" },
+        },
+      },
+    },
+    resumen: { type: "string" },
+  },
+} as const;
+
+/**
+ * Lo que se le pide al modelo.
+ *
+ * Dos reglas que son el motivo de que esto exista: NO corrige y NO rellena.
+ * Lo que vale es lo que escribió el trabajador; el modelo solo dice si la
+ * foto lo respalda. En cuanto se le deja «arreglar» un apellido, el dato de
+ * la ficha deja de tener un responsable con nombre.
+ */
+export const INSTRUCCIONES_VERIFICACION = [
+  "Eres un revisor de documentación laboral. Recibes lo que un trabajador ha",
+  "tecleado en su ficha y las fotos de su DNI y de su carnet de conducir.",
+  "",
+  "Para cada campo di si la foto respalda lo tecleado:",
+  "  · coincide     — lo que pone en el documento es lo mismo.",
+  "  · no_coincide  — el documento dice otra cosa (ponla en `leido`).",
+  "  · ilegible     — no se lee, está cortado, borroso o no aparece.",
+  "",
+  "Reglas:",
+  "- NO corrijas ni completes nada: solo comparas.",
+  "- Si el campo tecleado viene vacío, veredicto `ilegible` y nota explicando",
+  "  que el trabajador no lo ha puesto.",
+  "- Las tildes, las mayúsculas y el orden de los apellidos no son diferencias:",
+  "  'MARIA GERMY ESCALIER' y 'Maria Germy Escalier' coinciden.",
+  "- Las fechas, en dd/mm/aaaa.",
+  "- `nota` es una frase corta en español, para que la lea el encargado.",
+].join("\n");
+
+/** Un vistazo rápido al veredicto, que es lo que pinta la pantalla. */
+export function resumenVerificacion(v: Verificacion | null | undefined): {
+  coinciden: number;
+  noCoinciden: number;
+  ilegibles: number;
+  hayProblemas: boolean;
+} {
+  const campos = v?.campos ?? [];
+  const cuenta = (x: Veredicto) => campos.filter((c) => c.veredicto === x).length;
+  const noCoinciden = cuenta("no_coincide");
+  return {
+    coinciden: cuenta("coincide"),
+    noCoinciden,
+    ilegibles: cuenta("ilegible"),
+    hayProblemas: noCoinciden > 0,
+  };
+}
+
+// ── Lo que dice la documentación ───────────────────────────────────────────
+
+/**
+ * Una clase del permiso de conducción con SU fecha.
+ *
+ * Van por separado porque caducan por separado: el reverso del carnet es una
+ * tabla con una fila por clase, y la C profesional caduca cada cinco años
+ * mientras la B del mismo carnet dura diez. Guardar solo «caduca el día X»
+ * es perder justo el dato que hace falta para avisar a tiempo.
+ */
+export type ClaseCarnet = { clase: string; caducidad: string | null };
+
+export type Lectura = {
+  identidad: { numero: string | null; caducidad: string | null; nota: string };
+  carnet: {
+    numero: string | null;
+    caducidad: string | null;
+    clases: ClaseCarnet[];
+    capNumero: string | null;
+    capCaducidad: string | null;
+    nota: string;
+  };
+};
+
+export const ESQUEMA_LECTURA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["identidad", "carnet"],
+  properties: {
+    identidad: {
+      type: "object",
+      additionalProperties: false,
+      required: ["numero", "caducidad", "nota"],
+      properties: {
+        numero: { type: ["string", "null"] },
+        caducidad: { type: ["string", "null"] },
+        nota: { type: "string" },
+      },
+    },
+    carnet: {
+      type: "object",
+      additionalProperties: false,
+      required: ["numero", "caducidad", "clases", "capNumero", "capCaducidad", "nota"],
+      properties: {
+        numero: { type: ["string", "null"] },
+        caducidad: { type: ["string", "null"] },
+        clases: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["clase", "caducidad"],
+            properties: {
+              clase: { type: "string" },
+              caducidad: { type: ["string", "null"] },
+            },
+          },
+        },
+        capNumero: { type: ["string", "null"] },
+        capCaducidad: { type: ["string", "null"] },
+        nota: { type: "string" },
+      },
+    },
+  },
+} as const;
+
+export const INSTRUCCIONES_LECTURA = [
+  "Lee los documentos de las fotos y devuelve lo que ponen. No interpretes",
+  "ni completes: si un dato no se ve, va a null y lo explicas en la nota.",
+  "",
+  "Del documento de identidad (DNI o NIE):",
+  "- numero: el número con su letra.",
+  "- caducidad: la fecha de validez del documento.",
+  "",
+  "Del permiso de conducción:",
+  "- numero: el número del permiso (suele ser el DNI).",
+  "- caducidad: la fecha de validez del documento entero, si aparece.",
+  "- clases: UNA ENTRADA POR CLASE de las que tiene concedidas (AM, A1, A2,",
+  "  A, B, BE, C1, C, CE, D1, D, DE…). El reverso es una tabla con una fila",
+  "  por clase y su fecha; copia la fecha de CADA fila en su clase. Si una",
+  "  clase no tiene fecha propia, caducidad a null.",
+  "- capNumero y capCaducidad: solo si en la foto aparece la tarjeta CAP.",
+  "",
+  "Todas las fechas en dd/mm/aaaa.",
+].join("\n");
+
+/**
+ * Lo leído → las certificaciones que tocaría anotar.
+ *
+ * Una por clase con fecha propia, más el CAP. Se construye aquí, aparte de
+ * la base, para poder enseñarle al que revisa EXACTAMENTE lo que se le va a
+ * escribir en la ficha antes de que pulse el botón.
+ */
+export function certificacionesDeLectura(
+  lectura: Lectura | null | undefined
+): Array<{ nombre: string; caducidad: string; numero: string | null }> {
+  const fuera: Array<{ nombre: string; caducidad: string; numero: string | null }> = [];
+  for (const c of lectura?.carnet?.clases ?? []) {
+    const clase = String(c?.clase ?? "").trim().toUpperCase();
+    const caducidad = fechaIso(c?.caducidad);
+    if (!clase || !caducidad) continue;
+    fuera.push({ nombre: `Carnet de conducir ${clase}`, caducidad, numero: lectura?.carnet?.numero ?? null });
+  }
+  const cap = fechaIso(lectura?.carnet?.capCaducidad);
+  if (cap) fuera.push({ nombre: "CAP", caducidad: cap, numero: lectura?.carnet?.capNumero ?? null });
+  return fuera;
+}
+
+/** Lo leído → los campos de la ficha. Solo lo que se entiende. */
+export function fichaDeLectura(lectura: Lectura | null | undefined): Record<string, string | null> {
+  const clases = (lectura?.carnet?.clases ?? [])
+    .map((c) => String(c?.clase ?? "").trim().toUpperCase())
+    .filter(Boolean);
+  const campos: Record<string, string | null> = {};
+  const poner = (campo: string, valor: string | null) => {
+    if (valor) campos[campo] = valor;
+  };
+  poner("dni_caducidad", fechaIso(lectura?.identidad?.caducidad));
+  poner("carnet_numero", lectura?.carnet?.numero ?? null);
+  poner("carnet_caducidad", fechaIso(lectura?.carnet?.caducidad));
+  poner("carnet_clases", clases.length ? clases.join(", ") : null);
+  poner("cap_numero", lectura?.carnet?.capNumero ?? null);
+  poner("cap_caducidad", fechaIso(lectura?.carnet?.capCaducidad));
+  return campos;
+}

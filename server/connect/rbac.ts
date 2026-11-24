@@ -41,15 +41,21 @@ async function resolveConnectUser(req: Request): Promise<ConnectUserContext | nu
   const ctx = req.authCtx;
   if (!ctx) return null;
   const r = await db.query(
-    `SELECT id, "controlCenterId", email, name, role, "providerCompanyId"
+    /*
+     * `supabaseUserId` tiene que ir en la lista: sin él, la comprobación de
+     * abajo lo veía siempre vacío y reescribía la fila en CADA petición a
+     * Connect.
+     */
+    `SELECT id, "controlCenterId", email, name, role, "providerCompanyId", "supabaseUserId"
        FROM connect_users
       WHERE active AND ("supabaseUserId" = $1 OR lower(email) = lower($2))
       LIMIT 1`,
     [ctx.userId, ctx.username],
   );
   if (r.rows[0]) {
-    // Completar el vínculo supabaseUserId si entró por email
-    if (!r.rows[0].supabaseUserId) {
+    // Completar (o corregir) el vínculo si entró por email. Solo si cambia:
+    // escribir lo mismo en cada petición era una escritura por clic.
+    if (r.rows[0].supabaseUserId !== ctx.userId) {
       db.query(`UPDATE connect_users SET "supabaseUserId" = $1 WHERE id = $2`, [ctx.userId, r.rows[0].id]).catch(() => {});
     }
     return r.rows[0] as ConnectUserContext;

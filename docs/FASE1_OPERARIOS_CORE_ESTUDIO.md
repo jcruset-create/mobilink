@@ -1,5 +1,137 @@
 # Fase 1 — Estudio: Core como fuente única de operarios y usuarios
 
+> **2026-11-23 · Fase C en Taller (9/9 enlazados) — solo lo que no toca el nombre.**
+> En el taller el nombre del técnico (`techs.name`) es la clave con la que se
+> apunta todo: partes, pausas, cobros, asistencias, ausencias y el login de
+> las tablets. Por eso aquí la fase C es más corta que en Recepciones: **el
+> nombre del técnico no cambia ni se sustituye por el de Core.**
+>
+> **Qué se ha hecho**
+> - `GET /api/techs` trae, de cada técnico enlazado, quién es en Core
+>   (`coreNombre`, `coreNumero`) y si allí está de baja (`bajaEnCore`). Sin
+>   Core en la base, como antes (`server/core/hayCore.ts`, compartido con
+>   Recepciones).
+> - Pantalla Técnicos: bajo el nombre del taller sale el nombre completo de
+>   Core y su Nº; si en Core está de baja, un aviso para darle de baja también
+>   en el taller.
+> - Alta de técnico: primero se elige la persona de la plantilla (por Nº o
+>   nombre) y el técnico nace enlazado. El nombre del taller se sigue
+>   escribiendo (se propone el de pila). Quien ya es técnico no se ofrece.
+>   Si Core no responde, el alta sigue como antes, solo con nombre.
+> - `GET /api/techs/vinculo-core` devuelve además el número de trabajador y
+>   de qué técnico es ya cada empleado.
+>
+> **Lo que NO se ha tocado (y por qué)**
+> - El nombre del técnico, el histórico por nombre y los logins de tablet/APK.
+> - El teléfono: `techs.phone` es el que ve el cliente en el seguimiento de
+>   una asistencia; puede ser un móvil de empresa distinto del personal que
+>   hay en Core. Sigue siendo del taller.
+> - La baja: estar de baja en Core **avisa**, no da de baja sola en el taller
+>   (la baja del taller libera el trabajo en curso y retira los PIN; hacerlo
+>   sin que nadie lo vea en mitad de un trabajo es peor que avisar).
+>
+> **Pendiente de decidir**
+> - Si la baja en Core debe dar de baja sola en el taller.
+> - Si el teléfono del técnico debe leerse de Core.
+
+> **2026-11-23 · Fase C empezada por Recepciones (el más pequeño, 3/3 enlazados).**
+> Recepciones era el caso limpio: el operario del muelle no teclea su nombre
+> para firmar (lo elige de la lista y pone el PIN), así que leer el nombre de
+> Core no toca ningún login.
+>
+> **Qué se ha hecho**
+> - Lectura: `server/recepciones/repository.ts` cruza `rcp_operarios` con
+>   `sea_employees` por `employee_id`. El nombre que se enseña es el de Core y,
+>   si en Core está de baja, el operario no sale para firmar ni puede firmar.
+>   Sin enlace, el de siempre.
+> - Alta: con Core en la base, se elige la persona (por Nº o nombre) y el
+>   nombre lo pone Core. `GET /api/recepciones/operarios/personas-core` da la
+>   lista; esconde a quien ya es usuario de OTRA empresa (mismo criterio que
+>   Cash). Una persona solo puede ser un operario.
+> - Edición: el nombre de un enlazado no se cambia en Recepciones (409
+>   `NOMBRE_EN_CORE`); centro, PIN y baja del módulo, igual que antes.
+> - Sin Core en la base (`sea_employees` no existe), todo como antes.
+> - `rcp_operarios.nombre` se sigue rellenando al dar de alta: es NOT NULL y
+>   el respaldo si un día se desenlaza. No se borra nada (sin DROP).
+> - No hace falta ninguna migración: `employee_id` ya lo puso
+>   `core_enlace_modulos.sql`, y el arranque lo añade en bases sin ella.
+>
+> **Pendiente**
+> - Almacén (5 de 7 sin enlazar): su APK entra comparando el nombre que
+>   guarda `perfiles_usuario`; hay que decidir si el login pasa a mirar Core.
+> - Las recepciones ya firmadas guardan el nombre de entonces
+>   (`operario_nombre`): es histórico y no cambia.
+
+> **2026-11-23 · Número de trabajador — Fase B hecha (enlazar trabajadores).**
+> Estado en producción antes de empezar: los 21 empleados activos reales ya
+> tienen número (copiado de `codigo_operario`, que es el de nóminas). Por
+> enlazar: Taller 1, Administración 8, Almacén 7, Recepciones 3, TyreControl 7
+> (2 administradores + 5 operadores). Cash ya estaba entero (10/10).
+>
+> **Qué se ha hecho**
+> - `supabase/migrations/core_enlace_modulos.sql`: `employee_id` (FK a
+>   `sea_employees`, `ON DELETE SET NULL`) en `perfiles_usuario`,
+>   `rcp_operarios` y `tc_usuarios`. Sin triggers, sin copiar datos, sin DROP.
+> - `server/core/enlaceTrabajadores.ts`: `GET /api/core/enlaces` y
+>   `PUT /api/core/enlaces/:modulo/:id`, solo administradores. Una persona solo
+>   puede ser un usuario de cada módulo (409 si ya lo es). No se enlaza a nadie
+>   de baja. `app_usuarios` y `rcp_operarios` se filtran por la empresa cliente
+>   del administrador (salvo superadmin).
+> - Core → **Enlazar trabajadores**: una pestaña por módulo; se escribe el
+>   número de trabajador, sale a quién corresponde y se confirma. Pista por
+>   nombre marcada «por nombre — revisar».
+> - Cash no tiene pestaña: ya enlaza con su propia lógica y está entero.
+>
+> **Orden en Supabase**
+> 1. `core_enlace_modulos.sql` (idempotente; se salta la tabla que no exista).
+> 2. Enlazar desde Core → Enlazar trabajadores.
+> 3. Ver el avance con las consultas 5a–5c y 6d–6f de
+>    `core_numero_trabajador_informe.sql`.
+>
+> **Pendiente de decidir**
+> - Varios de los 8 usuarios de Administración pueden no ser plantilla
+>   (oficina, cuentas de prueba): se dejan sin enlazar, no hay que forzarlo.
+> - Fase C (los módulos leen la identidad de Core y dejan de crear personas):
+>   empezar por el módulo que quede entero primero.
+
+> **2026-11-23 · Número de trabajador por empresa — Fase A hecha.**
+> Plan completo en `PROMPT_NUMERO_TRABAJADOR_CORE.md`. Sustituye al paso «el DNI
+> como identificador único», que queda aparcado: el DNI sigue siendo un dato de
+> la ficha, pero la clave para enlazar módulos es el número interno.
+>
+> **Qué se ha hecho**
+> - `sea_employees.numero_trabajador` (TEXT, opcional) con índice único parcial
+>   `(company_id, numero_trabajador)`. No se usa `codigo_operario`: es único en
+>   toda la base y es el usuario de login de ToolControl.
+> - `server/core/numeroTrabajador.ts`: `GET /api/core/empleados/numeros-trabajador`
+>   y `PUT /api/core/empleados/:id/numero-trabajador`, solo administradores.
+>   Repetido en la misma empresa → 409 diciendo con quién choca (solo se busca
+>   dentro de esa empresa); sin empresa → 400; columna sin crear → 503.
+> - Core → Empleados: columna «Nº», búsqueda por número y filtro «Sin número».
+>   Ficha: tarjeta «Número de trabajador» para ponerlo o quitarlo. Las dos
+>   pantallas funcionan igual que antes mientras la migración no esté ejecutada.
+>
+> **Orden en Supabase (SQL Editor, a mano)**
+> 1. `core_numero_trabajador_informe.sql`, consultas 1, 2 y 5: empleados sin
+>    empresa y cuántos operarios hay por enlazar en cada módulo.
+> 2. Asignar empresa a los activos que no la tengan (Core → Empleados).
+> 3. `core_numero_trabajador.sql` (idempotente; si hubiera repetidos, se para y
+>    remite a la consulta 4 del informe).
+> 4. Rellenar los números desde Core → Empleados → «Sin número». La consulta 3
+>    del informe enseña el avance.
+>
+> **Pendiente de decidir**
+> - Los ceros a la izquierda cuentan: «007» y «7» son números distintos. Si en
+>   nóminas siempre van con ceros, conviene decidir un formato fijo.
+> - `sea_companies` (empresa del empleado) no está relacionada con la empresa
+>   cliente de la plataforma (`authCtx.empresaId`): cualquier administrador ve
+>   y numera empleados de todas las `sea_companies`.
+> - La web sigue escribiendo el resto de la ficha directamente en Supabase con
+>   RLS `USING (true)`; solo el número pasa por el servidor.
+> - `perfiles_usuario` no tiene `CREATE TABLE` en `supabase/migrations/`: su
+>   esquema se ha deducido del código para el informe (consulta 5d).
+> - Siguiente paso: Fase B (pantalla «Enlazar trabajadores»), empezando por Almacén.
+
 > **Revisado el 2026-09-08.** El estudio original (secciones 1–7, más abajo) sigue siendo
 > válido como inventario, pero se escribió antes de trabajar sobre el código. Lo que se
 > aprendió después cambia el plan: **el sistema unificado ya existe y funciona**, así que

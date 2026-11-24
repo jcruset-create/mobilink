@@ -13,6 +13,12 @@ import {
   textoSms,
   urlDeAlta,
   validarFicha,
+  motivoDeInvitacion,
+  estadoTrasInvitar,
+  textoSmsActualizacion,
+  resumenVerificacion,
+  certificacionesDeLectura,
+  fichaDeLectura,
 } from "./altaOperario";
 
 describe("dniValido", () => {
@@ -196,3 +202,121 @@ describe("esTipoDocumento", () => {
     expect(esTipoDocumento(null)).toBe(false);
   });
 });
+
+describe("alta o actualizacion", () => {
+  it("a quien ya esta completo se le pide una actualizacion, no un alta", () => {
+    expect(motivoDeInvitacion("completa")).toBe("actualizacion");
+  });
+
+  it("a quien esta a medias se le sigue pidiendo el alta", () => {
+    expect(motivoDeInvitacion("pendiente")).toBe("alta");
+    expect(motivoDeInvitacion("recibida")).toBe("alta");
+    expect(motivoDeInvitacion(null)).toBe("alta");
+  });
+
+  it("la ficha no vuelve a «enviado» cuando es una actualizacion", () => {
+    expect(estadoTrasInvitar("actualizacion")).toBe("actualizando");
+    expect(estadoTrasInvitar("alta")).toBe("enviado");
+  });
+
+  it("el SMS de actualizacion dice que la ficha ya esta empezada", () => {
+    const sms = textoSmsActualizacion({ empresa: "COMERCIAL SEA", nombre: "Albert", url: "https://x.es/alta/t" });
+    expect(sms).toContain("repasa y actualiza");
+    expect(sms).toContain("Ya tienes la ficha empezada");
+    expect(sms).not.toContain("terminar tu alta");
+  });
+
+  it("la nota del encargado viaja en el SMS", () => {
+    const sms = textoSmsActualizacion({
+      empresa: "COMERCIAL SEA", nombre: "Albert", url: "https://x.es/alta/t",
+      nota: "La foto del DNI sale movida.",
+    });
+    expect(sms).toContain("La foto del DNI sale movida.");
+  });
+});
+
+describe("resumenVerificacion", () => {
+  const campo = (veredicto: "coincide" | "no_coincide" | "ilegible") => ({
+    campo: "dni_nie", tecleado: "x", leido: "y", veredicto, nota: "",
+  });
+
+  it("sin verificacion no hay problemas que enseñar", () => {
+    expect(resumenVerificacion(null)).toEqual({ coinciden: 0, noCoinciden: 0, ilegibles: 0, hayProblemas: false });
+  });
+
+  it("cuenta cada veredicto por separado", () => {
+    const r = resumenVerificacion({
+      campos: [campo("coincide"), campo("coincide"), campo("ilegible"), campo("no_coincide")],
+      resumen: "",
+    });
+    expect(r).toEqual({ coinciden: 2, noCoinciden: 1, ilegibles: 1, hayProblemas: true });
+  });
+
+  it("lo ilegible no es un problema: es una foto mala, no un dato falso", () => {
+    const r = resumenVerificacion({ campos: [campo("ilegible"), campo("coincide")], resumen: "" });
+    expect(r.hayProblemas).toBe(false);
+  });
+});
+
+describe("lo que dice la documentacion", () => {
+  const lectura = {
+    identidad: { numero: "39882775Q", caducidad: "02/09/2031", nota: "" },
+    carnet: {
+      numero: "39882775Q",
+      caducidad: "14/03/2029",
+      clases: [
+        { clase: "b", caducidad: "14/03/2029" },
+        { clase: "C+E", caducidad: "14/03/2027" },
+        { clase: "AM", caducidad: null },
+      ],
+      capNumero: "123456",
+      capCaducidad: "01/06/2028",
+      nota: "",
+    },
+  };
+
+  it("una certificacion por clase CON fecha, mas el CAP", () => {
+    const c = certificacionesDeLectura(lectura);
+    expect(c).toEqual([
+      { nombre: "Carnet de conducir B", caducidad: "2029-03-14", numero: "39882775Q" },
+      { nombre: "Carnet de conducir C+E", caducidad: "2027-03-14", numero: "39882775Q" },
+      { nombre: "CAP", caducidad: "2028-06-01", numero: "123456" },
+    ]);
+  });
+
+  it("una clase sin fecha no se anota: no habria nada que avisar", () => {
+    expect(certificacionesDeLectura(lectura).some((c) => c.nombre.includes("AM"))).toBe(false);
+  });
+
+  it("sin lectura no hay nada que proponer", () => {
+    expect(certificacionesDeLectura(null)).toEqual([]);
+  });
+
+  it("la ficha se rellena con lo leido, con las fechas en formato base", () => {
+    expect(fichaDeLectura(lectura)).toEqual({
+      dni_caducidad: "2031-09-02",
+      carnet_numero: "39882775Q",
+      carnet_caducidad: "2029-03-14",
+      carnet_clases: "B, C+E, AM",
+      cap_numero: "123456",
+      cap_caducidad: "2028-06-01",
+    });
+  });
+
+  it("lo que no se ha leido no se escribe: no borra lo que ya hubiera", () => {
+    const vacia = {
+      identidad: { numero: null, caducidad: null, nota: "ilegible" },
+      carnet: { numero: null, caducidad: null, clases: [], capNumero: null, capCaducidad: null, nota: "" },
+    };
+    expect(fichaDeLectura(vacia)).toEqual({});
+  });
+
+  it("una fecha que no se entiende no pasa a la ficha", () => {
+    const rara = {
+      ...lectura,
+      identidad: { numero: "X", caducidad: "el mes que viene", nota: "" },
+    };
+    expect(fichaDeLectura(rara).dni_caducidad).toBeUndefined();
+  });
+});
+

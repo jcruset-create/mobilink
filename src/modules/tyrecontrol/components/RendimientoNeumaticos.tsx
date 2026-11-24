@@ -192,7 +192,8 @@ export function BloqueRendimientoVehiculo({
             {conCalculo.map(({ f, r }) => (
               <tr key={f.neumatico_id} className="border-b border-slate-700/50">
                 <td className="py-1.5 font-semibold text-slate-200">{f.posicion}</td>
-                <td><Link className="text-sky-300 hover:underline" to={`/tyrecontrol/neumaticos/${f.neumatico_id}`}>{f.modelo ?? "—"}</Link>
+                <td><Link className="text-sky-300 hover:underline" to={`/tyrecontrol/neumaticos/${f.neumatico_id}`}
+                  title={f.ref_modelo && f.ref_modelo !== f.modelo ? `En flota: ${f.modelo ?? "—"}` : undefined}>{f.ref_modelo ?? f.modelo ?? "—"}</Link>
                   {f.recauchutado && <span className="ml-1 text-[10px] font-bold text-violet-300">RECAUCH.</span>}
                   {f.reesculturado && <span className="ml-1 text-[10px] font-bold text-sky-300">REESC.</span>}</td>
                 <td>{mm(r.origenMm)}</td><td>{mm(r.actualMm)}</td><td>{mm(r.gastadoMm)}</td><td>{miles(r.kmGoma)}</td>

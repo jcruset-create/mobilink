@@ -154,6 +154,13 @@ export default function Correo() {
           ) : (
             <div className="mt-1 text-sm text-slate-500">Todavía ninguna.</div>
           )}
+          {/* Las pasadas sin nada nuevo ya no se guardan; esto dice que se sigue mirando. */}
+          {estado?.ultimaComprobacion && (
+            <div className="mt-1 text-[11px] text-slate-500">
+              Última comprobación: {fmtFechaHora(new Date(estado.ultimaComprobacion.at).toISOString())}
+              {estado.ultimaComprobacion.error ? " · sigue fallando" : " · sin correos nuevos"}
+            </div>
+          )}
           {(estado?.enRevision ?? 0) > 0 && <div className="mt-1 text-[12px] font-bold text-amber-300">{estado!.enRevision} correo(s) pendientes de revisión</div>}
         </div>
       </div>

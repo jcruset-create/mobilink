@@ -2561,6 +2561,90 @@ export function createCashRouter(): Router {
     })
   );
 
+  /*
+   * El mismo gasto, por proveedor. Mismo filtro y mismo ámbito de taller que
+   * el de arriba; `clave` vacía en el detalle = los pagos sin proveedor.
+   */
+  const filtroDeProveedores = (req: Request) => {
+    const q = req.query;
+    return {
+      empresaId: req.authCtx!.empresaId,
+      desde: String(q.desde ?? ""),
+      hasta: String(q.hasta ?? ""),
+      centroId: req.cashCentroId ?? (typeof q.centro === "string" && q.centro ? q.centro : null),
+      conceptoId: q.conceptoId ? enteroPositivo(q.conceptoId, "conceptoId") : null,
+    };
+  };
+
+  r.get(
+    "/expense-stats/suppliers",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const { gastoPorProveedor } = await import("./expensestats.ts");
+      res.json(await gastoPorProveedor(filtroDeProveedores(req)));
+    })
+  );
+
+  r.get(
+    "/expense-stats/suppliers/payments",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const { pagosDeProveedor } = await import("./expensestats.ts");
+      const clave = typeof req.query.clave === "string" && req.query.clave ? req.query.clave : null;
+      res.json({ pagos: await pagosDeProveedor(filtroDeProveedores(req), clave) });
+    })
+  );
+
+  /*
+   * Clasificar después de pagar. Mismo permiso que cambiar la sección de un
+   * cobro: no mueve dinero, pero cambia un número que alguien mira para
+   * decidir. Ver `clasificarGasto.ts`.
+   *
+   * El de un gasto va por la operación (`/operations/:id/…`), así que la
+   * puerta del ámbito de arriba ya lo cubre; `lineaId` es el ticket cuando el
+   * pago es de una liquidación.
+   */
+  r.patch(
+    "/operations/:id/expense-concept",
+    exigirPermiso("cash.operation.reclassify"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const { clasificarGasto } = await import("./clasificarGasto.ts");
+      res.json(
+        await clasificarGasto(contexto(req), {
+          operacionId: enteroPositivo(req.params.id, "id"),
+          lineaId: b.lineaId == null ? null : enteroPositivo(b.lineaId, "lineaId"),
+          conceptoId: enteroPositivo(b.conceptoId, "conceptoId"),
+        })
+      );
+    })
+  );
+
+  /*
+   * «Clasificar como…» de un proveedor: sus gastos SIN clasificar del periodo.
+   * No lleva número en la URL, así que el ámbito se comprueba aquí, operación
+   * a operación, sobre la misma lista que luego se clasifica.
+   */
+  r.post(
+    "/expense-stats/suppliers/classify",
+    exigirPermiso("cash.operation.reclassify"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const clave = typeof b.clave === "string" && b.clave ? b.clave : null;
+      if (!clave) {
+        return res.status(400).json({ error: "Falta el proveedor.", code: "ENTRADA_NO_VALIDA" });
+      }
+      const conceptoId = enteroPositivo(b.conceptoId, "conceptoId");
+      const { pendientesDeProveedor } = await import("./expensestats.ts");
+      const { clasificarProveedor } = await import("./clasificarGasto.ts");
+      const pendientes = await pendientesDeProveedor(filtroDeProveedores(req), clave);
+      for (const id of new Set(pendientes.gastos.map((g) => g.operacionId))) {
+        await acceso(req, { operacion: id });
+      }
+      res.json(await clasificarProveedor(contexto(req), pendientes, conceptoId, b.recordar === true));
+    })
+  );
+
   // ── Conceptos de gasto y sus destinos ────────────────────────────────────
 
   /*

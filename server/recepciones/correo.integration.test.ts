@@ -1175,5 +1175,29 @@ describe.skipIf(!RUN)("Recepciones · correos de Soledad contra PostgreSQL", () 
       const estado = await api("/correo/buzon");
       expect(estado.body.pasadas[0].error).toBe("LOGIN failed");
     });
+
+    it("el mismo fallo otra vez no deja otra fila, pero la pantalla sabe que se ha mirado; al volver a funcionar, sí", async () => {
+      // Contadas en la base: la pantalla enseña como mucho diez.
+      const cuantas = async () =>
+        Number((await db.query(`SELECT count(*) AS n FROM rcp_buzon_pasadas WHERE empresa_id = $1`, [EMPRESA])).rows[0].n);
+      await buzon.revisarBuzon({ cliente: buzonFalso([], { falloAlAbrir: "LOGIN failed" }), config: CFG });
+      const antes = await cuantas();
+
+      await buzon.revisarBuzon({ cliente: buzonFalso([], { falloAlAbrir: "LOGIN failed" }), config: CFG });
+      expect(await cuantas()).toBe(antes);
+      const estado = await api("/correo/buzon");
+      expect(estado.body.ultimaComprobacion).toMatchObject({ error: "LOGIN failed" });
+
+      // Vuelve a funcionar: esa sí se guarda, y la última pasada ya no es un error.
+      await buzon.revisarBuzon({ cliente: buzonFalso([]), config: CFG });
+      const tras = await api("/correo/buzon");
+      expect(tras.body.pasadas[0].error).toBeNull();
+      expect(tras.body.ultimaComprobacion).toMatchObject({ error: null });
+
+      // Y otra vacía después de esa, ya no.
+      const n = await cuantas();
+      await buzon.revisarBuzon({ cliente: buzonFalso([]), config: CFG });
+      expect(await cuantas()).toBe(n);
+    });
   });
 });

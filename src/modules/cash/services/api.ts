@@ -51,6 +51,9 @@ import type {
   DestinoGasto,
   GranularidadGasto,
   InformeGasto,
+  InformeProveedores,
+  PagoDeProveedor,
+  ResultadoClasificarProveedor,
   EquivalenciaErp,
   ResultadoCotejo,
   Liquidacion,
@@ -1083,6 +1086,47 @@ export const estadisticasDeGasto = (p: {
   if (p.comparar) q.set("comparar", "1");
   return pedir<InformeGasto>(`/expense-stats?${q.toString()}`);
 };
+
+type FiltroProveedores = {
+  desde: string;
+  hasta: string;
+  centro?: string | null;
+  conceptoId?: number | null;
+};
+
+function consultaDeProveedores(p: FiltroProveedores): URLSearchParams {
+  const q = new URLSearchParams({ desde: p.desde, hasta: p.hasta });
+  if (p.centro) q.set("centro", p.centro);
+  if (p.conceptoId != null) q.set("conceptoId", String(p.conceptoId));
+  return q;
+}
+
+export const gastoPorProveedor = (p: FiltroProveedores) =>
+  pedir<InformeProveedores>(`/expense-stats/suppliers?${consultaDeProveedores(p).toString()}`);
+
+/** `clave` `null` = los pagos sin proveedor. */
+export const pagosDeProveedor = (p: FiltroProveedores, clave: string | null) => {
+  const q = consultaDeProveedores(p);
+  if (clave) q.set("clave", clave);
+  return pedir<{ pagos: PagoDeProveedor[] }>(`/expense-stats/suppliers/payments?${q.toString()}`);
+};
+
+/** Un gasto, desde el detalle. `lineaId` = el ticket, si el pago es de una liquidación. */
+export const clasificarGasto = (operacionId: number, datos: { lineaId: number | null; conceptoId: number }) =>
+  pedir<{ destinoQuitado: boolean }>(`/operations/${operacionId}/expense-concept`, {
+    ...json(datos),
+    method: "PATCH",
+  });
+
+/** «Clasificar como…»: lo sin clasificar de un proveedor en el periodo consultado. */
+export const clasificarProveedor = (
+  p: FiltroProveedores,
+  datos: { clave: string; conceptoId: number; recordar: boolean }
+) =>
+  pedir<ResultadoClasificarProveedor>(
+    `/expense-stats/suppliers/classify?${consultaDeProveedores(p).toString()}`,
+    json(datos)
+  );
 
 // ── AutoScan ───────────────────────────────────────────────────────────────
 

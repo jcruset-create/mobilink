@@ -373,6 +373,55 @@ export type InformeGasto = {
   } | null;
 };
 
+/** Cómo se ha reconocido al proveedor de un gasto. Ver `server/cash/expensestats.ts`. */
+export type ViaProveedor = "ERP" | "NIF" | "NOMBRE";
+
+export type LineaProveedorGasto = {
+  /** `null` = los pagos sin proveedor reconocible. */
+  clave: string | null;
+  nombre: string;
+  via: ViaProveedor | null;
+  identificador: string | null;
+  importeCentimos: number;
+  operaciones: number;
+  conceptoPrincipal: string | null;
+  /** Cuántos de sus gastos están sin clasificar: lo que «Clasificar como…» rellenaría. */
+  pendientesDeClasificar: number;
+};
+
+export type InformeProveedores = {
+  desde: string;
+  hasta: string;
+  centroId: string | null;
+  conceptoId: number | null;
+  totalCentimos: number;
+  operaciones: number;
+  sinProveedorCentimos: number;
+  proveedores: LineaProveedorGasto[];
+};
+
+export type PagoDeProveedor = {
+  operacionId: number;
+  /** El ticket, si sale de una liquidación: se clasifica ticket a ticket. */
+  lineaId: number | null;
+  conceptoId: number | null;
+  numero: string;
+  fecha: string;
+  caja: string;
+  documento: string | null;
+  concepto: string | null;
+  destino: string | null;
+  importeCentimos: number;
+};
+
+export type ResultadoClasificarProveedor = {
+  clasificados: number;
+  destinosQuitados: number;
+  regla: { campo: string; patron: string } | null;
+  /** Por qué no se ha guardado la regla aunque se pidiera. */
+  reglaOmitida: string | null;
+};
+
 // ── AutoScan ───────────────────────────────────────────────────────────────
 
 export type EstadoAutoScan =

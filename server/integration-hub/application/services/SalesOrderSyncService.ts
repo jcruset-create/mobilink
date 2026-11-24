@@ -35,6 +35,27 @@ import {
 const ENTITY = "sales_orders";
 const OVERLAP_MS = 5 * 60 * 1000;
 
+/*
+ * Una pasada incremental SIN pedidos no escribe nada en la base.
+ *
+ * Cada 5 minutos creaba una operación, tres líneas de log, un número de
+ * correlación y el estado de la sincronización, para decir «0 pedidos»: unas
+ * 2.300 escrituras al día por empresa, y las tablas de operaciones y logs
+ * creciendo sin parar con entradas vacías. Ahora se pregunta primero a BC y,
+ * si no hay nada, solo se apunta EN MEMORIA cuándo se miró, para que la
+ * pantalla pueda decir que el proceso está vivo.
+ *
+ * `last_sync_ms` no avanza en esas pasadas, y no hace falta: la siguiente
+ * pregunta «modificados desde la última vez que hubo algo», que sigue siendo
+ * la pregunta correcta.
+ */
+const ultimaComprobacion = new Map<string, number>();
+
+/** Cuándo se miró BC por última vez sin encontrar pedidos nuevos. `null` desde el arranque. */
+export function ultimaComprobacionDePedidos(tenantId: string): number | null {
+  return ultimaComprobacion.get(tenantId) ?? null;
+}
+
 export interface SalesOrderSyncResult {
   mode: "full" | "incremental";
   correlationId: string;
@@ -68,6 +89,35 @@ export async function runSalesOrderSync(params: {
   const modifiedSince =
     mode === "incremental" ? new Date(Number(state.last_sync_ms) - OVERLAP_MS) : undefined;
 
+  /*
+   * Incremental: primero se pregunta, sin abrir operación. Si BC falla aquí,
+   * se sigue por el camino de siempre, que vuelve a preguntar dentro de la
+   * operación y deja el error registrado y reintentable.
+   */
+  let precargados: BcSalesOrder[] | undefined;
+  if (mode === "incremental") {
+    try {
+      precargados = await connector.getSalesOrdersForSync(
+        { tenantId: params.tenantId, correlationId: params.correlationId ?? "comprobacion" } as OperationContext,
+        { modifiedSince }
+      );
+    } catch {
+      precargados = undefined;
+    }
+    if (precargados && precargados.length === 0) {
+      ultimaComprobacion.set(params.tenantId, Date.now());
+      return {
+        mode,
+        correlationId: "",
+        simulated: resolved.usingDefault,
+        pedidos: 0,
+        lineas: 0,
+        divergencias: 0,
+        canceladas: 0,
+      };
+    }
+  }
+
   const correlationId = params.correlationId ?? (await nextCorrelationId());
   const ctx: OperationContext = { tenantId: params.tenantId, correlationId };
   const syncRunId = `${mode}-${correlationId}`;
@@ -84,7 +134,7 @@ export async function runSalesOrderSync(params: {
         requestPayload: { mode, modifiedSince: modifiedSince?.toISOString() ?? null },
       },
       async (log) => {
-        const orders = await connector.getSalesOrdersForSync!(ctx, { modifiedSince });
+        const orders = precargados ?? (await connector.getSalesOrdersForSync!(ctx, { modifiedSince }));
         await log.info(`${orders.length} pedidos recibidos de ${resolved.key} (${mode})`);
 
         let lineas = 0;

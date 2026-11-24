@@ -1,11 +1,13 @@
 import { useState, type ReactNode } from "react";
 import { useEsSuperadmin } from "../../esSuperadmin";
 import { NavLink, useNavigate } from "react-router-dom";
-import { Menu, Home, LayoutDashboard, Users, Building2, MapPin, Target, KeyRound, CalendarDays } from "lucide-react";
+import { Menu, Home, LayoutDashboard, Users, Building2, MapPin, Target, KeyRound, CalendarDays, Link2 } from "lucide-react";
+import VersionDesplegada from "../../../components/VersionDesplegada";
 
 const NAV = [
   { to: "/core", label: "Dashboard", icon: LayoutDashboard, end: true },
   { to: "/core/empleados", label: "Empleados", icon: Users, end: false },
+  { to: "/core/enlaces", label: "Enlazar trabajadores", icon: Link2, end: false },
   { to: "/core/empresas", label: "Empresas", icon: Building2, end: false },
   { to: "/core/centros", label: "Centros de trabajo", icon: MapPin, end: false },
   { to: "/core/competencias", label: "Competencias", icon: Target, end: false },
@@ -39,6 +41,7 @@ export default function CoreLayout({ children }: { children: ReactNode }) {
           <span className="text-sm font-black">Mobilink Core</span>
         </div>
         <div className="flex items-center gap-3">
+          <VersionDesplegada className="hidden sm:inline" />
           <button onClick={() => navigate("/inicio")} title="Volver al inicio" className="flex items-center gap-1 rounded-lg bg-slate-800 px-3 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-700">
             <Home className="h-4 w-4" /> Inicio
           </button>

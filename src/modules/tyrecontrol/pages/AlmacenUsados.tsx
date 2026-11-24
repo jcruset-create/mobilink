@@ -6,6 +6,8 @@ import {
 import type { Empresa, UsadoEnAlmacen, ResumenAlmacenUsados } from "../types";
 import { TableWrap, tdCls, thCls, inputCls, Modal } from "../components/ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
+import PendientesClasificar from "../components/PendientesClasificar";
+import { listarPendientesClasificar, type PendienteClasificar } from "../services/clasificarUsados";
 
 // Almacén de neumáticos usados: una fila por goma real, con su identidad y los
 // milímetros que le quedan.
@@ -40,6 +42,8 @@ export default function AlmacenUsados() {
   const [umbrales, setUmbrales] = useState<{ min: number; aviso: number }>({ min: 1.6, aviso: 3.0 });
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
+  const [pestana, setPestana] = useState<"almacen" | "pendientes">("almacen");
+  const [pendientes, setPendientes] = useState<PendienteClasificar[]>([]);
 
   const [q, setQ] = useState("");
   const [fMedida, setFMedida] = useState("");
@@ -62,15 +66,18 @@ export default function AlmacenUsados() {
     if (!empresaId) return;
     setLoading(true); setMsg("");
     try {
-      const [lista, res, umb] = await Promise.all([
+      const [lista, res, umb, pend] = await Promise.all([
         listarUsadosAlmacen(empresaId),
         resumenUsadosAlmacen(empresaId).then(
           (r) => { setResumenError(""); return r; },
           (e: any) => { setResumenError(e?.message || "No se ha podido cargar"); return null; },
         ),
         obtenerUmbralesEmpresa(empresaId).catch(() => null),
+        // Si la función aún no está en la base, la pestaña sale vacía en vez de romper la pantalla.
+        listarPendientesClasificar(empresaId).catch(() => [] as PendienteClasificar[]),
       ]);
       setItems(lista);
+      setPendientes(pend);
       setResumen(res);
       if (umb) setUmbrales({ min: umb.profundidad_minima_mm, aviso: umb.profundidad_aviso_mm });
     } catch (er: any) { setMsg(er?.message || "Error cargando el almacén"); }
@@ -208,6 +215,20 @@ export default function AlmacenUsados() {
         </div>
       )}
 
+      {/* Pestañas: lo que hay en el almacén y lo que falta por clasificar */}
+      <div className="mb-3 flex flex-wrap gap-1 border-b border-slate-700 pb-2">
+        {([["almacen", "En almacén", items.length], ["pendientes", "Pendientes de clasificar", pendientes.length]] as const).map(([k, t, c]) => (
+          <button key={k} onClick={() => setPestana(k)}
+            className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${pestana === k ? "bg-slate-700 text-white" : "text-slate-400 hover:text-slate-200"}`}>
+            {t} <span className="ml-1 tabular-nums text-amber-300">{c.toLocaleString("es-ES")}</span>
+          </button>
+        ))}
+      </div>
+
+      {pestana === "pendientes" ? (
+        <PendientesClasificar empresaId={empresaId} items={pendientes} puedeEditar={puedeEditar}
+          onCambio={(m) => { void cargar().then(() => setMsg(m)); }} />
+      ) : (<>
       {/* Filtros */}
       <div className="mb-3 flex flex-wrap items-end gap-2">
         <label className="flex flex-col text-[10px] text-slate-500">Empresa
@@ -288,6 +309,7 @@ export default function AlmacenUsados() {
           ))}
         </tbody>
       </TableWrap>
+      </>)}
 
       {modal && (
         <Modal onClose={() => setModal(null)} title={`Reesculturar ${modal.numero_interno ?? ""}`}>

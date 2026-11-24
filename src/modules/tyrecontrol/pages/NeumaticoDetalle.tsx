@@ -7,11 +7,12 @@ import { ESTADO_NEUMATICO_LABELS, TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS
 import { Modal, Field, inputCls } from "../components/ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 import { TarjetaRendimientoNeumatico } from "../components/RendimientoNeumaticos";
+import { PedirKm, PedirKmTodas } from "../components/KmDesdeFicha";
 
 type CamposEditables = "dot" | "rfid_epc" | "marca" | "modelo" | "medida" | "indice_carga" | "indice_velocidad" | "proveedor" | "fecha_compra" | "coste_compra";
 
 // Un punto en la línea temporal del neumático.
-interface EventoNeumatico { ts: number; fecha: string; icono: string; titulo: string; detalle: string; km: number | null; }
+interface EventoNeumatico { ts: number; fecha: string; icono: string; titulo: string; detalle: string; km: number | null; revisionId?: string | null; }
 
 const ICONO_OPERACION: Record<string, string> = {
   montaje: "▲", desmontaje: "▼", sustitucion: "♻", rotacion: "⇄", reparacion: "🔧",
@@ -68,6 +69,10 @@ export default function NeumaticoDetalle() {
 
   const [fotoModelo, setFotoModelo] = useState<string | null>(null);
   const [recorrido, setRecorrido] = useState<RecorridoNeumatico | null>(null);
+  /** Lo último que se hizo con los km (pedirlos o escribirlos), y un contador para recargar el rendimiento. */
+  const [msgKm, setMsgKm] = useState("");
+  const [recargas, setRecargas] = useState(0);
+  const kmHecho = (texto: string) => { setMsgKm(texto); setRecargas((x) => x + 1); void cargar(); };
 
   async function cargar() {
     const neu = await obtenerNeumatico(id);
@@ -165,6 +170,7 @@ export default function NeumaticoDetalle() {
         titulo: "Revisión",
         detalle,
         km: m.km_vehiculo ?? null,
+        revisionId: m.revision_id ?? null,
       });
     }
 
@@ -243,7 +249,7 @@ export default function NeumaticoDetalle() {
       </div>
 
       {/* Si su vehículo está en seguimiento de rendimiento: km/mm y proyección. */}
-      <TarjetaRendimientoNeumatico neumaticoId={n.id} />
+      <TarjetaRendimientoNeumatico key={recargas} neumaticoId={n.id} />
 
       {/* ── Lo que ha durado ───────────────────────────────────────────────
           Es la pregunta que justifica anotar los kilómetros en cada montaje y
@@ -269,6 +275,17 @@ export default function NeumaticoDetalle() {
               kilometraje anotado: el total es lo que se puede contar, no todo lo que ha rodado.
             </div>
           )}
+          {/* El montaje de ahora sin km: se puede pedir a la telemática o escribir. */}
+          {puedeEditar && montaje && recorrido.detalle.some((t) => t.vigente && !(Number(t.km_montaje) > 0)) && (
+            <div className="mt-2 rounded-lg border border-slate-700 p-2">
+              <div className="text-[11px] text-slate-300">Km del vehículo al montar esta goma ({montaje.fecha_montaje}):</div>
+              <PedirKm neumaticoId={n.id} onHecho={kmHecho} />
+            </div>
+          )}
+          {puedeEditar && montaje?.vehiculo_id && mediciones.some((m) => m.revision_id && m.km_vehiculo == null) && (
+            <PedirKmTodas vehiculoId={montaje.vehiculo_id} onHecho={kmHecho} />
+          )}
+          {msgKm && <div className="mt-2 text-xs font-semibold text-emerald-300">{msgKm}</div>}
 
           {recorrido.detalle.length > 0 && (
             <div className="mt-3 flex flex-col gap-1">
@@ -308,6 +325,12 @@ export default function NeumaticoDetalle() {
                   <div className="text-[13px] font-semibold text-slate-100">{e.titulo}{e.km != null ? ` · ${e.km} km` : ""}</div>
                   {e.detalle && <div className="text-[12px] text-slate-400">{e.detalle}</div>}
                   <div className="text-[10px] text-slate-500">{e.fecha}</div>
+                  {puedeEditar && e.revisionId && e.km == null && (
+                    <>
+                      <span className="mt-1 inline-block rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-300">sin km</span>
+                      <PedirKm revisionId={e.revisionId} onHecho={kmHecho} />
+                    </>
+                  )}
                 </div>
               </div>
             ))}

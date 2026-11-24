@@ -11,7 +11,9 @@ import sharp from "sharp";
 import nodemailer from "nodemailer";
 import { fileURLToPath } from "url";
 import db, { initDb } from "./db.ts";
+import type { PoolClient } from "pg";
 import { supabase, supabaseAnonAuth, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_BUCKET, SUPABASE_DOCS_BUCKET } from "./supabase.ts";
+import { hayCore, NOMBRE_CORE_SQL } from "./core/hayCore.ts";
 import { fallaAlFirmar, firmarEnFilas, firmarUrls } from "./core/fotosFirmadas.ts";
 import { descargarMedioTwilio, rescatarMedioDeTwilio } from "./core/medioTwilio.ts";
 import { elegirPosicion, horaWebfleet, type PosicionElegida } from "./core/posicionDoble.ts";
@@ -145,6 +147,7 @@ import { createUbicacionRouter } from "./tyrecontrol/ubicacion/router.ts";
 import { createKilometrajeMensualRouter } from "./tyrecontrol/kilometrajeMensual/router.ts";
 import { createAltaOperativaRouter } from "./tyrecontrol/altaOperativa/router.ts";
 import { createKilometrajeActualRouter } from "./tyrecontrol/kilometrajeActual/router.ts";
+import { createKmFichaRouter } from "./tyrecontrol/kilometrajeRevisiones/router.ts";
 import { createParteFlotasRouter } from "./tyrecontrol/parteFlotas/router.ts";
 import { createParteProveedorRouter } from "./tyrecontrol/parteProveedor/router.ts";
 import { startConciliacionQuincenal } from "./tyrecontrol/conciliacion/worker.ts";
@@ -172,6 +175,8 @@ import {
   createAltaOperarioAdminRouter,
   createAltaOperarioPublicRouter,
 } from "./core/altaOperarioRouter.ts";
+import { createNumeroTrabajadorRouter } from "./core/numeroTrabajador.ts";
+import { createEnlaceTrabajadoresRouter } from "./core/enlaceTrabajadores.ts";
 import { createCalidadRouter } from "./satisfaction/routerInterno.ts";
 import { createSatisfactionCallbackRouter } from "./satisfaction/routerCallback.ts";
 import { RUTA_CALLBACK } from "./satisfaction/urlPublica.ts";
@@ -202,10 +207,13 @@ import { siguienteReferencia } from "./cobros/referencias.ts";
 import { saveCaptureAnalysis, reconcileCaptureAiStatus } from "./core/whatsappCapture.ts";
 import { aE164, clienteTwilio, numeroWhatsAppEmisor } from "./core/twilio.ts";
 import { jsonAjeno } from "./core/jsonAjeno.ts";
+import { mismoJson } from "./core/mismoJson.ts";
+import { debeGuardarPosicion } from "./core/guardarPosicion.ts";
 import {
   avisarSiLosCallbacksVanADudoso,
   enviarConfirmacion,
   urlBaseParaCallbacks,
+  motivoParaNoEnviar,
 } from "./citasWhatsapp/envio.ts";
 import {
   aplicarEstadoDeEnvio,
@@ -898,6 +906,11 @@ function normalizeTechRow(t: any) {
     // Persona de Core con la que está vinculado (paso 2 de la unificación).
     // null = todavía sin vincular; el histórico sigue yendo por nombre.
     employeeId: t.employee_id ?? null,
+    // Quién es en Core, cuando está enlazado (fase C). Solo para enseñarlo:
+    // el técnico se sigue llamando `name`.
+    coreNombre: t.core_nombre ?? null,
+    coreNumero: t.core_numero ?? null,
+    bajaEnCore: t.employee_id != null && t.core_activo === false,
     // Taller al que pertenece. null = el de por defecto, que es como se ha
     // comportado siempre mientras la columna no existía.
     workshopId: t.workshopId ?? null,
@@ -2762,14 +2775,29 @@ Si no hay técnico válido, responsable debe ser null.
    TECHS
 ========================================================= */
 
+/*
+ * Fase C de la unificación: de los técnicos enlazados con Core se trae
+ * también quién son en Core (nombre completo, número de trabajador) y si allí
+ * están de baja. El nombre del técnico NO cambia: es la clave con la que el
+ * taller apunta todo su histórico. Sin Core en la base, como antes.
+ */
 app.get("/api/techs", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
+    const { core, numero } = await hayCore(db);
     const result = await db.query(`
-      SELECT name, status, blocked, "currentJobId", competencies, priorities, avatar,
-             "roadsideCapable", "compartidoCentral", "currentRoadsideAssistanceId", phone,
-             "statusChangedAtMs", "statusTotals", activo, employee_id, "workshopId"
-      FROM techs
-      ORDER BY id ASC
+      SELECT t.name, t.status, t.blocked, t."currentJobId", t.competencies, t.priorities, t.avatar,
+             t."roadsideCapable", t."compartidoCentral", t."currentRoadsideAssistanceId", t.phone,
+             t."statusChangedAtMs", t."statusTotals", t.activo, t.employee_id, t."workshopId"
+             ${
+               core
+                 ? `, ${NOMBRE_CORE_SQL} AS core_nombre,
+                    ${numero ? "e.numero_trabajador" : "NULL::text"} AS core_numero,
+                    e.activo AS core_activo`
+                 : ""
+             }
+      FROM techs t
+      ${core ? "LEFT JOIN sea_employees e ON e.id = t.employee_id" : ""}
+      ORDER BY t.id ASC
     `);
 
     res.json(result.rows.map(normalizeTechRow));
@@ -2985,15 +3013,23 @@ app.put("/api/techs/:name/activo", requireAdminRole, async (req, res) => {
 // Propuesta de emparejado, para revisarla ANTES de aplicar nada. No escribe.
 app.get("/api/techs/vinculo-core", requireAdminRole, async (_req, res) => {
   try {
+    const { numero } = await hayCore(db);
     const [tecnicos, empleados] = await Promise.all([
       db.query(`SELECT name, employee_id FROM techs ORDER BY name`),
       db.query(
-        `SELECT id, nombre, apellidos, codigo_operario
+        `SELECT id, nombre, apellidos, codigo_operario,
+                ${numero ? "numero_trabajador" : "NULL::text AS numero_trabajador"}
            FROM sea_employees
           WHERE activo = true
           ORDER BY nombre`
       ),
     ]);
+    // Quién es ya técnico: el alta de uno nuevo no lo ofrece.
+    const tecnicoDe = new Map<string, string>(
+      tecnicos.rows
+        .filter((t: any) => t.employee_id)
+        .map((t: any) => [String(t.employee_id), String(t.name)])
+    );
 
     const yaVinculados = new Map<string, string>(
       tecnicos.rows
@@ -3013,10 +3049,13 @@ app.get("/api/techs/vinculo-core", requireAdminRole, async (_req, res) => {
     res.json({
       propuestas,
       // Lista completa para elegir a mano cuando la propuesta es ambigua o no
-      // hay candidato. Solo id y nombre: lo demás de la ficha no hace falta.
+      // hay candidato, y para el alta de un técnico nuevo. Lo justo para
+      // elegir: nombre, número de trabajador y si ya es técnico.
       empleados: empleados.rows.map((e: any) => ({
         id: String(e.id),
         nombre: [e.nombre, e.apellidos].filter(Boolean).join(" ").trim(),
+        numeroTrabajador: e.numero_trabajador ?? null,
+        tecnico: tecnicoDe.get(String(e.id)) ?? null,
       })),
       resumen: {
         total: propuestas.length,
@@ -14044,6 +14083,12 @@ app.get("/api/partes-trabajo/articulos", exigirCredencial(requirePanelRole), asy
  * colección entera: es el error que ya ha costado varias pérdidas de datos.
  */
 app.put("/api/partes-trabajo/articulos", requireSupervisorRole, async (req, res) => {
+  /*
+   * Una conexión para toda la transacción. Con `db.query("BEGIN")` sobre el
+   * pool, BEGIN y COMMIT podían ir por conexiones distintas: no había
+   * transacción, y una conexión podía quedarse colgada con una a medias.
+   */
+  let tx: PoolClient | undefined;
   try {
     const workshopId = String(req.body?.workshopId || "");
 
@@ -14055,7 +14100,8 @@ app.put("/api/partes-trabajo/articulos", requireSupervisorRole, async (req, res)
 
     const now = Date.now();
 
-    await db.query("BEGIN");
+    tx = await db.connect();
+    await tx.query("BEGIN");
 
     for (const entrada of entradas) {
       const clave = String(entrada?.clave || "").trim();
@@ -14063,7 +14109,7 @@ app.put("/api/partes-trabajo/articulos", requireSupervisorRole, async (req, res)
 
       if (!clave || !templateKey) continue;
 
-      await db.query(
+      await tx.query(
         `INSERT INTO erp_articulo_plantilla (
            "workshopId", clave, "templateKey", descripcion, "createdAtMs", "updatedAtMs"
          )
@@ -14077,13 +14123,15 @@ app.put("/api/partes-trabajo/articulos", requireSupervisorRole, async (req, res)
       );
     }
 
-    await db.query("COMMIT");
+    await tx.query("COMMIT");
 
     res.json({ ok: true });
   } catch (error) {
-    await db.query("ROLLBACK").catch(() => {});
+    await tx?.query("ROLLBACK").catch(() => {});
     console.error("PUT /api/partes-trabajo/articulos error:", error);
     res.status(500).json({ error: "Error guardando las correspondencias de artículos" });
+  } finally {
+    tx?.release();
   }
 });
 
@@ -14273,6 +14321,12 @@ app.get("/api/vacaciones-config", exigirCredencial(requirePanelRole), async (req
  * que hereda el valor por defecto.
  */
 app.put("/api/vacaciones-config", requireSupervisorRole, async (req, res) => {
+  /*
+   * Una conexión para toda la transacción. Con `db.query("BEGIN")` sobre el
+   * pool, BEGIN y COMMIT podían ir por conexiones distintas: no había
+   * transacción, y una conexión podía quedarse colgada con una a medias.
+   */
+  let tx: PoolClient | undefined;
   try {
     const anio = Number(req.body?.anio);
 
@@ -14296,9 +14350,10 @@ app.put("/api/vacaciones-config", requireSupervisorRole, async (req, res) => {
 
     const now = Date.now();
 
-    await db.query("BEGIN");
+    tx = await db.connect();
+    await tx.query("BEGIN");
 
-    await db.query(
+    await tx.query(
       `
         INSERT INTO vacaciones_config (
           "workshopId", anio, "techName", modo, "diasPorDefecto", dias,
@@ -14322,7 +14377,7 @@ app.put("/api/vacaciones-config", requireSupervisorRole, async (req, res) => {
 
       // Sin cupo propio: se borra la fila y el técnico hereda el valor general.
       if (!Number.isInteger(dias) || dias < 0 || dias > 366) {
-        await db.query(
+        await tx.query(
           `DELETE FROM vacaciones_config
            WHERE "workshopId" = $1 AND anio = $2 AND "techName" = $3`,
           [workshopId, anio, nombre]
@@ -14330,7 +14385,7 @@ app.put("/api/vacaciones-config", requireSupervisorRole, async (req, res) => {
         continue;
       }
 
-      await db.query(
+      await tx.query(
         `
           INSERT INTO vacaciones_config (
             "workshopId", anio, "techName", modo, "diasPorDefecto", dias,
@@ -14346,13 +14401,15 @@ app.put("/api/vacaciones-config", requireSupervisorRole, async (req, res) => {
       );
     }
 
-    await db.query("COMMIT");
+    await tx.query("COMMIT");
 
     res.json({ ok: true });
   } catch (error) {
-    await db.query("ROLLBACK").catch(() => {});
+    await tx?.query("ROLLBACK").catch(() => {});
     console.error("PUT /api/vacaciones-config error:", error);
     res.status(500).json({ error: "Error guardando la configuración de vacaciones" });
+  } finally {
+    tx?.release();
   }
 });
 
@@ -14387,6 +14444,12 @@ app.get("/api/agenda-date-reminders", exigirCredencial(requirePanelRole), async 
 });
 
 app.put("/api/agenda-date-reminders", requireSupervisorRole, async (req, res) => {
+  /*
+   * Una conexión para toda la transacción. Con `db.query("BEGIN")` sobre el
+   * pool, BEGIN y COMMIT podían ir por conexiones distintas: no había
+   * transacción, y una conexión podía quedarse colgada con una a medias.
+   */
+  let tx: PoolClient | undefined;
   try {
     const items = Array.isArray(req.body) ? req.body : [];
 
@@ -14394,10 +14457,11 @@ app.put("/api/agenda-date-reminders", requireSupervisorRole, async (req, res) =>
     // insertar la lista del cliente: la última pestaña que guardaba imponía su
     // copia y borraba lo que hubieran creado las demás (se perdieron
     // recordatorios reales así). Los borrados van por DELETE /:id.
-    await db.query("BEGIN");
+    tx = await db.connect();
+    await tx.query("BEGIN");
 
     for (const item of items) {
-      await db.query(
+      await tx.query(
         `
           INSERT INTO agenda_date_reminders (
             id,
@@ -14442,7 +14506,7 @@ app.put("/api/agenda-date-reminders", requireSupervisorRole, async (req, res) =>
       );
     }
 
-    await db.query("COMMIT");
+    await tx.query("COMMIT");
 
     const result = await db.query(
       `
@@ -14465,13 +14529,14 @@ app.put("/api/agenda-date-reminders", requireSupervisorRole, async (req, res) =>
 
     res.json(result.rows);
   } catch (error) {
-    await db.query("ROLLBACK").catch(() => null);
+    await tx?.query("ROLLBACK").catch(() => null);
 
     console.error("PUT /api/agenda-date-reminders error:", error);
     res.status(500).json({
       error: "Error guardando recordatorios de agenda",
     });
-
+  } finally {
+    tx?.release();
   }
 });
 
@@ -14500,16 +14565,23 @@ app.delete("/api/agenda-date-reminders/:id", requireSupervisorRole, async (req, 
  * plataforma entra porque `getRoleFromRequestAsync` lo resuelve como "admin".
  */
 app.put("/api/scheduled-tech-statuses", requireAdminRole, async (req, res) => {
+  /*
+   * Una conexión para toda la transacción. Con `db.query("BEGIN")` sobre el
+   * pool, BEGIN y COMMIT podían ir por conexiones distintas: no había
+   * transacción, y una conexión podía quedarse colgada con una a medias.
+   */
+  let tx: PoolClient | undefined;
   try {
     const items = Array.isArray(req.body) ? req.body : [];
 
     // Upsert, NO reemplazo: vaciar la tabla hacía que una pestaña con datos
     // antiguos borrase los estados creados desde otra. Los borrados van por
     // DELETE /:id.
-    await db.query("BEGIN");
+    tx = await db.connect();
+    await tx.query("BEGIN");
 
     for (const item of items) {
-      await db.query(
+      await tx.query(
         `
           INSERT INTO scheduled_tech_statuses (
             id,
@@ -14548,7 +14620,7 @@ app.put("/api/scheduled-tech-statuses", requireAdminRole, async (req, res) => {
       );
     }
 
-    await db.query("COMMIT");
+    await tx.query("COMMIT");
 
     const result = await db.query(
       `
@@ -14569,12 +14641,14 @@ app.put("/api/scheduled-tech-statuses", requireAdminRole, async (req, res) => {
 
     res.json(result.rows);
   } catch (error) {
-    await db.query("ROLLBACK").catch(() => null);
+    await tx?.query("ROLLBACK").catch(() => null);
 
     console.error("PUT /api/scheduled-tech-statuses error:", error);
     res.status(500).json({
       error: "Error guardando estados técnicos programados",
     });
+  } finally {
+    tx?.release();
   }
 });
 
@@ -14655,6 +14729,14 @@ app.put("/api/scheduled-jobs", exigirCredencial(requirePanelRole), async (req, r
               deletedAtMs: item.deletedAtMs ?? now,
             }
           : item;
+
+      /*
+       * La pantalla manda la agenda ENTERA cada vez que se toca una cita,
+       * pasadas incluidas. Reescribirlas todas eran millones de escrituras en
+       * `scheduled_jobs`; ahora solo se escribe la que llega distinta de como
+       * está guardada.
+       */
+      if (existingData != null && mismoJson(existingData, nextItem)) continue;
 
       await db.query(
         `
@@ -16077,6 +16159,23 @@ async function markScheduledJobReminderSent(job: any, sentField: string, sentAtM
   );
 }
 
+/**
+ * Una cita que no puede pedir confirmación por configuración se vuelve a
+ * mirar cada minuto. Se avisa una vez por cita y motivo en cada arranque, no
+ * sesenta veces por hora.
+ */
+const confirmacionesSinConfigurarAvisadas = new Set<string>();
+function avisarConfirmacionSinConfigurar(citaId: unknown, motivo: string) {
+  const clave = `${citaId}:${motivo}`;
+  if (confirmacionesSinConfigurarAvisadas.has(clave)) return;
+  confirmacionesSinConfigurarAvisadas.add(clave);
+  console.warn(
+    motivo === "sin-plantilla"
+      ? `[Citas] confirmación NO enviada (cita ${citaId}): falta TWILIO_CONTENT_SID_CONFIRMACION_CITA. Se reintentará.`
+      : `[Citas] confirmación NO enviada (cita ${citaId}): ${motivo}.`
+  );
+}
+
 async function checkAgendaWhatsAppReminders() {
   if (reminderCheckerRunning) return;
 
@@ -16173,11 +16272,21 @@ async function checkAgendaWhatsAppReminders() {
         // la escritura posterior falla, ese envío ya cuenta. Cambia un
         // reintento ilimitado por uno acotado a tres.
         let intentos = 0;
-        try {
-          intentos = await reservarIntento(job.id, nowMs);
-        } catch (e) {
-          console.error("[Citas] no se pudo reservar el intento:", e);
-          intentos = 0;
+        /*
+         * Si falta configuración —plantilla, Twilio, un móvil—, ni se reserva:
+         * reservar y devolver cada minuto eran dos escrituras por cita y
+         * minuto para no mandar nada. Cuando se configure, sale igual.
+         */
+        const sinConfigurar = motivoParaNoEnviar(job);
+        if (sinConfigurar) {
+          avisarConfirmacionSinConfigurar(job.id, sinConfigurar);
+        } else {
+          try {
+            intentos = await reservarIntento(job.id, nowMs);
+          } catch (e) {
+            console.error("[Citas] no se pudo reservar el intento:", e);
+            intentos = 0;
+          }
         }
 
         if (intentos > 0) {
@@ -16476,7 +16585,8 @@ async function checkWebfleetWorkshopArrival() {
     // Busca asistencias en_camino_base con furgoneta Webfleet asignada
     const result = await db.query(`
       SELECT ra.id, ra."webfleetVehicleId", ra."workshopId", ra."assignedTechName",
-             ra."tabletLat", ra."tabletLng", ra."tabletLocationAtMs"
+             ra."tabletLat", ra."tabletLng", ra."tabletLocationAtMs",
+             ra."operatorLat", ra."operatorLng", ra."operatorLocationAtMs"
       FROM roadside_assistances ra
       WHERE ra.status = 'en_camino_base'
         AND ra."arrivedAtWorkshopMs" IS NULL
@@ -16500,13 +16610,22 @@ async function checkWebfleetWorkshopArrival() {
         const distM = haversineDistanceM(pos.lat, pos.lng, tallerLat, tallerLng);
         console.log(`Geofence taller #${row.id} (${pos.fuente}${pos.antigua ? ", antigua" : ""}): ${Math.round(distM)}m al taller`);
 
-        // Actualizar posición del operario para que el mapa del panel esté en vivo
-        await db.query(
-          `UPDATE roadside_assistances
-           SET "operatorLat" = $2, "operatorLng" = $3, "operatorLocationAtMs" = $4
-           WHERE id = $1 AND status = 'en_camino_base'`,
-          [row.id, pos.lat, pos.lng, pos.atMs]
-        );
+        // Actualizar posición del operario para que el mapa del panel esté en
+        // vivo. Solo si se ha movido o lo guardado envejece: parada, era la
+        // misma fila reescrita cada dos minutos (ver core/guardarPosicion.ts).
+        if (
+          debeGuardarPosicion(
+            { lat: row.operatorLat, lng: row.operatorLng, atMs: row.operatorLocationAtMs },
+            pos
+          )
+        ) {
+          await db.query(
+            `UPDATE roadside_assistances
+             SET "operatorLat" = $2, "operatorLng" = $3, "operatorLocationAtMs" = $4
+             WHERE id = $1 AND status = 'en_camino_base'`,
+            [row.id, pos.lat, pos.lng, pos.atMs]
+          );
+        }
 
         // Con una posición antigua no se cierra nada: no dice dónde está AHORA.
         if (!pos.antigua && distM <= radioM) {
@@ -16646,7 +16765,8 @@ async function vigilarSalidas() {
   vigilarSalidasRunning = true;
   try {
     const r = await db.query(
-      `SELECT id, status, "webfleetVehicleId", latitude, longitude, "enPuntoVisto", "assignedTechName"
+      `SELECT id, status, "webfleetVehicleId", latitude, longitude, "enPuntoVisto", "assignedTechName",
+              "operatorLat", "operatorLng", "operatorLocationAtMs"
          FROM roadside_assistances
         WHERE tipo = $1 AND status IN ('en_camino', 'en_punto')
           AND "webfleetVehicleId" IS NOT NULL
@@ -16665,13 +16785,23 @@ async function vigilarSalidas() {
           radioDestinoM: RADIO_DESTINO_M,
         });
         const now = Date.now();
-        // El mapa del panel en vivo, como en la vuelta al taller.
-        await db.query(
-          `UPDATE roadside_assistances
-              SET "operatorLat" = $2, "operatorLng" = $3, "operatorLocationAtMs" = $4
-            WHERE id = $1`,
-          [s.id, pos.lat, pos.lng, now]
-        );
+        // El mapa del panel en vivo, como en la vuelta al taller. Con la hora
+        // de AHORA, como siempre, pero solo si se ha movido o lo guardado
+        // envejece: una salida abierta con la furgoneta parada escribía la
+        // misma fila cada minuto, sin fin.
+        if (
+          debeGuardarPosicion(
+            { lat: s.operatorLat, lng: s.operatorLng, atMs: s.operatorLocationAtMs },
+            { lat: pos.lat, lng: pos.lng, atMs: now }
+          )
+        ) {
+          await db.query(
+            `UPDATE roadside_assistances
+                SET "operatorLat" = $2, "operatorLng" = $3, "operatorLocationAtMs" = $4
+              WHERE id = $1`,
+            [s.id, pos.lat, pos.lng, now]
+          );
+        }
         if (paso.enPuntoVisto != null && paso.enPuntoVisto !== (s.enPuntoVisto === true)) {
           await db.query(`UPDATE roadside_assistances SET "enPuntoVisto" = $2 WHERE id = $1`, [s.id, paso.enPuntoVisto]);
         }
@@ -23185,6 +23315,7 @@ app.use("/api/tyrecontrol/kilometraje-mensual", createKilometrajeMensualRouter()
 // de kilometraje mensual: si no, la ruta genérica se lo come.
 app.use("/api/tyrecontrol/alta-operativa", createAltaOperativaRouter());
 app.use("/api/tyrecontrol/kilometraje-actual", createKilometrajeActualRouter());
+app.use("/api/tyrecontrol/km-ficha", createKmFichaRouter());
 app.use("/api/tyrecontrol/parte-proveedor", createParteProveedorRouter());
 app.use("/api/tyrecontrol/parte-flotas", createParteFlotasRouter());
 app.use("/api/tyrecontrol", createTyreControlRouter(requireSupervisorRole));
@@ -23204,6 +23335,10 @@ app.use("/api/public/satisfaction", createSatisfactionPublicRouter());
  * nada más que el token que lleva en la URL.
  */
 app.use("/api/core/alta", createAltaOperarioAdminRouter());
+// Número de trabajador por empresa (clave para enlazar módulos con Core).
+app.use("/api/core/empleados", createNumeroTrabajadorRouter());
+// Enlazar los usuarios de cada módulo con su persona de Core (fase B).
+app.use("/api/core/enlaces", createEnlaceTrabajadoresRouter());
 app.use("/api/public/alta", createAltaOperarioPublicRouter());
 
 /*
