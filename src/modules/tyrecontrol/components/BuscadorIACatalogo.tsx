@@ -64,7 +64,8 @@ type Edicion = { indiceCargaSimple: string; indiceCargaDoble: string; codigoVelo
 type Resultado = { modelo: string; ok: boolean; detalle: string };
 
 export default function BuscadorIACatalogo({ onClose, onCreado, inicial }: {
-  onClose: () => void; onCreado: () => void;
+  /** `creados`: lo que se acaba de dar de alta (para buscarlo y elegirlo después). */
+  onClose: () => void; onCreado: (creados?: Array<{ marca: string; modelo: string; medida: string }>) => void;
   /** Abrir ya con esta marca, medida y modelo («Dar de alta con IA» desde Depurar catálogo). */
   inicial?: { marca: string; medida: string; modelo?: string };
 }) {
@@ -167,6 +168,7 @@ export default function BuscadorIACatalogo({ onClose, onCreado, inicial }: {
     const out: Resultado[] = [];
     const creadas: string[] = [];
     const hechas = new Set<string>();
+    const altas: Array<{ marca: string; modelo: string; medida: string }> = [];
     for (const c of seleccionados) {
       const e = ediciones[clave(c)];
       try {
@@ -184,6 +186,7 @@ export default function BuscadorIACatalogo({ onClose, onCreado, inicial }: {
         });
         creadas.push(id);
         hechas.add(clave(c));
+        altas.push({ marca: c.fabricante, modelo: c.modelo, medida: c.medida });
         out.push({ modelo: `${c.fabricante} ${c.modelo}`, ok: true, detalle: "Creado" });
       } catch (err: any) {
         out.push({ modelo: `${c.fabricante} ${c.modelo}`, ok: false, detalle: err?.message ?? "No se ha podido crear" });
@@ -203,7 +206,7 @@ export default function BuscadorIACatalogo({ onClose, onCreado, inicial }: {
     }
     setCreando(false);
     setConfirmando(false);
-    if (out.some((r) => r.ok)) onCreado();
+    if (out.some((r) => r.ok)) onCreado(altas);
     // Y a continuación, la ficha técnica de lo creado (profundidad, diámetro,
     // cargas, etiqueta UE…), con la misma búsqueda y reglas de «Completar fichas».
     if (creadas.length) setRellenar([...new Set(creadas)]);
@@ -473,7 +476,7 @@ export default function BuscadorIACatalogo({ onClose, onCreado, inicial }: {
         </Modal>
       )}
       {rellenar && (
-        <CompletarFichasIA referenciaIds={rellenar} onClose={() => setRellenar(null)} onCambio={onCreado} />
+        <CompletarFichasIA referenciaIds={rellenar} onClose={() => setRellenar(null)} onCambio={() => onCreado()} />
       )}
     </Modal>
   );
