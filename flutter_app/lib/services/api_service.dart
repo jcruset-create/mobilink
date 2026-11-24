@@ -170,6 +170,8 @@ class ApiService {
             req.headers.addAll((await _authHeaders())..remove('Content-Type'));
             req.fields['kind'] = item['kind'] as String;
             req.fields['clientActionId'] = actionId;
+            // Se encoló al hacerla: su hora es la de la cola, no la de ahora.
+            if (item['ts'] != null) req.fields['capturadaAtMs'] = item['ts'].toString();
             req.files.add(await http.MultipartFile.fromPath('file', path));
             final streamed = await req.send().timeout(const Duration(seconds: 40));
             await streamed.stream.drain();
@@ -1050,6 +1052,8 @@ class ApiService {
       });
       req.fields['kind'] = kind;
       if (actionId != null) req.fields['clientActionId'] = actionId;
+      // La hora en que se hizo, para el informe (la firma dice cuándo se firmó).
+      req.fields['capturadaAtMs'] = DateTime.now().millisecondsSinceEpoch.toString();
       req.files.add(await http.MultipartFile.fromPath('file', file.path));
       final streamed = await req.send().timeout(const Duration(seconds: 30));
       final body = await streamed.stream.bytesToString();
