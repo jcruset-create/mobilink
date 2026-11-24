@@ -11650,6 +11650,10 @@ app.get("/api/webfleet/vehicle/:objectno/tracking-report.pdf", requireAdminRole,
  * no pasar de una consulta por segundo: se espera entre una y otra, y a partir
  * de 15 paradas se dan las coordenadas.
  */
+// Nombres ya buscados en Nominatim (por coordenada redondeada a ~10 m): volver a
+// abrir el mismo informe no repite las consultas, que van a una por segundo.
+const cacheNombresParada = new Map<string, string>();
+
 async function nombresDeParadas(paradas: { lat: number; lng: number }[]): Promise<string[]> {
   const lugares = await db
     .query(`SELECT nombre, lat, lng FROM roadside_known_places WHERE active = true`)
@@ -11666,7 +11670,14 @@ async function nombresDeParadas(paradas: { lat: number; lng: number }[]): Promis
       continue;
     }
     const coords = `${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}`;
-    if (consultas >= 15) {
+    const clave = `${p.lat.toFixed(4)},${p.lng.toFixed(4)}`;
+    const guardado = cacheNombresParada.get(clave);
+    if (guardado) {
+      nombres.push(guardado);
+      continue;
+    }
+    // Pocas consultas y cortas: el informe tardaba más de un minuto en salir.
+    if (consultas >= 8) {
       nombres.push(coords);
       continue;
     }
@@ -11675,12 +11686,16 @@ async function nombresDeParadas(paradas: { lat: number; lng: number }[]): Promis
     try {
       const resp = await fetch(
         `https://nominatim.openstreetmap.org/reverse?lat=${p.lat}&lon=${p.lng}&format=json&zoom=17`,
-        { headers: { "User-Agent": "sea-tarragona-app/1.0" }, signal: AbortSignal.timeout(5000) }
+        { headers: { "User-Agent": "sea-tarragona-app/1.0" }, signal: AbortSignal.timeout(3000) }
       );
       const data: any = resp.ok ? await resp.json() : null;
       // La dirección entera es larguísima («…, Tarragonès, Tarragona,
       // Catalunya, 43006, España»): con las tres primeras partes basta.
       const corto = String(data?.display_name ?? "").split(",").slice(0, 3).join(",").trim();
+      if (corto) {
+        if (cacheNombresParada.size > 5000) cacheNombresParada.clear();
+        cacheNombresParada.set(clave, corto);
+      }
       nombres.push(corto || coords);
     } catch {
       nombres.push(coords);
