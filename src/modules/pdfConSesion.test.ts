@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { cuerpoDelPdf, esPdf, mensajeDeError, VIDA_DIRECCION_MS, type Peticion } from "./pdfConSesion.ts";
+import { cuerpoDelPdf, esPdf, mensajeDeError, paginaVisorPdf, VIDA_DIRECCION_MS, type Peticion } from "./pdfConSesion.ts";
 
 /** Una respuesta de `fetch` de mentira, con lo justo que se le mira. */
 function respuesta(
@@ -121,5 +121,14 @@ describe("lo que llega tiene que ser un PDF", () => {
 
   it("la dirección del PDF vive bastante más que un minuto", () => {
     expect(VIDA_DIRECCION_MS).toBeGreaterThanOrEqual(10 * 60_000);
+  });
+});
+
+describe("paginaVisorPdf", () => {
+  it("mete el PDF en un iframe con su título, escapado", () => {
+    const html = paginaVisorPdf("blob:https://x/abc", "Informe <1> & \"2\"");
+    expect(html).toContain('<iframe src="blob:https://x/abc"');
+    expect(html).toContain("<title>Informe &lt;1&gt; &amp; &quot;2&quot;</title>");
+    expect(html).not.toContain("<1>");
   });
 });
