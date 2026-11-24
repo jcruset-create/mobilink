@@ -128,6 +128,15 @@ export default function RevisionVehiculo() {
     const det = await listarDetalleRevision(r.id);
     const mapa: Record<string, Detalle> = {};
     for (const d of det) mapa[d.posicion_id] = d;
+    // Las posiciones que aún no se han tocado (sin mm ni presión) salen con la
+    // presión recomendada, igual que al empezar una revisión nueva.
+    for (const p of posiciones) {
+      const m = montajePorPosicion.get(p.id);
+      const d = mapa[p.id];
+      if (!m || d?.no_accesible || d?.neumatico_ausente || d?.profundidad_mm != null || d?.presion_bar != null) continue;
+      const presion = referenciasDePosicion(p.id).presionRecomendada;
+      if (presion != null) mapa[p.id] = { ...(d ?? { posicion_id: p.id, neumatico_id: m.neumatico_id ?? null }), presion_bar: presion };
+    }
     setDetalles(mapa);
     setKmVehiculo(r.km_vehiculo != null ? String(r.km_vehiculo) : "");
     // La fecha del borrador manda sobre la de hoy: si se empezó a pasar el
@@ -350,7 +359,11 @@ export default function RevisionVehiculo() {
       setRevision(r);
       const inicial: Record<string, Detalle> = {};
       posiciones.forEach((p) => {
-        inicial[p.id] = { posicion_id: p.id, neumatico_id: montajePorPosicion.get(p.id)?.neumatico_id ?? null };
+        const m = montajePorPosicion.get(p.id);
+        // La presión sale puesta con la recomendada de la tarjeta: lo normal es
+        // que esté bien, y si varía el técnico la cambia. Solo en esta pantalla.
+        const presion = m ? referenciasDePosicion(p.id).presionRecomendada : null;
+        inicial[p.id] = { posicion_id: p.id, neumatico_id: m?.neumatico_id ?? null, ...(presion != null ? { presion_bar: presion } : {}) };
       });
       setDetalles(inicial);
     } catch (e: any) { setMsg(e?.message || "Error al crear la revisión"); } finally { setSaving(false); }
@@ -389,7 +402,9 @@ export default function RevisionVehiculo() {
       const d = detalles[p.id];
       const ocupado = !!montajePorPosicion.get(p.id);
       if (!ocupado || d?.no_accesible || d?.neumatico_ausente) return false;
-      return d?.profundidad_mm == null && d?.presion_bar == null;
+      // La presión ya viene puesta de serie: lo que demuestra que se ha medido
+      // es la profundidad.
+      return d?.profundidad_mm == null;
     });
     if (faltan.length > 0) {
       setMsg(`Faltan posiciones por medir: ${faltan.map((p) => p.codigo_posicion).join(", ")}. Márcalas como "no accesible" si no se pueden medir, o complétalas.`);
