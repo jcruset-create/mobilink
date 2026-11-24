@@ -1,7 +1,10 @@
 // @ts-nocheck — maintenance functions kept for future re-activation (UI removed in v2.2.10)
 import { apiFetch } from "../modules/apiFetch";
 import Matricula from "./Matricula";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useAjustesWorkplanner } from "../modules/ajustesWorkplannerApi";
+import { fraseDeAviso, nuevasAsignaciones } from "../modules/sonidoAsignacion";
+import { activarSonido, decir, sonarTono, sonidoActivado } from "../modules/sonidoTv";
 import { formatoEntradaParte, resumenTarjeta } from "../modules/tarjetaTrabajo";
 import PuntoEnCola from "./PuntoEnCola";
 import SeguimientoAsistenciaCard from "./SeguimientoAsistenciaCard";
@@ -697,6 +700,31 @@ export default function OperariosTVView({
 }: Props) {
   const [nowTick, setNowTick] = useState(Date.now());
 
+  // Configuración → Pantalla técnicos: sonido, refresco y bloques.
+  const ajustes = useAjustesWorkplanner();
+
+  /*
+   * Sonido al asignar un trabajo. La primera vuelta solo apunta lo que hay;
+   * a partir de ahí, cada trabajo activo que aparezca con técnicos suena
+   * (src/modules/sonidoAsignacion.ts). El navegador exige un toque para
+   * poder sonar: hasta que alguien pulse «Activar sonido», no se oye nada.
+   */
+  const vistosRef = useRef<Set<string> | null>(null);
+  const [sonidoListo, setSonidoListo] = useState(sonidoActivado());
+  const firmaActivos = jobs
+    .filter((j) => j.status === "activo")
+    .map((j) => `${j.id}|${(j.assignedNames ?? []).join("+")}|${j.plate}`)
+    .join(";");
+  useEffect(() => {
+    const activos = jobs.filter((j) => j.status === "activo");
+    const { nuevos, vistos } = nuevasAsignaciones(vistosRef.current, activos);
+    vistosRef.current = vistos;
+    if (ajustes.tvSonido === "apagado" || !sonidoListo || nuevos.length === 0) return;
+    if (ajustes.tvSonido === "tono") sonarTono();
+    else for (const t of nuevos) decir(fraseDeAviso(t));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firmaActivos, ajustes.tvSonido, sonidoListo]);
+
   /*
    * Las OTF de Assist (operario en la base de un cliente). No llegan con las
    * asistencias: se piden aquí cada 20 s, y si no hay respuesta se deja lo
@@ -715,9 +743,10 @@ export default function OperariosTVView({
       }
     }
     void cargar();
-    const t = window.setInterval(() => void cargar(), 20_000);
+    // Cada cuánto se refresca: Configuración → Pantalla técnicos.
+    const t = window.setInterval(() => void cargar(), Math.max(5, ajustes.tvRefrescoSeg) * 1000);
     return () => { activo = false; window.clearInterval(t); };
-  }, []);
+  }, [ajustes.tvRefrescoSeg]);
   const otfsActivas = otfsEnCurso(otfs);
   const [maintenanceApiLoaded, setMaintenanceApiLoaded] = useState(false);
   const [maintenanceLastSyncAt, setMaintenanceLastSyncAt] = useState<
@@ -1336,6 +1365,17 @@ export default function OperariosTVView({
             </button>
           )}
 
+          {ajustes.tvSonido !== "apagado" && !sonidoListo && (
+            <button
+              type="button"
+              onClick={() => void activarSonido().then((ok) => setSonidoListo(ok))}
+              className="rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800 hover:bg-amber-100"
+              title="El navegador solo deja sonar después de un toque"
+            >
+              🔔 Activar sonido
+            </button>
+          )}
+
           {onLogout && (
             <button
               type="button"
@@ -1630,7 +1670,7 @@ export default function OperariosTVView({
 
         <div className="space-y-4">
 
-          <section className="rounded-3xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
+          <section hidden={!ajustes.tvBloques.recepciones} className="rounded-3xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-lg font-black text-amber-900">Pendientes de recepción</h2>
               <span className="rounded-full bg-amber-100 px-3 py-1 text-sm font-bold text-amber-700">
@@ -1662,7 +1702,7 @@ export default function OperariosTVView({
             )}
           </section>
 
-          <section className="rounded-3xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm">
+          <section hidden={!ajustes.tvBloques.llegadas} className="rounded-3xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-lg font-black text-emerald-900">Llegadas / agendados</h2>
               <span className="rounded-full bg-emerald-100 px-3 py-1 text-sm font-bold text-emerald-700">
@@ -1692,7 +1732,7 @@ export default function OperariosTVView({
             )}
           </section>
 
-          <section className="rounded-3xl border border-violet-200 bg-violet-50 p-4 shadow-sm">
+          <section hidden={!ajustes.tvBloques.validar} className="rounded-3xl border border-violet-200 bg-violet-50 p-4 shadow-sm">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-lg font-black text-violet-900">
                 Pendientes de validar
@@ -1763,7 +1803,7 @@ export default function OperariosTVView({
             )}
           </section>
 
-          <section className="rounded-3xl border border-orange-200 bg-orange-50 p-4 shadow-sm">
+          <section hidden={!ajustes.tvBloques.standby} className="rounded-3xl border border-orange-200 bg-orange-50 p-4 shadow-sm">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-lg font-black text-orange-900">
                 Trabajos en Stand by
@@ -1792,7 +1832,7 @@ export default function OperariosTVView({
             )}
           </section>
 
-          <section className="rounded-3xl border border-sky-200 bg-sky-50 p-4 shadow-sm">
+          <section hidden={!ajustes.tvBloques.cola} className="rounded-3xl border border-sky-200 bg-sky-50 p-4 shadow-sm">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-lg font-black text-sky-900">
                 Cola de trabajo

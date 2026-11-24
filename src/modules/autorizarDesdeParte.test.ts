@@ -31,6 +31,8 @@ describe("motivoNoAutorizable", () => {
   it("sin nadie, Móvil sin furgoneta, o alguien que no está libre", () => {
     expect(motivoNoAutorizable([], techs, "camion")).toBe("Elige al menos el responsable.");
     expect(motivoNoAutorizable(["Anthoni"], techs, "movil")).toMatch(/furgoneta/);
+    // Con la regla apagada en Configuración → Áreas, Móvil se autoriza como las demás.
+    expect(motivoNoAutorizable(["Anthoni"], techs, "movil", false)).toBeNull();
     expect(motivoNoAutorizable(["Anthoni", "José"], techs, "camion")).toBe("José ya está en otro trabajo.");
     expect(motivoNoAutorizable(["Alejandro"], techs, "camion")).toBe("Alejandro no está disponible.");
     expect(motivoNoAutorizable(["Nadie"], techs, "camion")).toBe("Nadie ya no existe como técnico.");

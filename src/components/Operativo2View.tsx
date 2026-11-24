@@ -5,6 +5,8 @@ import PuntoEnCola from "./PuntoEnCola";
 import ParteDeTrabajoModal from "./ParteDeTrabajoModal";
 import { esTecnicoDePrueba } from "../modules/tecnicosDePrueba";
 import { AREA_META } from "../modules/workshopConstants";
+import { useAjustesWorkplanner } from "../modules/ajustesWorkplannerApi";
+import { areasEnUso } from "../modules/ajustesWorkplanner";
 import { API_BASE, deleteScheduledJobFromBackend, fetchWithTimeout } from "../modules/workshopApi";
 import { getAdminHeaders } from "../modules/adminHeaders";
 import { formatMinutes } from "../modules/time";
@@ -249,6 +251,8 @@ export default function Operativo2View({
   asignarFurgonetaAlTrabajo,
   embebido,
 }: Operativo2ViewProps) {
+  // Áreas en uso y reglas (Configuración → Áreas).
+  const ajustes = useAjustesWorkplanner();
   const [op2CitaOpen, setOp2CitaOpen] = useState(false);
   /** Trabajo al que se le está enganchando un parte, o null. */
   const [parteDe, setParteDe] = useState<Job | null>(null);
@@ -455,7 +459,7 @@ export default function Operativo2View({
       <div className="mt-2 rounded-lg bg-white dark:bg-slate-800 p-2">
         <div className="mb-1 text-[10px] font-bold text-slate-600 dark:text-slate-400">ENTRADAS RÁPIDAS</div>
         <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
-          {(Object.keys(AREA_META) as AreaKey[]).map((a) => {
+          {(areasEnUso(ajustes) as AreaKey[]).map((a) => {
             const meta = AREA_META[a];
             const Icon = meta.icon;
             const count = quickTemplates.filter((t) => t.area === a).length;
@@ -607,7 +611,7 @@ export default function Operativo2View({
                     onAsignar={asignarFurgonetaAlTrabajo}
                     oscuro={tema === "oscuro"}
                   />
-                  <button type="button" disabled={assignedNames.length === 0 || (job.area === "movil" && !job.assignedVehicleId)} title={job.area === "movil" && !job.assignedVehicleId ? "Asigna una furgoneta antes de autorizar" : undefined} onClick={() => { void authorizeProposedJob(job.id); }} className="rounded bg-emerald-600 px-2 py-1 text-[11px] font-bold text-white disabled:opacity-40">✓ Autorizar</button>
+                  <button type="button" disabled={assignedNames.length === 0 || (job.area === "movil" && ajustes.movilExigeFurgoneta && !job.assignedVehicleId)} title={job.area === "movil" && ajustes.movilExigeFurgoneta && !job.assignedVehicleId ? "Asigna una furgoneta antes de autorizar" : undefined} onClick={() => { void authorizeProposedJob(job.id); }} className="rounded bg-emerald-600 px-2 py-1 text-[11px] font-bold text-white disabled:opacity-40">✓ Autorizar</button>
                   <button type="button" onClick={() => sendValidationJobToQueue(job.id)} className="rounded border border-amber-400/40 bg-amber-400/10 px-2 py-1 text-[11px] text-amber-700 dark:text-amber-300">Cola</button>
                   <button type="button" onClick={() => { void rejectProposedJob(job.id); }} className="rounded border border-slate-400/60 dark:border-slate-500/40 bg-slate-200 dark:bg-slate-700 px-2 py-1 text-[11px] text-slate-800 dark:text-slate-200">Rechazar</button>
                   <button type="button" onClick={() => setParteDe(job)} title={job.ptNumero ? `Parte ${job.ptNumero}` : "Enganchar el parte del ERP"} className={`rounded border px-2 py-1 text-[11px] font-bold ${job.ptNumero ? "border-sky-400/60 bg-sky-400/10 text-sky-700 dark:text-sky-300" : "border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200"}`}>

@@ -20,6 +20,7 @@ import {
   tecnicosParaElegir,
 } from "../autorizarDesdeParte";
 import { allocateJobPure } from "../assignment";
+import { useAjustesWorkplanner } from "../ajustesWorkplannerApi";
 import { buildTechLoadStats, buildTechStats } from "../workshopReports";
 import { getOperationKey } from "../jobHelpers";
 import {
@@ -128,6 +129,7 @@ export default function PartesTrabajoPage() {
   const [plantillas, setPlantillas] = useState<QuickTemplate[]>([]);
   const [techs, setTechs] = useState<Tech[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
+  const ajustes = useAjustesWorkplanner();
 
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -434,7 +436,7 @@ export default function PartesTrabajoPage() {
       const vistos = new Set<string>();
       for (const propuesto of aCrear) {
         const asignados = asignadosDe(propuesto.indiceLinea);
-        const motivo = motivoNoAutorizable(asignados, techs, propuesto.area);
+        const motivo = motivoNoAutorizable(asignados, techs, propuesto.area, ajustes.movilExigeFurgoneta);
         if (motivo) {
           setError(`${propuesto.plate} · ${propuesto.label}: ${motivo}`);
           return;
@@ -785,7 +787,7 @@ export default function PartesTrabajoPage() {
                   const responsable = asignados[0] ?? "";
                   const apoyos = asignados.slice(1);
                   const elegibles = tecnicosParaElegir(techs);
-                  const motivo = motivoNoAutorizable(asignados, techs, t.area);
+                  const motivo = motivoNoAutorizable(asignados, techs, t.area, ajustes.movilExigeFurgoneta);
                   const ocupado = estado === "creando";
                   const porQue = elegidos[t.indiceLinea]
                     ? "Técnicos elegidos a mano."
@@ -910,7 +912,7 @@ export default function PartesTrabajoPage() {
                     onClick={() => void crearTrabajos("autorizar")}
                     disabled={
                       estado === "creando" ||
-                      pendientes.some((t) => motivoNoAutorizable(asignadosDe(t.indiceLinea), techs, t.area))
+                      pendientes.some((t) => motivoNoAutorizable(asignadosDe(t.indiceLinea), techs, t.area, ajustes.movilExigeFurgoneta))
                     }
                     className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
                   >

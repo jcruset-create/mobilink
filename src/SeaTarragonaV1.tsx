@@ -1,4 +1,5 @@
 import { apiFetch } from "./modules/apiFetch";
+import { ajustesVigentes } from "./modules/ajustesWorkplannerApi";
 import { decidirSesionPanel } from "./modules/panelSession";
 import React, {
   useEffect,
@@ -7505,7 +7506,7 @@ const phaseLabel = getScheduledJobCurrentPhaseLabel(scheduled, jobs);
               enAsistencia={furgonetasEnAsistencia}
               onAsignar={asignarFurgonetaAlTrabajo}
             />
-            <button type="button" onClick={() => authorizeProposedJob(job.id)} disabled={assignedNames.length === 0 || (job.area === "movil" && !job.assignedVehicleId)} title={job.area === "movil" && !job.assignedVehicleId ? "Asigna una furgoneta antes de autorizar" : undefined} className="rounded-lg bg-green-600 px-3 py-1 text-xs font-semibold text-white hover:bg-green-700 disabled:opacity-40">✓ Autorizar</button>
+            <button type="button" onClick={() => authorizeProposedJob(job.id)} disabled={assignedNames.length === 0 || (job.area === "movil" && ajustesVigentes().movilExigeFurgoneta && !job.assignedVehicleId)} title={job.area === "movil" && ajustesVigentes().movilExigeFurgoneta && !job.assignedVehicleId ? "Asigna una furgoneta antes de autorizar" : undefined} className="rounded-lg bg-green-600 px-3 py-1 text-xs font-semibold text-white hover:bg-green-700 disabled:opacity-40">✓ Autorizar</button>
             <button type="button" onClick={() => sendValidationJobToQueue(job.id)} className="rounded-lg border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-800 hover:bg-amber-100">Cola</button>
             <button type="button" onClick={() => rejectProposedJob(job.id)} className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700 hover:bg-red-100">Rechazar</button>
             <button type="button" onClick={() => deleteValidationJob(job.id)} className="rounded-lg border border-red-300 bg-red-600 px-2 py-1 text-xs font-bold text-white hover:bg-red-700">Eliminar</button>

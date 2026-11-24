@@ -78,7 +78,7 @@ import {
 } from "../modules/agendaConfig";
 import { bloqueoQueChoca, bloqueosDelDia, textoDeBloqueo } from "../modules/bloqueosDeArea";
 import { cargarAjustesWorkplanner } from "../modules/ajustesWorkplannerApi";
-import { AJUSTES_POR_DEFECTO } from "../modules/ajustesWorkplanner";
+import { AJUSTES_POR_DEFECTO, areasEnUso } from "../modules/ajustesWorkplanner";
 import { loadAgendaConfig } from "../modules/agendaConfigApi";
 
 import CaducidadTacografoModal from "./CaducidadTacografoModal";
@@ -302,6 +302,12 @@ const SLOT_HEIGHT = 24;
 // Duración por defecto de una cita. Se puede cambiar en Configuración →
 // Tiempos y radios; hasta que llega el valor guardado, el de siempre.
 let DEFAULT_ESTIMATED_MINUTES = AJUSTES_POR_DEFECTO.duracionCitaMin;
+// Lo que va marcado de WhatsApp al crear una cita (Configuración → WhatsApp al cliente).
+let WA_POR_DEFECTO = {
+  sendWhatsAppOnSave: AJUSTES_POR_DEFECTO.waAlGuardar,
+  sendReminder24h: AJUSTES_POR_DEFECTO.waRecordatorio24h,
+  sendReminder1h: AJUSTES_POR_DEFECTO.waRecordatorio1h,
+};
 
 function timeToMinutes(time: string) {
   const [h, m] = time.split(":").map(Number);
@@ -872,12 +878,17 @@ useEffect(() => {
 
   // ---- Configuración de agenda (horario y festivos) ----
   const [agendaConfig, setAgendaConfig] = useState<AgendaConfig>(DEFAULT_AGENDA_CONFIG);
+  // Áreas que se ofrecen en el formulario de cita, en su orden (Configuración → Áreas).
+  const [areasDeCita, setAreasDeCita] = useState<AreaKey[]>(() => areasEnUso(AJUSTES_POR_DEFECTO) as AreaKey[]);
 
   // Duración por defecto de una cita (Configuración → Tiempos y radios).
   useEffect(() => {
     let vivo = true;
     void cargarAjustesWorkplanner().then((a) => {
-      if (vivo) DEFAULT_ESTIMATED_MINUTES = a.duracionCitaMin;
+      if (!vivo) return;
+      DEFAULT_ESTIMATED_MINUTES = a.duracionCitaMin;
+      WA_POR_DEFECTO = { sendWhatsAppOnSave: a.waAlGuardar, sendReminder24h: a.waRecordatorio24h, sendReminder1h: a.waRecordatorio1h };
+      setAreasDeCita(areasEnUso(a));
     });
     return () => {
       vivo = false;
@@ -1441,12 +1452,12 @@ function openConvertCaducidad(rec: CaducidadReminder) {
       .filter(Boolean)
       .join("\n"),
     urgent: false,
-    sendWhatsAppOnSave: true,
+    sendWhatsAppOnSave: WA_POR_DEFECTO.sendWhatsAppOnSave,
     manualReminderEnabled: false,
     manualReminderDate: "",
     manualReminderTime: "",
-    sendReminder24h: true,
-    sendReminder1h: true,
+    sendReminder24h: WA_POR_DEFECTO.sendReminder24h,
+    sendReminder1h: WA_POR_DEFECTO.sendReminder1h,
     estimatedMinutes: getEstimatedMinutesWithIncludedTasks(templateKey, []),
     linkedTemplateKey: "",
     includedTaskIds: [],
@@ -1510,12 +1521,12 @@ function getEstimatedMinutesWithIncludedTasks(
     customerPhone: "",
     notes: "",
     urgent: false,
-    sendWhatsAppOnSave: true,
+    sendWhatsAppOnSave: WA_POR_DEFECTO.sendWhatsAppOnSave,
     manualReminderEnabled: false,
     manualReminderDate: "",
     manualReminderTime: "",
-    sendReminder24h: true,
-    sendReminder1h: true,
+    sendReminder24h: WA_POR_DEFECTO.sendReminder24h,
+    sendReminder1h: WA_POR_DEFECTO.sendReminder1h,
     estimatedMinutes: getEstimatedMinutesWithIncludedTasks(templateKey, []),
     linkedTemplateKey: "",
     includedTaskIds: [],
@@ -3324,16 +3335,8 @@ appendLog(
 
                 <div className="space-y-4">
                   <div className="space-y-3">
-                    <div className="grid grid-cols-5 gap-2">
-                      {(
-                        [
-                          "camion",
-                          "movil",
-                          "tacografo",
-                          "turismo",
-                          "mecanica",
-                        ] as AreaKey[]
-                      ).map((area) => {
+                    <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${areasDeCita.length}, minmax(0, 1fr))` }}>
+                      {areasDeCita.map((area) => {
                         const areaTemplates = quickTemplates
                           .filter((template) => template.area === area)
                           .slice()

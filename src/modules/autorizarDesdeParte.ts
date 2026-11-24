@@ -44,10 +44,11 @@ export function tecnicosParaElegir(techs: Tech[]): Tech[] {
 export function motivoNoAutorizable(
   asignados: string[],
   techs: Tech[],
-  area: string
+  area: string,
+  movilExigeFurgoneta = true
 ): string | null {
   if (asignados.length === 0) return "Elige al menos el responsable.";
-  if (area === "movil") return "Los trabajos de Móvil necesitan furgoneta: autorízalos desde Operativo 2.";
+  if (area === "movil" && movilExigeFurgoneta) return "Los trabajos de Móvil necesitan furgoneta: autorízalos desde Operativo 2.";
   for (const nombre of asignados) {
     const tech = techs.find((t) => t.name === nombre);
     if (!tech) return `${nombre} ya no existe como técnico.`;
