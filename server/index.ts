@@ -14,6 +14,8 @@ import db, { initDb } from "./db.ts";
 import type { PoolClient } from "pg";
 import { supabase, supabaseAnonAuth, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_BUCKET, SUPABASE_DOCS_BUCKET } from "./supabase.ts";
 import { hayCore, NOMBRE_CORE_SQL } from "./core/hayCore.ts";
+import { nombreValeParaEntrar } from "./core/nombreDeAcceso.ts";
+import { createBajaEmpleadoRouter } from "./core/bajaEmpleado.ts";
 import {
   createTelefonoEmpresaRouter,
   telefonoDeTecnico,
@@ -15776,9 +15778,32 @@ app.post("/api/login", async (req, res) => {
 });
 
 // Login de la APK de Almacén: valida nombre + PIN contra perfiles_usuario
-// (con service role; la tabla deja de ser legible por anon) y garantiza un
+// (con service role; la tabla deja de ser legible por anon). Si la ficha está
+// enlazada con Core, el nombre que vale es el de Core y una baja en Core
+// impide entrar (ver core/nombreDeAcceso.ts). Después garantiza un
 // usuario de Supabase Auth con email sintético y el PIN como contraseña.
 // La APK hace después signInWithPassword y opera con sesión real (RLS).
+/** La persona de Core enlazada con una ficha de Almacén, o `null`. */
+async function personaDeCoreDeAlmacen(
+  perfilId: string
+): Promise<{ nombre: string | null; apellidos: string | null; activo: boolean } | null> {
+  const { data: enlace, error } = await supabase
+    .from("perfiles_usuario")
+    .select("employee_id")
+    .eq("id", perfilId)
+    .maybeSingle();
+  const employeeId = (enlace as { employee_id?: string | null } | null)?.employee_id;
+  if (error || !employeeId) return null;
+  const { data: persona, error: errPersona } = await supabase
+    .from("sea_employees")
+    .select("nombre, apellidos, activo")
+    .eq("id", employeeId)
+    .maybeSingle();
+  if (errPersona || !persona) return null;
+  const p = persona as { nombre: string | null; apellidos: string | null; activo: boolean | null };
+  return { nombre: p.nombre, apellidos: p.apellidos, activo: p.activo !== false };
+}
+
 app.post("/api/almacen/login-operario", async (req, res) => {
   try {
     const nombre = String(req.body?.nombre || "").trim();
@@ -15797,14 +15822,25 @@ app.post("/api/almacen/login-operario", async (req, res) => {
       .eq("activo", true)
       .maybeSingle();
 
-    const nombreDb = String(perfil?.nombre ?? "").toLowerCase().trim();
-    if (!perfil || nombreDb !== nombre.toLowerCase()) {
+    // La persona de Core, si la ficha está enlazada. En consultas aparte y
+    // tolerantes: si la columna o la tabla no existen en esta base, la ficha
+    // cuenta como sin enlazar y se entra como siempre.
+    const core = perfil ? await personaDeCoreDeAlmacen(String(perfil.id)) : null;
+
+    if (
+      !perfil ||
+      core?.activo === false ||
+      !nombreValeParaEntrar(nombre, { nombreModulo: perfil.nombre, core })
+    ) {
       registrarFalloIntento(freno);
       return res.status(401).json({ error: "Usuario o contraseña incorrectos" });
     }
     registrarExitoIntento(freno);
 
-    const slug = nombre
+    // El usuario sintético sale del nombre de la FICHA, no del tecleado: ahora
+    // se puede entrar escribiendo el nombre de Core, y el de la ficha es el
+    // que no cambia (y da el mismo correo que ha dado siempre).
+    const slug = String(perfil.nombre ?? nombre)
       .toLowerCase()
       .normalize("NFD")
       .replace(/[̀-ͯ]/g, "")
@@ -15836,7 +15872,9 @@ app.post("/api/almacen/login-operario", async (req, res) => {
       ip: req.ip,
     });
 
-    res.json({ ok: true, email, perfil });
+    // La APK enseña este nombre: el de Core, si lo hay.
+    const nombreCore = core ? [core.nombre, core.apellidos].filter(Boolean).join(" ").trim() : "";
+    res.json({ ok: true, email, perfil: nombreCore ? { ...perfil, nombre: nombreCore } : perfil });
   } catch (error) {
     console.error("POST /api/almacen/login-operario error:", error);
     res.status(500).json({ error: "Error iniciando sesión" });
@@ -23497,6 +23535,8 @@ app.use("/api/public/satisfaction", createSatisfactionPublicRouter());
  * nada más que el token que lleva en la URL.
  */
 app.use("/api/core/alta", createAltaOperarioAdminRouter());
+// Baja (y alta) de un empleado: la baja lo es en todos los módulos.
+app.use("/api/core/empleados", createBajaEmpleadoRouter());
 // Teléfono de empresa de la ficha (el que enseñan los módulos).
 app.use("/api/core/empleados", createTelefonoEmpresaRouter());
 // Número de trabajador por empresa (clave para enlazar módulos con Core).
