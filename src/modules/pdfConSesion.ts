@@ -90,6 +90,39 @@ export function esPdf(cabecera: Uint8Array): boolean {
  */
 export const VIDA_DIRECCION_MS = 30 * 60_000;
 
+/*
+ * El PDF se enseña DENTRO de una página nuestra (un <iframe>), no llevando la
+ * pestaña a la dirección `blob:`.
+ *
+ * Con la extensión de Adobe Acrobat instalada, Chrome le pasa a Acrobat toda
+ * pestaña que navega a un PDF, también a una `blob:`; y el visor de Acrobat, que
+ * vive en otro origen, no puede leer esa dirección: carita triste, aunque el
+ * PDF esté bien y la dirección siga viva (#749 alargó su vida y no bastó).
+ * Dentro de un <iframe> no lo intercepta: lo pinta el visor de Chrome, que es
+ * del mismo origen que la pestaña (about:blank abierta desde aquí) y sí la lee.
+ */
+const escaparHtml = (t: string) =>
+  t.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+
+/** La página que envuelve el PDF: título y el visor a pantalla completa. */
+export function paginaVisorPdf(direccion: string, titulo: string): string {
+  const t = escaparHtml(titulo);
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>${t}</title>`
+    + `<style>html,body{margin:0;height:100%;background:#525659}iframe{border:0;display:block;width:100%;height:100%}</style>`
+    + `</head><body><iframe src="${escaparHtml(direccion)}" title="${t}"></iframe></body></html>`;
+}
+
+function mostrarEnPestana(pestana: Window, direccion: string, titulo: string) {
+  try {
+    pestana.document.open();
+    pestana.document.write(paginaVisorPdf(direccion, titulo));
+    pestana.document.close();
+  } catch {
+    // Si no se puede escribir en la pestaña, como antes: a la dirección.
+    pestana.location.href = direccion;
+  }
+}
+
 /**
  * Abre el PDF en otra pestaña.
  *
@@ -112,7 +145,7 @@ export async function abrirPdfConSesion(
     const pdf = await cuerpoDelPdf(peticion, url);
     direccion = URL.createObjectURL(pdf);
     if (pestana) {
-      pestana.location.href = direccion;
+      mostrarEnPestana(pestana, direccion, nombreDeFichero);
     } else {
       const enlace = document.createElement("a");
       enlace.href = direccion;
