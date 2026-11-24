@@ -49,7 +49,7 @@ afterAll(async () => {
 
 describe.runIf(RUN)("operarios del muelle sin Core", () => {
   it("no hay Core, no hay personas que elegir", async () => {
-    expect(await repo.hayCore(conexion)).toEqual({ core: false, numero: false });
+    expect(await repo.hayCore(conexion)).toEqual({ core: false, numero: false, telefonoEmpresa: false });
     expect(await repo.empleadosCoreParaOperario(EMPRESA, conexion)).toBeNull();
   });
 

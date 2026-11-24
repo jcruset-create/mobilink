@@ -16,7 +16,7 @@
 
 import type { PoolClient, QueryResult, QueryResultRow } from "pg";
 import pool from "../db.ts";
-import { hayCore as hayCoreEn, NOMBRE_CORE_SQL } from "../core/hayCore.ts";
+import { hayCore as hayCoreEn, NOMBRE_CORE_SQL, type HayCore } from "../core/hayCore.ts";
 import { numero } from "./domain/cantidades.ts";
 import type { EstadoAlbaran, EstadoIncidencia, EstadoPedido, ResultadoRecepcion, TipoIncidencia } from "./domain/estados.ts";
 
@@ -800,7 +800,7 @@ const aOperario = (r: any): Operario => {
  * Supabase: en una base del módulo sin ellas no existe, y entonces los
  * operarios funcionan como siempre, con su propio nombre.
  */
-export async function hayCore(ejecutor?: Ejecutor): Promise<{ core: boolean; numero: boolean }> {
+export async function hayCore(ejecutor?: Ejecutor): Promise<HayCore> {
   return hayCoreEn(db(ejecutor));
 }
 
