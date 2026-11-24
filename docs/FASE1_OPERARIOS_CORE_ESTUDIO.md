@@ -1,5 +1,40 @@
 # Fase 1 — Estudio: Core como fuente única de operarios y usuarios
 
+> **2026-11-24 · La baja en Core es la baja en todos los módulos; la APK de
+> Almacén mira a Core.** Decidido por el usuario.
+>
+> **Baja**
+> - `server/core/bajaEmpleado.ts`: `PUT /api/core/empleados/:id/activo` (solo
+>   administradores). En una transacción da de baja en Core (`activo`,
+>   `fecha_baja`) y en cada módulo donde la persona esté enlazada: Taller
+>   (igual que la baja de Técnicos: sin trabajo en curso y sin PIN), Almacén,
+>   TyreControl y su usuario de acceso web. Recepciones, Presencia, Safety y
+>   ToolControl ya leen la baja de Core. Cash no se toca.
+> - Se escribe `activo = false` en cada módulo porque cada uno decide quién
+>   entra mirando el suyo (RLS, logins de APK, `authenticate`). No es un
+>   trigger ni una copia de identidad: es la misma acción en todos los sitios,
+>   pedida por un administrador y auditada.
+> - Volver a dar de alta en Core **no** reactiva los módulos: la respuesta dice
+>   dónde sigue de baja, y se reactiva a mano.
+> - Nadie puede darse de baja a sí mismo.
+> - Core → Empleados: el «Empleado activo» de la edición ya no se escribe
+>   directo en Supabase; pasa por el servidor, con confirmación.
+>
+> **APK de Almacén** (`/api/almacen/login-operario`)
+> - Ficha enlazada con Core: vale el nombre de Core (completo, el campo nombre
+>   o la primera palabra), sin mirar mayúsculas ni tildes
+>   (`server/core/nombreDeAcceso.ts`). De baja en Core, no entra.
+> - El nombre antiguo del módulo sigue valiendo mientras exista, para no dejar
+>   fuera a quien teclea un mote. Dejará de valer cuando se retire la columna.
+> - El usuario sintético de Supabase sale del nombre de la ficha, no del
+>   tecleado: entrar con el nombre de Core no crea un usuario nuevo.
+> - Solo servidor: no hace falta APK nueva. Sin enlazar, como siempre.
+>
+> **Pendiente de decidir**
+> - Si el nombre antiguo del módulo debe dejar de valer ya para los enlazados.
+> - Lo que entre en Core por otra vía (SQL a mano, escritura directa en
+>   Supabase) no pasa por el servidor y no da de baja en los módulos.
+
 > **2026-11-24 · Teléfono de empresa en Core; el del técnico se lee de Core.**
 > Decidido: el teléfono del técnico sale de Core, y la ficha de Core gana un
 > «teléfono de empresa» por si la persona tiene uno asignado.
