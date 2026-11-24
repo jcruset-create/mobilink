@@ -89,6 +89,10 @@ export type Tech = {
   roadsideCapable?: boolean;
   currentRoadsideAssistanceId?: number | null;
   phone?: string | null;
+  /** De dónde sale `phone`: de Core (empresa o personal) o del propio taller. */
+  phoneOrigen?: "empresa" | "personal" | "taller" | null;
+  /** El teléfono lo pone Core: en el taller no se edita. */
+  phoneEnCore?: boolean;
   /** Empleado de Core vinculado (sea_employees.id). null = sin vincular. */
   employeeId?: string | null;
   /** Quién es en Core (nombre completo y número). Solo para enseñarlo. */

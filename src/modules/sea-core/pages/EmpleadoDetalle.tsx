@@ -195,7 +195,37 @@ export default function EmpleadoDetalle() {
   const [numeroGuardando, setNumeroGuardando] = useState(false);
   const [numeroMensaje, setNumeroMensaje] = useState<{ ok: boolean; texto: string } | null>(null);
 
+  // Teléfono de empresa: el que enseñan los módulos (el otro es el personal).
+  const [telEmpresaInput, setTelEmpresaInput] = useState("");
+  const [telEmpresaGuardando, setTelEmpresaGuardando] = useState(false);
+  const [telEmpresaMensaje, setTelEmpresaMensaje] = useState<{ ok: boolean; texto: string } | null>(null);
+
   useEffect(() => { if (id) cargar(id); }, [id]);
+
+  async function guardarTelefonoEmpresa() {
+    if (!id) return;
+    setTelEmpresaGuardando(true);
+    setTelEmpresaMensaje(null);
+    try {
+      const r = await apiFetch(`/api/core/empleados/${id}/telefono-empresa`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ telefonoEmpresa: telEmpresaInput }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setTelEmpresaMensaje({ ok: false, texto: d?.error || "No se ha podido guardar el teléfono." });
+        return;
+      }
+      setEmpleado((e: any) => (e ? { ...e, telefono_empresa: d.telefonoEmpresa } : e));
+      setTelEmpresaInput(d.telefonoEmpresa ?? "");
+      setTelEmpresaMensaje({ ok: true, texto: d.telefonoEmpresa ? "Teléfono guardado." : "Teléfono quitado." });
+    } catch {
+      setTelEmpresaMensaje({ ok: false, texto: "No se ha podido guardar el teléfono." });
+    } finally {
+      setTelEmpresaGuardando(false);
+    }
+  }
 
   async function guardarNumero() {
     if (!id) return;
@@ -302,6 +332,8 @@ export default function EmpleadoDetalle() {
     setEmpleado(emp as any);
     setNumeroInput((emp as any)?.numero_trabajador ?? "");
     setNumeroMensaje(null);
+    setTelEmpresaInput((emp as any)?.telefono_empresa ?? "");
+    setTelEmpresaMensaje(null);
     setCompetencias(comp ?? []);
     setCertificaciones(cert ?? []);
     setAutorizaciones(aut ?? []);
@@ -622,7 +654,8 @@ export default function EmpleadoDetalle() {
         fila("Nº Seguridad Social", empleado!.num_seguridad_social),
         fila("Dirección", direccionCompleta(empleado!)),
         fila("Email", empleado!.email),
-        fila("Teléfono", empleado!.telefono),
+        fila("Teléfono de empresa", (empleado as any).telefono_empresa),
+        fila("Teléfono personal", empleado!.telefono),
         fila("Empresa", (empleado!.sea_companies as any)?.nombre),
         fila("Centro de trabajo", (empleado!.sea_work_centers as any)?.nombre),
         fila("Rol", empleado!.rol),
@@ -801,7 +834,10 @@ export default function EmpleadoDetalle() {
                 ? new Date(empleado.dni_caducidad).toLocaleDateString("es-ES") : null },
               { label: "Dirección", value: direccionCompleta(empleado) },
               { label: "Email", value: empleado.email },
-              { label: "Teléfono", value: empleado.telefono },
+              ...("telefono_empresa" in (empleado as any)
+                ? [{ label: "Teléfono de empresa", value: (empleado as any).telefono_empresa }]
+                : []),
+              { label: "Teléfono personal", value: empleado.telefono },
               { label: "Fecha de alta", value: empleado.fecha_alta ? new Date(empleado.fecha_alta).toLocaleDateString("es-ES") : null },
             ].map(({ label, value }) => (
               <div key={label} className="flex justify-between text-sm border-b border-slate-700 pb-2 last:border-0 last:pb-0">
@@ -857,6 +893,33 @@ export default function EmpleadoDetalle() {
               )}
               {numeroMensaje && (
                 <p className={`text-sm ${numeroMensaje.ok ? "text-green-300" : "text-red-300"}`}>{numeroMensaje.texto}</p>
+              )}
+            </div>
+          )}
+
+          {/* Igual que el número: solo cuando core_telefono_empresa.sql está ejecutada. */}
+          {"telefono_empresa" in (empleado as any) && (
+            <div className="rounded-xl border border-slate-700 bg-slate-800 p-5 space-y-3 md:col-span-2">
+              <div>
+                <h2 className="font-semibold text-slate-200">Teléfono de empresa</h2>
+                <p className="text-xs text-slate-400">
+                  El móvil o la extensión que la empresa le ha asignado, si tiene. Es el que ven los módulos
+                  (en Taller, también el cliente al seguir una asistencia). El personal no se enseña a los clientes.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <input value={telEmpresaInput} onChange={(e) => setTelEmpresaInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") void guardarTelefonoEmpresa(); }}
+                  type="tel" maxLength={24} placeholder="6XX XXX XXX"
+                  className="w-48 rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm" />
+                <button onClick={() => void guardarTelefonoEmpresa()}
+                  disabled={telEmpresaGuardando || telEmpresaInput.replace(/[\s.()-]/g, "") === ((empleado as any).telefono_empresa ?? "")}
+                  className="rounded-lg bg-slate-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-600 disabled:opacity-50">
+                  {telEmpresaGuardando ? "Guardando…" : "Guardar teléfono"}
+                </button>
+              </div>
+              {telEmpresaMensaje && (
+                <p className={`text-sm ${telEmpresaMensaje.ok ? "text-green-300" : "text-red-300"}`}>{telEmpresaMensaje.texto}</p>
               )}
             </div>
           )}
