@@ -393,7 +393,7 @@ export default function Vehiculos() {
 
   // ── Orden por columna ──────────────────────────────────────────────
   // Se pulsa la cabecera: primera vez ascendente, segunda descendente.
-  type Columna = "empresa" | "matricula" | "unidad" | "delegacion" | "marca" | "config" | "medida" | "km" | "estado" | "posicion";
+  type Columna = "empresa" | "matricula" | "unidad" | "delegacion" | "marca" | "config" | "medida" | "km" | "revision" | "estado" | "posicion";
   const [orden, setOrden] = useState<{ col: Columna; asc: boolean }>({ col: "matricula", asc: true });
 
   function ordenarPor(col: Columna) {
@@ -419,6 +419,8 @@ export default function Vehiculos() {
         case "config": return v.config_ejes?.nombre ?? "";
         case "medida": return medidaDe(v);
         case "km": return Number(v.km_actual) || 0;
+        // Fecha ISO: se ordena bien como texto. Sin revisión, al final.
+        case "revision": return revEstados.get(v.id)?.ultima_revision ?? "";
         case "estado": return (v.activo ? "Activo" : "Inactivo") + (v.en_seguimiento === false ? " · sin seguimiento" : "");
         // La posición no es un valor que se pueda comparar como texto: se
         // ordena por grupos y tiene su propio comparador, más abajo.
@@ -442,7 +444,7 @@ export default function Vehiculos() {
       if (typeof va === "number" && typeof vb === "number") return (va - vb) * signo;
       return String(va).localeCompare(String(vb), "es", { numeric: true, sensitivity: "base" }) * signo;
     });
-  }, [filtrados, orden, medidas, presencias, estados]);
+  }, [filtrados, orden, medidas, presencias, estados, revEstados]);
 
 
   return (
@@ -788,7 +790,7 @@ export default function Vehiculos() {
         <thead className="bg-slate-900"><tr>
           {([
             ["empresa", "Empresa"], ["matricula", "Matrícula"], ["unidad", "Nº unidad"], ["delegacion", "Delegación"],
-            ["marca", "Marca"], ["config", "Config."], ["medida", "Medida"], ["km", "Km"],
+            ["marca", "Marca"], ["config", "Config."], ["medida", "Medida"], ["km", "Km"], ["revision", "Últ. revisión"],
           ] as [Columna, string][]).map(([col, label]) => (
             <th key={col} className={`${thCls} cursor-pointer select-none hover:text-slate-100`}
               onClick={() => ordenarPor(col)} title={`Ordenar por ${label.toLowerCase()}`}>
@@ -809,8 +811,8 @@ export default function Vehiculos() {
           <th className={thCls}>Acciones</th>
         </tr></thead>
         <tbody>
-          {loading ? <tr><td className={tdCls + " text-slate-500"} colSpan={11}>Cargando…</td></tr>
-          : visibles.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={11}>Sin vehículos.</td></tr>
+          {loading ? <tr><td className={tdCls + " text-slate-500"} colSpan={12}>Cargando…</td></tr>
+          : visibles.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={12}>Sin vehículos.</td></tr>
           : visibles.map((v) => (
             <tr key={v.id} className={`border-t border-slate-700/60 ${revisarEnBase(v.id) ? "bg-amber-500/5" : ""}`}>
               <td className={tdCls + " text-slate-400"}>{v.empresa?.nombre ?? "—"}</td>
@@ -821,6 +823,20 @@ export default function Vehiculos() {
               <td className={tdCls + " text-slate-400"}>{v.config_ejes?.nombre ?? "—"}</td>
               <td className={tdCls + " text-slate-400"}>{v.medidas_por_eje ? "por eje" : (medidas.find((m) => m.id === v.medida_id)?.valor ?? "—")}</td>
               <td className={tdCls + " text-slate-400"}>{Number(v.km_actual).toLocaleString("es-ES")}</td>
+              {(() => {
+                // La fecha de la última revisión, en el color de su estado:
+                // rojo si toca (vencida o nunca revisado), ámbar si está próxima.
+                const r = revEstados.get(v.id);
+                const f = r?.ultima_revision ? r.ultima_revision.slice(0, 10).split("-").reverse().join("/") : null;
+                const cls = r?.estado === "vencida" || r?.estado === "sin_revision" ? "text-rose-300"
+                  : r?.estado === "proxima" ? "text-amber-300" : "text-slate-300";
+                const titulo = r ? [
+                  r.proxima_revision ? `Próxima: ${r.proxima_revision.slice(0, 10).split("-").reverse().join("/")}` : "",
+                  r.dias_vencido ? `${r.dias_vencido} días vencida` : "",
+                  r.ultima_revision_por ? `Por ${r.ultima_revision_por}` : "",
+                ].filter(Boolean).join(" · ") : "";
+                return <td className={`${tdCls} whitespace-nowrap tabular-nums ${cls}`} title={titulo || undefined}>{f ?? "nunca"}</td>;
+              })()}
               <td className={tdCls}>
                 {(() => {
                   const est = estados.get(v.id);
