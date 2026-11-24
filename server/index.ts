@@ -139,6 +139,7 @@ import {
 import { tipoDesdeKindAssist as tipoDocumentoDesdeKind } from "./documentos/tipos.ts";
 import { normalizarMatricula as normalizarMatriculaTc } from "./tyrecontrol/matricula.ts";
 import { INSTRUCCION_PAIS, paisParaGuardar } from "./matriculaPais.ts";
+import { horaCapturaValida, horaDeLaFirma } from "./horaCaptura.ts";
 import { decidirCambioDeDatos, mensajeDeCorreo } from "./tyrecontrol/usuarioDatos.ts";
 import { puedeVerEmpresaDeRequest as puedeVerEmpresaTc, puedeVerEmpresa as puedeVerEmpresaTcCtx, puedeOperarEnEmpresa } from "./tyrecontrol/empresaAcceso.ts";
 import {
@@ -10302,9 +10303,11 @@ app.post(
       }
 
       const result = await db.query(
-        `INSERT INTO roadside_assistance_files ("assistanceId", kind, url, "fileName", "createdAtMs", "detectedPlate")
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-        [id, kind, publicData.publicUrl, req.file.originalname, Date.now(), detectedPlate]
+        `INSERT INTO roadside_assistance_files ("assistanceId", kind, url, "fileName", "createdAtMs", "detectedPlate", "capturadaAtMs")
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+        [id, kind, publicData.publicUrl, req.file.originalname, Date.now(), detectedPlate,
+         // La hora en que se hizo en la tablet, que con la subida diferida no es la de ahora.
+         horaCapturaValida(req.body?.capturadaAtMs, Date.now())]
       );
 
       /*
@@ -11470,8 +11473,14 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
         if (a.conductorNombre || a.conductorDni) {
           doc.fontSize(10).font("Helvetica-Bold").text(a.conductorNombre ?? "", M, doc.y);
           doc.fontSize(9).font("Helvetica").text(`DNI / NIE: ${a.conductorDni ?? "-"}`);
-          doc.moveDown(0.4);
         }
+        // Cuándo firmó: la hora en que se hizo en la tablet (si llegó sin
+        // cobertura, la de llegada sería la de después).
+        const firmadaMs = horaDeLaFirma(signature);
+        if (firmadaMs) {
+          doc.fontSize(9).font("Helvetica").text(`Firmado: ${formatDateEs(firmadaMs)}`, M, doc.y);
+        }
+        doc.moveDown(0.4);
         try {
           const buffer = await fetchImageForPdf(signature.url);
           doc.image(buffer, M, doc.y, { fit: [360, 130] });
@@ -20690,6 +20699,8 @@ async function buildOtfReportPdfBuffer(id: number): Promise<Buffer | null> {
       doc.moveDown(0.3);
       if (data.firmanteNombre) row("Firmante:", data.firmanteNombre);
       if (data.firmanteDni) row("DNI:", data.firmanteDni);
+      // La firma se hace al cerrar la visita: es la hora de cierre.
+      if (data.finishedAtMs) row("Firmado:", formatDateEs(data.finishedAtMs));
       if (data.firmaUrl) {
         try {
           const buf = await fetchImageForPdf(data.firmaUrl);
