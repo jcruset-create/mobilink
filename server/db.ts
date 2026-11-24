@@ -727,6 +727,11 @@ export async function initDb() {
     ALTER TABLE roadside_assistance_files
     ADD COLUMN IF NOT EXISTS "detectedPlate" TEXT;
 
+    -- Cuándo se hizo la foto o la firma en la tablet (no cuándo llegó: sin
+    -- cobertura llega horas después). Ver server/horaCaptura.ts.
+    ALTER TABLE roadside_assistance_files
+    ADD COLUMN IF NOT EXISTS "capturadaAtMs" BIGINT;
+
     CREATE INDEX IF NOT EXISTS roadside_assistances_status_idx
       ON roadside_assistances(status);
 
