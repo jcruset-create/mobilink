@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { cuerpoDelPdf, mensajeDeError, type Peticion } from "./pdfConSesion.ts";
+import { cuerpoDelPdf, esPdf, mensajeDeError, VIDA_DIRECCION_MS, type Peticion } from "./pdfConSesion.ts";
 
 /** Una respuesta de `fetch` de mentira, con lo justo que se le mira. */
 function respuesta(
@@ -94,5 +94,32 @@ describe("la descarga del PDF", () => {
     await expect(cuerpoDelPdf(peticion, "/api/informe.pdf")).rejects.toThrow(
       "No se pudo abrir el informe (error 502)."
     );
+  });
+});
+
+describe("lo que llega tiene que ser un PDF", () => {
+  const bytes = (txt: string) => new TextEncoder().encode(txt);
+
+  it("reconoce la cabecera de un PDF", () => {
+    expect(esPdf(bytes("%PDF-1.3"))).toBe(true);
+    expect(esPdf(bytes("<!doctype html>"))).toBe(false);
+    expect(esPdf(bytes("%PD"))).toBe(false);
+  });
+
+  it("si el servidor devuelve otra cosa con un 200, se dice en vez de abrir un visor roto", async () => {
+    const html = new Blob(["<!doctype html><html></html>"], { type: "text/html" });
+    const peticion = vi.fn(async () => respuesta(200, { blob: html })) as unknown as Peticion;
+    await expect(cuerpoDelPdf(peticion, "/api/informe.pdf")).rejects.toThrow("no ha devuelto un PDF");
+  });
+
+  it("un PDF sin tipo sale con el tipo puesto, para que el visor lo reconozca", async () => {
+    const pdf = new Blob(["%PDF-1.3\n..."]);
+    const peticion = vi.fn(async () => respuesta(200, { blob: pdf })) as unknown as Peticion;
+    const r = await cuerpoDelPdf(peticion, "/api/informe.pdf");
+    expect(r.type).toBe("application/pdf");
+  });
+
+  it("la dirección del PDF vive bastante más que un minuto", () => {
+    expect(VIDA_DIRECCION_MS).toBeGreaterThanOrEqual(10 * 60_000);
   });
 });

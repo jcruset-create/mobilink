@@ -61,8 +61,34 @@ export async function cuerpoDelPdf(peticion: Peticion, url: string): Promise<Blo
     const cuerpo = await respuesta.json().catch(() => null);
     throw new Error(mensajeDeError(respuesta.status, cuerpo));
   }
-  return await respuesta.blob();
+  const datos = await respuesta.blob();
+  // Que sea un PDF de verdad: si no lo es, el visor enseña una carita triste
+  // sin decir nada, y así al menos se sabe qué ha pasado.
+  if (datos instanceof Blob) {
+    const cabecera = new Uint8Array(await datos.slice(0, 5).arrayBuffer());
+    if (!esPdf(cabecera)) {
+      throw new Error("El servidor no ha devuelto un PDF. Vuelve a intentarlo en un momento.");
+    }
+    // Con el tipo bien puesto, el visor del navegador (o el de Acrobat) lo reconoce.
+    if (datos.type !== "application/pdf") return new Blob([datos], { type: "application/pdf" });
+  }
+  return datos;
 }
+
+/** Un PDF empieza siempre por «%PDF-». */
+export function esPdf(cabecera: Uint8Array): boolean {
+  return cabecera.length >= 5 && String.fromCharCode(...cabecera.slice(0, 5)) === "%PDF-";
+}
+
+/*
+ * Cuánto vive la dirección `blob:` del PDF abierto. Antes era un minuto, y no
+ * basta: el visor de la extensión de Adobe Acrobat no carga el fichero hasta
+ * que se mira la pestaña, así que si se volvía a ella pasado ese minuto la
+ * dirección ya no existía y salía la carita triste. Pasaba sobre todo con el
+ * recorrido de la tablet, que tarda en generarse y da tiempo a irse a otra
+ * pestaña. Media hora es de sobra y lo que ocupa en memoria es el propio PDF.
+ */
+export const VIDA_DIRECCION_MS = 30 * 60_000;
 
 /**
  * Abre el PDF en otra pestaña.
@@ -102,8 +128,8 @@ export async function abrirPdfConSesion(
     /*
      * La URL del objeto se suelta tarde, no al salir de aquí: la pestaña
      * todavía la está cargando y revocarla de inmediato deja el visor en
-     * blanco. Un minuto es de sobra para que el navegador tenga el fichero.
+     * blanco. Ver VIDA_DIRECCION_MS.
      */
-    if (direccion) window.setTimeout(() => URL.revokeObjectURL(direccion), 60_000);
+    if (direccion) window.setTimeout(() => URL.revokeObjectURL(direccion), VIDA_DIRECCION_MS);
   }
 }
