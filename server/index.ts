@@ -3015,7 +3015,9 @@ app.get("/api/techs/vinculo-core", requireAdminRole, async (_req, res) => {
   try {
     const { numero } = await hayCore(db);
     const [tecnicos, empleados] = await Promise.all([
-      db.query(`SELECT name, employee_id FROM techs ORDER BY name`),
+      // Solo los de alta: un técnico dado de baja no tiene nada que conciliar
+      // con Core, y salía como «Sin candidato» para siempre.
+      db.query(`SELECT name, employee_id FROM techs WHERE activo IS NOT FALSE ORDER BY name`),
       db.query(
         `SELECT id, nombre, apellidos, codigo_operario,
                 ${numero ? "numero_trabajador" : "NULL::text AS numero_trabajador"}
