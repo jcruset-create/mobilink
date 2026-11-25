@@ -8,6 +8,8 @@ import { Donut, ColumnChart } from "../../components/informes/charts";
 import { FiltroActivo } from "../../components/informes/KpiCard";
 import { TableWrap, tdCls, thCls } from "../../components/ui";
 import { descargarCSV } from "../../utils/exportar";
+import { useOrdenColumnas } from "../../hooks/useOrdenColumnas";
+import { CabeceraOrden } from "../../components/OrdenColumnas";
 import { vehiculosDeEstado, NOMBRE_ESTADO_FLOTA } from "../../services/cuadrosInformes";
 
 const COLOR_ESTADO: Record<EstadoDeFlota, string> = {
@@ -80,6 +82,8 @@ export default function InformeEstadoFlota() {
   // La lista de vehículos, con lo peor primero. Solo si la base la manda.
   const lista = flota?.vehiculos;
   const visibles = useMemo(() => (lista ? vehiculosDeEstado(lista, soloEstado) : []), [lista, soloEstado]);
+  // Tocar «Matrícula» o «Unidad» reordena la tabla (el CSV no cambia).
+  const orden = useOrdenColumnas(visibles, { matricula: (v) => v.matricula, unidad: (v) => v.numero_unidad });
   const alternar = (e: EstadoDeFlota) => setSoloEstado((actual) => (actual === e ? null : e));
   const clic = (e: EstadoDeFlota) => (lista ? () => alternar(e) : undefined);
 
@@ -144,7 +148,7 @@ export default function InformeEstadoFlota() {
           </div>
           <TableWrap>
             <thead className="bg-slate-900"><tr>
-              <th className={thCls}>Matrícula</th><th className={thCls}>Unidad</th><th className={thCls}>Estado</th>
+              <th className={thCls}><CabeceraOrden col="matricula" orden={orden}>Matrícula</CabeceraOrden></th><th className={thCls}><CabeceraOrden col="unidad" orden={orden}>Unidad</CabeceraOrden></th><th className={thCls}>Estado</th>
               <th className={thCls}>Profundidad mínima</th><th className={thCls}>Última revisión</th>
             </tr></thead>
             <tbody>
@@ -152,7 +156,7 @@ export default function InformeEstadoFlota() {
                 <tr><td className={tdCls + " text-slate-500"} colSpan={5}>
                   {soloEstado ? `Ningún vehículo en «${NOMBRE_ESTADO_FLOTA[soloEstado]}».` : "Sin vehículos en seguimiento."}
                 </td></tr>
-              ) : visibles.map((v) => (
+              ) : orden.filas.map((v) => (
                 <tr key={v.vehiculo_id} className="border-t border-slate-700/60">
                   <td className={tdCls + " font-semibold"}>
                     <Link to={`/tyrecontrol/vehiculos/${v.vehiculo_id}`} className="text-sky-300 hover:underline">{v.matricula || "sin matrícula"}</Link>
