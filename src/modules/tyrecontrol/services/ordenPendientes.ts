@@ -103,11 +103,26 @@ export const siguienteSentido = (s: SentidoUnidad): SentidoUnidad => (s === null
  * final, también de mayor a menor: un hueco no es ni el más alto ni el más bajo.
  */
 export function ordenarPorUnidad<T>(filas: T[], sentido: SentidoUnidad, unidad: (f: T) => string | null): T[] {
+  return ordenarPorTexto(filas, sentido, unidad);
+}
+
+/**
+ * Lo mismo para la matrícula. «—» (revisión sin vehículo) cuenta como vacío y
+ * va al final. Se compara como la lee una persona (`compararMatricula`).
+ */
+export function ordenarPorMatricula<T>(filas: T[], sentido: SentidoUnidad, matricula: (f: T) => string | null): T[] {
+  return ordenarPorTexto(filas, sentido, (f) => {
+    const m = (matricula(f) ?? "").trim();
+    return m === "—" ? "" : m;
+  });
+}
+
+function ordenarPorTexto<T>(filas: T[], sentido: SentidoUnidad, valor: (f: T) => string | null): T[] {
   if (!sentido) return filas;
   return [...filas].sort((x, y) => {
-    const a = unidad(x), b = unidad(y);
+    const a = valor(x), b = valor(y);
     const vacioA = !(a ?? "").trim(), vacioB = !(b ?? "").trim();
-    if (vacioA || vacioB) return compararUnidad(a, b);
+    if (vacioA || vacioB) return compararUnidad(a, b); // los vacíos, al final
     return sentido === "asc" ? compararUnidad(a, b) : compararUnidad(b, a);
   });
 }
