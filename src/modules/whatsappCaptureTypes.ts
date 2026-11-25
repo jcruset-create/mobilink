@@ -58,6 +58,8 @@ export type WhatsAppAiSuggestions = {
   // Vehículo
   plate?: string | null;
   plateRemolque?: string | null;
+  /** País de la matrícula del camión leído en la banda azul («I», «F»…). */
+  paisMatricula?: string | null;
   vehicleBrand?: string | null;
   vehicleModel?: string | null;
   vehicleDescription?: string | null;
