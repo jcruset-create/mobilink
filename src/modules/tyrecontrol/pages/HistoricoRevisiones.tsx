@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { ordenarPorUnidad, siguienteSentido, type SentidoUnidad } from "../services/ordenPendientes";
 import { useNavigate } from "react-router-dom";
 import { listarRevisionesHistorico, listarEmpresas, listarUsuarios, listarDetalleRevision, listarIncidenciasDeRevision, listarTiposIncidencia, listarMotivosPendiente, abrirInformeRevisionesPdf, umbralDesgasteIrregular } from "../services/data";
 import CeldaProfundidad from "../components/CeldaProfundidad";
@@ -287,6 +288,9 @@ export default function HistoricoRevisiones() {
   // (y el total) son de lo cargado, no de todo lo que cumple el filtro: se
   // dice, en vez de dar un número que parece completo y no lo es.
   const topeAlcanzado = filas.length >= 200;
+  // Tocar «Nº unidad»: de mayor a menor, de menor a mayor, y como estaba.
+  const [ordenUnidad, setOrdenUnidad] = useState<SentidoUnidad>(null);
+  const filasVistas = useMemo(() => ordenarPorUnidad(filas, ordenUnidad, (f) => f.unidad), [filas, ordenUnidad]);
 
   const btnCls = (activo: boolean) =>
     `rounded-lg px-3 py-1.5 text-sm font-bold ${activo ? "bg-sky-600 text-white" : "bg-slate-800 text-slate-300 hover:bg-slate-700"}`;
@@ -390,7 +394,14 @@ export default function HistoricoRevisiones() {
       <TableWrap>
         <thead className="bg-slate-900"><tr>
           <th className={thCls}>Fecha</th><th className={thCls}>Hora</th><th className={thCls}>Matrícula</th>
-          <th className={thCls}>Nº unidad</th>
+          <th className={thCls}>
+            <button type="button" onClick={() => setOrdenUnidad(siguienteSentido)}
+              title={ordenUnidad === null ? "Ordenar por nº de unidad, de mayor a menor"
+                : ordenUnidad === "desc" ? "Ordenar de menor a mayor" : "Volver al orden de siempre (por fecha)"}
+              className={`inline-flex items-center gap-1 uppercase hover:text-slate-100 ${ordenUnidad ? "text-sky-300" : ""}`}>
+              Nº unidad <span aria-hidden>{ordenUnidad === "desc" ? "▼" : ordenUnidad === "asc" ? "▲" : "↕"}</span>
+            </button>
+          </th>
           <th className={thCls}>Cliente</th><th className={thCls}>Base</th><th className={thCls}>Operario</th>
           {/* Lo que tardó, de abrir la revisión a cerrarla. Va pegada a
               Operario porque es su dato: dice cuánto le costó a esa persona,
@@ -404,7 +415,7 @@ export default function HistoricoRevisiones() {
             <tr><td className={tdCls + " text-slate-500"} colSpan={12}>Cargando…</td></tr>
           ) : filas.length === 0 ? (
             <tr><td className={tdCls + " text-slate-500"} colSpan={12}>Sin revisiones en este periodo.</td></tr>
-          ) : filas.map((f) => {
+          ) : filasVistas.map((f) => {
             const meta = ESTADO_META[f.estado] ?? { label: f.estado, cls: "bg-slate-500/15 text-slate-300" };
             return (
               <tr key={f.id} className="border-t border-slate-700/60">
