@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ordenarPorUnidad, siguienteSentido, type SentidoUnidad } from "../services/ordenPendientes";
+import { ordenarPorMatricula, ordenarPorUnidad, siguienteSentido, type SentidoUnidad } from "../services/ordenPendientes";
 import { useNavigate } from "react-router-dom";
 import { listarRevisionesHistorico, listarEmpresas, listarUsuarios, listarDetalleRevision, listarIncidenciasDeRevision, listarTiposIncidencia, listarMotivosPendiente, abrirInformeRevisionesPdf, umbralDesgasteIrregular } from "../services/data";
 import CeldaProfundidad from "../components/CeldaProfundidad";
@@ -288,9 +288,17 @@ export default function HistoricoRevisiones() {
   // (y el total) son de lo cargado, no de todo lo que cumple el filtro: se
   // dice, en vez de dar un número que parece completo y no lo es.
   const topeAlcanzado = filas.length >= 200;
-  // Tocar «Nº unidad»: de mayor a menor, de menor a mayor, y como estaba.
-  const [ordenUnidad, setOrdenUnidad] = useState<SentidoUnidad>(null);
-  const filasVistas = useMemo(() => ordenarPorUnidad(filas, ordenUnidad, (f) => f.unidad), [filas, ordenUnidad]);
+  // Tocar «Matrícula» o «Nº unidad»: de mayor a menor, de menor a mayor, y
+  // como estaba. Una sola columna a la vez: tocar la otra empieza de cero.
+  const [orden, setOrden] = useState<{ col: "matricula" | "unidad"; sentido: SentidoUnidad }>({ col: "unidad", sentido: null });
+  const tocarCabecera = (col: "matricula" | "unidad") =>
+    setOrden((o) => ({ col, sentido: siguienteSentido(o.col === col ? o.sentido : null) }));
+  const filasVistas = useMemo(
+    () => orden.col === "unidad"
+      ? ordenarPorUnidad(filas, orden.sentido, (f) => f.unidad)
+      : ordenarPorMatricula(filas, orden.sentido, (f) => f.matricula),
+    [filas, orden],
+  );
 
   const btnCls = (activo: boolean) =>
     `rounded-lg px-3 py-1.5 text-sm font-bold ${activo ? "bg-sky-600 text-white" : "bg-slate-800 text-slate-300 hover:bg-slate-700"}`;
@@ -393,15 +401,21 @@ export default function HistoricoRevisiones() {
 
       <TableWrap>
         <thead className="bg-slate-900"><tr>
-          <th className={thCls}>Fecha</th><th className={thCls}>Hora</th><th className={thCls}>Matrícula</th>
-          <th className={thCls}>
-            <button type="button" onClick={() => setOrdenUnidad(siguienteSentido)}
-              title={ordenUnidad === null ? "Ordenar por nº de unidad, de mayor a menor"
-                : ordenUnidad === "desc" ? "Ordenar de menor a mayor" : "Volver al orden de siempre (por fecha)"}
-              className={`inline-flex items-center gap-1 uppercase hover:text-slate-100 ${ordenUnidad ? "text-sky-300" : ""}`}>
-              Nº unidad <span aria-hidden>{ordenUnidad === "desc" ? "▼" : ordenUnidad === "asc" ? "▲" : "↕"}</span>
-            </button>
-          </th>
+          <th className={thCls}>Fecha</th><th className={thCls}>Hora</th>
+          {(["matricula", "unidad"] as const).map((col) => {
+            const s = orden.col === col ? orden.sentido : null;
+            const nombre = col === "matricula" ? "Matrícula" : "Nº unidad";
+            return (
+              <th key={col} className={thCls}>
+                <button type="button" onClick={() => tocarCabecera(col)}
+                  title={s === null ? `Ordenar por ${nombre.toLowerCase()}, de mayor a menor`
+                    : s === "desc" ? "Ordenar de menor a mayor" : "Volver al orden de siempre (por fecha)"}
+                  className={`inline-flex items-center gap-1 uppercase hover:text-slate-100 ${s ? "text-sky-300" : ""}`}>
+                  {nombre} <span aria-hidden>{s === "desc" ? "▼" : s === "asc" ? "▲" : "↕"}</span>
+                </button>
+              </th>
+            );
+          })}
           <th className={thCls}>Cliente</th><th className={thCls}>Base</th><th className={thCls}>Operario</th>
           {/* Lo que tardó, de abrir la revisión a cerrarla. Va pegada a
               Operario porque es su dato: dice cuánto le costó a esa persona,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  ordenarPorUnidad, siguienteSentido,
+  ordenarPorMatricula, ordenarPorUnidad, siguienteSentido,
   compararMatricula, compararPosicion, compararUnidad, grupoDeSitio,
   ordenarPendientes, recuentoPorGrupo, sitioDeVehiculo,
   type FilaPendiente, type Sitio,
@@ -211,5 +211,15 @@ describe("ordenarPorUnidad (cabecera «Nº unidad» del histórico)", () => {
     expect(siguienteSentido(null)).toBe("desc");
     expect(siguienteSentido("desc")).toBe("asc");
     expect(siguienteSentido("asc")).toBeNull();
+  });
+});
+
+describe("ordenarPorMatricula (cabecera «Matrícula» del histórico)", () => {
+  const filas = [{ m: "6495HTN" }, { m: "—" }, { m: "2302HVH" }, { m: "9266KKK" }];
+  const m = (f: { m: string }) => f.m;
+  it("primer toque de mayor a menor, segundo de menor a mayor, sin vehículo al final", () => {
+    expect(ordenarPorMatricula(filas, "desc", m).map(m)).toEqual(["9266KKK", "6495HTN", "2302HVH", "—"]);
+    expect(ordenarPorMatricula(filas, "asc", m).map(m)).toEqual(["2302HVH", "6495HTN", "9266KKK", "—"]);
+    expect(ordenarPorMatricula(filas, null, m)).toBe(filas);
   });
 });
