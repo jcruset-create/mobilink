@@ -58,7 +58,7 @@ export default function EstadisticasClientePage() {
     let vivo = true;
     setDatos(null);
     const qs = new URLSearchParams({ cliente, desde: String(p.desdeMs), hasta: String(p.hastaMs) });
-    fetch(`${API_BASE}/api/roadside-assistances/estadisticas/cliente?${qs}`, { headers: getAdminHeaders() })
+    apiFetch(`${API_BASE}/api/roadside-assistances/estadisticas/cliente?${qs}`, { headers: getAdminHeaders() })
       .then(async (r) => {
         const d = await r.json().catch(() => null);
         if (!r.ok) throw new Error(d?.error ?? "Error de servidor");

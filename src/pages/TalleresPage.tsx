@@ -4,6 +4,7 @@
  * los talleres y se asigna cada técnico a un taller.
  */
 
+import { apiFetch } from "../modules/apiFetch";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, RefreshCw, Store, Plus, User, Building2, ShieldCheck } from "lucide-react";
@@ -51,7 +52,7 @@ export default function TalleresPage() {
   const load = useCallback(async () => {
     setError("");
     try {
-      const res = await fetch(`${API_BASE}/api/assist-talleres`, { headers: getAdminHeaders() as HeadersInit });
+      const res = await apiFetch(`${API_BASE}/api/assist-talleres`, { headers: getAdminHeaders() as HeadersInit });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Error cargando");
       setTalleres(data.talleres ?? []);
@@ -59,7 +60,7 @@ export default function TalleresPage() {
       setTechs(data.techs ?? []);
       // Usuarios del panel web (hub) — best-effort, no bloquea la pantalla
       try {
-        const ru = await fetch(`${API_BASE}/api/assist-panel-users`, { headers: getAdminHeaders() as HeadersInit });
+        const ru = await apiFetch(`${API_BASE}/api/assist-panel-users`, { headers: getAdminHeaders() as HeadersInit });
         const du = await ru.json();
         if (ru.ok) setPanelUsers(du.usuarios ?? []);
       } catch { /* opcional */ }
@@ -76,7 +77,7 @@ export default function TalleresPage() {
     if (!nuevoNombre.trim()) { setError("El nombre del taller es obligatorio"); return; }
     setBusy("crear");
     try {
-      const res = await fetch(`${API_BASE}/api/assist-talleres`, {
+      const res = await apiFetch(`${API_BASE}/api/assist-talleres`, {
         method: "POST",
         headers: getAdminHeaders({ "Content-Type": "application/json" }) as HeadersInit,
         body: JSON.stringify({
@@ -98,7 +99,7 @@ export default function TalleresPage() {
   async function toggleActivo(t: Taller) {
     setBusy(`t${t.id}`);
     try {
-      await fetch(`${API_BASE}/api/assist-talleres/${t.id}`, {
+      await apiFetch(`${API_BASE}/api/assist-talleres/${t.id}`, {
         method: "PATCH",
         headers: getAdminHeaders({ "Content-Type": "application/json" }) as HeadersInit,
         body: JSON.stringify({ activo: !t.activo }),
@@ -110,7 +111,7 @@ export default function TalleresPage() {
   async function cambiarEmpresa(t: Taller, licenseId: string) {
     setBusy(`e${t.id}`);
     try {
-      await fetch(`${API_BASE}/api/assist-talleres/${t.id}`, {
+      await apiFetch(`${API_BASE}/api/assist-talleres/${t.id}`, {
         method: "PATCH",
         headers: getAdminHeaders({ "Content-Type": "application/json" }) as HeadersInit,
         body: JSON.stringify({ licenseId: licenseId ? Number(licenseId) : null }),
@@ -123,7 +124,7 @@ export default function TalleresPage() {
     setBusy(`tech${name}`);
     setTechs((prev) => prev.map((x) => (x.name === name ? { ...x, tallerId: tallerId ? Number(tallerId) : null } : x)));
     try {
-      await fetch(`${API_BASE}/api/assist-talleres/tech/${encodeURIComponent(name)}`, {
+      await apiFetch(`${API_BASE}/api/assist-talleres/tech/${encodeURIComponent(name)}`, {
         method: "PATCH",
         headers: getAdminHeaders({ "Content-Type": "application/json" }) as HeadersInit,
         body: JSON.stringify({ tallerId: tallerId ? Number(tallerId) : null }),
@@ -137,7 +138,7 @@ export default function TalleresPage() {
     const nuevo = { ...u, ...cambios };
     setPanelUsers((prev) => prev.map((x) => (x.userId === u.userId ? nuevo : x)));
     try {
-      await fetch(`${API_BASE}/api/assist-panel-users/${encodeURIComponent(u.userId)}`, {
+      await apiFetch(`${API_BASE}/api/assist-panel-users/${encodeURIComponent(u.userId)}`, {
         method: "PATCH",
         headers: getAdminHeaders({ "Content-Type": "application/json" }) as HeadersInit,
         body: JSON.stringify({ tallerId: nuevo.tallerId, esAdmin: nuevo.esAdmin }),

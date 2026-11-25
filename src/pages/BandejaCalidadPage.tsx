@@ -12,6 +12,7 @@
  * hacer falta de verdad.
  */
 
+import { apiFetch } from "../modules/apiFetch";
 import { useEffect, useMemo, useState } from "react";
 
 import AssistSidebar from "../components/AssistSidebar";
@@ -90,7 +91,7 @@ export default function BandejaCalidadPage() {
 
   useEffect(() => {
     let vivo = true;
-    fetch(`${API_BASE}/api/calidad/casos?${consulta}`, { headers: getAdminHeaders() })
+    apiFetch(`${API_BASE}/api/calidad/casos?${consulta}`, { headers: getAdminHeaders() })
       .then((r) => r.json())
       .then((b) => { if (vivo) setBandeja(b); })
       .catch(() => { if (vivo) setBandeja(null); });
@@ -265,7 +266,7 @@ function PanelCaso({ casoId, onCerrar, onCambio }: {
 
   useEffect(() => {
     let vivo = true;
-    fetch(`${API_BASE}/api/calidad/casos/${casoId}`, { headers: getAdminHeaders() })
+    apiFetch(`${API_BASE}/api/calidad/casos/${casoId}`, { headers: getAdminHeaders() })
       .then((r) => r.json())
       .then((x) => { if (vivo) setD(x); })
       .catch(() => { if (vivo) setD(null); });
@@ -276,7 +277,7 @@ function PanelCaso({ casoId, onCerrar, onCambio }: {
     if (ocupado) return;
     setOcupado(true); setError(null);
     try {
-      const r = await fetch(`${API_BASE}/api/calidad/casos/${casoId}${ruta}`, {
+      const r = await apiFetch(`${API_BASE}/api/calidad/casos/${casoId}${ruta}`, {
         method: ruta ? "POST" : "PATCH",
         headers: { "Content-Type": "application/json", ...getAdminHeaders() },
         body: JSON.stringify(cuerpo),

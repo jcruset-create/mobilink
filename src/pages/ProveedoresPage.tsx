@@ -10,6 +10,7 @@
  * entrada. Aquí no se copia nada.
  */
 
+import { apiFetch } from "../modules/apiFetch";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, RefreshCw, Building2, Plus, Search } from "lucide-react";
@@ -118,7 +119,7 @@ export default function ProveedoresPage() {
   const [busy, setBusy] = useState(false);
 
   const pedir = useCallback(async (ruta: string, init?: RequestInit) => {
-    const res = await fetch(`${API_BASE}${ruta}`, {
+    const res = await apiFetch(`${API_BASE}${ruta}`, {
       ...init,
       headers: { "Content-Type": "application/json", ...getAdminHeaders() },
     });
