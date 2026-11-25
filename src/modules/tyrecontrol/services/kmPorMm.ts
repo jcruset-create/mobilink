@@ -27,6 +27,8 @@ export interface EjeKmPorMm {
   /** `null` cuando la medición no tenía posición conocida. */
   eje: number | null;
   tramos: number;
+  /** De ellos, los que parten de la profundidad de nueva (seguimiento desde origen). */
+  tramosEstimados: number;
   kmPorMm: number;
   mediana: number;
 }
@@ -37,6 +39,8 @@ export interface ModeloKmPorMm {
   marca: string;
   modelo: string;
   tramos: number;
+  /** Tramos que parten de la profundidad de nueva, no de una medición real. */
+  tramosEstimados: number;
   neumaticos: number;
   kmTotales: number;
   mmTotales: number;
@@ -86,7 +90,7 @@ export function agruparPorModelo(filas: KmPorMmFila[]): ModeloKmPorMm[] {
     if (!m) {
       m = {
         clave, marca, modelo,
-        tramos: 0, neumaticos: num(f.neumaticos_modelo),
+        tramos: 0, tramosEstimados: 0, neumaticos: num(f.neumaticos_modelo),
         kmTotales: 0, mmTotales: 0, kmPorMm: 0,
         mmNuevo: numONulo(f.mm_nuevo), mmRetirada: numONulo(f.mm_retirada),
         vidaKm: null, ejes: [],
@@ -97,11 +101,13 @@ export function agruparPorModelo(filas: KmPorMmFila[]): ModeloKmPorMm[] {
     const km = num(f.km_totales);
     const mm = num(f.mm_totales);
     m.tramos += num(f.tramos);
+    m.tramosEstimados += num(f.tramos_estimados);
     m.kmTotales += km;
     m.mmTotales += mm;
     m.ejes.push({
       eje: f.eje === null || f.eje === undefined ? null : num(f.eje),
       tramos: num(f.tramos),
+      tramosEstimados: num(f.tramos_estimados),
       kmPorMm: num(f.km_por_mm),
       mediana: num(f.mediana),
     });
