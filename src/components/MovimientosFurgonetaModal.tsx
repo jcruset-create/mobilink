@@ -70,7 +70,7 @@ export default function MovimientosFurgonetaModal({
 
   useEffect(() => {
     let vivo = true;
-    fetch(`${API_BASE}/api/roadside-assistances/${assistanceId}/movimientos`, { headers: getAdminHeaders() })
+    apiFetch(`${API_BASE}/api/roadside-assistances/${assistanceId}/movimientos`, { headers: getAdminHeaders() })
       .then(async (r) => {
         const d = await r.json().catch(() => null);
         if (!r.ok) throw new Error(d?.error ?? "Error de servidor");

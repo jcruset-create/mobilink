@@ -8,6 +8,7 @@
  * Misma tabla que Connect Pro: una sola verdad, dos puertas de entrada.
  */
 
+import { apiFetch } from "../modules/apiFetch";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, RefreshCw, Contact, Plus, Search } from "lucide-react";
@@ -91,7 +92,7 @@ export default function ClientesFacturacionPage() {
   const [busy, setBusy] = useState(false);
 
   const pedir = useCallback(async (ruta: string, init?: RequestInit) => {
-    const res = await fetch(`${API_BASE}${ruta}`, {
+    const res = await apiFetch(`${API_BASE}${ruta}`, {
       ...init,
       headers: { "Content-Type": "application/json", ...getAdminHeaders() },
     });

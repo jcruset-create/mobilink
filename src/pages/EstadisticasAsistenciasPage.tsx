@@ -5,6 +5,7 @@
  * control de calidad. Con filtros y exportación a Excel.
  */
 
+import { apiFetch } from "../modules/apiFetch";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import * as XLSX from "xlsx";
@@ -52,7 +53,7 @@ export default function EstadisticasAsistenciasPage() {
     if (!p) return;
     setCargando(true);
     try {
-      const r = await fetch(`${API_BASE}/api/roadside-assistances/estadisticas?${consultaEstadisticas(p, filtros)}`, { headers: getAdminHeaders() });
+      const r = await apiFetch(`${API_BASE}/api/roadside-assistances/estadisticas?${consultaEstadisticas(p, filtros)}`, { headers: getAdminHeaders() });
       const d = await r.json().catch(() => null);
       if (!r.ok) throw new Error(d?.error ?? "Error de servidor");
       setDatos(d);
@@ -72,7 +73,7 @@ export default function EstadisticasAsistenciasPage() {
     if (!p) return;
     setExportando(true);
     try {
-      const r = await fetch(`${API_BASE}/api/roadside-assistances/estadisticas?${consultaEstadisticas(p, filtros, { detalle: "1" })}`, { headers: getAdminHeaders() });
+      const r = await apiFetch(`${API_BASE}/api/roadside-assistances/estadisticas?${consultaEstadisticas(p, filtros, { detalle: "1" })}`, { headers: getAdminHeaders() });
       const d: Respuesta = await r.json();
       if (!r.ok) throw new Error((d as any)?.error ?? "Error de servidor");
       const wb = XLSX.utils.book_new();

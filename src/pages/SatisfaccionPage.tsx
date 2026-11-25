@@ -24,6 +24,7 @@
  * que exista el campo que falta, desaparecen solas.
  */
 
+import { apiFetch } from "../modules/apiFetch";
 import { useEffect, useMemo, useState } from "react";
 
 import AssistSidebar from "../components/AssistSidebar";
@@ -302,7 +303,7 @@ export default function SatisfaccionPage() {
 
   useEffect(() => {
     let vivo = true;
-    fetch(`${API_BASE}/api/calidad/metricas?${consulta}`, { headers: getAdminHeaders() })
+    apiFetch(`${API_BASE}/api/calidad/metricas?${consulta}`, { headers: getAdminHeaders() })
       .then(async (r) => {
         const j = await r.json();
         if (!r.ok) throw new Error(j?.error || "No se han podido cargar las métricas");
@@ -538,7 +539,7 @@ function PanelConfig() {
 
   useEffect(() => {
     let vivo = true;
-    fetch(`${API_BASE}/api/calidad/config`, { headers: getAdminHeaders() })
+    apiFetch(`${API_BASE}/api/calidad/config`, { headers: getAdminHeaders() })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error("Sin permiso para ver la configuración"))))
       .then((j) => { if (vivo) { setConfig(j.config); setTecnico(j.tecnico); } })
       .catch(() => { /* Un supervisor sin permiso no ve el bloque, y ya está. */ });
@@ -548,7 +549,7 @@ function PanelConfig() {
   async function guardar(cambio: Partial<Config>) {
     setGuardando(true);
     try {
-      const r = await fetch(`${API_BASE}/api/calidad/config`, {
+      const r = await apiFetch(`${API_BASE}/api/calidad/config`, {
         method: "PUT",
         headers: { ...getAdminHeaders(), "content-type": "application/json" },
         body: JSON.stringify(cambio),

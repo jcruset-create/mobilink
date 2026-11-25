@@ -4,6 +4,7 @@
  * Por defecto nada se comparte hasta que se active aquí.
  */
 
+import { apiFetch } from "../modules/apiFetch";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, RefreshCw, Truck, User, Wifi } from "lucide-react";
@@ -37,7 +38,7 @@ export default function CentralSharingPage() {
   const load = useCallback(async () => {
     setError("");
     try {
-      const res = await fetch(`${API_BASE}/api/central-sharing`, { headers: getAdminHeaders() as HeadersInit });
+      const res = await apiFetch(`${API_BASE}/api/central-sharing`, { headers: getAdminHeaders() as HeadersInit });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Error cargando");
       setVehicles(data.vehicles ?? []);
@@ -55,7 +56,7 @@ export default function CentralSharingPage() {
     setBusy(`v${v.id}`);
     setVehicles((prev) => prev.map((x) => (x.id === v.id ? { ...x, compartidoCentral: !x.compartidoCentral } : x)));
     try {
-      await fetch(`${API_BASE}/api/central-sharing/vehicle/${v.id}`, {
+      await apiFetch(`${API_BASE}/api/central-sharing/vehicle/${v.id}`, {
         method: "PATCH",
         headers: getAdminHeaders({ "Content-Type": "application/json" }) as HeadersInit,
         body: JSON.stringify({ compartido: !v.compartidoCentral }),
@@ -67,7 +68,7 @@ export default function CentralSharingPage() {
     setBusy(`t${t.name}`);
     setTechs((prev) => prev.map((x) => (x.name === t.name ? { ...x, compartidoCentral: !x.compartidoCentral } : x)));
     try {
-      await fetch(`${API_BASE}/api/central-sharing/tech/${encodeURIComponent(t.name)}`, {
+      await apiFetch(`${API_BASE}/api/central-sharing/tech/${encodeURIComponent(t.name)}`, {
         method: "PATCH",
         headers: getAdminHeaders({ "Content-Type": "application/json" }) as HeadersInit,
         body: JSON.stringify({ compartido: !t.compartidoCentral }),
@@ -78,7 +79,7 @@ export default function CentralSharingPage() {
   async function bulk(tipo: "vehicles" | "techs", compartido: boolean) {
     setBusy(`bulk-${tipo}`);
     try {
-      await fetch(`${API_BASE}/api/central-sharing/bulk`, {
+      await apiFetch(`${API_BASE}/api/central-sharing/bulk`, {
         method: "POST",
         headers: getAdminHeaders({ "Content-Type": "application/json" }) as HeadersInit,
         body: JSON.stringify({ tipo, compartido }),
