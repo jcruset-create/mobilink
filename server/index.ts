@@ -159,6 +159,8 @@ import { createPresenciaRouter } from "./tyrecontrol/presencia/router.ts";
 import { createSateliteRouter } from "./tyrecontrol/satelite/router.ts";
 import { createUbicacionRouter } from "./tyrecontrol/ubicacion/router.ts";
 import { createKilometrajeMensualRouter } from "./tyrecontrol/kilometrajeMensual/router.ts";
+import { createPorDondeRuedaRouter } from "./tyrecontrol/porDondeRueda/router.ts";
+import { startPorDondeRueda } from "./tyrecontrol/porDondeRueda/worker.ts";
 import { createAltaOperativaRouter } from "./tyrecontrol/altaOperativa/router.ts";
 import { createKilometrajeActualRouter } from "./tyrecontrol/kilometrajeActual/router.ts";
 import { createKmFichaRouter } from "./tyrecontrol/kilometrajeRevisiones/router.ts";
@@ -23839,6 +23841,7 @@ app.use("/api/tyrecontrol/satelite", createSateliteRouter());
 app.use("/api/tyrecontrol/ubicacion", createUbicacionRouter());
 // Kilómetros mensuales: mismo motivo que la conciliación para ir ANTES del router general.
 app.use("/api/tyrecontrol/kilometraje-mensual", createKilometrajeMensualRouter());
+app.use("/api/tyrecontrol/por-donde-rueda", createPorDondeRuedaRouter());
 // El alta operativa va ANTES del router general de TyreControl, igual que el
 // de kilometraje mensual: si no, la ruta genérica se lo come.
 app.use("/api/tyrecontrol/alta-operativa", createAltaOperativaRouter());
@@ -24191,6 +24194,7 @@ initDb()
       startRellenoKilometraje();
       startRellenoRevisiones(); // kilometraje del histórico de revisiones
       startRellenoDiario(); // y cada mañana, el de las revisiones de los últimos días
+      startPorDondeRueda(); // km por tipo de vía de los vehículos marcados, cada mañana
     });
   })
   .catch((error) => {

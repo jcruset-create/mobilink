@@ -1,4 +1,4 @@
-import { Home, LayoutDashboard, Users, Building2, MapPin, Truck, CircleDot, Wrench, Settings, User, ClipboardList, ClipboardCheck, ShieldCheck, Link2, Ruler, BookOpen, Bluetooth, BarChart3, Upload, Archive, CalendarCheck, AlertTriangle, History, HelpCircle, QrCode, Gauge, FileScan, type LucideIcon } from "lucide-react";
+import { Home, LayoutDashboard, Users, Building2, MapPin, Truck, CircleDot, Wrench, Settings, User, ClipboardList, ClipboardCheck, ShieldCheck, Link2, Ruler, BookOpen, Bluetooth, BarChart3, Upload, Archive, CalendarCheck, AlertTriangle, History, HelpCircle, QrCode, Gauge, FileScan, Route, type LucideIcon } from "lucide-react";
 import type { Rol } from "../types";
 
 /**
@@ -46,6 +46,7 @@ export const NAV: NavItem[] = [
   { key: "vehiculos-en-bases", path: "vehiculos-en-bases", label: "Vehículos en bases", icon: MapPin, grupo: "flota", roles: ["administrador", "operador"] },
   { key: "ranking-kilometraje", path: "ranking-kilometraje", label: "Kilómetros por vehículo", icon: Gauge, grupo: "flota", roles: ["administrador"] },
   { key: "km-flota", path: "km-flota", label: "Km de la flota", icon: Gauge, grupo: "flota", roles: ["administrador"] },
+  { key: "por-donde-ruedan", path: "por-donde-ruedan", label: "Por dónde ruedan", icon: Route, grupo: "flota", roles: ["administrador"] },
   { key: "disponibles-revisar", path: "disponibles-revisar", label: "Disponibles para revisar", icon: CalendarCheck, grupo: "revisiones", roles: ["administrador", "operador"] },
   { key: "control-tacografos", path: "control-tacografos", label: "Control de tacógrafos", icon: Gauge, grupo: "flota", roles: ["administrador"] },
   { key: "propuestas-medida", path: "propuestas-medida", label: "Propuestas de medida", icon: Ruler, grupo: "revisiones", roles: ["administrador"] },

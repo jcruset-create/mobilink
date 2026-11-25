@@ -68,7 +68,7 @@ const PAGINA_FLOTA = 500;
 type Peticion = Request & { solicitante?: Solicitante };
 
 /** El vehículo, su cuenta de telemática y su unidad, para las pruebas con el proveedor. */
-async function enlaceParaPrueba(empresaId: string, vehiculoId: string) {
+export async function enlaceParaPrueba(empresaId: string, vehiculoId: string) {
   const { data: v } = await supabase
     .from("tc_vehiculos").select("id, empresa_id, matricula").eq("id", vehiculoId).maybeSingle();
   if (!v || String((v as { empresa_id?: string }).empresa_id ?? "") !== empresaId) {
