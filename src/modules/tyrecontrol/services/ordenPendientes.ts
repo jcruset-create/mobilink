@@ -117,7 +117,7 @@ export function ordenarPorMatricula<T>(filas: T[], sentido: SentidoUnidad, matri
   });
 }
 
-function ordenarPorTexto<T>(filas: T[], sentido: SentidoUnidad, valor: (f: T) => string | null): T[] {
+export function ordenarPorTexto<T>(filas: T[], sentido: SentidoUnidad, valor: (f: T) => string | null): T[] {
   if (!sentido) return filas;
   return [...filas].sort((x, y) => {
     const a = valor(x), b = valor(y);
