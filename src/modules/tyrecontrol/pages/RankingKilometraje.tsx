@@ -8,6 +8,7 @@ import {
 import { detalleDeMeses, listaDeMeses } from "../services/mesesEtiqueta";
 import { listarEmpresas } from "../services/data";
 import { rutaConFiltros } from "../services/navegacionVolver";
+import ProbarMovertis from "../components/ProbarMovertis";
 import type { Empresa } from "../types";
 
 /**
@@ -331,6 +332,7 @@ function Fila({ v, puesto, num, empresaId, volverAqui, onRehecho }: {
 }) {
   const [rehaciendo, setRehaciendo] = useState(false);
   const [aviso, setAviso] = useState("");
+  const [probar, setProbar] = useState(false);
   const huecosConocidos = v.mesesSinDato + v.mesesConError;
 
   /*
@@ -451,7 +453,25 @@ function Fila({ v, puesto, num, empresaId, volverAqui, onRehecho }: {
             <RefreshCw className={`inline h-3 w-3 ${rehaciendo ? "animate-spin" : ""}`} />
             <span className="ml-1">{rehaciendo ? "Pidiendo…" : "Rehacer"}</span>
           </button>
+          {/* Prueba de diagnóstico: varias ventanas y una unidad de control. No guarda nada. */}
+          <button
+            onClick={() => setProbar(true)}
+            disabled={!empresaId}
+            title="Prueba a Movertis con varias ventanas de fechas para ver qué falla. No guarda nada"
+            className="rounded-lg border border-slate-600 px-2 py-1 text-[11px] font-bold text-slate-300 hover:bg-slate-700/40 disabled:opacity-40"
+          >
+            🔬 Probar
+          </button>
         </div>
+        {probar && (
+          <ProbarMovertis
+            vehiculoId={v.vehiculoId}
+            matricula={v.matricula ?? null}
+            empresaId={empresaId}
+            mesesConError={v.mesesConErrorDetalle}
+            onClose={() => setProbar(false)}
+          />
+        )}
       </td>
     </tr>
   );

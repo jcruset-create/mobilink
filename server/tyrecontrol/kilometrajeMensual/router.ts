@@ -39,6 +39,11 @@ import { compararMeses, mesDe, mesesEntre, ZONA_HORARIA_POR_DEFECTO, type Mes } 
 import { resumirKilometraje } from "./resumen.ts";
 import { rankingDeKilometraje, type VehiculoDeFlota } from "./ranking.ts";
 import { resumenDeFlota } from "./flota.ts";
+import { conclusion, ventanasDePrueba, type Respuesta, type ResultadoVentana, type Ventana } from "./prueba.ts";
+import { resolveTelematicsConnectors } from "../../integration-hub/connectors/ConnectorRegistry.ts";
+import { listVehicleMappings, nextCorrelationId } from "../../integration-hub/infrastructure/repositories.ts";
+import { ErrorRitmo, limitadorDe, ritmoDeConfig } from "../../integration-hub/infrastructure/ritmo.ts";
+import { sabeResumirViajes } from "../../integration-hub/domain/telematics.ts";
 import { iniciarRelleno, pararRelleno, tareasDeEmpresa } from "./rellenoWorker.ts";
 import { intervaloValido } from "./relleno.ts";
 import { contarPorClase, mesesQueFaltan, proveedorDe } from "./huecos.ts";
@@ -477,6 +482,87 @@ export function createKilometrajeMensualRouter(): Router {
 
       const zona = await zonaDeEmpresa(empresaId);
       res.json({ empresaId, ...rankingDeKilometraje(filas, flota, mesDe(ahora, zona)) });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /**
+   * «Probar con Movertis»: pide el resumen de UN vehículo con varias
+   * ventanas (mes, quincenas, semana, día, mes anterior) y la misma petición
+   * con otra unidad que sí funciona. No guarda nada. Ver `prueba.ts`.
+   *
+   * Cuerpo: { empresaId?, vehiculoId, year, month }
+   */
+  router.post("/probar-vehiculo", async (req, res) => {
+    try {
+      const empresaId = empresaDe((req as Peticion).solicitante!, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const vehiculoId = String(req.body?.vehiculoId ?? "").trim();
+      const mes = mesDeCuerpo(req.body);
+      if (!vehiculoId || !mes) return res.status(400).json({ error: "Falta el vehículo o el mes" });
+
+      const { data: v } = await supabase
+        .from("tc_vehiculos").select("id, empresa_id, matricula").eq("id", vehiculoId).maybeSingle();
+      if (!v || String((v as { empresa_id?: string }).empresa_id ?? "") !== empresaId) {
+        return res.status(404).json({ error: "Vehículo no encontrado" });
+      }
+
+      // La cuenta de telemática en la que está enlazado este vehículo.
+      const cuentas = await resolveTelematicsConnectors(empresaId);
+      let cuenta: (typeof cuentas)[number] | null = null;
+      let unidad = "";
+      for (const c of cuentas) {
+        const enlaces = await listVehicleMappings({ tenantId: empresaId, system: c.key, accountKey: c.accountKey });
+        const e = enlaces.find((x) => x.mobilink_id === vehiculoId && x.active !== false);
+        if (e) { cuenta = c; unidad = String(e.external_code); break; }
+      }
+      if (!cuenta || !unidad) return res.status(400).json({ error: "Este vehículo no está enlazado con ninguna cuenta de telemática" });
+      const conector = cuenta.connector;
+      if (!sabeResumirViajes(conector)) return res.status(400).json({ error: "Esta cuenta no sabe resumir viajes" });
+
+      const zona = String(cuenta.config.zonaHoraria ?? ZONA_HORARIA_POR_DEFECTO);
+      const ventanas = ventanasDePrueba(mes, zona);
+
+      // Control: otra unidad de la misma cuenta con ese mes cerrado y bien.
+      const filas = await listMonthlyMileageByTenant({ tenantId: empresaId, desdeYear: mes.year });
+      const control = filas.find((f) => f.system === cuenta!.key && f.account_key === cuenta!.accountKey
+        && f.year === mes.year && f.month === mes.month && f.sync_status === "ok" && f.closed && f.mobilink_id !== vehiculoId);
+
+      const ctx = { tenantId: empresaId, correlationId: await nextCorrelationId() };
+      const limitador = limitadorDe(`${empresaId}/${cuenta.key}/${cuenta.accountKey}`, ritmoDeConfig(cuenta.config));
+      const pedir = async (u: string, w: Ventana): Promise<ResultadoVentana> => {
+        const peticion = { units: [Number(u)], initial_date: w.desde.getTime(), end_date: w.hasta.getTime() };
+        let respuesta: Respuesta;
+        try {
+          await limitador.turno(ESPERA_MAXIMA_MS);
+          const r = await conector.getTripSummary(ctx, [u], { from: w.desde, to: w.hasta });
+          const s = r.find((x) => String(x.providerVehicleId) === u);
+          respuesta = s
+            ? { tipo: "ok", km: Math.round(s.distanceKm), odometroInicial: s.initialOdometerKm ?? null, odometroFinal: s.finalOdometerKm ?? null, viajes: s.trips ?? null }
+            : { tipo: "vacio" };
+        } catch (e) {
+          respuesta = e instanceof ErrorRitmo ? { tipo: "sin_turno" } : { tipo: "error", mensaje: e instanceof Error ? e.message : String(e) };
+        }
+        return { ...w, unidad: u, peticion, respuesta };
+      };
+
+      // En serie: son pocas y van por el mismo limitador que el job.
+      const resultados: ResultadoVentana[] = [];
+      for (const w of ventanas) resultados.push(await pedir(unidad, w));
+      if (control) {
+        const ctl = await pedir(String(control.external_code), { ...ventanas[0], clave: "control", etiqueta: `${ventanas[0].etiqueta} · unidad de control` });
+        resultados.push(ctl);
+      }
+
+      res.json({
+        vehiculoId, matricula: (v as { matricula?: string }).matricula ?? null,
+        cuenta: { connectorKey: cuenta.key, accountKey: cuenta.accountKey }, unidad,
+        unidadControl: control ? String(control.external_code) : null,
+        probadoEn: new Date().toISOString(),
+        resultados: resultados.map((r) => ({ ...r, desde: r.desde.toISOString(), hasta: r.hasta.toISOString() })),
+        conclusion: conclusion(resultados),
+      });
     } catch (e) {
       fallo(res, e);
     }
