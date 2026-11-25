@@ -117,7 +117,7 @@ export default function AssistSidebar({ active, otf }: Props) {
             <Star className="h-4 w-4 shrink-0" /> Calidad
           </a>
           <a href="/asistencias/satisfaccion" className={itemCls(active === "satisfaccion")}>
-            <Gauge className="h-4 w-4 shrink-0" /> Satisfacción
+            <Gauge className="h-4 w-4 shrink-0" /> Satisfacción (encuestas)
           </a>
           <a href="/asistencias/estadisticas" className={itemCls(active === "estadisticas")}>
             <BarChart3 className="h-4 w-4 shrink-0" /> Estadísticas

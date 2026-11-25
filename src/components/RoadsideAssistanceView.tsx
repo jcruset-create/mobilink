@@ -32,6 +32,9 @@ import {
   Building2,
   Contact,
   BarChart3,
+  AlertTriangle,
+  Star,
+  Gauge,
 } from "lucide-react";
 import RoadsideBackofficeModal, { type BackofficeData } from "./RoadsideBackofficeModal";
 import KnownPlaceMapModal from "./KnownPlaceMapModal";
@@ -1689,6 +1692,26 @@ export default function RoadsideAssistanceView({
             className="flex items-center gap-2.5 rounded-lg px-3 py-2 font-medium text-slate-300 hover:bg-slate-800"
           >
             <Store className="h-4 w-4 shrink-0" /> Talleres
+          </a>
+          {/* Encuestas y calidad: estaban solo en el menú de las otras
+              pantallas de Assist, y desde aquí no había forma de llegar. */}
+          <a
+            href="/asistencias/bandeja"
+            className="flex items-center gap-2.5 rounded-lg px-3 py-2 font-medium text-slate-300 hover:bg-slate-800"
+          >
+            <AlertTriangle className="h-4 w-4 shrink-0" /> Bandeja
+          </a>
+          <a
+            href="/asistencias/calidad"
+            className="flex items-center gap-2.5 rounded-lg px-3 py-2 font-medium text-slate-300 hover:bg-slate-800"
+          >
+            <Star className="h-4 w-4 shrink-0" /> Calidad
+          </a>
+          <a
+            href="/asistencias/satisfaccion"
+            className="flex items-center gap-2.5 rounded-lg px-3 py-2 font-medium text-slate-300 hover:bg-slate-800"
+          >
+            <Gauge className="h-4 w-4 shrink-0" /> Satisfacción (encuestas)
           </a>
           <a
             href="/asistencias/proveedores"
