@@ -38,6 +38,7 @@ import { entidadSyncDe } from "../../integration-hub/application/services/Monthl
 import { compararMeses, mesDe, mesesEntre, ZONA_HORARIA_POR_DEFECTO, type Mes } from "../../integration-hub/domain/meses.ts";
 import { resumirKilometraje } from "./resumen.ts";
 import { rankingDeKilometraje, type VehiculoDeFlota } from "./ranking.ts";
+import { resumenDeFlota } from "./flota.ts";
 import { iniciarRelleno, pararRelleno, tareasDeEmpresa } from "./rellenoWorker.ts";
 import { intervaloValido } from "./relleno.ts";
 import { contarPorClase, mesesQueFaltan, proveedorDe } from "./huecos.ts";
@@ -57,6 +58,42 @@ const ESPERA_MAXIMA_MS = 45_000;
 const PAGINA_FLOTA = 500;
 
 type Peticion = Request & { solicitante?: Solicitante };
+
+/** La zona horaria de la cuenta de telemática activa de la empresa. */
+async function zonaDeEmpresa(empresaId: string): Promise<string> {
+  const configs = await listConnectorConfigs(empresaId);
+  const activa = configs.find((c: { enabled?: boolean }) => c.enabled) as { config?: { zonaHoraria?: unknown } } | undefined;
+  return String(activa?.config?.zonaHoraria ?? ZONA_HORARIA_POR_DEFECTO);
+}
+
+/**
+ * La flota activa de la empresa, paginada. Nada de traerla de golpe ni de
+ * meter 751 identificadores en un filtro: eso viaja en la URL y ya rompió una
+ * vez el barrido de presencia en producción.
+ */
+async function flotaActiva(empresaId: string): Promise<VehiculoDeFlota[]> {
+  const flota: VehiculoDeFlota[] = [];
+  for (let desde = 0; ; desde += PAGINA_FLOTA) {
+    const { data, error } = await supabase
+      .from("tc_vehiculos")
+      .select("id, matricula, numero_unidad")
+      .eq("empresa_id", empresaId)
+      .eq("activo", true)
+      .order("matricula")
+      .range(desde, desde + PAGINA_FLOTA - 1);
+    if (error) throw new Error(`No se pudo leer la flota: ${error.message}`);
+    const pagina = data ?? [];
+    for (const v of pagina) {
+      flota.push({
+        id: String((v as any).id),
+        matricula: (v as any).matricula ?? null,
+        numeroUnidad: (v as any).numero_unidad ?? null,
+      });
+    }
+    if (pagina.length < PAGINA_FLOTA) break;
+  }
+  return flota;
+}
 
 /** Sesión → usuario. Sin rol: para leer basta con poder ver la empresa. */
 async function usuarioDe(req: Request): Promise<{ userId: string; esSuperadmin: boolean } | null> {
@@ -428,29 +465,7 @@ export function createKilometrajeMensualRouter(): Router {
       const empresaId = empresaDe((req as Peticion).solicitante!, req.query.empresa);
       if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
 
-      // La flota activa, paginada. Nada de traerla de golpe ni de meter 751
-      // identificadores en un filtro: eso viaja en la URL y ya rompió una vez
-      // el barrido de presencia en producción.
-      const flota: VehiculoDeFlota[] = [];
-      for (let desde = 0; ; desde += PAGINA_FLOTA) {
-        const { data, error } = await supabase
-          .from("tc_vehiculos")
-          .select("id, matricula, numero_unidad")
-          .eq("empresa_id", empresaId)
-          .eq("activo", true)
-          .order("matricula")
-          .range(desde, desde + PAGINA_FLOTA - 1);
-        if (error) throw new Error(`No se pudo leer la flota: ${error.message}`);
-        const pagina = data ?? [];
-        for (const v of pagina) {
-          flota.push({
-            id: String((v as any).id),
-            matricula: (v as any).matricula ?? null,
-            numeroUnidad: (v as any).numero_unidad ?? null,
-          });
-        }
-        if (pagina.length < PAGINA_FLOTA) break;
-      }
+      const flota = await flotaActiva(empresaId);
 
       // Un año hacia atrás basta: la media solo mira los doce últimos meses
       // completos, así que traer más sería cargar filas para descartarlas.
@@ -460,9 +475,29 @@ export function createKilometrajeMensualRouter(): Router {
         desdeYear: ahora.getFullYear() - 1,
       });
 
-      const configs = await listConnectorConfigs(empresaId);
-      const zona = String((configs.find((c: any) => c.enabled)?.config as any)?.zonaHoraria ?? ZONA_HORARIA_POR_DEFECTO);
+      const zona = await zonaDeEmpresa(empresaId);
       res.json({ empresaId, ...rankingDeKilometraje(filas, flota, mesDe(ahora, zona)) });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /**
+   * Km de toda la flota por meses y por años (pantalla «Km de la flota»).
+   * Solo suma lo auténtico: ver `flota.ts`. Todo el histórico guardado.
+   */
+  router.get("/flota", async (req, res) => {
+    try {
+      const empresaId = empresaDe((req as Peticion).solicitante!, req.query.empresa);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const flota = await flotaActiva(empresaId);
+      const filas = await listMonthlyMileageByTenant({ tenantId: empresaId });
+      const zona = await zonaDeEmpresa(empresaId);
+      res.json({
+        empresaId,
+        vehiculosActivos: flota.length,
+        ...resumenDeFlota(filas, new Set(flota.map((v) => v.id)), mesDe(new Date(), zona)),
+      });
     } catch (e) {
       fallo(res, e);
     }
