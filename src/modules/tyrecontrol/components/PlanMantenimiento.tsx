@@ -235,11 +235,13 @@ export default function PlanMantenimientoVehiculo({ vehiculo, puedeEditar }: { v
         </div>
       )}
 
-      {/* Historial de revisiones */}
+      {/* Historial del plan de mantenimiento (NO son las revisiones de
+          neumáticos, que van en su propio apartado: llamarlo «revisiones»
+          hacía pensar que una revisión hecha no se había guardado). */}
       <div className="mt-3">
-        <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Historial de revisiones</div>
+        <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Historial de mantenimiento</div>
         {historial.length === 0 ? (
-          <div className="text-[12px] text-slate-500">Sin revisiones registradas.</div>
+          <div className="text-[12px] text-slate-500">Sin operaciones de mantenimiento registradas.</div>
         ) : (
           <div className="flex flex-col gap-1">
             {historial.map((h) => (
