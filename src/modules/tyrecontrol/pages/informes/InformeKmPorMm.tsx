@@ -84,6 +84,12 @@ export default function InformeKmPorMm() {
             <b> 3 tramos y 5 mm medidos</b> no sale, porque con medio milímetro gastado la cuenta da cifras
             de millones de kilómetros que solo miden el ruido.
           </p>
+          <p className="text-slate-400">
+            Los modelos se agrupan por la <b>referencia del catálogo</b>: «X COACH Z», «COACHZ» y «XCOACH» son
+            la misma goma. Y las gomas de los vehículos con <b>seguimiento de rendimiento</b> empiezan en su
+            punto de partida (la profundidad de nueva del catálogo en el km de inicio), así que les basta una
+            medición real; esas filas salen marcadas como <b className="text-amber-300">estimado desde origen</b>.
+          </p>
         </div>
       </details>
 
@@ -102,8 +108,8 @@ export default function InformeKmPorMm() {
             <button
               onClick={() => descargarCSV(
                 "km-por-mm",
-                ["Marca", "Modelo", "Eje", "Tramos", "Neumáticos", "Km medidos", "mm gastados", "Km por mm", "p25", "Mediana", "p75", "Dibujo nuevo (mm)", "Dibujo retirada (mm)"],
-                filas.map((f) => [f.marca, f.modelo, f.eje ?? "", f.tramos, f.neumaticos, f.km_totales, f.mm_totales, f.km_por_mm, f.p25, f.mediana, f.p75, f.mm_nuevo ?? "", f.mm_retirada ?? ""]),
+                ["Marca", "Modelo", "Eje", "Tramos", "Tramos estimados desde origen", "Neumáticos", "Km medidos", "mm gastados", "Km por mm", "p25", "Mediana", "p75", "Dibujo nuevo (mm)", "Dibujo retirada (mm)"],
+                filas.map((f) => [f.marca, f.modelo, f.eje ?? "", f.tramos, f.tramos_estimados ?? 0, f.neumaticos, f.km_totales, f.mm_totales, f.km_por_mm, f.p25, f.mediana, f.p75, f.mm_nuevo ?? "", f.mm_retirada ?? ""]),
               )}
               className="ml-1 rounded border border-slate-600 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-700"
             >Exportar CSV</button>
@@ -130,6 +136,14 @@ export default function InformeKmPorMm() {
               <tr key={m.clave} className="border-t border-slate-700/60">
                 <td className={tdCls + " font-semibold text-slate-200"}>
                   {m.marca} <span className="text-slate-400">{m.modelo}</span>
+                  {/* Parte de la profundidad de nueva del catálogo, no de una
+                      medición real: se dice, hasta que haya 3 medidas reales. */}
+                  {m.tramosEstimados > 0 && (
+                    <div className="mt-0.5 text-[10px] font-bold text-amber-300"
+                      title="Gomas en seguimiento de rendimiento: el primer punto es la profundidad de nueva del catálogo, no una medición. Pasará a medido cuando tengan 3 mediciones reales.">
+                      {m.tramosEstimados === m.tramos ? "estimado desde origen" : `${m.tramosEstimados} de ${m.tramos} tramos estimados desde origen`}
+                    </div>
+                  )}
                 </td>
                 <td className={tdCls + " text-lg font-black text-sky-300"}>{miles(m.kmPorMm)}</td>
                 <td className={tdCls + " text-slate-200"}>

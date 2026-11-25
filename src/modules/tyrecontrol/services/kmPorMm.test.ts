@@ -129,3 +129,15 @@ describe("nombreDeEje y claveDe", () => {
     expect(claveDe(" Hankook ", " AH51 ")).toBe("Hankook · AH51");
   });
 });
+
+describe("tramos estimados desde origen", () => {
+  it("se suman por modelo y por eje, y faltar el campo cuenta como 0", () => {
+    const [m] = agruparPorModelo([
+      fila({ eje: 1, tramos: 14, tramos_estimados: 14 }),
+      fila({ eje: 2, tramos: 28, tramos_estimados: 28 }),
+      fila({ eje: 3, tramos: 3 }),
+    ]);
+    expect(m.tramosEstimados).toBe(42);
+    expect(m.ejes.map((e) => e.tramosEstimados)).toEqual([14, 28, 0]);
+  });
+});

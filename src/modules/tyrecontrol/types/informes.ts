@@ -288,6 +288,11 @@ export interface KmPorMmFila {
   mm_retirada: number | null;
   /** Gomas distintas del modelo entero, ya sin contar dos veces las que han pasado por dos ejes. */
   neumaticos_modelo: number;
+  /**
+   * Tramos que empiezan en el punto de partida del seguimiento de rendimiento
+   * (profundidad de nueva del catálogo) y no en una medición real.
+   */
+  tramos_estimados?: number;
 }
 
 /**
