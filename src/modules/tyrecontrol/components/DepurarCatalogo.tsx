@@ -6,6 +6,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Modal, inputCls } from "./ui";
+import { useOrdenColumnas } from "../hooks/useOrdenColumnas";
+import { CabeceraOrden } from "./OrdenColumnas";
 import BuscadorIACatalogo from "./BuscadorIACatalogo";
 import { quitarIndices, type Diagnostico, type GrupoSinReferencia, type TipoSugerencia } from "../services/depurarCatalogo";
 import {
@@ -71,6 +73,8 @@ export default function DepurarCatalogo({ onClose, onCambio }: { onClose: () => 
 
   const marcarAutomaticas = () =>
     setMarcadas(new Set((d?.sinReferencia ?? []).filter((g) => g.tipo === "auto").map((g) => g.clave)));
+  // Tocar «Vehículo» ordena las gomas incompletas por matrícula.
+  const orden = useOrdenColumnas(d?.incompletas ?? [], { matricula: (g) => g.matricula });
   const alternar = (set: Set<string>, id: string) => { const x = new Set(set); if (x.has(id)) x.delete(id); else x.add(id); return x; };
 
   const guardar = () => hacer(async () => {
@@ -271,10 +275,10 @@ export default function DepurarCatalogo({ onClose, onCambio }: { onClose: () => 
               <div className="overflow-x-auto rounded-lg border border-slate-700">
                 <table className="w-full min-w-[760px] text-xs">
                   <thead className="bg-slate-900/60 text-[10px] uppercase tracking-wide text-slate-400">
-                    <tr><th className="p-2 text-left">Goma</th><th className="p-2 text-left">Vehículo</th><th className="p-2 text-left">Empresa</th><th className="p-2 text-left">Marca</th><th className="p-2 text-left">Modelo</th><th className="p-2 text-left">Medida</th></tr>
+                    <tr><th className="p-2 text-left">Goma</th><th className="p-2 text-left"><CabeceraOrden col="matricula" orden={orden}>Vehículo</CabeceraOrden></th><th className="p-2 text-left">Empresa</th><th className="p-2 text-left">Marca</th><th className="p-2 text-left">Modelo</th><th className="p-2 text-left">Medida</th></tr>
                   </thead>
                   <tbody>
-                    {d.incompletas.map((g) => (
+                    {orden.filas.map((g) => (
                       <tr key={g.id} className="border-t border-slate-700/60">
                         <td className="p-2"><Link to={`/tyrecontrol/neumaticos/${g.id}`} className="text-sky-300 hover:underline">{g.codigo || "Ficha"}</Link></td>
                         <td className="p-2">{g.matricula ?? "—"}</td>

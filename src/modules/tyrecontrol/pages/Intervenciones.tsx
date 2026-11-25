@@ -5,6 +5,8 @@ import type { Intervencion, EstadoIntervencion, FiltrosIntervenciones, Operacion
 import type { Empresa, Vehiculo, Perfil, PosicionVehiculo, Neumatico, OperacionNeumatico, TipoOperacion, PrioridadOperacion } from "../types";
 import { TIPO_OPERACION_LABELS, ESTADO_OPERACION_LABELS, PRIORIDAD_OPERACION_LABELS } from "../types";
 import { TableWrap, tdCls, thCls, inputCls, Modal, Field } from "../components/ui";
+import { useOrdenColumnas } from "../hooks/useOrdenColumnas";
+import { CabeceraOrden } from "../components/OrdenColumnas";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 import { esHistoricoAlbaran, etiquetaHistorico } from "../../../../shared/historicoAlbaran";
 
@@ -55,6 +57,8 @@ export default function Intervenciones() {
   const [total, setTotal] = useState(0);
   const TAMANO = 50;
   const ultimaPagina = Math.max(0, Math.ceil(total / TAMANO) - 1);
+  // Tocar «Vehículo» ordena por matrícula (solo la página que se ve).
+  const orden = useOrdenColumnas(items, { matricula: (i) => i.vehiculo?.matricula });
 
   const filtros: FiltrosIntervenciones = {
     empresaId: fEmpresa || undefined, vehiculoId: fVehiculo || undefined,
@@ -184,14 +188,14 @@ export default function Intervenciones() {
       <TableWrap>
         <thead className="bg-slate-900"><tr>
           <th className={thCls} title="Número de parte (OP-…). Se asigna al cerrar; una planificada aún no lo tiene.">Nº parte</th>
-          <th className={thCls}>Fecha</th><th className={thCls}>Empresa</th><th className={thCls}>Vehículo</th>
+          <th className={thCls}>Fecha</th><th className={thCls}>Empresa</th><th className={thCls}><CabeceraOrden col="matricula" orden={orden}>Vehículo</CabeceraOrden></th>
           <th className={thCls}>Técnico</th><th className={thCls}>Estado</th><th className={thCls}>Ops</th>
           <th className={thCls}>Resumen</th><th className={thCls}>Acciones</th>
         </tr></thead>
         <tbody>
           {loading ? <tr><td className={tdCls + " text-slate-500"} colSpan={9}>Cargando…</td></tr>
           : items.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={9}>Sin intervenciones.</td></tr>
-          : items.map((i) => {
+          : orden.filas.map((i) => {
             const est = estadoIntervencion(i);
             return (
               <tr key={i.id} className="border-t border-slate-700/60">

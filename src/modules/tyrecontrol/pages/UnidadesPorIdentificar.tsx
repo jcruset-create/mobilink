@@ -4,6 +4,8 @@ import { listarUnidadesPorIdentificar, listarCandidatasFicha, identificarUnidad,
 import type { UnidadPorIdentificar } from "../services/data";
 import type { Neumatico, Empresa } from "../types";
 import { Modal, TableWrap, tdCls, thCls } from "../components/ui";
+import { useOrdenColumnas } from "../hooks/useOrdenColumnas";
+import { CabeceraOrden } from "../components/OrdenColumnas";
 
 /**
  * Bandeja de unidades históricas sin ficha: usados y recauchutados que se
@@ -62,6 +64,9 @@ export default function UnidadesPorIdentificar() {
     return [...m.entries()];
   }, [unidades]);
 
+  // Tocar «Vehículo» ordena por matrícula.
+  const orden = useOrdenColumnas(unidades, { matricula: (u) => u.vehiculo?.matricula });
+
   return (
     <div className="p-4">
       <div className="mb-3 flex flex-wrap items-center gap-3">
@@ -87,11 +92,11 @@ export default function UnidadesPorIdentificar() {
         <TableWrap>
           <table className="min-w-full text-sm">
             <thead><tr>
-              <th className={thCls}>Fecha</th><th className={thCls}>Albarán</th><th className={thCls}>Vehículo</th>
+              <th className={thCls}>Fecha</th><th className={thCls}>Albarán</th><th className={thCls}><CabeceraOrden col="matricula" orden={orden}>Vehículo</CabeceraOrden></th>
               <th className={thCls}>Condición</th><th className={thCls}>Neumático</th><th className={thCls}></th>
             </tr></thead>
             <tbody>
-              {unidades.map((u) => (
+              {orden.filas.map((u) => (
                 <tr key={u.id} className="border-t border-slate-700">
                   <td className={tdCls}>{u.fecha_operacion}</td>
                   <td className={tdCls}>{(u.intervencion?.origen_doc ?? "—").split("|")[0]}</td>

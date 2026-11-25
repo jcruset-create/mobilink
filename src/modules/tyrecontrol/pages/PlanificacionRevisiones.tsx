@@ -12,6 +12,8 @@ import type {
 } from "../types";
 import { ESTADO_PLAN_LABELS, PRIORIDAD_PLAN_LABELS, ESTADO_WEBFLEET_LABELS, ESTADO_WEBFLEET_BADGE, ESTADO_WEBFLEET_PUNTO } from "../types";
 import { TableWrap, tdCls, thCls, inputCls } from "../components/ui";
+import { useOrdenColumnas } from "../hooks/useOrdenColumnas";
+import { CabeceraOrden } from "../components/OrdenColumnas";
 import { BadgePlan, ModalRegistrar } from "../components/PlanMantenimiento";
 
 type Fila = { plan: PlanMantenimiento; est: PlanEstado; v: Vehiculo; wf?: VehiculoWebfleetEstado };
@@ -142,6 +144,8 @@ export default function PlanificacionRevisiones() {
       return true;
     }).sort((a, b) => (a.est.dias_restantes ?? 9999) - (b.est.dias_restantes ?? 9999));
   }, [filas, tab, q, fEmpresa, fEstado, fPrioridad]);
+  // Tocar «Matrícula» ordena la tabla (no el Excel).
+  const orden = useOrdenColumnas(visibles, { matricula: (f) => f.v.matricula });
 
   const porCliente = useMemo(() => {
     const m = new Map<string, { nombre: string; total: number; vehiculos: Set<string>; pend: number; atras: number; semana: number; bases: Set<string>; empresaId: string }>();
@@ -441,13 +445,13 @@ export default function PlanificacionRevisiones() {
         <TableWrap>
           <thead className="bg-slate-900"><tr>
             <th className={thCls}><input type="checkbox" checked={visibles.length > 0 && visibles.every((f) => sel.has(f.plan.id))} onChange={(e) => setSel(e.target.checked ? new Set(visibles.map((f) => f.plan.id)) : new Set())} /></th>
-            <th className={thCls}>Matrícula</th><th className={thCls}>Cliente</th><th className={thCls}>Base</th><th className={thCls}>Revisión</th>
+            <th className={thCls}><CabeceraOrden col="matricula" orden={orden}>Matrícula</CabeceraOrden></th><th className={thCls}>Cliente</th><th className={thCls}>Base</th><th className={thCls}>Revisión</th>
             <th className={thCls}>Última</th><th className={thCls}>Próxima</th><th className={thCls}>Días</th><th className={thCls}>Estado</th><th className={thCls}>Prioridad</th>
             <th className={thCls}>Webfleet</th><th className={thCls}>Técnico</th><th className={thCls}>Acciones</th>
           </tr></thead>
           <tbody>
             {visibles.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={13}>Sin revisiones en esta pestaña.</td></tr>
-            : visibles.map((f) => (
+            : orden.filas.map((f) => (
               <tr key={f.plan.id} className={`border-t border-slate-700/60 ${f.est.estado === "atrasada" ? "bg-rose-500/5" : ""}`}>
                 <td className={tdCls}><input type="checkbox" checked={sel.has(f.plan.id)} onChange={() => toggleSel(f.plan.id)} /></td>
                 <td className={tdCls + " font-bold"}>{f.v.matricula}</td>

@@ -4,6 +4,8 @@ import { controlRevisiones } from "../../services/informes";
 import type { ControlRevision } from "../../types/informes";
 import { descargarCSV } from "../../utils/exportar";
 import { TableWrap, tdCls, thCls } from "../../components/ui";
+import { useOrdenColumnas } from "../../hooks/useOrdenColumnas";
+import { CabeceraOrden } from "../../components/OrdenColumnas";
 
 /**
  * La flota entera por fecha de revisión, incluidos los que no se han revisado
@@ -60,6 +62,8 @@ export default function InformeControlRevisiones() {
   }, [filas]);
 
   const visibles = soloEstado ? filas.filter((f) => f.estado === soloEstado) : filas;
+  // Tocar «Matrícula» o «Nº unidad» reordena la tabla (el CSV no cambia).
+  const orden = useOrdenColumnas(visibles, { matricula: (f) => f.matricula, unidad: (f) => f.numero_unidad });
 
   function exportar() {
     descargarCSV(
@@ -120,8 +124,8 @@ export default function InformeControlRevisiones() {
         <table className="w-full text-sm">
           <thead>
             <tr>
-              <th className={thCls}>Matrícula</th>
-              <th className={thCls}>Nº unidad</th>
+              <th className={thCls}><CabeceraOrden col="matricula" orden={orden}>Matrícula</CabeceraOrden></th>
+              <th className={thCls}><CabeceraOrden col="unidad" orden={orden}>Nº unidad</CabeceraOrden></th>
               <th className={thCls}>Base</th>
               <th className={thCls}>Tipo</th>
               <th className={thCls}>Última revisión</th>
@@ -134,7 +138,7 @@ export default function InformeControlRevisiones() {
             </tr>
           </thead>
           <tbody>
-            {visibles.map((f) => (
+            {orden.filas.map((f) => (
               <tr key={f.vehiculo_id} className="border-t border-slate-700/60">
                 <td className={`${tdCls} font-mono font-bold`}>{f.matricula}</td>
                 <td className={tdCls}>{f.numero_unidad ?? "—"}</td>

@@ -9,6 +9,8 @@ import { descargarCSV } from "../../utils/exportar";
 import {
   filtrarDesgaste, plazoDe, recuentosDesgaste, DIAS_PROXIMA, NOMBRE_FILTRO, type FiltroDesgaste,
 } from "../../services/desgasteFiltro";
+import { useOrdenColumnas } from "../../hooks/useOrdenColumnas";
+import { CabeceraOrden } from "../../components/OrdenColumnas";
 
 function fmtFecha(f: string | null): string {
   if (!f) return "—";
@@ -34,14 +36,17 @@ export default function InformeDesgaste() {
     return () => { vivo = false; };
   }, [filtros]);
 
+  const hoy = new Date();
+  const visibles = filtrarDesgaste(items, filtro, hoy);
+  // Tocar «Vehículo» ordena por matrícula. Antes de los return: es un hook.
+  const orden = useOrdenColumnas(visibles, { matricula: (i) => i.matricula });
+
   if (cargando && items.length === 0) return <div className="text-slate-400">Calculando desgaste…</div>;
   if (error) return <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">{error}</div>;
 
-  const hoy = new Date();
   // Los números de los cuadros y las filas que deja cada uno salen de la misma
   // regla (services/desgasteFiltro.ts): no pueden decir cosas distintas.
   const { vencida: vencidos, proxima: proximos, modelo: prestados } = recuentosDesgaste(items, hoy);
-  const visibles = filtrarDesgaste(items, filtro, hoy);
   // Pulsar el cuadro que ya manda lo quita: es la forma natural de volver.
   const alternar = (f: FiltroDesgaste) => setFiltro((actual) => (actual === f ? "todo" : f));
   // La API corta en 1.000 filas. Como la lista viene ordenada por fecha
@@ -120,14 +125,14 @@ export default function InformeDesgaste() {
         </div>
         <TableWrap>
           <thead className="bg-slate-900"><tr>
-            <th className={thCls}>Neumático</th><th className={thCls}>Vehículo</th><th className={thCls}>Marca / modelo</th>
+            <th className={thCls}>Neumático</th><th className={thCls}><CabeceraOrden col="matricula" orden={orden}>Vehículo</CabeceraOrden></th><th className={thCls}>Marca / modelo</th>
             <th className={thCls}>Última prof.</th><th className={thCls}>Desgaste</th><th className={thCls}>Km restantes</th>
             <th className={thCls}>Sustitución prevista</th><th className={thCls}>Medidas</th>
           </tr></thead>
           <tbody>
             {items.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={8}>Sin datos: hacen falta neumáticos montados con revisiones y kilometraje.</td></tr>
             : visibles.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={8}>Ninguna goma en «{NOMBRE_FILTRO[filtro]}».</td></tr>
-            : visibles.map((i) => (
+            : orden.filas.map((i) => (
               <tr key={i.neumatico_id} className="border-t border-slate-700/60">
                 <td className={tdCls + " font-semibold"}><Link to={`/tyrecontrol/neumaticos/${i.neumatico_id}`} className="text-sky-300 hover:underline">{i.codigo ?? "—"}</Link></td>
                 <td className={tdCls + " text-slate-300"}>{i.matricula ?? "—"}</td>

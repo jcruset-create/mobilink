@@ -9,6 +9,8 @@ import {
 } from "../services/data";
 import type { Empresa } from "../types";
 import { TableWrap, tdCls, thCls } from "../components/ui";
+import { useOrdenColumnas } from "../hooks/useOrdenColumnas";
+import { CabeceraOrden } from "../components/OrdenColumnas";
 
 /**
  * Propuestas de medida del tacógrafo.
@@ -101,6 +103,8 @@ export default function PropuestasMedida() {
     () => (d?.propuestas ?? []).filter((p) => casos.length === 0 || casos.includes(p.caso)),
     [d, casos],
   );
+  // Tocar «Matrícula» ordena la tabla.
+  const orden = useOrdenColumnas(visibles, { matricula: (p) => p.matriculaNorm });
 
   async function resolver(p: PropuestaTacografo, accion: "aceptar" | "rechazar") {
     setTrabajando(p.id); setAviso(""); setError("");
@@ -232,7 +236,7 @@ export default function PropuestasMedida() {
 
           <TableWrap>
             <thead><tr>
-              <th className={thCls}>Matrícula</th>
+              <th className={thCls}><CabeceraOrden col="matricula" orden={orden}>Matrícula</CabeceraOrden></th>
               <th className={thCls}>Caso</th>
               <th className={thCls}>Dice el tacógrafo</th>
               <th className={thCls}>Tiene TyreControl</th>
@@ -241,7 +245,7 @@ export default function PropuestasMedida() {
               <th className={thCls}></th>
             </tr></thead>
             <tbody>
-              {visibles.map((p) => (
+              {orden.filas.map((p) => (
                 <tr key={p.id} className={p.puedeAceptar ? "" : "opacity-70"}>
                   <td className={`${tdCls} font-bold`}>
                     {p.vehiculoId ? (

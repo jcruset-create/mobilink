@@ -9,6 +9,8 @@ import { detalleDeMeses, listaDeMeses } from "../services/mesesEtiqueta";
 import { listarEmpresas } from "../services/data";
 import { rutaConFiltros } from "../services/navegacionVolver";
 import ProbarMovertis from "../components/ProbarMovertis";
+import { useOrdenColumnas } from "../hooks/useOrdenColumnas";
+import { CabeceraOrden } from "../components/OrdenColumnas";
 import type { Empresa } from "../types";
 
 /**
@@ -126,6 +128,9 @@ export default function RankingKilometraje() {
         (v.numeroUnidad ?? "").toLowerCase().includes(q),
     );
   }, [datos, busqueda]);
+
+  // Tocar «Matrícula» o «Unidad» reordena lo que se ve; el puesto no cambia.
+  const orden = useOrdenColumnas(filtrados, { matricula: (v) => v.matricula, unidad: (v) => v.numeroUnidad });
 
   const nombreEmpresa = empresas.find((e) => e.id === empresaId)?.nombre ?? "";
 
@@ -267,8 +272,8 @@ export default function RankingKilometraje() {
               <thead className="bg-slate-800 text-slate-400">
                 <tr>
                   <th className="px-3 py-2 text-right">#</th>
-                  <th className="px-3 py-2 text-left">Matrícula</th>
-                  <th className="px-3 py-2 text-left">Unidad</th>
+                  <th className="px-3 py-2 text-left"><CabeceraOrden col="matricula" orden={orden}>Matrícula</CabeceraOrden></th>
+                  <th className="px-3 py-2 text-left"><CabeceraOrden col="unidad" orden={orden}>Unidad</CabeceraOrden></th>
                   <th className="px-3 py-2 text-right">km / año</th>
                   {/* La columna que impide que la cifra engañe. Ver la cabecera. */}
                   <th className="px-3 py-2 text-right">sobre</th>
@@ -282,7 +287,7 @@ export default function RankingKilometraje() {
                 {/* El puesto es el del ranking completo, no el de la lista
                     filtrada: buscar una matrícula no puede cambiar en qué
                     posición va ese autobús. */}
-                {filtrados.map((v) => (
+                {orden.filas.map((v) => (
                   <Fila key={v.vehiculoId} v={v} puesto={datos.vehiculos.indexOf(v) + 1} num={num}
                         empresaId={empresaId} volverAqui={volverAqui}
                         onRehecho={() => setRecarga((n) => n + 1)} />

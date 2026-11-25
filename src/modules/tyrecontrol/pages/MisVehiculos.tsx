@@ -4,6 +4,8 @@ import { listarVehiculos } from "../services/data";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 import type { Vehiculo } from "../types";
 import { Badge, TableWrap, tdCls, thCls, inputCls } from "../components/ui";
+import { useOrdenColumnas } from "../hooks/useOrdenColumnas";
+import { CabeceraOrden } from "../components/OrdenColumnas";
 
 export default function MisVehiculos() {
   const { perfil } = useTyreAuth();
@@ -28,6 +30,8 @@ export default function MisVehiculos() {
       return !s || v.matricula.toLowerCase().includes(s) || (v.numero_unidad ?? "").toLowerCase().includes(s);
     });
   }, [items, q, verBajas]);
+  // Tocar «Matrícula» o «Nº unidad» ordena la tabla.
+  const orden = useOrdenColumnas(visibles, { matricula: (v) => v.matricula, unidad: (v) => v.numero_unidad });
 
   return (
     <div>
@@ -48,13 +52,13 @@ export default function MisVehiculos() {
       </div>
       <TableWrap>
         <thead className="bg-slate-900"><tr>
-          <th className={thCls}>Matrícula</th><th className={thCls}>Nº unidad</th><th className={thCls}>Delegación</th><th className={thCls}>Marca</th>
+          <th className={thCls}><CabeceraOrden col="matricula" orden={orden}>Matrícula</CabeceraOrden></th><th className={thCls}><CabeceraOrden col="unidad" orden={orden}>Nº unidad</CabeceraOrden></th><th className={thCls}>Delegación</th><th className={thCls}>Marca</th>
           <th className={thCls}>Modelo</th><th className={thCls}>Tipo</th><th className={thCls}>Km</th><th className={thCls}>Estado</th>
         </tr></thead>
         <tbody>
           {loading ? <tr><td className={tdCls + " text-slate-500"} colSpan={8}>Cargando…</td></tr>
           : visibles.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={8}>Sin vehículos.</td></tr>
-          : visibles.map((v) => (
+          : orden.filas.map((v) => (
             <tr
               key={v.id}
               onClick={() => navigate(`/tyrecontrol/vehiculos/${v.id}`)}
