@@ -291,3 +291,18 @@ export interface PruebaPorPartes {
 }
 export const probarVehiculoPorPartes = (b: { empresaId?: string; vehiculoId: string; year: number; month: number }) =>
   pedir<PruebaPorPartes>("/probar-vehiculo/partes", { method: "POST", body: JSON.stringify(b) });
+
+/** «🗺 Recorrido»: los puntos de un vehículo en un día y si bastan para saber la carretera. */
+export interface PruebaRecorrido {
+  vehiculoId: string; matricula: string | null; unidad: string; fecha: string; desde: string; hasta: string;
+  errorPuntos: string | null; kmResumen: number | null; errorResumen: string | null;
+  estadistica: {
+    puntos: number; primero: string | null; ultimo: string | null;
+    intervaloMediana: number | null; intervaloP90: number | null; intervaloMaximo: number | null;
+    huecos: number; minutosEnHuecos: number; conVelocidad: number; kmPorPuntos: number;
+    veredicto: "suficiente" | "justo" | "insuficiente" | "sin_datos"; explicacion: string;
+  };
+  puntos: Array<{ t: number; lat: number; lng: number; velocidad: number | null }>;
+}
+export const probarRecorrido = (b: { empresaId?: string; vehiculoId: string; fecha: string }) =>
+  pedir<PruebaRecorrido>("/probar-recorrido", { method: "POST", body: JSON.stringify(b) });

@@ -45,6 +45,8 @@ import { listVehicleMappings, nextCorrelationId } from "../../integration-hub/in
 import { ErrorRitmo, limitadorDe, ritmoDeConfig } from "../../integration-hub/infrastructure/ritmo.ts";
 import { sabeResumirViajes } from "../../integration-hub/domain/telematics.ts";
 import { pedirPorPartes } from "../../integration-hub/domain/partesDelMes.ts";
+import { estadisticaRecorrido, reducirPuntos, type PuntoRecorrido } from "./recorrido.ts";
+import { medianocheEn } from "../../integration-hub/domain/meses.ts";
 import { iniciarRelleno, pararRelleno, tareasDeEmpresa } from "./rellenoWorker.ts";
 import { intervaloValido } from "./relleno.ts";
 import { contarPorClase, mesesQueFaltan, proveedorDe } from "./huecos.ts";
@@ -587,6 +589,62 @@ export function createKilometrajeMensualRouter(): Router {
    *
    * Cuerpo: { empresaId?, vehiculoId, year, month }
    */
+  router.post("/probar-recorrido", async (req, res) => {
+    // «🗺 Recorrido»: los puntos que da Movertis de UN vehículo en UN día y si
+    // bastan para saber por qué carretera va. No guarda nada. Ver recorrido.ts.
+    try {
+      const empresaId = empresaDe((req as Peticion).solicitante!, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const vehiculoId = String(req.body?.vehiculoId ?? "").trim();
+      const fecha = String(req.body?.fecha ?? "").trim();
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(fecha);
+      if (!vehiculoId || !m) return res.status(400).json({ error: "Falta el vehículo o la fecha (AAAA-MM-DD)" });
+      const enl = await enlaceParaPrueba(empresaId, vehiculoId);
+      if ("error" in enl) return res.status(enl.estado).json({ error: enl.error });
+      const { v, cuenta, unidad, conector } = enl;
+      const zona = String(cuenta.config.zonaHoraria ?? ZONA_HORARIA_POR_DEFECTO);
+      const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+      const desde = medianocheEn(y, mo, d, zona);
+      const manana = new Date(Date.UTC(y, mo - 1, d + 1)); // el día siguiente, también a fin de mes
+      const finDia = medianocheEn(manana.getUTCFullYear(), manana.getUTCMonth() + 1, manana.getUTCDate(), zona);
+      const ventana = { from: desde, to: finDia };
+      const ctx = { tenantId: empresaId, correlationId: await nextCorrelationId() };
+      const limitador = limitadorDe(`${empresaId}/${cuenta.key}/${cuenta.accountKey}`, ritmoDeConfig(cuenta.config));
+
+      let puntos: PuntoRecorrido[] = [];
+      let errorPuntos: string | null = null;
+      try {
+        await limitador.turno(ESPERA_MAXIMA_MS);
+        const lecturas = await conector.getTelemetryHistory(ctx, unidad, ventana);
+        puntos = lecturas
+          .filter((l) => l.latitude != null && l.longitude != null)
+          .map((l) => ({ t: l.capturedAt.getTime(), lat: Number(l.latitude), lng: Number(l.longitude), velocidad: l.speedKmh ?? null }));
+      } catch (e) {
+        errorPuntos = e instanceof ErrorRitmo ? "Límite de peticiones: repite en unos minutos." : e instanceof Error ? e.message : String(e);
+      }
+
+      let kmResumen: number | null = null;
+      let errorResumen: string | null = null;
+      try {
+        await limitador.turno(ESPERA_MAXIMA_MS);
+        const [s] = await conector.getTripSummary(ctx, [unidad], ventana);
+        kmResumen = s ? Math.round(s.distanceKm * 10) / 10 : 0;
+      } catch (e) {
+        errorResumen = e instanceof ErrorRitmo ? "Límite de peticiones" : e instanceof Error ? e.message : String(e);
+      }
+
+      res.json({
+        vehiculoId, matricula: (v as { matricula?: string }).matricula ?? null, unidad, fecha,
+        desde: desde.toISOString(), hasta: finDia.toISOString(),
+        errorPuntos, kmResumen, errorResumen,
+        estadistica: estadisticaRecorrido(puntos, kmResumen),
+        puntos: reducirPuntos(puntos, 2000),
+      });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
   router.post("/probar-vehiculo/partes", async (req, res) => {
     try {
       const empresaId = empresaDe((req as Peticion).solicitante!, req.body?.empresaId);

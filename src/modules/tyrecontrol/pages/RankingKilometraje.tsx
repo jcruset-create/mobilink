@@ -9,6 +9,7 @@ import { detalleDeMeses, listaDeMeses } from "../services/mesesEtiqueta";
 import { listarEmpresas } from "../services/data";
 import { rutaConFiltros } from "../services/navegacionVolver";
 import ProbarMovertis from "../components/ProbarMovertis";
+import ProbarRecorrido from "../components/ProbarRecorrido";
 import { useOrdenColumnas } from "../hooks/useOrdenColumnas";
 import { CabeceraOrden } from "../components/OrdenColumnas";
 import type { Empresa } from "../types";
@@ -338,6 +339,7 @@ function Fila({ v, puesto, num, empresaId, volverAqui, onRehecho }: {
   const [rehaciendo, setRehaciendo] = useState(false);
   const [aviso, setAviso] = useState("");
   const [probar, setProbar] = useState(false);
+  const [recorrido, setRecorrido] = useState(false);
   const huecosConocidos = v.mesesSinDato + v.mesesConError;
 
   /*
@@ -467,7 +469,18 @@ function Fila({ v, puesto, num, empresaId, volverAqui, onRehecho }: {
           >
             🔬 Probar
           </button>
+          <button
+            onClick={() => setRecorrido(true)}
+            disabled={!empresaId}
+            title="Los puntos GPS de un día en el mapa: ¿bastan para saber por qué carretera va? No guarda nada"
+            className="rounded-lg border border-slate-600 px-2 py-1 text-[11px] font-bold text-slate-300 hover:bg-slate-700/40 disabled:opacity-40"
+          >
+            🗺 Recorrido
+          </button>
         </div>
+        {recorrido && (
+          <ProbarRecorrido vehiculoId={v.vehiculoId} matricula={v.matricula ?? null} empresaId={empresaId} onClose={() => setRecorrido(false)} />
+        )}
         {probar && (
           <ProbarMovertis
             vehiculoId={v.vehiculoId}
