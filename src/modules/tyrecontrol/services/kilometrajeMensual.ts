@@ -255,3 +255,23 @@ export interface KmDeFlota { empresaId: string; vehiculosActivos: number; meses:
 
 export const kmDeFlota = (empresaId?: string) =>
   pedir<KmDeFlota>(`/flota${empresaId ? `?empresa=${encodeURIComponent(empresaId)}` : ""}`);
+
+// ── «Probar con Movertis» un solo vehículo (no guarda nada) ────────────────
+export type RespuestaPrueba =
+  | { tipo: "ok"; km: number; odometroInicial: number | null; odometroFinal: number | null; viajes: number | null }
+  | { tipo: "vacio" }
+  | { tipo: "error"; mensaje: string }
+  | { tipo: "sin_turno" };
+export interface VentanaProbada {
+  clave: "mes" | "q1" | "q2" | "semana" | "dia" | "anterior" | "control";
+  etiqueta: string; desde: string; hasta: string; unidad: string;
+  peticion: { units: number[]; initial_date: number; end_date: number };
+  respuesta: RespuestaPrueba;
+}
+export interface PruebaVehiculo {
+  vehiculoId: string; matricula: string | null;
+  cuenta: { connectorKey: string; accountKey: string }; unidad: string; unidadControl: string | null;
+  probadoEn: string; resultados: VentanaProbada[]; conclusion: string;
+}
+export const probarVehiculo = (b: { empresaId?: string; vehiculoId: string; year: number; month: number }) =>
+  pedir<PruebaVehiculo>("/probar-vehiculo", { method: "POST", body: JSON.stringify(b) });
