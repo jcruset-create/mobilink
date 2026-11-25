@@ -100,6 +100,7 @@ function resumen(r: ResumenSyncMensual): string {
     .map((c) =>
       `${c.connectorKey}/${c.accountKey}: ${c.vehiculosProcesados}/${c.vehiculosEnlazados} vehículos, ` +
       `${c.peticiones} peticiones, ${c.errores} errores, ${Math.round(c.kmTotales)} km` +
+      (c.porPartes ? ` · por partes: ${c.porPartes.cerrados}/${c.porPartes.intentados} meses cerrados (${c.porPartes.peticiones} peticiones)` : "") +
       (c.abandonada ? ` · ABANDONADA: ${c.abandonada}` : ""))
     .join(" | ") || "sin cuentas";
 }

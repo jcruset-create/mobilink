@@ -275,3 +275,19 @@ export interface PruebaVehiculo {
 }
 export const probarVehiculo = (b: { empresaId?: string; vehiculoId: string; year: number; month: number }) =>
   pedir<PruebaVehiculo>("/probar-vehiculo", { method: "POST", body: JSON.stringify(b) });
+
+/** «Buscar los días que fallan»: el mes pedido por partes (no guarda nada). */
+export interface PartePrueba {
+  desde: string; hasta: string; dias: [number, number];
+  resultado:
+    | { tipo: "ok"; km: number; odometroInicial: number | null; odometroFinal: number | null; viajes: number | null }
+    | { tipo: "error"; mensaje: string }
+    | { tipo: "sin_turno" };
+}
+export interface PruebaPorPartes {
+  vehiculoId: string; matricula: string | null; unidad: string; probadoEn: string;
+  km: number | null; kmPorOdometro: number; odometroInicial: number | null; odometroFinal: number | null;
+  viajes: number; diasFallidos: number[]; peticiones: number; motivo: string | null; partes: PartePrueba[];
+}
+export const probarVehiculoPorPartes = (b: { empresaId?: string; vehiculoId: string; year: number; month: number }) =>
+  pedir<PruebaPorPartes>("/probar-vehiculo/partes", { method: "POST", body: JSON.stringify(b) });

@@ -479,7 +479,7 @@ describe("errores", () => {
     });
     vi.mocked(listVehicleMappings).mockResolvedValue(enlaces(8) as any);
 
-    const r = await syncMonthlyMileage({ tenantId: "empresa-A", meses: [{ year: 2026, month: 8 }], ahora: AHORA });
+    const r = await syncMonthlyMileage({ tenantId: "empresa-A", meses: [{ year: 2026, month: 8 }], ahora: AHORA, presupuestoPartes: 0 });
 
     expect(r.cuentas[0].vehiculosConKm).toBe(7);
     expect(r.cuentas[0].errores).toBe(1);
@@ -497,7 +497,7 @@ describe("errores", () => {
       fallo: IntegrationError.permanent("MOVERTIS_PETICION", "Movertis rechazó la petición: Core Error: 4"),
     });
     vi.mocked(listVehicleMappings).mockResolvedValue(enlaces(8) as any);
-    await syncMonthlyMileage({ tenantId: "empresa-A", meses: [{ year: 2026, month: 8 }], ahora: AHORA });
+    await syncMonthlyMileage({ tenantId: "empresa-A", meses: [{ year: 2026, month: 8 }], ahora: AHORA, presupuestoPartes: 0 });
     expect(llamadas).toHaveLength(3);
   });
 
@@ -506,6 +506,60 @@ describe("errores", () => {
     vi.mocked(listVehicleMappings).mockResolvedValue(enlaces(8) as any);
     await syncMonthlyMileage({ tenantId: "empresa-A", meses: [{ year: 2026, month: 8 }], ahora: AHORA });
     expect(llamadas).toHaveLength(1);
+  });
+
+  it("un mes cerrado que falla entero se pide POR PARTES y se cierra (día roto con el odómetro)", async () => {
+    // Como 0179JDJ: cualquier ventana con el 12 de agosto falla; el resto va.
+    // 10 km cada día y el odómetro avanzando con ellos.
+    const inicioAgo = Date.UTC(2026, 6, 31, 22); // 1/8 00:00 Madrid
+    const diaDe = (t: Date) => Math.floor((t.getTime() - inicioAgo) / 86_400_000) + 1;
+    const llamadas = cuenta({
+      config: { unidadesPorPeticion: 25 },
+      responder: (ids, w) => {
+        const d1 = diaDe(w.from);
+        const d2 = diaDe(new Date(w.to.getTime() - 1));
+        if (ids.includes("E2") && d1 <= 12 && d2 >= 12) {
+          throw IntegrationError.permanent("MOVERTIS_PETICION", "Movertis rechazó la petición: Cannot read properties of undefined (reading 'toString')");
+        }
+        return ids.map((id) => ({
+          provider: "movertis", accountKey: "buses", providerVehicleId: id, window: w,
+          distanceKm: (d2 - d1 + 1) * 10, initialOdometerKm: 1000 + (d1 - 1) * 10, finalOdometerKm: 1000 + d2 * 10, trips: d2 - d1 + 1,
+        }));
+      },
+    });
+    vi.mocked(listVehicleMappings).mockResolvedValue(enlaces(2) as any);
+
+    const r = await syncMonthlyMileage({ tenantId: "empresa-A", meses: [{ year: 2026, month: 8 }], ahora: AHORA });
+
+    const fila = vi.mocked(upsertMonthlyMileage).mock.calls.map((c) => c[0]).filter((f) => f.mobilinkId === "v2").at(-1)!;
+    expect(fila).toMatchObject({ syncStatus: "ok", closed: true, distanceKm: 310, source: "summarytrips_partes_odometro" });
+    expect(fila.initialOdometerKm).toBe(1000);
+    expect(fila.finalOdometerKm).toBe(1310);
+    expect(r.cuentas[0].porPartes).toMatchObject({ intentados: 1, cerrados: 1, conOdometro: 1 });
+    expect(r.cuentas[0].peticiones).toBe(llamadas.length);
+  });
+
+  it("el mes en curso NO se pide por partes (cambia cada día: sería gastar cupo)", async () => {
+    const llamadas = cuenta({
+      config: { unidadesPorPeticion: 1 },
+      fallo: IntegrationError.permanent("MOVERTIS_PETICION", "Cannot read properties of undefined"),
+    });
+    vi.mocked(listVehicleMappings).mockResolvedValue(enlaces(1) as any);
+    const r = await syncMonthlyMileage({ tenantId: "empresa-A", meses: [{ year: 2026, month: 9 }], ahora: AHORA });
+    expect(llamadas).toHaveLength(1);
+    expect(r.cuentas[0].porPartes).toBeUndefined();
+  });
+
+  it("si por partes no sale ni una parte buena, es el proveedor: no se sigue gastando", async () => {
+    const llamadas = cuenta({
+      config: { unidadesPorPeticion: 1 },
+      fallo: IntegrationError.permanent("MOVERTIS_PETICION", "Core Error: 4"),
+    });
+    vi.mocked(listVehicleMappings).mockResolvedValue(enlaces(3) as any);
+    const r = await syncMonthlyMileage({ tenantId: "empresa-A", meses: [{ year: 2026, month: 8 }], ahora: AHORA });
+    // 3 peticiones normales + las de UNA sola unidad por partes, y se para.
+    expect(r.cuentas[0].porPartes?.intentados).toBe(1);
+    expect(llamadas.length).toBeLessThanOrEqual(3 + 16);
   });
 
   it("con la credencial rechazada se abandona la cuenta: seguir es quemar cupo", async () => {
