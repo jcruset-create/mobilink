@@ -11,9 +11,11 @@ export function CabeceraOrden<T>({ col, orden, children, className = "" }: {
       type="button"
       onClick={() => orden.tocar(col)}
       title={s === null ? "Ordenar de mayor a menor" : s === "desc" ? "Ordenar de menor a mayor" : "Volver al orden de la lista"}
-      className={`inline-flex items-center gap-1 uppercase hover:text-slate-100 ${s ? "text-sky-300" : ""} ${className}`}
+      // Sin mayúsculas ni tamaño propios: hereda los de la cabecera de cada
+      // tabla. La flecha no sale al imprimir (hay informes que se imprimen).
+      className={`inline-flex items-center gap-1 hover:text-slate-100 print:text-inherit ${s ? "text-sky-300" : ""} ${className}`}
     >
-      {children} <span aria-hidden>{s === "desc" ? "▼" : s === "asc" ? "▲" : "↕"}</span>
+      {children} <span aria-hidden className="print:hidden">{s === "desc" ? "▼" : s === "asc" ? "▲" : "↕"}</span>
     </button>
   );
 }
