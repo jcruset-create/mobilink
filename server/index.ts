@@ -141,6 +141,10 @@ import { normalizarMatricula as normalizarMatriculaTc } from "./tyrecontrol/matr
 import { INSTRUCCION_PAIS, paisParaGuardar } from "./matriculaPais.ts";
 import { horaCapturaValida, horaDeLaFirma } from "./horaCaptura.ts";
 import { hitosDeAsistencia, lineaDeTiempo, resumenMovimientos, ventanaDeAsistencia } from "./assist/movimientos.ts";
+import {
+  detalleParaExcel, estadisticas as calcularEstadisticas, fichaCliente, filtrar as filtrarEstadisticas,
+  nombreCliente, opcionesFiltros, porMes, type FilaEstadistica, type Filtros as FiltrosEstadistica,
+} from "./assist/estadisticas.ts";
 import { decidirCambioDeDatos, mensajeDeCorreo } from "./tyrecontrol/usuarioDatos.ts";
 import { puedeVerEmpresaDeRequest as puedeVerEmpresaTc, puedeVerEmpresa as puedeVerEmpresaTcCtx, puedeOperarEnEmpresa } from "./tyrecontrol/empresaAcceso.ts";
 import {
@@ -6147,6 +6151,193 @@ app.patch("/api/assist-panel-users/:userId", requireSupervisorRole, async (req, 
   }
 });
 
+/* =========================================================
+   ESTADÍSTICAS DE ASISTENCIAS (cálculo en server/assist/estadisticas.ts)
+========================================================= */
+
+/**
+ * Las filas de un periodo, con lo que las estadísticas necesitan y la tabla no
+ * tiene: firma, fotos, valoración y distancia de la base al punto. Respeta el
+ * taller del usuario como la lista de asistencias.
+ */
+async function filasEstadistica(
+  desdeMs: number,
+  hastaMs: number,
+  tallerId: number | null,
+): Promise<FilaEstadistica[]> {
+  const params: unknown[] = [desdeMs, hastaMs, TIPO_SALIDA];
+  const porTaller = tallerId != null ? `AND a."tallerId" = $${params.push(tallerId)}` : "";
+  const base = `
+    SELECT a.*,
+           EXISTS (SELECT 1 FROM roadside_assistance_files f WHERE f."assistanceId" = a.id AND f.kind = 'firma') AS "conFirma",
+           EXISTS (SELECT 1 FROM roadside_assistance_files f WHERE f."assistanceId" = a.id AND f.kind <> 'firma') AS "conFotos"
+           %VALORACION%
+      FROM roadside_assistances a
+     WHERE a."createdAtMs" BETWEEN $1 AND $2
+       AND COALESCE(a.tipo, '') <> $3
+       ${porTaller}`;
+  const valoracion = `,
+           (SELECT AVG(x."scaleValue")::float
+              FROM survey_instances si
+              JOIN survey_responses r ON r."surveyInstanceId" = si.id
+              JOIN survey_answers x ON x."surveyResponseId" = r.id AND x."questionCode" = 'overall_rating'
+             WHERE si."sourceSystem" = 'assist' AND si."assistanceId" = a.id::text) AS valoracion`;
+  // Sin el módulo de encuestas instalado, las estadísticas salen igual.
+  const r = await db
+    .query(base.replace("%VALORACION%", valoracion), params)
+    .catch(() => db.query(base.replace("%VALORACION%", ", NULL::float AS valoracion"), params));
+
+  const configs = new Map<string, Promise<any>>();
+  const configDe = (w: string | null) => {
+    const k = w ?? "";
+    if (!configs.has(k)) configs.set(k, getWorkshopConfig(w).catch(() => ({})));
+    return configs.get(k)!;
+  };
+  const num = (v: unknown) => (v == null || v === "" ? null : Number.isFinite(Number(v)) ? Number(v) : null);
+  return Promise.all(
+    r.rows.map(async (row: any): Promise<FilaEstadistica> => {
+      const cfg = await configDe(row.workshopId ?? null);
+      const tLat = parseFloat(cfg?.taller_lat);
+      const tLng = parseFloat(cfg?.taller_lng);
+      const lat = num(row.latitude);
+      const lng = num(row.longitude);
+      const distanciaKm =
+        lat != null && lng != null && Number.isFinite(tLat) && Number.isFinite(tLng)
+          ? Math.round(haversineDistanceM(tLat, tLng, lat, lng) / 100) / 10
+          : null;
+      return {
+        id: Number(row.id),
+        status: String(row.status ?? ""),
+        createdAtMs: Number(row.createdAtMs),
+        assignedAtMs: num(row.assignedAtMs),
+        departedAtMs: num(row.departedAtMs),
+        arrivedAtPointMs: num(row.arrivedAtPointMs),
+        inicioReparacionAtMs: num(row.inicioReparacionAtMs),
+        finishedAtMs: num(row.finishedAtMs),
+        arrivedAtWorkshopMs: num(row.arrivedAtWorkshopMs),
+        cancelledAtMs: num(row.cancelledAtMs),
+        customerName: row.customerName ?? null,
+        clientId: num(row.clientId),
+        assignedTechName: row.assignedTechName ?? null,
+        assignedVehicleName: row.assignedVehicleName ?? null,
+        webfleetVehicleId: row.webfleetVehicleId ?? null,
+        tipo: row.tipo ?? null,
+        origen: row.origen ?? null,
+        motivo: row.motivo ?? null,
+        descripcionAveria: row.descripcionAveria ?? null,
+        plate: row.plate ?? null,
+        plateRemolque: row.plateRemolque ?? null,
+        esRemolque: Boolean(row.esRemolque),
+        address: row.address ?? null,
+        plateMismatch: Boolean(row.plateMismatch),
+        waStatus: row.waStatus ?? null,
+        kmRecorridos: num(row.kmRecorridos),
+        distanciaKm,
+        valoracion: num(row.valoracion),
+        conFirma: Boolean(row.conFirma),
+        conFotos: Boolean(row.conFotos),
+      };
+    })
+  );
+}
+
+/** El periodo y los filtros de la petición; null si el periodo no vale. */
+function periodoEstadistica(q: any): { desdeMs: number; hastaMs: number; filtros: FiltrosEstadistica } | null {
+  const desdeMs = Number(q.desde);
+  const hastaMs = Number(q.hasta);
+  if (!Number.isFinite(desdeMs) || !Number.isFinite(hastaMs) || hastaMs <= desdeMs) return null;
+  // Más de dos años de golpe no hace falta y sería una consulta enorme.
+  if (hastaMs - desdeMs > 2 * 366 * 24 * 3600_000) return null;
+  const txt = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  return {
+    desdeMs,
+    hastaMs,
+    filtros: {
+      cliente: txt(q.cliente), operario: txt(q.operario), furgoneta: txt(q.furgoneta),
+      tipoAveria: txt(q.tipoAveria), origen: txt(q.origen),
+    },
+  };
+}
+
+/** El taller cuyas asistencias puede ver quien pregunta (como la lista). */
+async function tallerParaEstadistica(req: any): Promise<{ tallerId: number | null } | null> {
+  const panelUser = await getAssistPanelUser(req);
+  if (!panelUser) return { tallerId: null };
+  if (panelUser.esAdmin) {
+    const sel = req.query.tallerId != null ? Number(req.query.tallerId) : NaN;
+    return { tallerId: Number.isFinite(sel) ? sel : null };
+  }
+  if (panelUser.tallerId != null) return { tallerId: panelUser.tallerId };
+  return null; // sin taller y sin ser admin: nada
+}
+
+app.get("/api/roadside-assistances/estadisticas", requireSupervisorRole, async (req, res) => {
+  try {
+    const p = periodoEstadistica(req.query);
+    if (!p) return res.status(400).json({ error: "Periodo no válido (desde/hasta en ms, máximo dos años)" });
+    const taller = await tallerParaEstadistica(req);
+    if (!taller) return res.status(403).json({ error: "Sin taller asignado" });
+
+    // El periodo anterior, de la misma duración, para comparar.
+    const largo = p.hastaMs - p.desdeMs;
+    const todas = await filasEstadistica(p.desdeMs - largo, p.hastaMs, taller.tallerId);
+    const actuales = todas.filter((a) => a.createdAtMs >= p.desdeMs);
+    const anteriores = todas.filter((a) => a.createdAtMs < p.desdeMs);
+    const filas = filtrarEstadisticas(actuales, p.filtros);
+
+    const datos = calcularEstadisticas(filas, filtrarEstadisticas(anteriores, p.filtros), p.desdeMs, p.hastaMs);
+    // Para abrir las de cada alerta sin otra petición.
+    const enAlertas = new Set(datos.alertas.flatMap((a) => a.ids));
+    const fichas = Object.fromEntries(
+      filas.filter((a) => enAlertas.has(a.id)).map((a) => [
+        a.id,
+        { id: a.id, createdAtMs: a.createdAtMs, cliente: nombreCliente(a), matricula: a.plate || a.plateRemolque || "", operario: a.assignedTechName },
+      ])
+    );
+    res.json({
+      desdeMs: p.desdeMs,
+      hastaMs: p.hastaMs,
+      opciones: opcionesFiltros(actuales),
+      ...datos,
+      fichas,
+      detalle: String(req.query.detalle ?? "") === "1" ? detalleParaExcel(filas) : undefined,
+    });
+  } catch (error: any) {
+    console.error("GET estadisticas error:", error);
+    res.status(500).json({ error: error?.message || "Error calculando estadísticas" });
+  }
+});
+
+// Ficha de un cliente: lo del periodo, más su evolución de los últimos 12 meses.
+app.get("/api/roadside-assistances/estadisticas/cliente", requireSupervisorRole, async (req, res) => {
+  try {
+    const p = periodoEstadistica(req.query);
+    if (!p || !p.filtros.cliente) return res.status(400).json({ error: "Faltan el cliente o el periodo" });
+    const taller = await tallerParaEstadistica(req);
+    if (!taller) return res.status(403).json({ error: "Sin taller asignado" });
+
+    const largo = p.hastaMs - p.desdeMs;
+    const anio = 366 * 24 * 3600_000;
+    const desdeCarga = Math.min(p.desdeMs - largo, p.hastaMs - anio);
+    const todas = filtrarEstadisticas(await filasEstadistica(desdeCarga, p.hastaMs, taller.tallerId), { cliente: p.filtros.cliente });
+    const filas = todas.filter((a) => a.createdAtMs >= p.desdeMs);
+    const anteriores = todas.filter((a) => a.createdAtMs >= p.desdeMs - largo && a.createdAtMs < p.desdeMs);
+    const datos = calcularEstadisticas(filas, anteriores, p.desdeMs, p.hastaMs);
+    res.json({
+      cliente: p.filtros.cliente,
+      desdeMs: p.desdeMs,
+      hastaMs: p.hastaMs,
+      ...datos,
+      ...fichaCliente(filas),
+      // La evolución, con el año entero aunque el periodo sea un mes.
+      porMes: porMes(todas.filter((a) => a.createdAtMs >= p.hastaMs - anio)),
+    });
+  } catch (error: any) {
+    console.error("GET estadisticas cliente error:", error);
+    res.status(500).json({ error: error?.message || "Error calculando la ficha" });
+  }
+});
+
 app.get("/api/roadside-assistances", exigirCredencial(authenticate), async (req, res) => {
   try {
     const includeClosed = String(req.query.includeClosed || "") === "true";
@@ -6470,6 +6661,48 @@ async function etaEstimadaDeAsistencia(row: any): Promise<EtaEstimada | null> {
  */
 const cacheKmAsistencia = new Map<number, { atMs: number; km: number; fuente: "furgoneta" | "tablet" }>();
 const TTL_KM_ASISTENCIA_MS = 2 * 60_000;
+
+/*
+ * Km de las asistencias cerradas, guardados para las estadísticas. Poco a
+ * poco (unas pocas cada vez) para no saturar Webfleet: las nuevas entran en
+ * cuanto se cierran y las antiguas (último año) se van rellenando solas.
+ */
+let rellenandoKm = false;
+async function rellenarKmAsistencias(lote = 4) {
+  if (rellenandoKm) return;
+  rellenandoKm = true;
+  try {
+    const r = await db.query(
+      `SELECT * FROM roadside_assistances
+        WHERE "kmCalculadoAtMs" IS NULL
+          AND "departedAtMs" IS NOT NULL
+          AND ("arrivedAtWorkshopMs" IS NOT NULL OR "cancelledAtMs" IS NOT NULL)
+          AND "createdAtMs" > $1
+        ORDER BY "createdAtMs" DESC
+        LIMIT $2`,
+      [Date.now() - 400 * 24 * 3600_000, lote]
+    );
+    for (const row of r.rows) {
+      const a = normalizeRoadsideAssistanceRow(row);
+      const km = await kmRecorridosDeAsistencia(a).catch(() => null);
+      await db.query(
+        `UPDATE roadside_assistances SET "kmRecorridos" = $2, "kmFuente" = $3, "kmCalculadoAtMs" = $4 WHERE id = $1`,
+        [a.id, km ? Math.round(km.km * 10) / 10 : null, km?.fuente ?? null, Date.now()]
+      );
+      // Webfleet limita las consultas por minuto, y la usan también otras partes.
+      await new Promise((ok) => setTimeout(ok, 5000));
+    }
+  } catch (e: any) {
+    console.error("rellenarKmAsistencias:", e?.message ?? e);
+  } finally {
+    rellenandoKm = false;
+  }
+}
+
+function startRellenoKmAsistencias() {
+  setTimeout(() => void rellenarKmAsistencias(), 60_000);
+  setInterval(() => void rellenarKmAsistencias(), 5 * 60_000);
+}
 
 async function kmRecorridosDeAsistencia(
   a: ReturnType<typeof normalizeRoadsideAssistanceRow>
@@ -23922,6 +24155,7 @@ initDb()
       void conectarPersistenciaLimites(); // bloqueos de login que sobreviven a un reinicio
       startAgendaWhatsAppReminderChecker();
       startWorkshopAutoStandbyChecker();
+      startRellenoKmAsistencias(); // km de las cerradas, para las estadísticas
       startRecobrosNotifierChecker();
       startCaducidadRecordatoriosChecker(); // avisos WhatsApp/SMS de caducidad de tacógrafo
       startWebfleetSync(); // sincronización periódica de "vehículos en base"
