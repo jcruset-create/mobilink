@@ -8,6 +8,8 @@ import type { Alerta, RuedaAlerta } from "../../types/informes";
 import { KpiCard } from "../../components/informes/KpiCard";
 import PlanoMiniVehiculo from "../../components/informes/PlanoMiniVehiculo";
 import { descargarCSV } from "../../utils/exportar";
+import { useOrdenColumnas } from "../../hooks/useOrdenColumnas";
+import { CabeceraOrden } from "../../components/OrdenColumnas";
 import {
   agruparPorVehiculo, edadEnTexto, fechaCorta, filtrarVehiculos, mm, ordenarVehiculos,
   resumenDeTarjeta, ruedasEnPresion, ruedasParaMedirConSonda, DIAS_MEDICION_VIEJA,
@@ -168,6 +170,8 @@ export default function InformeAlertas() {
   const nPresion = vehiculos.reduce((t, v) => t + v.conPresion, 0);
   const nVieja = filtrarVehiculos(vehiculos, "vieja").length;
   const paraSonda = useMemo(() => ruedasParaMedirConSonda(vehiculos), [vehiculos]);
+  // Tabla «Para medir con sonda»: tocar «Vehículo» ordena por matrícula.
+  const ordenSonda = useOrdenColumnas(paraSonda, { matricula: (f) => f.matricula });
   const sinRevisar = alertas.filter((a) => a.tipo === "vehiculo_sin_revisar");
 
   if (cargando && ruedas.length === 0) return <div className="text-slate-400">Cargando alertas…</div>;
@@ -303,7 +307,7 @@ export default function InformeAlertas() {
             <table className="w-full min-w-[560px] text-left text-[12px]">
               <thead className="text-[10px] uppercase tracking-wide text-slate-400">
                 <tr>
-                  <th className="py-1 pr-3 font-bold">Vehículo</th>
+                  <th className="py-1 pr-3 font-bold"><CabeceraOrden col="matricula" orden={ordenSonda}>Vehículo</CabeceraOrden></th>
                   <th className="py-1 pr-3 font-bold">Rueda</th>
                   <th className="py-1 pr-3 text-right font-bold">Lectura en duda</th>
                   <th className="py-1 pr-3 text-right font-bold">Mínimo</th>
@@ -312,7 +316,7 @@ export default function InformeAlertas() {
                 </tr>
               </thead>
               <tbody className="tabular-nums text-slate-200">
-                {paraSonda.map((f) => (
+                {ordenSonda.filas.map((f) => (
                   <tr key={`${f.vehiculoId}-${f.codigo}`} className="border-t border-slate-700">
                     <td className="py-1.5 pr-3">
                       <Link to={`/tyrecontrol/vehiculos/${f.vehiculoId}`} state={volver} className="font-bold text-slate-100 hover:underline">

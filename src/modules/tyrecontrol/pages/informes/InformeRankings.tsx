@@ -5,6 +5,8 @@ import { rankingVehiculos, rankingMarcas, costeKmNeumatico } from "../../service
 import type { RankingVehiculo, RankingMarca, CosteKmNeumatico } from "../../types/informes";
 import { TableWrap, tdCls, thCls } from "../../components/ui";
 import { descargarCSV } from "../../utils/exportar";
+import { useOrdenColumnas } from "../../hooks/useOrdenColumnas";
+import { CabeceraOrden } from "../../components/OrdenColumnas";
 
 const eur = (n: number) => n.toLocaleString("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
 const eur3 = (n: number) => n.toLocaleString("es-ES", { style: "currency", currency: "EUR", minimumFractionDigits: 2, maximumFractionDigits: 3 });
@@ -25,6 +27,8 @@ export default function InformeRankings() {
   const [marcas, setMarcas] = useState<RankingMarca[]>([]);
   const [neus, setNeus] = useState<CosteKmNeumatico[]>([]);
   const [error, setError] = useState("");
+  // Tocar «Matrícula» ordena la tabla de vehículos (`orden` ya es el ranking).
+  const ordenVeh = useOrdenColumnas(veh, { matricula: (v) => v.matricula });
 
   useEffect(() => {
     let vivo = true; setError("");
@@ -62,12 +66,12 @@ export default function InformeRankings() {
           </div>
           <TableWrap>
             <thead className="bg-slate-900"><tr>
-              <th className={thCls}>Matrícula</th><th className={thCls}>Km</th><th className={thCls}>Coste total</th>
+              <th className={thCls}><CabeceraOrden col="matricula" orden={ordenVeh}>Matrícula</CabeceraOrden></th><th className={thCls}>Km</th><th className={thCls}>Coste total</th>
               <th className={thCls}>Coste/km</th><th className={thCls}>Pinchazos</th><th className={thCls}>Reparaciones</th>
             </tr></thead>
             <tbody>
               {veh.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={6}>Sin datos.</td></tr>
-              : veh.map((v) => (
+              : ordenVeh.filas.map((v) => (
                 <tr key={v.vehiculo_id} className="border-t border-slate-700/60">
                   <td className={tdCls + " font-semibold"}><Link to={`/tyrecontrol/vehiculos/${v.vehiculo_id}`} className="text-sky-300 hover:underline">{v.matricula}</Link></td>
                   <td className={tdCls + " text-slate-400"}>{Number(v.km).toLocaleString("es-ES")}</td>
