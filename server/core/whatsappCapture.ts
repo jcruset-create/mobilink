@@ -14,6 +14,7 @@
 import db from "../db.ts";
 import { extractJson, AI_IMAGE_RULES } from "./ai.ts";
 import { numeroDeCita } from "../whatsapp/cita.ts";
+import { INSTRUCCION_PAIS, paisLeidoValido } from "../matriculaPais.ts";
 
 /** Para qué se abrió la captura: decide con qué prompt la lee la IA. */
 export type CapturePurpose = "assistance" | "workshop";
@@ -132,12 +133,13 @@ CITA O AUTORIZACIÓN:
 
 CAMPOS DE MATRÍCULA:
 - La BLANCA va en "plate" y la ROJA del remolque en "plateRemolque", sin espacios ni guiones.
+- País de la matrícula del camión ("paisMatricula"): ${INSTRUCCION_PAIS.replace("la placa", "la placa del camión").replace("en «pais»", "en \"paisMatricula\"")}
 
 Responde SOLO con JSON válido, sin markdown. Campos (null si no consta):
 {
   "customerName": string, "conductorNombre": string, "empresa": string,
   "contactoNombre": string, "contactoTelefono": string, "conductorTelefono": string,
-  "plate": string, "plateRemolque": string,
+  "plate": string, "plateRemolque": string, "paisMatricula": string,
   "vehicleBrand": string, "vehicleModel": string, "vehicleDescription": string,
   "latitude": number, "longitude": number, "address": string,
   "municipio": string, "provincia": string,
@@ -169,6 +171,9 @@ kilómetros, medida de neumático, contacto alternativo…). Si no hay nada, lis
    * pide después la aseguradora para pagar, así que no conviene dejarlo a un
    * solo criterio. Solo rellena si falta; lo que diga la IA manda.
    */
+  // Solo una letra de país de la UE que se pueda dibujar; lo demás, fuera.
+  if (out) out.paisMatricula = paisLeidoValido(out.paisMatricula);
+
   if (out && !out.citaOAutorizacion) {
     const cita = numeroDeCita(lines.join("\n"));
     if (cita) out.citaOAutorizacion = cita;

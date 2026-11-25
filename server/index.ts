@@ -19115,12 +19115,42 @@ app.post("/api/whatsapp-capture/sessions/:id/apply", requireAdminRole, async (re
       return res.json({ ok: true, assistance: updated.rows[0] });
     }
 
+    // El país de la matrícula, leído de la banda azul de la foto.
+    if (field === "paisMatricula") {
+      const pais = paisMatriculaDe(value);
+      if (!pais) return res.status(400).json({ error: "País no válido" });
+      await db.query(
+        `UPDATE roadside_assistances SET "paisMatricula" = $2, "updatedAtMs" = $3 WHERE id = $1`,
+        [jobId, pais, Date.now()]
+      );
+      const updated = await db.query(`SELECT * FROM roadside_assistances WHERE id = $1`, [jobId]);
+      return res.json({ ok: true, assistance: updated.rows[0] });
+    }
+
     if (!ALLOWED_FIELDS[field]) return res.status(400).json({ error: "Campo no permitido" });
 
     await db.query(
       `UPDATE roadside_assistances SET ${ALLOWED_FIELDS[field]} = $2, "updatedAtMs" = $3 WHERE id = $1`,
       [jobId, value, Date.now()]
     );
+
+    /*
+     * Al aplicar la matrícula del camión va con ella el país que la IA leyó en
+     * la misma foto, si la matrícula es la misma y la oficina no había puesto
+     * ya uno. Sin esto, una placa italiana leída por WhatsApp salía dibujada
+     * como española.
+     */
+    if (field === "plate") {
+      const sug = session.rows[0].ai_suggestions;
+      const ia = typeof sug === "string" ? (() => { try { return JSON.parse(sug); } catch { return null; } })() : sug;
+      const pais = paisParaGuardar(ia?.paisMatricula, ia?.plate, String(value ?? ""), normalizePlateText);
+      if (pais) {
+        await db.query(
+          `UPDATE roadside_assistances SET "paisMatricula" = $2 WHERE id = $1 AND "paisMatricula" IS NULL`,
+          [jobId, pais]
+        );
+      }
+    }
 
     const updated = await db.query(
       `SELECT * FROM roadside_assistances WHERE id = $1`,
