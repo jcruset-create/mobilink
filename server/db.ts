@@ -581,6 +581,13 @@ export async function initDb() {
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "descripcionAveria" TEXT;
 
+    -- Km de la asistencia (Webfleet o tablet), guardados al cerrarla para las
+    -- estadísticas: pedirlos todos a Webfleet cada vez sería lentísimo.
+    -- "kmCalculadoAtMs" marca que ya se intentó, haya salido o no.
+    ALTER TABLE roadside_assistances ADD COLUMN IF NOT EXISTS "kmRecorridos" DOUBLE PRECISION;
+    ALTER TABLE roadside_assistances ADD COLUMN IF NOT EXISTS "kmFuente" TEXT;
+    ALTER TABLE roadside_assistances ADD COLUMN IF NOT EXISTS "kmCalculadoAtMs" BIGINT;
+
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "trabajosARealizar" TEXT;
 

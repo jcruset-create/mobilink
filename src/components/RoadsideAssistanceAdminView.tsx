@@ -17,6 +17,7 @@ import {
   Truck,
   Wifi,
   X,
+  BarChart3,
 } from "lucide-react";
 
 import type { Tech } from "../modules/workshopTypes";
@@ -421,6 +422,9 @@ export default function RoadsideAssistanceAdminView({
           </a>
           <a href="/vehiculo" target="_blank" rel="noopener noreferrer" className={enlaceLateral}>
             <List className="h-4 w-4 shrink-0" /> Historial vehículo
+          </a>
+          <a href="/asistencias/estadisticas" className={enlaceLateral}>
+            <BarChart3 className="h-4 w-4 shrink-0" /> Estadísticas
           </a>
         </nav>
       </aside>

@@ -31,6 +31,7 @@ import {
   Store,
   Building2,
   Contact,
+  BarChart3,
 } from "lucide-react";
 import RoadsideBackofficeModal, { type BackofficeData } from "./RoadsideBackofficeModal";
 import KnownPlaceMapModal from "./KnownPlaceMapModal";
@@ -1700,6 +1701,12 @@ export default function RoadsideAssistanceView({
             className="flex items-center gap-2.5 rounded-lg px-3 py-2 font-medium text-slate-300 hover:bg-slate-800"
           >
             <Contact className="h-4 w-4 shrink-0" /> Clientes
+          </a>
+          <a
+            href="/asistencias/estadisticas"
+            className="flex items-center gap-2.5 rounded-lg px-3 py-2 font-medium text-slate-300 hover:bg-slate-800"
+          >
+            <BarChart3 className="h-4 w-4 shrink-0" /> Estadísticas
           </a>
           <a
             href="/asistencias/lugares"

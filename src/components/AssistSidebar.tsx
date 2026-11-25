@@ -27,11 +27,12 @@ import {
   Menu,
   Gauge,
   Star,
+  BarChart3,
 } from "lucide-react";
 
 type Props = {
   /** Clave de la entrada activa (p. ej. "otf"). */
-  active?: "flota" | "central" | "talleres" | "proveedores" | "clientes" | "lugares" | "otf" | "vehiculo" | "panel" | "bandeja" | "calidad" | "satisfaccion";
+  active?: "flota" | "central" | "talleres" | "proveedores" | "clientes" | "lugares" | "otf" | "vehiculo" | "panel" | "bandeja" | "calidad" | "satisfaccion" | "estadisticas";
   /** La pestaña de la sección OTF que está abierta, si es una pantalla de OTF. */
   otf?: PestanaOtf | null;
 };
@@ -117,6 +118,9 @@ export default function AssistSidebar({ active, otf }: Props) {
           </a>
           <a href="/asistencias/satisfaccion" className={itemCls(active === "satisfaccion")}>
             <Gauge className="h-4 w-4 shrink-0" /> Satisfacción
+          </a>
+          <a href="/asistencias/estadisticas" className={itemCls(active === "estadisticas")}>
+            <BarChart3 className="h-4 w-4 shrink-0" /> Estadísticas
           </a>
           <a href="/asistencias/proveedores" className={itemCls(active === "proveedores")}>
             <Building2 className="h-4 w-4 shrink-0" /> Proveedores

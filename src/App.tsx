@@ -22,6 +22,8 @@ import ProveedoresPage from "./pages/ProveedoresPage";
 import BandejaExcepcionesPage from "./pages/BandejaExcepcionesPage";
 import BandejaCalidadPage from "./pages/BandejaCalidadPage";
 import SatisfaccionPage from "./pages/SatisfaccionPage";
+import EstadisticasAsistenciasPage from "./pages/EstadisticasAsistenciasPage";
+import EstadisticasClientePage from "./pages/EstadisticasClientePage";
 import ClientesFacturacionPage from "./pages/ClientesFacturacionPage";
 import LugaresPage from "./pages/LugaresPage";
 import OtfHistorialPage from "./pages/OtfHistorialPage";
@@ -189,6 +191,8 @@ export default function App() {
       <Route path="/asistencias/bandeja" element={<BandejaExcepcionesPage />} />
       <Route path="/asistencias/calidad" element={<BandejaCalidadPage />} />
       <Route path="/asistencias/satisfaccion" element={<SatisfaccionPage />} />
+      <Route path="/asistencias/estadisticas" element={<EstadisticasAsistenciasPage />} />
+      <Route path="/asistencias/estadisticas/cliente" element={<EstadisticasClientePage />} />
       <Route path="/asistencias/proveedores" element={<ProveedoresPage />} />
       <Route path="/asistencias/clientes" element={<ClientesFacturacionPage />} />
       <Route path="/asistencias/lugares" element={<LugaresPage />} />
