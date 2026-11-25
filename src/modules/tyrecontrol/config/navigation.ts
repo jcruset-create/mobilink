@@ -45,6 +45,7 @@ export const NAV: NavItem[] = [
   { key: "conciliacion-telematica", path: "conciliacion-telematica", label: "Conciliación telemática", icon: Link2, grupo: "flota", roles: ["administrador"] },
   { key: "vehiculos-en-bases", path: "vehiculos-en-bases", label: "Vehículos en bases", icon: MapPin, grupo: "flota", roles: ["administrador", "operador"] },
   { key: "ranking-kilometraje", path: "ranking-kilometraje", label: "Kilómetros por vehículo", icon: Gauge, grupo: "flota", roles: ["administrador"] },
+  { key: "km-flota", path: "km-flota", label: "Km de la flota", icon: Gauge, grupo: "flota", roles: ["administrador"] },
   { key: "disponibles-revisar", path: "disponibles-revisar", label: "Disponibles para revisar", icon: CalendarCheck, grupo: "revisiones", roles: ["administrador", "operador"] },
   { key: "control-tacografos", path: "control-tacografos", label: "Control de tacógrafos", icon: Gauge, grupo: "flota", roles: ["administrador"] },
   { key: "propuestas-medida", path: "propuestas-medida", label: "Propuestas de medida", icon: Ruler, grupo: "revisiones", roles: ["administrador"] },

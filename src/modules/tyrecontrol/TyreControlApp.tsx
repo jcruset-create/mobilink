@@ -11,6 +11,7 @@ import Delegaciones from "./pages/Delegaciones";
 import Vehiculos from "./pages/Vehiculos";
 import ConciliacionTelematica from "./pages/ConciliacionTelematica";
 import RankingKilometraje from "./pages/RankingKilometraje";
+import KmFlota from "./pages/KmFlota";
 import VehiculosEnBases from "./pages/VehiculosEnBases";
 import VehiculoDetalle from "./pages/VehiculoDetalle";
 import DisponiblesRevisar from "./pages/DisponiblesRevisar";
@@ -167,6 +168,7 @@ export default function TyreControlApp() {
               <Route path="vehiculos" element={<Vehiculos />} />
               <Route path="conciliacion-telematica" element={<ConciliacionTelematica />} />
               <Route path="ranking-kilometraje" element={<RankingKilometraje />} />
+              <Route path="km-flota" element={<KmFlota />} />
               <Route path="control-tacografos" element={<ControlTacografos />} />
               <Route path="propuestas-medida" element={<PropuestasMedida />} />
               <Route path="tipos-incidencia" element={<TiposIncidencia />} />

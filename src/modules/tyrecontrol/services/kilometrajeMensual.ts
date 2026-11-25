@@ -240,3 +240,18 @@ export const revisarCoherencia = (b: { empresaId?: string; aplicar?: boolean }) 
 // El texto de los meses vive en su propio módulo, sin red, para poder
 // probarlo. Se reexporta para no romper a quien ya lo importaba de aquí.
 export { nombreDeMes, mesCorto, listaDeMeses, detalleDeMeses } from "./mesesEtiqueta";
+
+// ── Km de toda la flota por meses y años (pantalla «Km de la flota») ────────
+export interface MesDeFlota {
+  year: number; month: number;
+  kmAutenticos: number; vehiculosAutenticos: number;
+  kmProvisionales: number; vehiculosProvisionales: number;
+  descartados: number; kmDescartados: number; sinDato: number;
+  estado: "cerrado" | "incompleto" | "en_curso";
+  cuentasSinCerrar: Array<{ connectorKey: string; accountKey: string }>;
+}
+export interface AnoDeFlota { year: number; kmAutenticos: number; mesesCerrados: number; mediaMensual: number | null; kmProvisionales: number }
+export interface KmDeFlota { empresaId: string; vehiculosActivos: number; meses: MesDeFlota[]; anos: AnoDeFlota[] }
+
+export const kmDeFlota = (empresaId?: string) =>
+  pedir<KmDeFlota>(`/flota${empresaId ? `?empresa=${encodeURIComponent(empresaId)}` : ""}`);
