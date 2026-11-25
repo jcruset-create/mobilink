@@ -6,7 +6,9 @@
  * que contestó cada una.
  */
 import { useState } from "react";
-import { probarVehiculo, type PruebaVehiculo, type RespuestaPrueba } from "../services/kilometrajeMensual";
+import {
+  probarVehiculo, probarVehiculoPorPartes, type PruebaPorPartes, type PruebaVehiculo, type RespuestaPrueba,
+} from "../services/kilometrajeMensual";
 import { Modal } from "./ui";
 
 const fmt = (n: number | null | undefined) => (n == null ? "—" : Math.round(n).toLocaleString("es-ES"));
@@ -37,10 +39,24 @@ export default function ProbarMovertis({ vehiculoId, matricula, empresaId, meses
   const [error, setError] = useState("");
   const [prueba, setPrueba] = useState<PruebaVehiculo | null>(null);
   const [copiado, setCopiado] = useState(false);
+  const [partes, setPartes] = useState<PruebaPorPartes | null>(null);
+  const [buscando, setBuscando] = useState(false);
+
+  async function buscarDias() {
+    const [year, month] = mes.split("-").map(Number);
+    setBuscando(true); setError(""); setPartes(null); setCopiado(false);
+    try {
+      setPartes(await probarVehiculoPorPartes({ empresaId, vehiculoId, year, month }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo hacer la búsqueda");
+    } finally {
+      setBuscando(false);
+    }
+  }
 
   async function probar() {
     const [year, month] = mes.split("-").map(Number);
-    setProbando(true); setError(""); setPrueba(null); setCopiado(false);
+    setProbando(true); setError(""); setPrueba(null); setPartes(null); setCopiado(false);
     try {
       setPrueba(await probarVehiculo({ empresaId, vehiculoId, year, month }));
     } catch (e) {
@@ -59,6 +75,14 @@ export default function ProbarMovertis({ vehiculoId, matricula, empresaId, meses
         `· ${r.etiqueta} [unidad ${r.unidad}]\n  petición: ${JSON.stringify(r.peticion)}\n  resultado: ${r.respuesta.tipo.toUpperCase()} — ${textoRespuesta(r.respuesta)}`),
       "",
       `Conclusión: ${prueba.conclusion}`,
+      ...(partes ? [
+        "",
+        `Por partes (${partes.peticiones} peticiones, partiendo por la mitad lo que falla):`,
+        ...partes.partes.map((p) => `· días ${p.dias[0]}–${p.dias[1]}: ${p.resultado.tipo === "ok"
+          ? `OK — ${fmt(p.resultado.km)} km${p.resultado.odometroInicial != null ? ` · odómetro ${fmt(p.resultado.odometroInicial)} → ${fmt(p.resultado.odometroFinal)}` : ""}`
+          : p.resultado.tipo === "error" ? `ERROR — ${p.resultado.mensaje}` : "sin turno"}  ${JSON.stringify({ units: [Number(partes.unidad)], initial_date: Date.parse(p.desde), end_date: Date.parse(p.hasta) })}`),
+        partes.diasFallidos.length ? `Días que fallan incluso solos: ${partes.diasFallidos.join(", ")}` : "Ningún día falla solo.",
+      ] : []),
     ];
     try {
       await navigator.clipboard.writeText(lineas.join("\n"));
@@ -107,6 +131,13 @@ export default function ProbarMovertis({ vehiculoId, matricula, empresaId, meses
               {prueba.unidadControl && <> · control: unidad <b className="text-slate-200">{prueba.unidadControl}</b></>}
               {" "}· cuenta {prueba.cuenta.connectorKey}/{prueba.cuenta.accountKey} · {fecha(prueba.probadoEn)}
             </div>
+            {prueba.resultados.some((r) => r.clave !== "control" && r.respuesta.tipo === "error") && !partes && (
+              <button onClick={() => void buscarDias()} disabled={buscando}
+                className="justify-self-start rounded-lg border border-amber-500 px-3 py-1.5 text-sm font-bold text-amber-200 hover:bg-amber-500/10 disabled:opacity-50">
+                {buscando ? "Buscando… (unas 10 peticiones, hasta un par de minutos)" : "🔎 Buscar los días que fallan y calcular el mes por partes"}
+              </button>
+            )}
+            {partes && <ResultadoPartes p={partes} />}
             <div className="overflow-x-auto rounded-lg border border-slate-700">
               <table className="w-full min-w-[640px] text-[12px]">
                 <thead className="bg-slate-900/60 text-[10px] uppercase tracking-wide text-slate-400">
@@ -137,5 +168,45 @@ export default function ProbarMovertis({ vehiculoId, matricula, empresaId, meses
         )}
       </div>
     </Modal>
+  );
+}
+
+/** Lo que salió pidiendo el mes por partes. */
+function ResultadoPartes({ p }: { p: PruebaPorPartes }) {
+  return (
+    <div className="grid gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-[12px]">
+      <div className="text-sm text-slate-100">
+        {p.diasFallidos.length
+          ? <>Fallan incluso solos los días <b className="text-rose-300">{p.diasFallidos.join(", ")}</b>.</>
+          : <>Ningún día falla pedido solo.</>}
+        {" "}
+        {p.km != null
+          ? <>El mes por partes da <b className="text-emerald-300">{fmt(p.km)} km</b>
+              {p.kmPorOdometro > 0 && <> ({fmt(p.kmPorOdometro)} de ellos con el odómetro, para los días que fallan)</>}
+              {p.odometroInicial != null && p.odometroFinal != null && <> · odómetro {fmt(p.odometroInicial)} → {fmt(p.odometroFinal)}</>}.
+              {" "}Así lo cerrará la sincronización de la noche.</>
+          : <>No se ha podido completar el mes: {p.motivo ?? "—"}</>}
+      </div>
+      <div className="text-slate-400">{p.peticiones} peticiones · {fecha(p.probadoEn)}</div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[520px]">
+          <tbody>
+            {p.partes.map((x) => (
+              <tr key={`${x.dias[0]}-${x.dias[1]}`} className="border-t border-slate-800">
+                <td className="py-1 pr-3 font-bold text-slate-200">Días {x.dias[0]}{x.dias[1] !== x.dias[0] ? `–${x.dias[1]}` : ""}</td>
+                <td className={`py-1 pr-3 font-bold ${x.resultado.tipo === "ok" ? "text-emerald-300" : x.resultado.tipo === "error" ? "text-rose-300" : "text-slate-400"}`}>
+                  {x.resultado.tipo === "ok" ? "Funciona" : x.resultado.tipo === "error" ? "Error" : "Sin turno"}
+                </td>
+                <td className="py-1 text-slate-300">
+                  {x.resultado.tipo === "ok"
+                    ? `${fmt(x.resultado.km)} km${x.resultado.odometroInicial != null ? ` · odómetro ${fmt(x.resultado.odometroInicial)} → ${fmt(x.resultado.odometroFinal)}` : ""}`
+                    : x.resultado.tipo === "error" ? x.resultado.mensaje : "Repite en unos minutos"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }

@@ -44,6 +44,7 @@ import { resolveTelematicsConnectors } from "../../integration-hub/connectors/Co
 import { listVehicleMappings, nextCorrelationId } from "../../integration-hub/infrastructure/repositories.ts";
 import { ErrorRitmo, limitadorDe, ritmoDeConfig } from "../../integration-hub/infrastructure/ritmo.ts";
 import { sabeResumirViajes } from "../../integration-hub/domain/telematics.ts";
+import { pedirPorPartes } from "../../integration-hub/domain/partesDelMes.ts";
 import { iniciarRelleno, pararRelleno, tareasDeEmpresa } from "./rellenoWorker.ts";
 import { intervaloValido } from "./relleno.ts";
 import { contarPorClase, mesesQueFaltan, proveedorDe } from "./huecos.ts";
@@ -63,6 +64,25 @@ const ESPERA_MAXIMA_MS = 45_000;
 const PAGINA_FLOTA = 500;
 
 type Peticion = Request & { solicitante?: Solicitante };
+
+/** El vehículo, su cuenta de telemática y su unidad, para las pruebas con el proveedor. */
+async function enlaceParaPrueba(empresaId: string, vehiculoId: string) {
+  const { data: v } = await supabase
+    .from("tc_vehiculos").select("id, empresa_id, matricula").eq("id", vehiculoId).maybeSingle();
+  if (!v || String((v as { empresa_id?: string }).empresa_id ?? "") !== empresaId) {
+    return { error: "Vehículo no encontrado", estado: 404 } as const;
+  }
+  const cuentas = await resolveTelematicsConnectors(empresaId);
+  for (const c of cuentas) {
+    const enlaces = await listVehicleMappings({ tenantId: empresaId, system: c.key, accountKey: c.accountKey });
+    const e = enlaces.find((x) => x.mobilink_id === vehiculoId && x.active !== false);
+    if (!e) continue;
+    const conector = c.connector;
+    if (!sabeResumirViajes(conector)) return { error: "Esta cuenta no sabe resumir viajes", estado: 400 } as const;
+    return { v, cuenta: c, unidad: String(e.external_code), conector };
+  }
+  return { error: "Este vehículo no está enlazado con ninguna cuenta de telemática", estado: 400 } as const;
+}
 
 /** La zona horaria de la cuenta de telemática activa de la empresa. */
 async function zonaDeEmpresa(empresaId: string): Promise<string> {
@@ -502,32 +522,22 @@ export function createKilometrajeMensualRouter(): Router {
       const mes = mesDeCuerpo(req.body);
       if (!vehiculoId || !mes) return res.status(400).json({ error: "Falta el vehículo o el mes" });
 
-      const { data: v } = await supabase
-        .from("tc_vehiculos").select("id, empresa_id, matricula").eq("id", vehiculoId).maybeSingle();
-      if (!v || String((v as { empresa_id?: string }).empresa_id ?? "") !== empresaId) {
-        return res.status(404).json({ error: "Vehículo no encontrado" });
-      }
-
-      // La cuenta de telemática en la que está enlazado este vehículo.
-      const cuentas = await resolveTelematicsConnectors(empresaId);
-      let cuenta: (typeof cuentas)[number] | null = null;
-      let unidad = "";
-      for (const c of cuentas) {
-        const enlaces = await listVehicleMappings({ tenantId: empresaId, system: c.key, accountKey: c.accountKey });
-        const e = enlaces.find((x) => x.mobilink_id === vehiculoId && x.active !== false);
-        if (e) { cuenta = c; unidad = String(e.external_code); break; }
-      }
-      if (!cuenta || !unidad) return res.status(400).json({ error: "Este vehículo no está enlazado con ninguna cuenta de telemática" });
-      const conector = cuenta.connector;
-      if (!sabeResumirViajes(conector)) return res.status(400).json({ error: "Esta cuenta no sabe resumir viajes" });
+      const enl = await enlaceParaPrueba(empresaId, vehiculoId);
+      if ("error" in enl) return res.status(enl.estado).json({ error: enl.error });
+      const { v, cuenta, unidad, conector } = enl;
 
       const zona = String(cuenta.config.zonaHoraria ?? ZONA_HORARIA_POR_DEFECTO);
       const ventanas = ventanasDePrueba(mes, zona);
 
-      // Control: otra unidad de la misma cuenta con ese mes cerrado y bien.
+      // Control: la unidad de la misma cuenta que MÁS rodó ese mes, con el mes
+      // cerrado y bien. Una que no se movió no demuestra nada (contesta 0 km
+      // con cualquier cosa): con muchos viajes, si funciona, el problema no es
+      // el volumen.
       const filas = await listMonthlyMileageByTenant({ tenantId: empresaId, desdeYear: mes.year });
-      const control = filas.find((f) => f.system === cuenta!.key && f.account_key === cuenta!.accountKey
-        && f.year === mes.year && f.month === mes.month && f.sync_status === "ok" && f.closed && f.mobilink_id !== vehiculoId);
+      const control = filas
+        .filter((f) => f.system === cuenta.key && f.account_key === cuenta.accountKey
+          && f.year === mes.year && f.month === mes.month && f.sync_status === "ok" && f.closed && f.mobilink_id !== vehiculoId)
+        .sort((a, b) => Number(b.distance_km ?? 0) - Number(a.distance_km ?? 0))[0];
 
       const ctx = { tenantId: empresaId, correlationId: await nextCorrelationId() };
       const limitador = limitadorDe(`${empresaId}/${cuenta.key}/${cuenta.accountKey}`, ritmoDeConfig(cuenta.config));
@@ -562,6 +572,56 @@ export function createKilometrajeMensualRouter(): Router {
         probadoEn: new Date().toISOString(),
         resultados: resultados.map((r) => ({ ...r, desde: r.desde.toISOString(), hasta: r.hasta.toISOString() })),
         conclusion: conclusion(resultados),
+      });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /**
+   * «Buscar los días que fallan»: el mes de UN vehículo pedido por partes,
+   * partiendo por la mitad lo que falla hasta llegar a días sueltos. Dice qué
+   * días fallan y cuántos km da el mes por partes (con los días rotos
+   * rellenados con el odómetro). Es lo mismo que hace la sincronización de la
+   * noche con los meses cerrados que fallan enteros. No guarda nada.
+   *
+   * Cuerpo: { empresaId?, vehiculoId, year, month }
+   */
+  router.post("/probar-vehiculo/partes", async (req, res) => {
+    try {
+      const empresaId = empresaDe((req as Peticion).solicitante!, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const vehiculoId = String(req.body?.vehiculoId ?? "").trim();
+      const mes = mesDeCuerpo(req.body);
+      if (!vehiculoId || !mes) return res.status(400).json({ error: "Falta el vehículo o el mes" });
+      const enl = await enlaceParaPrueba(empresaId, vehiculoId);
+      if ("error" in enl) return res.status(enl.estado).json({ error: enl.error });
+      const { v, cuenta, unidad, conector } = enl;
+      const zona = String(cuenta.config.zonaHoraria ?? ZONA_HORARIA_POR_DEFECTO);
+      const ctx = { tenantId: empresaId, correlationId: await nextCorrelationId() };
+      const limitador = limitadorDe(`${empresaId}/${cuenta.key}/${cuenta.accountKey}`, ritmoDeConfig(cuenta.config));
+
+      const m = await pedirPorPartes(mes, zona, async (desde, hasta) => {
+        try {
+          await limitador.turno(ESPERA_MAXIMA_MS);
+        } catch (e) {
+          if (e instanceof ErrorRitmo) return null;
+          throw e;
+        }
+        const [s] = await conector.getTripSummary(ctx, [unidad], { from: desde, to: hasta });
+        if (!s) return "vacio";
+        return { km: s.distanceKm, odometroInicial: s.initialOdometerKm ?? null, odometroFinal: s.finalOdometerKm ?? null, viajes: s.trips ?? null };
+      }, { primeraFallida: true, maxPeticiones: 16 });
+
+      res.json({
+        vehiculoId, matricula: (v as { matricula?: string }).matricula ?? null, unidad,
+        probadoEn: new Date().toISOString(),
+        km: m.km == null ? null : Math.round(m.km), kmPorOdometro: Math.round(m.kmPorOdometro),
+        odometroInicial: m.odometroInicial, odometroFinal: m.odometroFinal, viajes: m.viajes,
+        diasFallidos: m.diasFallidos, peticiones: m.peticiones, motivo: m.motivo ?? null,
+        partes: m.partes
+          .sort((a, b) => a.dias[0] - b.dias[0])
+          .map((p) => ({ ...p, desde: p.desde.toISOString(), hasta: p.hasta.toISOString() })),
       });
     } catch (e) {
       fallo(res, e);

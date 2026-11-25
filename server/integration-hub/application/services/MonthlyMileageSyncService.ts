@@ -51,8 +51,22 @@ import {
 } from "../../infrastructure/repositories.ts";
 import { ErrorRitmo, limitadorDe, ritmoDeConfig } from "../../infrastructure/ritmo.ts";
 import { resolveTelematicsConnectors } from "../../connectors/ConnectorRegistry.ts";
+import { pedirPorPartes } from "../../domain/partesDelMes.ts";
 
 export const FUENTE = "summarytrips";
+/** Mes cerrado pedido por partes porque el mes entero fallaba. Ver `partesDelMes.ts`. */
+export const FUENTE_PARTES = "summarytrips_partes";
+/** Igual, y con días que fallan solos rellenados con el odómetro de los vecinos. */
+export const FUENTE_PARTES_ODOMETRO = "summarytrips_partes_odometro";
+/**
+ * Cuántas peticiones puede gastar UNA pasada en pedir meses por partes.
+ * Se suma al trabajo normal y va por el mismo limitador: con 12 cada 5
+ * minutos, 250 son unas dos horas, lo que cabe en la madrugada después de la
+ * pasada normal. Lo que no quepa, la noche siguiente (el mes sigue sin cerrar).
+ */
+export const PETICIONES_POR_PARTES_POR_PASADA = 250;
+/** Tope por unidad y mes: un día roto se aísla con unas diez. */
+const PETICIONES_POR_PARTES_POR_UNIDAD = 16;
 export const MESES_HISTORICO_POR_DEFECTO = 12;
 const UNIDADES_POR_PETICION_POR_DEFECTO = 25;
 const UNIDADES_POR_PETICION_MAXIMO = 100;
@@ -117,6 +131,8 @@ export interface OpcionesSyncMensual {
   esperaMaximaMs?: number;
   /** Para pruebas. */
   ahora?: Date;
+  /** Peticiones para pedir por partes los meses cerrados que fallan enteros. 0 = no. */
+  presupuestoPartes?: number;
 }
 
 export interface ResumenCuentaMensual {
@@ -144,6 +160,8 @@ export interface ResumenCuentaMensual {
   abandonada?: string;
   /** Se abandonó por no tener turno con el proveedor, sin llegar a preguntar. */
   sinCupo?: boolean;
+  /** Meses cerrados que fallaban enteros y se han pedido por partes. */
+  porPartes?: { intentados: number; cerrados: number; peticiones: number; conOdometro: number };
 }
 
 export interface ResumenSyncMensual {
@@ -153,7 +171,7 @@ export interface ResumenSyncMensual {
 
 /** Lo que devuelve el proveedor para un vehículo, o por qué no. */
 type Resultado =
-  | { tipo: "ok"; resumen: TripSummary }
+  | { tipo: "ok"; resumen: TripSummary; fuente?: string }
   | { tipo: "vacio" }
   | { tipo: "error"; mensaje: string; divisible?: boolean };
 
@@ -241,6 +259,9 @@ async function sincronizarCuenta(
     const conKm = new Set<string>();
     const sinDatos = new Set<string>();
     let lotesSeguidosFallidos = 0;
+    // Meses CERRADOS que el proveedor rechaza aunque la unidad se pida sola:
+    // se intentan por partes al final de la pasada. Ver `partesDelMes.ts`.
+    const porPartes: Array<{ enlace: MappingRow; mes: Mes; limites: { desde: Date; hasta: Date } }> = [];
 
     for (const mes of meses) {
       const limites = limitesDelMes(mes, zona);
@@ -308,6 +329,7 @@ async function sincronizarCuenta(
 
           if (res.tipo === "error") {
             anotarError(`${claveDeMes(mes)} ${enlace.external_code}: ${res.mensaje}`);
+            if (cerrado && res.divisible) porPartes.push({ enlace, mes, limites });
             // Con la credencial rechazada, cada petición más es cupo quemado.
             if (res.mensaje.startsWith("AUTH:")) {
               await guardarFila(op.tenantId, cuenta, enlace, mes, limites, zona, res, cerrado);
@@ -339,6 +361,49 @@ async function sincronizarCuenta(
           await cerrarAuditoria(op.tenantId, cuenta, r, "error");
           return r;
         }
+      }
+    }
+
+    // Por partes, con lo que quede de presupuesto. Solo si la pasada no se ha
+    // abandonado (con el proveedor diciendo que no a todo no tiene sentido).
+    let presupuesto = op.presupuestoPartes ?? PETICIONES_POR_PARTES_POR_PASADA;
+    if (porPartes.length && presupuesto > 0) {
+      r.porPartes = { intentados: 0, cerrados: 0, peticiones: 0, conOdometro: 0 };
+      for (const { enlace, mes, limites } of porPartes) {
+        if (presupuesto < 4) break;
+        r.porPartes.intentados += 1;
+        const m = await pedirPorPartes(mes, zona, async (desde, hasta) => {
+          try {
+            await limitador.turno(op.esperaMaximaMs);
+          } catch (e) {
+            if (e instanceof ErrorRitmo) return null;
+            throw e;
+          }
+          r.peticiones += 1;
+          const [s] = await conector.getTripSummary(ctx, [enlace.external_code], { from: desde, to: hasta });
+          if (!s) return "vacio";
+          return { km: s.distanceKm, odometroInicial: s.initialOdometerKm ?? null, odometroFinal: s.finalOdometerKm ?? null, viajes: s.trips ?? null };
+        }, { primeraFallida: true, maxPeticiones: Math.min(PETICIONES_POR_PARTES_POR_UNIDAD, presupuesto) });
+        presupuesto -= m.peticiones;
+        r.porPartes.peticiones += m.peticiones;
+        // Ni una parte buena: no es un día roto, es el proveedor diciendo que
+        // no a todo. Se deja el resto para otra pasada en vez de gastar cupo.
+        if (!m.partes.some((p) => p.resultado.tipo === "ok")) break;
+        if (m.km == null) continue; // sigue en error: otra noche, o a mano
+        r.porPartes.cerrados += 1;
+        if (m.kmPorOdometro > 0) r.porPartes.conOdometro += 1;
+        conKm.add(enlace.mobilink_id);
+        r.kmTotales += m.km;
+        await guardarFila(op.tenantId, cuenta, enlace, mes, limites, zona, {
+          tipo: "ok",
+          fuente: m.kmPorOdometro > 0 ? FUENTE_PARTES_ODOMETRO : FUENTE_PARTES,
+          resumen: {
+            provider: cuenta.key, accountKey: cuenta.accountKey, providerVehicleId: enlace.external_code,
+            window: { from: limites.desde, to: limites.hasta },
+            distanceKm: m.km, initialOdometerKm: m.odometroInicial ?? undefined,
+            finalOdometerKm: m.odometroFinal ?? undefined, trips: m.viajes,
+          } as TripSummary,
+        }, true);
       }
     }
 
@@ -482,7 +547,7 @@ async function guardarFila(
     mobilinkId: enlace.mobilink_id, externalCode: enlace.external_code,
     year: mes.year, month: mes.month,
     periodStartMs: limites.desde.getTime(), periodEndMs: limites.hasta.getTime(),
-    timezone: zona, source: FUENTE,
+    timezone: zona, source: res.tipo === "ok" && res.fuente ? res.fuente : FUENTE,
   };
   if (res.tipo === "ok") {
     await upsertMonthlyMileage({
@@ -536,6 +601,7 @@ async function cerrarAuditoria(
         muestraErrores: r.muestraErrores, kmTotales: redondear(r.kmTotales),
         unidadesPorPeticion: r.unidadesPorPeticion, zonaHoraria: r.zonaHoraria,
         abandonada: r.abandonada ?? null,
+        porPartes: r.porPartes ?? null,
       }),
     });
   } catch (e: any) {
