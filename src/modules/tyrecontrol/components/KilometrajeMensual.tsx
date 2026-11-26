@@ -6,6 +6,7 @@ import {
   type KilometrajeVehiculo,
 } from "../services/kilometrajeMensual";
 import { listarCuentas } from "../services/conciliacion";
+import KmEnFecha from "./KmEnFecha";
 
 /**
  * Kilómetros mensuales del vehículo, según la telemática.
@@ -77,11 +78,18 @@ export default function KilometrajeMensual({ vehiculoId }: { vehiculoId: string 
   }
 
   if (!datos || !datos.hayTelemetria) {
-    // Sin telemática, nada. Con error de red, tampoco se grita: una línea.
-    return error && esAdmin ? <div className="mt-3 text-[11px] text-slate-500">Kilómetros mensuales: {error}</div> : null;
+    // Sin telemática, no hay cuadro de meses; «km en una fecha» sí, que sale
+    // también de las revisiones y los montajes. Un error de red no se grita.
+    return (
+      <div className="mt-3">
+        {error && esAdmin && <div className="mb-2 text-[11px] text-slate-500">Kilómetros mensuales: {error}</div>}
+        {datos && <div className="max-w-xs"><KmEnFecha vehiculoId={vehiculoId} /></div>}
+      </div>
+    );
   }
 
   const km = (v: number | null | undefined) => (v == null ? "—" : `${Math.round(v).toLocaleString("es-ES")} km`);
+  const odo = (v: number) => Math.round(v).toLocaleString("es-ES");
   const meses = verTodos ? datos.meses : datos.meses.slice(0, 6);
   const ultimaSync = datos.meses.length ? Math.max(...datos.meses.map((m) => m.sincronizadoMs)) : null;
 
@@ -108,12 +116,24 @@ export default function KilometrajeMensual({ vehiculoId }: { vehiculoId: string 
       </div>
 
       {datos.meses.length === 0 ? (
-        <div className="text-xs text-slate-500">
-          Todavía sin datos: la sincronización diaria los trae de madrugada, o pulsa «Sincronizar».
+        <div className="grid gap-3 md:grid-cols-[1fr_auto]">
+          <div className="text-xs text-slate-500">
+            Todavía sin datos: la sincronización diaria los trae de madrugada, o pulsa «Sincronizar».
+          </div>
+          <div className="md:min-w-[180px]"><KmEnFecha vehiculoId={vehiculoId} /></div>
         </div>
       ) : (
         <div className="grid gap-3 md:grid-cols-[1fr_auto]">
           <table className="text-xs">
+            <thead>
+              <tr className="text-[10px] text-slate-500">
+                <th className="pb-1 pr-4 text-left font-normal">Mes</th>
+                <th className="pb-1 pr-3 text-right font-normal">Recorridos</th>
+                <th className="pb-1" />
+                <th className="pb-1 pr-3 text-right font-normal">Odómetro al empezar</th>
+                <th className="pb-1 text-right font-normal">Odómetro al cerrar</th>
+              </tr>
+            </thead>
             <tbody>
               {meses.map((m) => (
                 <tr key={`${m.year}-${m.month}`} className="border-b border-slate-700/60 last:border-0">
@@ -125,11 +145,16 @@ export default function KilometrajeMensual({ vehiculoId }: { vehiculoId: string 
                     {!m.cerrado && m.estado !== "error" && "en curso"}
                     {m.estado === "error" && <span className="text-amber-400" title={m.error ?? ""}>error al sincronizar</span>}
                   </td>
+                  {/* El cierre del mes en curso no es el del último día: es el de la
+                      última sincronización. Se deja en blanco hasta que cierre. */}
+                  <td className="py-1 pr-3 text-right tabular-nums text-slate-300">{m.estado === "ok" && m.odometroInicial ? odo(m.odometroInicial) : <span className="text-slate-600">—</span>}</td>
+                  <td className="py-1 text-right tabular-nums text-slate-300">{m.estado === "ok" && m.cerrado && m.odometroFinal ? odo(m.odometroFinal) : <span className="text-slate-600">—</span>}</td>
                 </tr>
               ))}
             </tbody>
           </table>
           <div className="flex flex-col gap-2 md:min-w-[180px]">
+            <KmEnFecha vehiculoId={vehiculoId} />
             <div className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2">
               <div className="text-[10px] text-slate-400">Año {datos.anioActual.year}</div>
               <div className="text-sm font-black text-slate-100">{km(datos.anioActual.km)}</div>
