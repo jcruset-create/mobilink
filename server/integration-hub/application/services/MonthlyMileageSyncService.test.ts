@@ -539,6 +539,39 @@ describe("errores", () => {
     expect(r.cuentas[0].peticiones).toBe(llamadas.length);
   });
 
+  it("tras abandonar por lotes rechazados, los meses cerrados que fallaron se piden POR PARTES", async () => {
+    // Producción, 26/11/2026: los ~150 de octubre con un día roto van juntos
+    // en los lotes, caen cinco seguidos y la pasada se abandonaba sin llegar
+    // nunca a la fase por partes.
+    const inicioAgo = Date.UTC(2026, 6, 31, 22);
+    const diaDe = (t: Date) => Math.floor((t.getTime() - inicioAgo) / 86_400_000) + 1;
+    cuenta({
+      config: { unidadesPorPeticion: 1 },
+      responder: (ids, w) => {
+        const d1 = diaDe(w.from);
+        const d2 = diaDe(new Date(w.to.getTime() - 1));
+        if (d1 <= 12 && d2 >= 12) {
+          throw IntegrationError.permanent("MOVERTIS_PETICION", "Movertis rechazó la petición: Cannot read properties of undefined (reading 'toString')");
+        }
+        return ids.map((id) => ({
+          provider: "movertis", accountKey: "buses", providerVehicleId: id, window: w,
+          distanceKm: (d2 - d1 + 1) * 10, initialOdometerKm: 1000 + (d1 - 1) * 10, finalOdometerKm: 1000 + d2 * 10,
+        }));
+      },
+    });
+    vi.mocked(listVehicleMappings).mockResolvedValue(enlaces(8) as any);
+
+    const r = await syncMonthlyMileage({ tenantId: "empresa-A", meses: [{ year: 2026, month: 8 }], ahora: AHORA });
+
+    expect(r.cuentas[0].abandonada).toContain("5 lotes seguidos");
+    expect(r.cuentas[0].porPartes?.intentados).toBe(5);
+    expect(r.cuentas[0].porPartes?.cerrados).toBe(5);
+    const cerradas = vi.mocked(upsertMonthlyMileage).mock.calls.map((c) => c[0]).filter((f) => f.source === "summarytrips_partes_odometro");
+    expect(cerradas).toHaveLength(5);
+    expect(cerradas[0]).toMatchObject({ closed: true, syncStatus: "ok", distanceKm: 310 });
+    expect(vi.mocked(upsertSyncState).mock.calls[0][0].status).toBe("error");
+  });
+
   it("el mes en curso NO se pide por partes (cambia cada día: sería gastar cupo)", async () => {
     const llamadas = cuenta({
       config: { unidadesPorPeticion: 1 },
