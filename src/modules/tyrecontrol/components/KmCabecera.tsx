@@ -76,15 +76,26 @@ export default function KmCabecera({ vehiculoId, kmActual, procedencia }: {
     );
   }
 
-  // 2. Todavía no ha contestado, o no ha podido: el último conocido.
-  const base = ultimo?.km ?? inicial;
+  // 2. Sin odómetro fiable de la telemática: el reconstruido (última lectura
+  //    real + km de viajes) y, si no lo hay, el último conocido.
+  const rec = datos?.reconstruido ?? null;
+  const base = rec?.km ?? ultimo?.km ?? inicial;
   const sinTelematica = lectura?.estado === "sin_telematica";
   return (
     <>
       <span className="ml-2 text-lg font-black text-slate-100">
-        {base != null ? km(base) : "—"} <span className="text-xs font-normal text-slate-400">km</span>
+        {rec && rec.rodados !== 0 ? "≈ " : ""}{base != null ? km(base) : "—"} <span className="text-xs font-normal text-slate-400">km</span>
       </span>
-      {ultimo ? (
+      {rec && rec.rodados !== 0 ? (
+        <span
+          className="rounded-full bg-sky-500/15 px-2.5 py-1 text-[11px] font-bold text-sky-300"
+          title={`Reconstruido: ${rec.ancla.detalle} (${km(rec.ancla.km)} km) ${rec.rodados >= 0 ? "+" : "−"} ` +
+            `${km(Math.abs(rec.rodados))} km de viajes de la telemática desde entonces. ` +
+            "Cada revisión o montaje con km vuelve a anclar la cuenta."}
+        >
+          reconstruido · {rec.ancla.detalle} + viajes
+        </span>
+      ) : ultimo ? (
         <span
           className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${leyendo ? "bg-slate-700/60 text-slate-300" : "bg-amber-500/15 text-amber-300"}`}
           title={`Último km conocido: ${ultimo.detalle}`}

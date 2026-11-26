@@ -4,6 +4,7 @@ import { Download, Gauge, RefreshCw, TriangleAlert } from "lucide-react";
 import { kmDeFlota, rellenarKilometraje, type KmDeFlota, type MesDeFlota } from "../services/kilometrajeMensual";
 import { listarEmpresas } from "../services/data";
 import type { Empresa } from "../types";
+import KmActualFlota from "../components/KmActualFlota";
 
 /**
  * Km recorridos por TODA la flota, por meses y por años.
@@ -147,6 +148,9 @@ export default function KmFlota() {
       {error && <div className="mb-3 rounded-lg bg-red-500/10 p-3 text-sm text-red-300">{error}</div>}
       {aviso && <div className="mb-3 rounded-lg bg-emerald-500/10 p-3 text-sm text-emerald-300">{aviso}</div>}
       {cargando && <div className="text-sm text-slate-400">Cargando…</div>}
+
+      {/* El km de HOY de cada vehículo: no depende del año elegido. */}
+      {empresaId && <div className="mb-4"><KmActualFlota empresaId={empresaId} /></div>}
 
       {!cargando && datos && meses.length === 0 && (
         <div className="rounded-lg border border-slate-700 bg-slate-800/50 p-4 text-sm text-slate-400">

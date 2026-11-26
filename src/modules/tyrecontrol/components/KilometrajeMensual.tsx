@@ -7,6 +7,7 @@ import {
 } from "../services/kilometrajeMensual";
 import { listarCuentas } from "../services/conciliacion";
 import KmEnFecha from "./KmEnFecha";
+import { kmFichaVehiculo, type OdometroMes } from "../services/data";
 
 /**
  * Kilómetros mensuales del vehículo, según la telemática.
@@ -28,6 +29,9 @@ export default function KilometrajeMensual({ vehiculoId }: { vehiculoId: string 
   const [sincronizando, setSincronizando] = useState(false);
   const [msg, setMsg] = useState("");
   const [verTodos, setVerTodos] = useState(false);
+  // Los odómetros de cada mes, depurados: el de Movertis si cuadra con las
+  // lecturas reales; si no, el reconstruido (lectura real + viajes).
+  const [odos, setOdos] = useState<OdometroMes[]>([]);
 
   async function cargar() {
     try {
@@ -39,6 +43,11 @@ export default function KilometrajeMensual({ vehiculoId }: { vehiculoId: string 
   }
 
   useEffect(() => { void cargar(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [vehiculoId]);
+  useEffect(() => {
+    let vivo = true;
+    kmFichaVehiculo(vehiculoId, false).then((r) => { if (vivo) setOdos(r.odometrosMes ?? []); }).catch(() => {});
+    return () => { vivo = false; };
+  }, [vehiculoId]);
 
   async function sincronizar() {
     if (!datos) return;
@@ -89,9 +98,16 @@ export default function KilometrajeMensual({ vehiculoId }: { vehiculoId: string 
   }
 
   const km = (v: number | null | undefined) => (v == null ? "—" : `${Math.round(v).toLocaleString("es-ES")} km`);
-  const odo = (v: number) => Math.round(v).toLocaleString("es-ES");
   const hoy = new Date();
   const esMesActual = (m: { year: number; month: number }) => m.year === hoy.getFullYear() && m.month === hoy.getMonth() + 1;
+  const odoDe = (m: { year: number; month: number; odometroInicial: number | null; odometroFinal: number | null; estado: string; cerrado: boolean }): OdometroMes | null =>
+    odos.find((o) => o.year === m.year && o.month === m.month)
+    // Sin el cálculo del servidor (todavía cargando), lo de Movertis tal cual.
+    ?? (m.estado === "ok"
+      ? { year: m.year, month: m.month, inicio: m.odometroInicial, cierre: m.odometroFinal,
+          fuenteInicio: m.odometroInicial ? "movertis" : null, fuenteCierre: m.odometroFinal ? "movertis" : null,
+          movertisInicio: null, movertisCierre: null }
+      : null);
   const meses = verTodos ? datos.meses : datos.meses.slice(0, 6);
   const ultimaSync = datos.meses.length ? Math.max(...datos.meses.map((m) => m.sincronizadoMs)) : null;
 
@@ -158,8 +174,8 @@ export default function KilometrajeMensual({ vehiculoId }: { vehiculoId: string 
                   </td>
                   {/* El cierre del mes en curso no es el del último día: es el de la
                       última sincronización. Se deja en blanco hasta que cierre. */}
-                  <td className="py-1 pr-3 text-right tabular-nums text-slate-300">{m.estado === "ok" && m.odometroInicial ? odo(m.odometroInicial) : <span className="text-slate-600">—</span>}</td>
-                  <td className="py-1 text-right tabular-nums text-slate-300">{m.estado === "ok" && !esMesActual(m) && m.odometroFinal ? odo(m.odometroFinal) : <span className="text-slate-600">—</span>}</td>
+                  <CeldaOdometro o={odoDe(m)} cual="inicio" />
+                  <CeldaOdometro o={esMesActual(m) ? null : odoDe(m)} cual="cierre" />
                 </tr>
               ))}
             </tbody>
@@ -191,3 +207,25 @@ export default function KilometrajeMensual({ vehiculoId }: { vehiculoId: string 
     </div>
   );
 }
+
+/**
+ * Un odómetro del mes: el de Movertis en blanco, el reconstruido en azul con
+ * «≈», y el de Movertis que no cuadra, tachado al lado.
+ */
+function CeldaOdometro({ o, cual }: { o: OdometroMes | null; cual: "inicio" | "cierre" }) {
+  const km = o ? (cual === "inicio" ? o.inicio : o.cierre) : null;
+  const fuente = o ? (cual === "inicio" ? o.fuenteInicio : o.fuenteCierre) : null;
+  const tachado = o ? (cual === "inicio" ? o.movertisInicio : o.movertisCierre) : null;
+  const f = (n: number) => Math.round(n).toLocaleString("es-ES");
+  return (
+    <td className={`py-1 text-right tabular-nums ${cual === "inicio" ? "pr-3" : ""}`}>
+      {km == null ? <span className="text-slate-600">—</span> : fuente === "reconstruido" ? (
+        <span className="text-sky-300" title="Reconstruido: última lectura real (revisión o montaje) ± km de viajes">≈ {f(km)}</span>
+      ) : <span className="text-slate-300">{f(km)}</span>}
+      {tachado != null && (
+        <span className="ml-1.5 text-slate-600 line-through" title="Lo que daba Movertis: no cuadra con las lecturas reales">{f(tachado)}</span>
+      )}
+    </td>
+  );
+}
+
