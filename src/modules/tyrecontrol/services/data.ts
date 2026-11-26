@@ -972,10 +972,16 @@ export async function kmFichaVehiculo(vehiculoId: string, vivo: boolean): Promis
   return j as KmFicha;
 }
 
-export type KmEnFechaRespuesta =
+export type KmEnFechaRespuesta = (
   | { tipo: "lectura" | "telematica" | "estimado"; km: number; fecha: string; detalle: string }
   | { tipo: "interpolado"; km: number; fecha: string; anterior: LecturaKmFicha; siguiente: LecturaKmFicha }
-  | { tipo: "sin_datos"; fecha: string; motivo: string };
+  | { tipo: "sin_datos"; fecha: string; motivo: string }
+) & {
+  /** Lecturas de ese día que no cuadran con las demás y no se han usado. */
+  avisos?: string[];
+  /** Por qué la telemática no ha dado el odómetro exacto, si no lo ha dado. */
+  telematica?: string;
+};
 
 /** Los km que tenía el vehículo en una fecha (`YYYY-MM-DD`), con su procedencia. */
 export async function kmEnFechaVehiculo(vehiculoId: string, fecha: string): Promise<KmEnFechaRespuesta> {

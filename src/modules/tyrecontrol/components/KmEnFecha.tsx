@@ -13,8 +13,9 @@ const ETIQUETA: Record<string, { texto: string; cls: string }> = {
 
 /**
  * «¿Cuántos km tenía en una fecha?» Pregunta al servidor, que prueba por
- * orden: lectura real de ese día, odómetro de la telemática al final del día,
- * entre dos lecturas cercanas o estimado con los km del mes. Siempre se dice
+ * orden: odómetro de la telemática al final del día, lectura real de ese día,
+ * entre dos lecturas cercanas o estimado con los km del mes. Las lecturas que
+ * no cuadran (un km mal tecleado en un montaje) se apartan y se avisan. Siempre se dice
  * cuál de ellas ha sido: un número sin procedencia invita a creérselo exacto.
  */
 export default function KmEnFecha({ vehiculoId }: { vehiculoId: string }) {
@@ -63,6 +64,12 @@ export default function KmEnFecha({ vehiculoId }: { vehiculoId: string }) {
               </div>
             </>
           )}
+          {res.tipo !== "telematica" && res.telematica && (
+            <div className="mt-1 text-[10px] text-slate-500">Telemática: {res.telematica}</div>
+          )}
+          {(res.avisos ?? []).map((a) => (
+            <div key={a} className="mt-1 rounded bg-amber-500/10 px-1.5 py-1 text-[10px] leading-snug text-amber-300">⚠ {a}</div>
+          ))}
         </div>
       )}
     </div>

@@ -73,13 +73,53 @@ export function lecturasDeMeses(meses: MesTelematica[]): LecturaKm[] {
   return out;
 }
 
+/** Lo que un cuentakilómetros puede «bajar» sin que sea un error (redondeos). */
+const HOLGURA_KM = 5;
+
+/** Con qué facilidad se aparta una lectura cuando hay que elegir: primero lo tecleado. */
+const FRAGILIDAD: Record<FuenteKm, number> = { operacion: 3, revision: 2, vehiculo: 1, telematica_mes: 0 };
+
 /**
- * El último km conocido: el MAYOR de todas las lecturas, porque un
- * cuentakilómetros solo sube. Con empate, la más reciente.
+ * Aparta las lecturas que no cuadran con las demás.
+ *
+ * Un cuentakilómetros solo sube: si una lectura es MAYOR que otra de una fecha
+ * posterior, una de las dos está mal. Pasa con los km tecleados a mano en un
+ * montaje (92.748 en un autobús que marca 150.000). Se quita la que choca con
+ * más lecturas —con empate, la tecleada antes que la de la telemática— y se
+ * repite hasta que no quede ningún choque. Las apartadas no se tiran: se
+ * devuelven para poder avisar de ellas.
+ */
+export function descartarIncoherentes(lecturas: LecturaKm[]): { buenas: LecturaKm[]; descartadas: LecturaKm[] } {
+  const buenas = lecturas.filter((l) => valido(l.km));
+  const descartadas: LecturaKm[] = [];
+  for (;;) {
+    const choques = buenas.map(() => 0);
+    let alguno = false;
+    for (let i = 0; i < buenas.length; i++) {
+      for (let j = 0; j < buenas.length; j++) {
+        const a = buenas[i], b = buenas[j];
+        if (a.fecha < b.fecha && a.km > b.km + HOLGURA_KM) { choques[i]++; choques[j]++; alguno = true; }
+      }
+    }
+    if (!alguno) break;
+    let peor = 0;
+    for (let i = 1; i < buenas.length; i++) {
+      const masChoques = choques[i] > choques[peor];
+      const empateMasFragil = choques[i] === choques[peor] && FRAGILIDAD[buenas[i].fuente] > FRAGILIDAD[buenas[peor].fuente];
+      if (masChoques || empateMasFragil) peor = i;
+    }
+    descartadas.push(...buenas.splice(peor, 1));
+  }
+  return { buenas, descartadas };
+}
+
+/**
+ * El último km conocido: el MAYOR de las lecturas que cuadran entre sí,
+ * porque un cuentakilómetros solo sube. Con empate, la más reciente.
  */
 export function ultimoConocido(lecturas: LecturaKm[]): LecturaKm | null {
   let mejor: LecturaKm | null = null;
-  for (const l of lecturas) {
+  for (const l of descartarIncoherentes(lecturas).buenas) {
     if (!valido(l.km)) continue;
     if (!mejor || l.km > mejor.km || (l.km === mejor.km && l.fecha > mejor.fecha)) mejor = l;
   }
@@ -91,12 +131,12 @@ export const MAX_DIAS_INTERPOLAR = 62;
 
 /**
  * Los km en una fecha, sin preguntar al proveedor: lectura real de ese día,
- * entre dos lecturas cercanas o estimado con los km del mes. La telemática
- * exacta la pide el router ANTES de llamar a esto, solo si no hay lectura del
- * día; si la hubo, esto no se llama.
+ * entre dos lecturas cercanas o estimado con los km del mes, siempre con las
+ * lecturas que cuadran entre sí. La telemática exacta la pide el router ANTES
+ * de llamar a esto; esto es lo que queda si el proveedor no la da.
  */
 export function kmEnFecha(fecha: string, lecturas: LecturaKm[], meses: MesTelematica[]): KmEnFecha {
-  const todas = [...lecturas, ...lecturasDeMeses(meses)].filter((l) => valido(l.km));
+  const todas = descartarIncoherentes([...lecturas, ...lecturasDeMeses(meses)]).buenas;
 
   // 1. Una lectura de ese mismo día (si hay varias, la mayor: se tomó más tarde).
   const delDia = todas.filter((l) => l.fecha === fecha && l.fuente !== "telematica_mes");
