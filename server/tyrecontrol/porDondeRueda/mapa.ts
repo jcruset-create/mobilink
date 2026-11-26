@@ -6,12 +6,23 @@
  * Solo las clases que importan para el neumático; caminos, pistas, aceras y
  * vías de servicio no entran (un autobús por un camino es un error del GPS o
  * una cochera, y meterlos haría que se pegara a ellos).
+ *
+ * Hablar con Overpass —reintentos, cambio de servidor y el motivo en
+ * cristiano— es cosa de `overpass.ts`: es un servicio compartido que va a
+ * ratos, y rendirse al primer tropiezo dejaba el día sin analizar.
  */
 
 import { supabase } from "../../supabase.ts";
 import { cajaDeTesela, refPrincipal, velocidadMaxima } from "./clasificar.ts";
+import { pedirAOverpass, servidoresDe } from "./overpass.ts";
 
-const OVERPASS = process.env.TC_OVERPASS_URL ?? "https://overpass-api.de/api/interpreter";
+/**
+ * Los servidores de Overpass, en orden. Varios separados por comas en
+ * `TC_OVERPASS_URL`; sin variable, el oficial. Se lee en cada descarga y no
+ * al cargar el módulo: así cambiar la variable en el panel de Render surte
+ * efecto al reiniciar, sin depender de cuándo se importó esto.
+ */
+const servidores = () => servidoresDe(process.env.TC_OVERPASS_URL);
 const CLASES = "^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|road)(_link)?$";
 /** Las teselas no caducan solas: las carreteras cambian poco. Se recargan pasado esto. */
 const VIGENCIA_TESELA_MS = 180 * 24 * 3600 * 1000;
@@ -61,14 +72,10 @@ export function consultaOverpass(tesela: string): string {
 }
 
 async function descargar(tesela: string): Promise<FilaVia[]> {
-  const r = await fetch(OVERPASS, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "MobilinkTyreControl/1.0" },
-    body: new URLSearchParams({ data: consultaOverpass(tesela) }),
-    signal: AbortSignal.timeout(120_000),
-  });
-  if (!r.ok) throw new Error(`OpenStreetMap ha contestado ${r.status} para la tesela ${tesela}`);
-  return filasDeOverpass(await r.json() as { elements?: ElementoOverpass[] });
+  // Los reintentos y el cambio de servidor los lleva el cliente: aquí solo se
+  // pide la tesela y se traduce lo que venga.
+  const json = await pedirAOverpass(consultaOverpass(tesela), { servidores: servidores() });
+  return filasDeOverpass(json as { elements?: ElementoOverpass[] });
 }
 
 /** Las teselas de la lista que aún no están (o están caducadas). */

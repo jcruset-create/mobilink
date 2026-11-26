@@ -224,7 +224,9 @@ function AnalizarDia({ vehiculoId, matricula, onClose }: { vehiculoId: string; m
         {r && r.estado !== "ok" && (
           <div className="rounded border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
             {r.estado === "sin_puntos" && "Movertis no da recorrido ese día (¿no se movió?)."}
-            {r.estado === "mapa_pendiente" && `Todavía se está cargando el mapa de la zona: ${r.error ?? ""} Vuelve a pulsar «Analizar» en un minuto.`}
+            {/* El motivo ya viene redactado y sin punto final (overpass.ts):
+                aquí solo se encadena para que la frase se lea de corrido. */}
+            {r.estado === "mapa_pendiente" && `Falta el mapa de la zona${r.error ? `: ${r.error.replace(/\.$/, "")}` : ""}. No se pierde nada: se reintenta solo, o vuelve a pulsar «Analizar» en un rato.`}
             {r.estado === "error" && `Error: ${r.error ?? ""}`}
           </div>
         )}
