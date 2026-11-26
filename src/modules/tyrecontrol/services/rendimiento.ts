@@ -15,6 +15,7 @@
  */
 
 import { supabase } from "./supabase";
+import { kmActualFlota, kmFichaVehiculo } from "./data";
 
 export interface DatosRendimiento {
   vehiculo_id: string;
@@ -182,7 +183,51 @@ export async function datosRendimiento(f: { vehiculoId?: string | null; empresaI
     p_vehiculo: f.vehiculoId ?? null, p_empresa: f.empresaId ?? null,
   });
   if (error) throw new Error(error.message);
-  return (data ?? []) as DatosRendimiento[];
+  return conKmReconstruido((data ?? []) as DatosRendimiento[], f);
+}
+
+/** Por encima de esto un odómetro es de otra unidad (Movertis ha dado 8 millones). */
+const ODOMETRO_IMPOSIBLE_KM = 3_000_000;
+
+/** Vehículos que se piden uno a uno; con más, hace falta la empresa. */
+const MAX_VEHICULOS_SUELTOS = 5;
+
+/**
+ * El km del vehículo con el que se calcula el rendimiento.
+ *
+ * La base lo saca del mayor entre el km del vehículo, sus revisiones y el
+ * odómetro mensual de Movertis, y ese odómetro no vale para la mayoría de la
+ * flota: parado desde 08/2026, acumulado por GPS o en otra unidad. Aquí se
+ * sustituye por el RECONSTRUIDO —la última lectura real (revisión o montaje)
+ * más los km de viajes de la telemática desde entonces— o, si no se puede
+ * reconstruir, por el último km real. Es el mismo que enseña la ficha.
+ *
+ * Si el servidor no contesta se queda el de la base, salvo que sea imposible:
+ * el rendimiento no puede dejar de salir porque falle esta consulta.
+ */
+async function conKmReconstruido(
+  filas: DatosRendimiento[],
+  f: { vehiculoId?: string | null; empresaId?: string | null },
+): Promise<DatosRendimiento[]> {
+  if (!filas.length) return filas;
+  const km = new Map<string, number | null>();
+  try {
+    const vehiculos = [...new Set(filas.map((x) => x.vehiculo_id))];
+    if (f.empresaId && vehiculos.length > MAX_VEHICULOS_SUELTOS) {
+      for (const v of await kmActualFlota(f.empresaId)) km.set(v.vehiculoId, v.km);
+    } else if (vehiculos.length <= MAX_VEHICULOS_SUELTOS) {
+      await Promise.all(vehiculos.map(async (id) => {
+        const r = await kmFichaVehiculo(id, false);
+        km.set(id, r.reconstruido?.km ?? r.ultimo?.km ?? null);
+      }));
+    }
+  } catch { /* sin servidor: se queda el de la base */ }
+  return filas.map((x) => {
+    const nuevo = km.get(x.vehiculo_id);
+    if (nuevo != null) return { ...x, km_actual_vehiculo: nuevo };
+    const deLaBase = Number(x.km_actual_vehiculo);
+    return Number.isFinite(deLaBase) && deLaBase >= ODOMETRO_IMPOSIBLE_KM ? { ...x, km_actual_vehiculo: null } : x;
+  });
 }
 
 export async function estadoSeguimientoRendimiento(vehiculoId: string): Promise<{

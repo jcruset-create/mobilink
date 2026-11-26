@@ -389,7 +389,13 @@ export function TarjetaRendimientoNeumatico({ neumaticoId }: { neumaticoId: stri
   const [fila, setFila] = useState<DatosRendimiento | null>(null);
   useEffect(() => {
     let vivo = true;
+    // Primero se busca su vehículo y luego se piden los de ESE vehículo: así
+    // el km sale reconstruido (lectura real + viajes), como en la ficha.
     datosRendimiento()
+      .then((d) => {
+        const suya = d.find((x) => x.neumatico_id === neumaticoId);
+        return suya ? datosRendimiento({ vehiculoId: suya.vehiculo_id }) : [];
+      })
       .then((d) => { if (vivo) setFila(d.find((x) => x.neumatico_id === neumaticoId) ?? null); })
       .catch(() => { if (vivo) setFila(null); });
     return () => { vivo = false; };
