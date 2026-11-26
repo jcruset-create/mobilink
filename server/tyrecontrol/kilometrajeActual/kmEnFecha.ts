@@ -39,6 +39,7 @@ export type KmEnFecha =
   | { tipo: "lectura"; km: number; fecha: string; detalle: string }
   | { tipo: "telematica"; km: number; fecha: string; detalle: string }
   | { tipo: "interpolado"; km: number; fecha: string; anterior: LecturaKm; siguiente: LecturaKm }
+  | { tipo: "reconstruido"; km: number; fecha: string; detalle: string; ancla: LecturaKm; rodados: number }
   | { tipo: "estimado"; km: number; fecha: string; detalle: string }
   | { tipo: "sin_datos"; fecha: string; motivo: string };
 
@@ -61,7 +62,10 @@ export function lecturasDeMeses(meses: MesTelematica[]): LecturaKm[] {
   for (const m of meses) {
     const nombre = `${NOMBRE_MES[m.month - 1]} ${m.year}`;
     if (valido(m.inicial)) {
-      out.push({ km: m.inicial, fecha: `${m.year}-${pad(m.month)}-01`, fuente: "telematica_mes", detalle: `telemática (inicio de ${nombre})` });
+      // El odómetro «al empezar» es el del final del día anterior al 1: todas
+      // las lecturas se entienden al acabar su día.
+      const fechaIni = m.month === 1 ? `${m.year - 1}-12-31` : `${m.year}-${pad(m.month - 1)}-${pad(diasDelMes(m.year, m.month - 1))}`;
+      out.push({ km: m.inicial, fecha: fechaIni, fuente: "telematica_mes", detalle: `telemática (inicio de ${nombre})` });
     }
     if (m.cerrado && valido(m.final)) {
       out.push({
@@ -119,7 +123,7 @@ export function descartarIncoherentes(lecturas: LecturaKm[]): { buenas: LecturaK
  */
 export function ultimoConocido(lecturas: LecturaKm[]): LecturaKm | null {
   let mejor: LecturaKm | null = null;
-  for (const l of descartarIncoherentes(lecturas).buenas) {
+  for (const l of descartarIncoherentes(lecturas.filter((x) => x.km < ODOMETRO_IMPOSIBLE_KM)).buenas) {
     if (!valido(l.km)) continue;
     if (!mejor || l.km > mejor.km || (l.km === mejor.km && l.fecha > mejor.fecha)) mejor = l;
   }
@@ -132,18 +136,21 @@ export function ultimoConocido(lecturas: LecturaKm[]): LecturaKm | null {
  * DISTANCIA de los viajes, que el proveedor sigue dando aunque el odómetro
  * del equipo se quede parado.
  */
-export function kmRodadosEntre(desde: string, hasta: string, meses: MesTelematica[]): number {
+export function kmRodadosEntre(desde: string, hasta: string, meses: MesTelematica[], hoy?: string): number {
   let total = 0;
   for (const m of meses) {
     if (!valido(m.distancia)) continue;
-    const dias = diasDelMes(m.year, m.month);
+    // Del mes en curso, la distancia es la de los días que van, no la del mes
+    // entero: se reparte entre los días transcurridos.
+    const enCurso = !!hoy && !m.cerrado && hoy.slice(0, 7) === `${m.year}-${pad(m.month)}`;
+    const dias = enCurso ? Math.max(1, +hoy!.slice(8, 10)) : diasDelMes(m.year, m.month);
     const ini = `${m.year}-${pad(m.month)}-01`;
     const fin = `${m.year}-${pad(m.month)}-${pad(dias)}`;
     const a = desde > ini ? desde : null;          // el día «desde» no cuenta
     const b = hasta < fin ? hasta : fin;
     const primero = a ? diasEntre(ini, a) + 1 : 0;  // días del mes ya pasados
     const ultimo = diasEntre(ini, b) + 1;
-    const n = Math.max(0, ultimo - primero);
+    const n = Math.min(dias, Math.max(0, ultimo - primero));
     total += m.distancia * (n / dias);
   }
   return total;
@@ -182,6 +189,130 @@ export function odometroNoFiable(km: number, fecha: string, lecturas: LecturaKm[
   return null;
 }
 
+// ── Odómetro reconstruido ───────────────────────────────────────────────────
+//
+// El odómetro de Movertis no vale hoy para la mayoría de la flota (parado
+// desde 08/2026, acumulado por GPS desde la instalación, o en otra unidad: hay
+// vehículos con 8 millones de km). La DISTANCIA de sus viajes sí vale. Así que
+// el km de cualquier día se reconstruye desde la lectura REAL más cercana
+// (revisión o montaje con el km del salpicadero) sumando o restando los km de
+// viajes entre las dos fechas. Cada lectura real nueva lo vuelve a anclar: el
+// error de la distancia GPS no se acumula.
+
+/** Lo que ningún vehículo de la flota puede marcar: un odómetro así es de otra unidad. */
+export const ODOMETRO_IMPOSIBLE_KM = 3_000_000;
+
+const esReal = (l: LecturaKm) => l.fuente === "revision" || l.fuente === "operacion";
+
+/** Las lecturas reales (revisiones y montajes) que cuadran entre sí. */
+export function anclas(lecturas: LecturaKm[]): LecturaKm[] {
+  return descartarIncoherentes(lecturas.filter(esReal)).buenas;
+}
+
+const mesDe = (f: string) => f.slice(0, 7);
+function mesesDelTramo(a: string, b: string): string[] {
+  const [desde, hasta] = a <= b ? [a, b] : [b, a];
+  const out: string[] = [];
+  let y = +desde.slice(0, 4), m = +desde.slice(5, 7);
+  const fy = +hasta.slice(0, 4), fm = +hasta.slice(5, 7);
+  while (y < fy || (y === fy && m <= fm)) {
+    out.push(`${y}-${pad(m)}`);
+    m++; if (m > 12) { m = 1; y++; }
+  }
+  return out;
+}
+
+export interface Reconstruido {
+  km: number;
+  fecha: string;
+  ancla: LecturaKm;
+  /** Km de viajes entre la lectura real y la fecha (negativo si la fecha es anterior). */
+  rodados: number;
+}
+
+/**
+ * El odómetro de un día reconstruido desde la lectura real más cercana y los
+ * km de viajes. `null` si no hay lectura real o si algún mes del tramo no
+ * tiene dato de viajes (un mes con error no se puede dar por «no rodó»).
+ */
+export function reconstruir(fecha: string, lecturas: LecturaKm[], meses: MesTelematica[], hoy?: string): Reconstruido | null {
+  return reconstruirDesde(fecha, anclas(lecturas), meses, hoy);
+}
+
+/** Igual que `reconstruir`, con las lecturas reales ya depuradas (para no repetirlo en bucle). */
+function reconstruirDesde(fecha: string, lasAnclas: LecturaKm[], meses: MesTelematica[], hoy?: string): Reconstruido | null {
+  const conDato = new Set(meses.map((m) => `${m.year}-${pad(m.month)}`));
+  const candidatas = lasAnclas
+    .map((l) => ({ l, d: Math.abs(diasEntre(l.fecha, fecha)) }))
+    .sort((a, b) => a.d - b.d || (a.l.fecha <= fecha ? -1 : 1));
+  for (const { l } of candidatas) {
+    if (l.fecha === fecha) return { km: Math.round(l.km), fecha, ancla: l, rodados: 0 };
+    // Del mes de la lectura no hace falta dato si la fecha cae en el mismo mes y no rodó…
+    // pero sin dato de viajes no se sabe; se exige en todo el tramo.
+    if (!mesesDelTramo(l.fecha, fecha).every((m) => conDato.has(m))) continue;
+    const rodados = l.fecha < fecha ? kmRodadosEntre(l.fecha, fecha, meses, hoy) : -kmRodadosEntre(fecha, l.fecha, meses, hoy);
+    return { km: Math.round(l.km + rodados), fecha, ancla: l, rodados: Math.round(rodados) };
+  }
+  return null;
+}
+
+/** ¿Dos odómetros dicen lo mismo? Con holgura: la distancia GPS no es exacta. */
+const cuadran = (a: number, b: number) => Math.abs(a - b) <= Math.max(500, 0.03 * Math.max(a, b));
+
+export interface OdometroMes {
+  year: number;
+  month: number;
+  /** Odómetro al empezar el mes (fin del día anterior al 1). */
+  inicio: number | null;
+  cierre: number | null;
+  fuenteInicio: "movertis" | "reconstruido" | null;
+  fuenteCierre: "movertis" | "reconstruido" | null;
+  /** Lo que daba Movertis cuando no cuadra con lo reconstruido (para tacharlo). */
+  movertisInicio: number | null;
+  movertisCierre: number | null;
+}
+
+const ultimoDia = (y: number, m: number) => `${y}-${pad(m)}-${pad(diasDelMes(y, m))}`;
+const diaAnteriorAl1 = (y: number, m: number) => (m === 1 ? ultimoDia(y - 1, 12) : ultimoDia(y, m - 1));
+
+/**
+ * Los odómetros de cada mes: el de Movertis si cuadra con lo reconstruido (o
+ * si no hay con qué contrastarlo y es posible), y si no, el reconstruido.
+ */
+export function odometrosDeMeses(meses: MesTelematica[], lecturas: LecturaKm[], hoy?: string): OdometroMes[] {
+  const lasAnclas = anclas(lecturas);
+  return meses.map((m) => {
+    const elegir = (mov: number | null, fecha: string | null) => {
+      const rec = fecha ? reconstruirDesde(fecha, lasAnclas, meses, hoy) : null;
+      const movOk = valido(mov) && mov < ODOMETRO_IMPOSIBLE_KM ? mov : null;
+      if (movOk != null && (!rec || cuadran(movOk, rec.km))) return { km: movOk, fuente: "movertis" as const, tachado: null };
+      if (rec) return { km: rec.km, fuente: "reconstruido" as const, tachado: valido(mov) ? mov : null };
+      return { km: null, fuente: null, tachado: valido(mov) ? mov : null };
+    };
+    const i = elegir(m.inicial, diaAnteriorAl1(m.year, m.month));
+    const c = m.cerrado ? elegir(m.final, ultimoDia(m.year, m.month)) : { km: null, fuente: null, tachado: null };
+    return {
+      year: m.year, month: m.month,
+      inicio: i.km, cierre: c.km, fuenteInicio: i.fuente, fuenteCierre: c.fuente,
+      movertisInicio: i.tachado, movertisCierre: c.tachado,
+    };
+  });
+}
+
+/**
+ * Los meses con los odómetros de Movertis que no cuadran (o son imposibles)
+ * quitados: la distancia se queda, que es lo fiable. Es lo que se le pasa a
+ * todo lo demás para que un odómetro malo no se cuele como lectura.
+ */
+export function mesesDepurados(meses: MesTelematica[], lecturas: LecturaKm[], hoy?: string): MesTelematica[] {
+  const odos = odometrosDeMeses(meses, lecturas, hoy);
+  return meses.map((m, i) => ({
+    ...m,
+    inicial: odos[i].fuenteInicio === "movertis" ? m.inicial : null,
+    final: odos[i].fuenteCierre === "movertis" ? m.final : null,
+  }));
+}
+
 /** Cuánto se aleja como mucho una lectura vecina para interpolar entre dos. */
 export const MAX_DIAS_INTERPOLAR = 62;
 
@@ -191,7 +322,8 @@ export const MAX_DIAS_INTERPOLAR = 62;
  * lecturas que cuadran entre sí. La telemática exacta la pide el router ANTES
  * de llamar a esto; esto es lo que queda si el proveedor no la da.
  */
-export function kmEnFecha(fecha: string, lecturas: LecturaKm[], meses: MesTelematica[]): KmEnFecha {
+export function kmEnFecha(fecha: string, lecturas: LecturaKm[], mesesBrutos: MesTelematica[], hoy?: string): KmEnFecha {
+  const meses = mesesDepurados(mesesBrutos, lecturas, hoy);
   const todas = descartarIncoherentes([...lecturas, ...lecturasDeMeses(meses)]).buenas;
 
   // 1. Una lectura de ese mismo día (si hay varias, la mayor: se tomó más tarde).
@@ -208,12 +340,27 @@ export function kmEnFecha(fecha: string, lecturas: LecturaKm[], meses: MesTelema
   const despues = todas.filter((l) => l.fecha >= fecha && diasEntre(fecha, l.fecha) <= MAX_DIAS_INTERPOLAR)
     .sort((a, b) => (a.fecha === b.fecha ? a.km - b.km : a.fecha.localeCompare(b.fecha)))[0];
   if (antes && despues && despues.km >= antes.km) {
+    // Repartido según los viajes de cada día si los hay; si no, en línea recta.
+    const viajesTotal = kmRodadosEntre(antes.fecha, despues.fecha, meses, hoy);
     const total = diasEntre(antes.fecha, despues.fecha);
-    const km = total === 0 ? antes.km : antes.km + (despues.km - antes.km) * (diasEntre(antes.fecha, fecha) / total);
+    const parte = viajesTotal > 0
+      ? kmRodadosEntre(antes.fecha, fecha, meses, hoy) / viajesTotal
+      : total === 0 ? 0 : diasEntre(antes.fecha, fecha) / total;
+    const km = antes.km + (despues.km - antes.km) * parte;
     return { tipo: "interpolado", km: Math.round(km), fecha, anterior: antes, siguiente: despues };
   }
 
-  // 3. Estimado con el mes: odómetro del día 1 + lo que rodó, repartido por días.
+  // 3. Reconstruido: la lectura real más cercana ± los km de viajes.
+  const rec = reconstruir(fecha, lecturas, meses, hoy);
+  if (rec) {
+    const fmt = (n: number) => Math.round(n).toLocaleString("es-ES");
+    return {
+      tipo: "reconstruido", km: rec.km, fecha, ancla: rec.ancla, rodados: rec.rodados,
+      detalle: `${rec.ancla.detalle} (${fmt(rec.ancla.km)}) ${rec.rodados >= 0 ? "+" : "−"} ${fmt(Math.abs(rec.rodados))} km de viajes`,
+    };
+  }
+
+  // 4. Estimado con el mes: odómetro del día 1 + lo que rodó, repartido por días.
   const y = +fecha.slice(0, 4), mo = +fecha.slice(5, 7), d = +fecha.slice(8, 10);
   const mes = meses.find((m) => m.year === y && m.month === mo);
   if (mes && valido(mes.inicial) && valido(mes.distancia)) {

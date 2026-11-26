@@ -37,7 +37,8 @@ import { supabase } from "../../supabase.ts";
 import { puedeVerEmpresa } from "../empresaAcceso.ts";
 import { clasificarLectura, frescuraDeConfig, avisoDeSalto, type LecturaOdometro } from "./frescura.ts";
 import {
-  descartarIncoherentes, kmEnFecha, lecturasDeMeses, odometroNoFiable, ultimoConocido, type KmEnFecha, type LecturaKm, type MesTelematica,
+  descartarIncoherentes, kmEnFecha, lecturasDeMeses, mesesDepurados, odometroNoFiable, odometrosDeMeses, reconstruir,
+  ultimoConocido, ODOMETRO_IMPOSIBLE_KM, type KmEnFecha, type LecturaKm, type MesTelematica,
 } from "./kmEnFecha.ts";
 
 /*
@@ -148,23 +149,38 @@ export function createKilometrajeActualRouter(): Router {
       if (!v) return res.status(404).json({ error: "Vehículo no encontrado" });
 
       const { lecturas, meses } = await lecturasDelVehiculo(v.id, v.empresa_id, v);
-      const ultimo = ultimoConocido([...lecturas, ...lecturasDeMeses(meses)]);
-      if (String(req.query.vivo ?? "") !== "1") return res.json({ ultimo, lectura: null, guardado: false });
+      const hoy = new Date().toISOString().slice(0, 10);
+      // Los odómetros mensuales de Movertis que no cuadran (o son imposibles)
+      // fuera: la distancia de viajes se queda, que es lo que vale.
+      const depurados = mesesDepurados(meses, lecturas, hoy);
+      const ultimo = ultimoConocido([...lecturas, ...lecturasDeMeses(depurados)]);
+      // Hoy, desde la última lectura real + viajes: lo que se enseña cuando la
+      // telemática no da un odómetro fiable.
+      const reconstruido = reconstruir(hoy, lecturas, meses, hoy);
+      const odometrosMes = odometrosDeMeses(meses, lecturas, hoy);
+      const base = { ultimo, reconstruido, odometrosMes };
+      if (String(req.query.vivo ?? "") !== "1") return res.json({ ...base, lectura: null, guardado: false });
 
       const enCache = CACHE_FICHA.get(v.id);
       // Una lectura buena se recuerda un rato; un fallo, poco: si no, «reintentar»
       // devolvería el mismo fallo durante un cuarto de hora.
       const vida = (enCache?.lectura.km != null ? CACHE_FICHA_MIN : 2) * 60_000;
       if (enCache && Date.now() - enCache.at < vida) {
-        return res.json({ ultimo, lectura: enCache.lectura, guardado: false, deCache: true });
+        return res.json({ ...base, lectura: enCache.lectura, guardado: false, deCache: true });
       }
 
       const consultadoAt = new Date();
       const { lectura, aviso } = await leerAhora(v.id, v.empresa_id, Number(v.km_actual), consultadoAt);
       // Un odómetro parado (equipo clavado en un número viejo que sigue
       // contestando con fecha de hoy) no se enseña como «ahora» ni se guarda.
-      const hoy = consultadoAt.toISOString().slice(0, 10);
-      const noFiable = lectura.km !== null ? odometroNoFiable(lectura.km, hoy, lecturas, meses) : null;
+      const noFiable = lectura.km === null ? null
+        : lectura.km >= ODOMETRO_IMPOSIBLE_KM
+          ? `La telemática marca ${Math.round(lectura.km).toLocaleString("es-ES")} km, que no es posible: seguramente viene en otra unidad.`
+          : odometroNoFiable(lectura.km, hoy, lecturas, depurados)
+            ?? (reconstruido && Math.abs(lectura.km - reconstruido.km) > Math.max(2_000, 0.05 * reconstruido.km)
+              ? `La telemática marca ${Math.round(lectura.km).toLocaleString("es-ES")} km y desde el ${reconstruido.ancla.detalle} ` +
+                `(${Math.round(reconstruido.ancla.km).toLocaleString("es-ES")} km) los viajes llevan a unos ${Math.round(reconstruido.km).toLocaleString("es-ES")}: no cuadra.`
+              : null);
       if (noFiable) console.warn(`[km-ficha] ${v.id}: ${noFiable}`);
       const respuesta: RespuestaFicha = noFiable
         ? { ...aRespuesta(lectura, aviso), estado: "no_fiable", kmTelematica: lectura.km, km: null, texto: noFiable }
@@ -181,7 +197,7 @@ export function createKilometrajeActualRouter(): Router {
         guardado = !error && (count ?? 0) > 0;
         if (error) console.error("[km-ficha] no se ha podido guardar el km:", error.message);
       }
-      res.json({ ultimo, lectura: respuesta, guardado });
+      res.json({ ...base, lectura: respuesta, guardado });
     } catch (e) {
       console.error("[km-ficha] error:", (e as any)?.message ?? e);
       res.status(500).json({ error: "No se han podido leer los kilómetros." });
@@ -212,8 +228,7 @@ export function createKilometrajeActualRouter(): Router {
       if (!v) return res.status(404).json({ error: "Vehículo no encontrado" });
 
       const { lecturas, meses } = await lecturasDelVehiculo(v.id, v.empresa_id, v);
-      const todas = [...lecturas, ...lecturasDeMeses(meses)];
-      const { descartadas } = descartarIncoherentes(todas);
+      const { descartadas } = descartarIncoherentes(lecturas);
       const fmt = (n: number) => Math.round(n).toLocaleString("es-ES");
       // Las lecturas apartadas de ese día se dicen: si no, quien tecleó mal el
       // montaje no se entera de por qué la ficha no le hace caso.
@@ -222,11 +237,13 @@ export function createKilometrajeActualRouter(): Router {
 
       // 1. La telemática primero: es el odómetro del autobús, no un número
       //    tecleado. Se contrasta solo con lo que también es de la telemática.
-      const tele = await telematicaEnFecha(v.id, v.empresa_id, fecha, lecturas, meses);
+      const hoy = new Date().toISOString().slice(0, 10);
+      const tele = await telematicaEnFecha(v.id, v.empresa_id, fecha, lecturas, mesesDepurados(meses, lecturas, hoy));
       if (tele.resultado) return res.json({ ...tele.resultado, avisos });
 
-      // 2. Lo demás, con las lecturas que cuadran entre sí.
-      const r = kmEnFecha(fecha, lecturas, meses);
+      // 2. Lo demás, con las lecturas que cuadran entre sí: entre dos lecturas,
+      //    reconstruido desde la real más cercana con los viajes, o estimado.
+      const r = kmEnFecha(fecha, lecturas, meses, hoy);
       res.json({ ...r, avisos, telematica: tele.motivo });
     } catch (e) {
       console.error("[km-en-fecha] error:", (e as any)?.message ?? e);
@@ -234,7 +251,142 @@ export function createKilometrajeActualRouter(): Router {
     }
   });
 
+  /**
+   * El km actual de cada vehículo de una empresa, con su procedencia, para
+   * «Km de la flota». No pregunta al proveedor: sale de las lecturas reales
+   * (revisiones y montajes) y de la distancia de viajes ya sincronizada.
+   *
+   *   movertis      — se reconstruye y el odómetro de Movertis cuadra con ello.
+   *   reconstruido  — lectura real + viajes; Movertis no cuadra o no da.
+   *   ultimo        — hay lectura real pero no viajes con que avanzarla.
+   *   sin_ancla     — hay viajes pero ninguna lectura real: hace falta UNA
+   *                   revisión o montaje con el km del salpicadero.
+   */
+  router.get("/flota", async (req, res) => {
+    try {
+      const usuario = await usuarioDe(req);
+      if (!usuario) return res.status(401).json({ error: "Sin sesión" });
+      const empresaId = String(req.query.empresa ?? "").trim();
+      if (!/^[0-9a-f-]{36}$/i.test(empresaId)) return res.status(400).json({ error: "Empresa no válida" });
+      if (!(await puedeVerEmpresa({ userId: usuario.userId, esSuperadmin: usuario.esSuperadmin }, empresaId))) {
+        return res.status(404).json({ error: "Empresa no encontrada" });
+      }
+      res.json(await kmActualDeFlota(empresaId));
+    } catch (e) {
+      console.error("[km-flota-actual] error:", (e as any)?.message ?? e);
+      res.status(500).json({ error: "No se han podido calcular los km de la flota." });
+    }
+  });
+
   return router;
+}
+
+/** Todas las filas de una consulta, de mil en mil (el tope de Supabase). */
+async function todas<T>(consulta: (desde: number, hasta: number) => PromiseLike<{ data: T[] | null; error: any }>): Promise<T[]> {
+  const out: T[] = [];
+  for (let desde = 0; desde < 200_000; desde += 1000) {
+    const { data, error } = await consulta(desde, desde + 999);
+    if (error) throw new Error(error.message);
+    out.push(...(data ?? []));
+    if ((data ?? []).length < 1000) break;
+  }
+  return out;
+}
+
+export interface KmActualVehiculo {
+  vehiculoId: string;
+  matricula: string;
+  km: number | null;
+  procedencia: "movertis" | "reconstruido" | "ultimo" | "sin_ancla";
+  detalle: string;
+  /** El último odómetro que dio Movertis, para compararlo (tachado si no cuadra). */
+  odometroMovertis: number | null;
+  movertisCuadra: boolean | null;
+  /** Km de viajes sin ninguna lectura real (solo `sin_ancla`). */
+  kmViajes: number | null;
+}
+
+async function kmActualDeFlota(empresaId: string): Promise<{ vehiculos: KmActualVehiculo[] }> {
+  const fmt = (n: number) => Math.round(n).toLocaleString("es-ES");
+  const fmtF = (f: string) => `${f.slice(8, 10)}/${f.slice(5, 7)}/${f.slice(0, 4)}`;
+  const hoy = new Date().toISOString().slice(0, 10);
+
+  let filasMes: any[] = [];
+  let mesCerrado: any = null, zona = "Europe/Madrid";
+  try {
+    const repo = await import("../../integration-hub/infrastructure/repositories.ts");
+    const meses = await import("../../integration-hub/domain/meses.ts");
+    filasMes = await repo.listMonthlyMileageByTenant({ tenantId: empresaId });
+    mesCerrado = meses.mesCerrado; zona = meses.ZONA_HORARIA_POR_DEFECTO;
+  } catch { /* sin base del Hub: sin viajes */ }
+  const porVehiculoMes = new Map<string, any[]>();
+  for (const f of filasMes) {
+    const l = porVehiculoMes.get(f.mobilink_id) ?? [];
+    l.push(f); porVehiculoMes.set(f.mobilink_id, l);
+  }
+  if (porVehiculoMes.size === 0) return { vehiculos: [] };
+
+  const [vehiculos, revs, ops] = await Promise.all([
+    todas<any>((a, b) => supabase.from("tc_vehiculos").select("id, matricula, activo")
+      .eq("empresa_id", empresaId).eq("activo", true).order("matricula").range(a, b)),
+    todas<any>((a, b) => supabase.from("revisiones_vehiculo").select("vehiculo_id, km_vehiculo, fecha_revision")
+      .eq("empresa_id", empresaId).not("km_vehiculo", "is", null).neq("estado_revision", "anulada").order("id").range(a, b)),
+    todas<any>((a, b) => supabase.from("operaciones_neumaticos").select("vehiculo_id, km_vehiculo, fecha_operacion, tipo_operacion, is_anulada")
+      .eq("empresa_id", empresaId).not("km_vehiculo", "is", null).order("id").range(a, b)),
+  ]);
+  const lecturasDe = new Map<string, LecturaKm[]>();
+  const meter = (id: string, l: LecturaKm) => { const x = lecturasDe.get(id) ?? []; x.push(l); lecturasDe.set(id, x); };
+  for (const r of revs) {
+    const f = String(r.fecha_revision).slice(0, 10);
+    meter(r.vehiculo_id, { km: Number(r.km_vehiculo), fecha: f, fuente: "revision", detalle: `revisión del ${fmtF(f)}` });
+  }
+  for (const o of ops) {
+    if (o.is_anulada === true) continue;
+    const f = String(o.fecha_operacion).slice(0, 10);
+    meter(o.vehiculo_id, { km: Number(o.km_vehiculo), fecha: f, fuente: "operacion", detalle: `${TIPO_OPERACION[String(o.tipo_operacion)] ?? "operación"} del ${fmtF(f)}` });
+  }
+
+  const out: KmActualVehiculo[] = [];
+  for (const v of vehiculos) {
+    const filas = porVehiculoMes.get(v.id);
+    if (!filas) continue;   // sin telemática: no es de este cuadro
+    const meses = mesCerrado ? aMeses(filas, new Date(), mesCerrado, zona) : [];
+    const lecturas = lecturasDe.get(v.id) ?? [];
+    const conOdo = meses.filter((m) => (m.final ?? m.inicial) != null)
+      .sort((a, b) => (b.year - a.year) || (b.month - a.month))[0];
+    const odometroMovertis = conOdo ? Number(conOdo.final ?? conOdo.inicial) : null;
+    const rec = reconstruir(hoy, lecturas, meses, hoy);
+    const ult = ultimoConocido(lecturas);
+    let fila: KmActualVehiculo;
+    if (rec) {
+      const odos = odometrosDeMeses(meses, lecturas, hoy);
+      const delMes = conOdo ? odos.find((o) => o.year === conOdo.year && o.month === conOdo.month) : null;
+      const cuadra = delMes ? (delMes.fuenteCierre ?? delMes.fuenteInicio) === "movertis" : null;
+      fila = {
+        vehiculoId: v.id, matricula: v.matricula, km: rec.km,
+        procedencia: cuadra ? "movertis" : "reconstruido",
+        detalle: `${rec.ancla.detalle} ${rec.rodados >= 0 ? "+" : "−"} ${fmt(Math.abs(rec.rodados))} km de viajes`,
+        odometroMovertis, movertisCuadra: cuadra, kmViajes: null,
+      };
+    } else if (ult) {
+      fila = {
+        vehiculoId: v.id, matricula: v.matricula, km: Math.round(ult.km), procedencia: "ultimo",
+        detalle: `${ult.detalle}; sin viajes completos desde entonces para avanzarlo`,
+        odometroMovertis, movertisCuadra: null, kmViajes: null,
+      };
+    } else {
+      const kmViajes = meses.reduce((t, m) => t + (m.distancia ?? 0), 0);
+      fila = {
+        vehiculoId: v.id, matricula: v.matricula, km: null, procedencia: "sin_ancla",
+        detalle: `${fmt(kmViajes)} km de viajes, sin ninguna revisión ni montaje con km`,
+        odometroMovertis, movertisCuadra: null, kmViajes: Math.round(kmViajes),
+      };
+    }
+    out.push(fila);
+  }
+  const orden = { sin_ancla: 0, ultimo: 1, reconstruido: 2, movertis: 3 };
+  out.sort((a, b) => orden[a.procedencia] - orden[b.procedencia] || (b.kmViajes ?? 0) - (a.kmViajes ?? 0) || a.matricula.localeCompare(b.matricula));
+  return { vehiculos: out };
 }
 
 /** Cuánto se recuerda la lectura de ahora de la ficha, por vehículo. */
@@ -293,13 +445,33 @@ async function lecturasDelVehiculo(vehiculoId: string, empresaId: string, v: Veh
     const { mesCerrado, ZONA_HORARIA_POR_DEFECTO } = await import("../../integration-hub/domain/meses.ts");
     const filas = await listMonthlyMileage({ tenantId: empresaId, mobilinkId: vehiculoId });
     const ahora = new Date();
-    meses = filas.filter((f) => f.sync_status === "ok").map((f) => ({
-      year: f.year, month: f.month,
-      inicial: f.initial_odometer_km, final: f.final_odometer_km, distancia: f.distance_km,
-      cerrado: mesCerrado({ year: f.year, month: f.month }, ZONA_HORARIA_POR_DEFECTO, ahora),
-    }));
+    meses = aMeses(filas, ahora, mesCerrado, ZONA_HORARIA_POR_DEFECTO);
   } catch { /* sin la base del Hub: sin telemática mensual, no un fallo */ }
   return { lecturas, meses };
+}
+
+/**
+ * Las filas mensuales del Hub → meses de la telemática, una por mes: si el
+ * vehículo está en dos cuentas, la que trajo km. Un mes «empty» es dato: el
+ * proveedor contestó y no hubo viajes (rodó 0). Uno con error no entra: no se
+ * sabe cuánto rodó y la reconstrucción no puede atravesarlo.
+ */
+function aMeses(filas: any[], ahora: Date, mesCerrado: any, zona: string): MesTelematica[] {
+  const porMes = new Map<string, MesTelematica>();
+  for (const f of filas) {
+    if (f.sync_status !== "ok" && f.sync_status !== "empty") continue;
+    const m: MesTelematica = {
+      year: f.year, month: f.month,
+      inicial: f.sync_status === "ok" ? f.initial_odometer_km : null,
+      final: f.sync_status === "ok" ? f.final_odometer_km : null,
+      distancia: f.sync_status === "ok" ? f.distance_km : 0,
+      cerrado: mesCerrado({ year: f.year, month: f.month }, zona, ahora),
+    };
+    const k = `${f.year}-${f.month}`;
+    const ya = porMes.get(k);
+    if (!ya || (m.distancia ?? 0) > (ya.distancia ?? 0)) porMes.set(k, m);
+  }
+  return [...porMes.values()];
 }
 
 /**
@@ -333,6 +505,9 @@ async function telematicaEnFecha(
       return { resultado: null, motivo: motivo[String(r?.estado)] ?? "La telemática no ha dado odómetro de ese día." };
     }
     const km = Number(r.odometro.odometerKm);
+    if (km >= ODOMETRO_IMPOSIBLE_KM) {
+      return { resultado: null, motivo: `La telemática ha dado ${Math.round(km).toLocaleString("es-ES")} km, que no es posible: seguramente viene en otra unidad.` };
+    }
     // Contraste solo con lo que también es de la telemática: un km tecleado mal
     // en un montaje no puede tumbar el odómetro del autobús (pasó: 92.748
     // tecleados frente a 150.000 reales).

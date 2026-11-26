@@ -8,6 +8,7 @@ const ETIQUETA: Record<string, { texto: string; cls: string }> = {
   lectura: { texto: "lectura real", cls: "bg-emerald-500/15 text-emerald-300" },
   telematica: { texto: "exacto", cls: "bg-emerald-500/15 text-emerald-300" },
   interpolado: { texto: "entre dos lecturas", cls: "bg-amber-500/15 text-amber-300" },
+  reconstruido: { texto: "reconstruido", cls: "bg-sky-500/15 text-sky-300" },
   estimado: { texto: "estimado", cls: "bg-amber-500/15 text-amber-300" },
 };
 
@@ -54,7 +55,7 @@ export default function KmEnFecha({ vehiculoId }: { vehiculoId: string }) {
           ) : (
             <>
               <div className="text-sm font-black text-slate-100">
-                {res.tipo === "interpolado" || res.tipo === "estimado" ? "≈ " : ""}{km(res.km)}
+                {res.tipo === "interpolado" || res.tipo === "estimado" || res.tipo === "reconstruido" ? "≈ " : ""}{km(res.km)}
               </div>
               <div className="mt-0.5 text-[10px] leading-snug text-slate-400">
                 <span className={`mr-1 rounded-full px-1.5 py-0.5 font-bold ${ETIQUETA[res.tipo].cls}`}>{ETIQUETA[res.tipo].texto}</span>
