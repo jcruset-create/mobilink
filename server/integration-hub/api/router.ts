@@ -37,6 +37,7 @@ import {
 } from "../connectors/ConnectorRegistry.ts";
 import { IntegrationError } from "../domain/errors.ts";
 import { nextCorrelationId } from "../infrastructure/repositories.ts";
+import { esSuperadminPorSesion } from "./sesionSuperadmin.ts";
 import { inventarioCombustible, veredictoCombustible } from "../application/services/fuelProbe.ts";
 import {
   listOperations,
@@ -60,6 +61,15 @@ function tenantOf(req: Request): string | undefined {
 }
 
 /**
+ * Marca puesta por el guard del router cuando la petición trae la sesión
+ * unificada (Bearer) de un SUPER-ADMIN. Solo super-admin: el Hub elige el
+ * tenant por parámetro, así que un administrador de una empresa podría mirar
+ * las de otras; eso no se abre.
+ */
+const SUPERADMIN_POR_SESION = Symbol("superadminPorSesion");
+type ConSesion = Request & { [SUPERADMIN_POR_SESION]?: boolean };
+
+/**
  * Guard ligero para endpoints de administración (config, reprocesar).
  *
  * La cabecera llega percent-encoded desde el front (`makeAdminHeaders` en
@@ -73,6 +83,7 @@ function tenantOf(req: Request): string | undefined {
  * usuario estuviese correctamente autenticado como administrador.
  */
 function requireAdmin(req: Request, res: Response): boolean {
+  if ((req as ConSesion)[SUPERADMIN_POR_SESION]) return true;
   const accepted = [process.env.ADMIN_TOKEN, process.env.ADMIN_PASSWORD].filter(Boolean) as string[];
   // Sin credencial configurada se deja pasar SOLO fuera de producción, que es
   // para lo que se pensó («entorno de desarrollo»). En producción, una variable
@@ -141,8 +152,13 @@ export function createIntegrationHubRouter(): Router {
    * ahora redundantes. Se dejan a propósito: no cuestan nada y hacen que una
    * ruta siga protegida aunque algún día se monte fuera de este router.
    */
-  router.use((req, res, next) => {
+  //
+  // Además de `x-admin-token`, vale la sesión unificada de un super-admin: el
+  // panel ya la manda (getAdminHeaders) y así no hace falta la contraseña de
+  // administrador del servidor para entrar desde TyreControl.
+  router.use(async (req, res, next) => {
     if (req.path === "/health") return next();
+    if (await esSuperadminPorSesion(req)) (req as ConSesion)[SUPERADMIN_POR_SESION] = true;
     if (!requireAdmin(req, res)) return;
     next();
   });
