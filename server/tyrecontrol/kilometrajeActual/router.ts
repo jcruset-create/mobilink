@@ -37,7 +37,7 @@ import { supabase } from "../../supabase.ts";
 import { puedeVerEmpresa } from "../empresaAcceso.ts";
 import { clasificarLectura, frescuraDeConfig, avisoDeSalto, type LecturaOdometro } from "./frescura.ts";
 import {
-  descartarIncoherentes, kmEnFecha, lecturasDeMeses, ultimoConocido, type KmEnFecha, type LecturaKm, type MesTelematica,
+  descartarIncoherentes, kmEnFecha, lecturasDeMeses, odometroNoFiable, ultimoConocido, type KmEnFecha, type LecturaKm, type MesTelematica,
 } from "./kmEnFecha.ts";
 
 /*
@@ -161,12 +161,19 @@ export function createKilometrajeActualRouter(): Router {
 
       const consultadoAt = new Date();
       const { lectura, aviso } = await leerAhora(v.id, v.empresa_id, Number(v.km_actual), consultadoAt);
-      const respuesta = aRespuesta(lectura, aviso);
+      // Un odómetro parado (equipo clavado en un número viejo que sigue
+      // contestando con fecha de hoy) no se enseña como «ahora» ni se guarda.
+      const hoy = consultadoAt.toISOString().slice(0, 10);
+      const noFiable = lectura.km !== null ? odometroNoFiable(lectura.km, hoy, lecturas, meses) : null;
+      if (noFiable) console.warn(`[km-ficha] ${v.id}: ${noFiable}`);
+      const respuesta: RespuestaFicha = noFiable
+        ? { ...aRespuesta(lectura, aviso), estado: "no_fiable", kmTelematica: lectura.km, km: null, texto: noFiable }
+        : aRespuesta(lectura, aviso);
       CACHE_FICHA.set(v.id, { at: Date.now(), lectura: respuesta });
 
       let guardado = false;
       const km = lectura.km;
-      if (km !== null && lectura.estado === "actualizado" && !aviso && km > (Number(v.km_actual) || 0)) {
+      if (km !== null && !noFiable && lectura.estado === "actualizado" && !aviso && km > (Number(v.km_actual) || 0)) {
         // Solo sube: el `lt` hace que dos lecturas a la vez no se pisen al revés.
         const { error, count } = await supabase.from("tc_vehiculos")
           .update({ km_actual: Math.round(km), origen_km: "telematica", updated_at: new Date().toISOString() }, { count: "exact" })
@@ -215,7 +222,7 @@ export function createKilometrajeActualRouter(): Router {
 
       // 1. La telemática primero: es el odómetro del autobús, no un número
       //    tecleado. Se contrasta solo con lo que también es de la telemática.
-      const tele = await telematicaEnFecha(v.id, v.empresa_id, fecha, todas.filter((l) => l.fuente === "telematica_mes" || l.fuente === "vehiculo"));
+      const tele = await telematicaEnFecha(v.id, v.empresa_id, fecha, lecturas, meses);
       if (tele.resultado) return res.json({ ...tele.resultado, avisos });
 
       // 2. Lo demás, con las lecturas que cuadran entre sí.
@@ -232,7 +239,8 @@ export function createKilometrajeActualRouter(): Router {
 
 /** Cuánto se recuerda la lectura de ahora de la ficha, por vehículo. */
 export const CACHE_FICHA_MIN = 15;
-const CACHE_FICHA = new Map<string, { at: number; lectura: ReturnType<typeof aRespuesta> }>();
+type RespuestaFicha = Omit<ReturnType<typeof aRespuesta>, "estado"> & { estado: string; kmTelematica?: number | null };
+const CACHE_FICHA = new Map<string, { at: number; lectura: RespuestaFicha }>();
 
 interface VehiculoFicha { id: string; empresa_id: string; km_actual: number | null; origen_km: string | null; updated_at: string | null }
 
@@ -300,8 +308,9 @@ async function lecturasDelVehiculo(vehiculoId: string, empresaId: string, v: Veh
  * ellas es una de las respuestas malas que documenta HistoricOdometerService).
  */
 async function telematicaEnFecha(
-  vehiculoId: string, empresaId: string, fecha: string, deTelematica: LecturaKm[],
+  vehiculoId: string, empresaId: string, fecha: string, lecturas: LecturaKm[], meses: MesTelematica[],
 ): Promise<{ resultado: KmEnFecha | null; motivo: string }> {
+  const deTelematica = [...lecturas, ...lecturasDeMeses(meses)].filter((l) => l.fuente === "telematica_mes" || l.fuente === "vehiculo");
   try {
     const { odometroEnInstante } = await import("../../integration-hub/application/services/HistoricOdometerService.ts");
     const { ZONA_HORARIA_POR_DEFECTO } = await import("../../integration-hub/domain/meses.ts");
@@ -332,6 +341,11 @@ async function telematicaEnFecha(
     if (!(km > 0) || km + 5 < antes || km - 5 > despues) {
       return { resultado: null, motivo: `La telemática ha dado ${Math.round(km)} km, que no cuadra con sus propios odómetros mensuales; no se ha usado.` };
     }
+    // Y que no sea un odómetro parado: comparado con todas las lecturas buenas
+    // y con los km de los viajes, que el proveedor sigue dando aunque el
+    // contador del equipo se quede clavado.
+    const parado = odometroNoFiable(km, fecha, lecturas, meses);
+    if (parado) return { resultado: null, motivo: parado };
     const proveedor = String(r.odometro.provider ?? "");
     const nombre = proveedor ? proveedor.charAt(0).toUpperCase() + proveedor.slice(1) : "la telemática";
     return {

@@ -126,6 +126,62 @@ export function ultimoConocido(lecturas: LecturaKm[]): LecturaKm | null {
   return mejor;
 }
 
+/**
+ * Km que la telemática dice que rodó el vehículo entre dos fechas (excluida
+ * la primera, incluida la segunda), repartiendo cada mes por días. Es la
+ * DISTANCIA de los viajes, que el proveedor sigue dando aunque el odómetro
+ * del equipo se quede parado.
+ */
+export function kmRodadosEntre(desde: string, hasta: string, meses: MesTelematica[]): number {
+  let total = 0;
+  for (const m of meses) {
+    if (!valido(m.distancia)) continue;
+    const dias = diasDelMes(m.year, m.month);
+    const ini = `${m.year}-${pad(m.month)}-01`;
+    const fin = `${m.year}-${pad(m.month)}-${pad(dias)}`;
+    const a = desde > ini ? desde : null;          // el día «desde» no cuenta
+    const b = hasta < fin ? hasta : fin;
+    const primero = a ? diasEntre(ini, a) + 1 : 0;  // días del mes ya pasados
+    const ultimo = diasEntre(ini, b) + 1;
+    const n = Math.max(0, ultimo - primero);
+    total += m.distancia * (n / dias);
+  }
+  return total;
+}
+
+/** Por debajo de esto no se juzga si el odómetro se ha movido: ruido. */
+const MIN_KM_PARA_JUZGAR = 500;
+
+/**
+ * ¿Es creíble un odómetro de la telemática para esta fecha?
+ *
+ * Pasa: el equipo de Movertis del 8378NBC se quedó clavado en 66.690 km el
+ * 30/05/2026 y siguió contestando ese número —con fecha de hoy— mientras sus
+ * viajes sumaban miles de km. Un odómetro así no es «exacto», es viejo. Se
+ * rechaza si:
+ *   · es MENOR que una lectura buena anterior (un cuentakilómetros no baja), o
+ *   · desde la última lectura que alcanza apenas ha subido, cuando los viajes
+ *     de la propia telemática dicen que el vehículo rodó bastante más.
+ * Devuelve el motivo para enseñarlo, o `null` si es creíble.
+ */
+export function odometroNoFiable(km: number, fecha: string, lecturas: LecturaKm[], meses: MesTelematica[]): string | null {
+  const fmt = (n: number) => Math.round(n).toLocaleString("es-ES");
+  const buenas = descartarIncoherentes([...lecturas, ...lecturasDeMeses(meses)]).buenas.filter((l) => l.fecha <= fecha);
+  const mayor = buenas.reduce<LecturaKm | null>((m, l) => (!m || l.km > m.km ? l : m), null);
+  if (mayor && km < mayor.km - HOLGURA_KM) {
+    return `La telemática marca ${fmt(km)} km, menos que el ${mayor.detalle} (${fmt(mayor.km)} km): su odómetro parece parado.`;
+  }
+  // La lectura más reciente a la que llega este odómetro: desde ahí, ¿cuánto rodó?
+  const ref = buenas.filter((l) => l.km <= km + HOLGURA_KM).sort((a, b) => b.fecha.localeCompare(a.fecha))[0];
+  if (!ref || ref.fecha >= fecha) return null;
+  const rodados = kmRodadosEntre(ref.fecha, fecha, meses);
+  if (rodados >= MIN_KM_PARA_JUZGAR && km - ref.km < rodados * 0.3) {
+    return `La telemática marca ${fmt(km)} km, casi lo mismo que el ${ref.detalle} (${fmt(ref.km)} km), ` +
+      `pero sus viajes suman unos ${fmt(rodados)} km desde entonces: su odómetro parece parado.`;
+  }
+  return null;
+}
+
 /** Cuánto se aleja como mucho una lectura vecina para interpolar entre dos. */
 export const MAX_DIAS_INTERPOLAR = 62;
 
