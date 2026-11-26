@@ -101,6 +101,10 @@ export default function KmCabecera({ vehiculoId, kmActual, procedencia }: {
           <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-sky-300 border-r-transparent" />
           leyendo odómetro…
         </span>
+      ) : lectura?.estado === "no_fiable" ? (
+        <span className="rounded-full bg-rose-500/15 px-2.5 py-1 text-[11px] font-bold text-rose-300" title={lectura.texto}>
+          ⚠ odómetro de la telemática no fiable{lectura.kmTelematica != null ? ` (marca ${km(lectura.kmTelematica)})` : ""}
+        </span>
       ) : sinTelematica ? null : (fallo || lectura) && (
         <span className="text-[11px] text-slate-500" title={lectura?.texto ?? ""}>
           No se ha podido leer ahora ·{" "}

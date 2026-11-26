@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { descartarIncoherentes, kmEnFecha, lecturasDeMeses, ultimoConocido, type LecturaKm, type MesTelematica } from "./kmEnFecha.ts";
+import { descartarIncoherentes, kmEnFecha, kmRodadosEntre, odometroNoFiable, lecturasDeMeses, ultimoConocido, type LecturaKm, type MesTelematica } from "./kmEnFecha.ts";
 
 const rev = (fecha: string, km: number): LecturaKm => ({ km, fecha, fuente: "revision", detalle: `revisión del ${fecha}` });
 const sept: MesTelematica = { year: 2026, month: 9, inicial: 143_709, final: 151_988, distancia: 8_279, cerrado: true };
@@ -87,5 +87,36 @@ describe("descartarIncoherentes", () => {
   it("un km tecleado de más tampoco se cuela como último conocido", () => {
     const u = ultimoConocido([rev("2026-09-10", 147_000), op("2026-09-24", 1_500_000), rev("2026-10-05", 153_000), rev("2026-11-20", 163_000)]);
     expect(u?.km).toBe(163_000);
+  });
+});
+
+describe("odómetro de la telemática parado (8378NBC: clavado en 66.690 desde el 30/05)", () => {
+  const mayo: MesTelematica = { year: 2026, month: 5, inicial: 59_597, final: 66_690, distancia: 7_090, cerrado: true };
+  const septSinOdo: MesTelematica = { year: 2026, month: 9, inicial: null, final: null, distancia: 8_279, cerrado: true };
+  const octSinOdo: MesTelematica = { year: 2026, month: 10, inicial: null, final: null, distancia: 9_081, cerrado: true };
+  const montaje: LecturaKm = { km: 92_748, fecha: "2026-09-24", fuente: "operacion", detalle: "montaje del 24/09/2026" };
+
+  it("los km rodados entre dos fechas se reparten por días", () => {
+    expect(Math.round(kmRodadosEntre("2026-08-31", "2026-09-30", [septSinOdo]))).toBe(8_279);
+    expect(Math.round(kmRodadosEntre("2026-09-15", "2026-09-30", [septSinOdo]))).toBe(Math.round(8_279 * 15 / 30));
+  });
+
+  it("menor que una lectura buena anterior: no fiable", () => {
+    const m = odometroNoFiable(66_690, "2026-10-10", [montaje], [mayo, septSinOdo, octSinOdo]);
+    expect(m).toContain("menos que el montaje del 24/09/2026");
+  });
+
+  it("sin lecturas por medio, pero los viajes dicen que rodó: no fiable", () => {
+    const m = odometroNoFiable(66_690, "2026-09-24", [], [mayo, septSinOdo]);
+    expect(m).toContain("parece parado");
+  });
+
+  it("un odómetro que sube al ritmo de los viajes es fiable", () => {
+    expect(odometroNoFiable(66_690 + 6_500, "2026-09-24", [], [mayo, septSinOdo])).toBeNull();
+  });
+
+  it("si el vehículo no rodó (verano sin viajes), que no suba es normal", () => {
+    const junio: MesTelematica = { year: 2026, month: 6, inicial: null, final: null, distancia: null, cerrado: true };
+    expect(odometroNoFiable(66_690, "2026-06-20", [], [mayo, junio])).toBeNull();
   });
 });

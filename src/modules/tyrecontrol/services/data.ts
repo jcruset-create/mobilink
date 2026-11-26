@@ -957,7 +957,8 @@ export interface KmFicha {
   /** El mayor km conocido, con su fecha. `null` si no hay ninguna lectura. */
   ultimo: LecturaKmFicha | null;
   /** La lectura de ahora de la telemática (solo con `vivo`). */
-  lectura: (LecturaKmActual & { consultadoAt?: string }) | null;
+  /** `estado: "no_fiable"`: la telemática dio un odómetro parado (`kmTelematica`) y no se usa. */
+  lectura: (LecturaKmActual & { consultadoAt?: string; kmTelematica?: number | null }) | null;
   /** Se ha guardado como km del vehículo. */
   guardado: boolean;
 }
