@@ -24,6 +24,7 @@ import FichaTecnicaItv from "../components/FichaTecnicaItv";
 import SeccionTacografo from "../components/SeccionTacografo";
 import WebfleetVehiculo from "../components/WebfleetVehiculo";
 import KilometrajeMensual from "../components/KilometrajeMensual";
+import PorDondeRueda from "../components/PorDondeRueda";
 import { BloqueRendimientoVehiculo, DialogoSeguirRendimiento } from "../components/RendimientoNeumaticos";
 import { estadoSeguimientoRendimiento } from "../services/rendimiento";
 import PlanMantenimientoVehiculo from "../components/PlanMantenimiento";
@@ -488,6 +489,10 @@ export default function VehiculoDetalle() {
       {/* Kilómetros mensuales desde la telemática: se leen de nuestra base,
           nunca del proveedor al abrir la ficha. Sin telemática no se enseña. */}
       <KilometrajeMensual vehiculoId={v.id} />
+
+      {/* Km por tipo de vía (autopista, nacional, urbana…) de los vehículos
+          marcados; la casilla está dentro. Ver porDondeRueda en el servidor. */}
+      <PorDondeRueda vehiculoId={v.id} matricula={v.matricula} />
 
       {dialogoRend && (
         <DialogoSeguirRendimiento
