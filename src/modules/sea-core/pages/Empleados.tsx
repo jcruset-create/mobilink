@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import CoreLayout from "../layouts/CoreLayout";
 import { supabase } from "../../almacen-neumaticos/services/supabase";
 import { apiFetch } from "../../apiFetch";
+import ImportarNominas from "../components/ImportarNominas";
 
 type Empleado = {
   id: string;
@@ -87,6 +88,8 @@ export default function Empleados() {
   const [numeros, setNumeros] = useState<Record<string, string>>({});
   const [numerosDisponibles, setNumerosDisponibles] = useState(false);
   const [soloSinNumero, setSoloSinNumero] = useState(false);
+  /** El importador de nóminas, abierto. */
+  const [importando, setImportando] = useState(false);
 
   useEffect(() => { cargar(); }, []);
 
@@ -307,11 +310,20 @@ export default function Empleados() {
           <h1 className="text-2xl font-bold">Empleados</h1>
           <p className="text-sm text-slate-400">{filtrados.length} empleados</p>
         </div>
-        <button onClick={abrirNuevo}
-          className="rounded-xl bg-slate-800 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-500">
-          + Nuevo empleado
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={() => setImportando(true)}
+            title="Dar de alta a los trabajadores nuevos a partir del PDF de nóminas del mes"
+            className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-700/50">
+            Importar de nóminas
+          </button>
+          <button onClick={abrirNuevo}
+            className="rounded-xl bg-slate-800 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-500">
+            + Nuevo empleado
+          </button>
+        </div>
       </div>
+
+      {importando && <ImportarNominas onCerrar={() => setImportando(false)} onImportado={() => void cargar()} />}
 
       {mensaje && <p className="rounded-lg bg-green-50 p-3 text-sm text-green-700">{mensaje}</p>}
 

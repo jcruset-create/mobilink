@@ -16,6 +16,7 @@ import { supabase, supabaseAnonAuth, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_
 import { hayCore, NOMBRE_CORE_SQL } from "./core/hayCore.ts";
 import { nombreValeParaEntrar } from "./core/nombreDeAcceso.ts";
 import { createBajaEmpleadoRouter } from "./core/bajaEmpleado.ts";
+import { createImportarNominasRouter } from "./core/importarNominas.ts";
 import {
   createTelefonoEmpresaRouter,
   telefonoDeTecnico,
@@ -23866,6 +23867,8 @@ app.use("/api/public/satisfaction", createSatisfactionPublicRouter());
  * nada más que el token que lleva en la URL.
  */
 app.use("/api/core/alta", createAltaOperarioAdminRouter());
+// Importar de las nóminas del mes los trabajadores que falten en Core.
+app.use("/api/core/empleados", createImportarNominasRouter());
 // Baja (y alta) de un empleado: la baja lo es en todos los módulos.
 app.use("/api/core/empleados", createBajaEmpleadoRouter());
 // Teléfono de empresa de la ficha (el que enseñan los módulos).
