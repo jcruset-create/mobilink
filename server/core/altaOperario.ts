@@ -226,16 +226,23 @@ function etiqueta(campo: string): string {
 /**
  * ¿Se puede dar por enviada la ficha?
  *
- * Las dos fotos del DNI y los dos consentimientos que no son opcionales.
- * El carnet NO se exige: hay puestos que no conducen, y bloquear el envío
- * por eso dejaría a media oficina sin poder terminar su alta.
+ * La foto de la persona, las dos fotos del DNI y los dos consentimientos que
+ * no son opcionales. El carnet NO se exige: hay puestos que no conducen, y
+ * bloquear el envío por eso dejaría a media oficina sin poder terminar su
+ * alta.
+ *
+ * La foto es obligatoria también en una actualización: quien ya la tiene en
+ * su ficha la cumple sin hacer nada, y a quien no, es el momento de pedírsela.
  */
 export function faltaParaEnviar(p: {
+  /** Ya hay una foto de la persona en su ficha. */
+  foto: boolean;
   documentos: readonly string[];
   consentimientos: Partial<Record<Consentimiento, boolean>>;
   firma: boolean;
 }): string[] {
   const falta: string[] = [];
+  if (!p.foto) falta.push("Falta tu foto.");
   if (!p.documentos.includes("dni_anverso")) falta.push("Falta la foto del DNI por delante.");
   if (!p.documentos.includes("dni_reverso")) falta.push("Falta la foto del DNI por detrás.");
   if (!p.consentimientos.normativa) falta.push("Tienes que aceptar la normativa interna.");

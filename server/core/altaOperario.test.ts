@@ -119,6 +119,7 @@ describe("validarFicha", () => {
 
 describe("faltaParaEnviar", () => {
   const completo = {
+    foto: true,
     documentos: ["dni_anverso", "dni_reverso"],
     consentimientos: { normativa: true, datos: true },
     firma: true,
@@ -143,6 +144,11 @@ describe("faltaParaEnviar", () => {
 
   it("sin firma no se envía", () => {
     expect(faltaParaEnviar({ ...completo, firma: false })).toHaveLength(1);
+  });
+
+  it("sin la foto de la persona no se envía, y es lo primero que se pide", () => {
+    expect(faltaParaEnviar({ ...completo, foto: false })).toEqual(["Falta tu foto."]);
+    expect(faltaParaEnviar({ ...completo, foto: false, firma: false })[0]).toBe("Falta tu foto.");
   });
 });
 
