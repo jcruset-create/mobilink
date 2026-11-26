@@ -210,5 +210,25 @@ export async function desactivarSeguimientoRendimiento(vehiculoId: string): Prom
   if (error) throw new Error(error.message);
 }
 
+/** El km de montaje de cada goma montada (para ofrecerlo como inicio). Solo lee. */
+export async function kmMontajeDeVehiculo(vehiculoId: string): Promise<Map<string, number | null>> {
+  const { data, error } = await supabase.from("tc_montajes_actuales")
+    .select("neumatico_id, km_montaje").eq("vehiculo_id", vehiculoId);
+  if (error) throw new Error(error.message);
+  return new Map(((data ?? []) as { neumatico_id: string; km_montaje: number | null }[])
+    .map((m) => [m.neumatico_id, m.km_montaje == null ? null : Number(m.km_montaje)]));
+}
+
+/** Cambia a mano el punto de partida (km y profundidad) de cada goma. */
+export async function ajustarInicioRendimiento(
+  vehiculoId: string, inicios: { neumaticoId: string; km: number; profundidadMm: number }[],
+): Promise<void> {
+  const { error } = await supabase.rpc("tc_rendimiento_ajustar_inicio", {
+    p_vehiculo: vehiculoId,
+    p_inicios: inicios.map((i) => ({ neumatico_id: i.neumaticoId, km: i.km, profundidad_mm: i.profundidadMm })),
+  });
+  if (error) throw new Error(error.message);
+}
+
 export const miles = (v: number | null | undefined) =>
   v === null || v === undefined ? "—" : Math.round(v).toLocaleString("es-ES");
