@@ -37,7 +37,7 @@ import { supabase } from "../../supabase.ts";
 import { puedeVerEmpresa } from "../empresaAcceso.ts";
 import { clasificarLectura, frescuraDeConfig, avisoDeSalto, type LecturaOdometro } from "./frescura.ts";
 import {
-  kmEnFecha, lecturasDeMeses, ultimoConocido, type KmEnFecha, type LecturaKm, type MesTelematica,
+  descartarIncoherentes, kmEnFecha, lecturasDeMeses, ultimoConocido, type KmEnFecha, type LecturaKm, type MesTelematica,
 } from "./kmEnFecha.ts";
 
 /*
@@ -204,12 +204,23 @@ export function createKilometrajeActualRouter(): Router {
       const v = await vehiculoVisible(usuario, vehiculoId);
       if (!v) return res.status(404).json({ error: "Vehículo no encontrado" });
 
-      const { lecturas, meses } = await lecturasDelVehiculo(v.id, v.empresa_id, null);
-      const sinTelematica = kmEnFecha(fecha, lecturas, meses);
-      if (sinTelematica.tipo === "lectura") return res.json(sinTelematica);
+      const { lecturas, meses } = await lecturasDelVehiculo(v.id, v.empresa_id, v);
+      const todas = [...lecturas, ...lecturasDeMeses(meses)];
+      const { descartadas } = descartarIncoherentes(todas);
+      const fmt = (n: number) => Math.round(n).toLocaleString("es-ES");
+      // Las lecturas apartadas de ese día se dicen: si no, quien tecleó mal el
+      // montaje no se entera de por qué la ficha no le hace caso.
+      const avisos = descartadas.filter((l) => l.fecha === fecha)
+        .map((l) => `${l.detalle.charAt(0).toUpperCase()}${l.detalle.slice(1)} dice ${fmt(l.km)} km: no cuadra con las demás lecturas y no se ha usado.`);
 
-      const exacta = await telematicaEnFecha(v.id, v.empresa_id, fecha, [...lecturas, ...lecturasDeMeses(meses)]);
-      res.json(exacta ?? sinTelematica);
+      // 1. La telemática primero: es el odómetro del autobús, no un número
+      //    tecleado. Se contrasta solo con lo que también es de la telemática.
+      const tele = await telematicaEnFecha(v.id, v.empresa_id, fecha, todas.filter((l) => l.fuente === "telematica_mes" || l.fuente === "vehiculo"));
+      if (tele.resultado) return res.json({ ...tele.resultado, avisos });
+
+      // 2. Lo demás, con las lecturas que cuadran entre sí.
+      const r = kmEnFecha(fecha, lecturas, meses);
+      res.json({ ...r, avisos, telematica: tele.motivo });
     } catch (e) {
       console.error("[km-en-fecha] error:", (e as any)?.message ?? e);
       res.status(500).json({ error: "No se han podido calcular los kilómetros de esa fecha." });
@@ -288,7 +299,9 @@ async function lecturasDelVehiculo(vehiculoId: string, empresaId: string, v: Veh
  * y cuadra con las lecturas de antes y de después (un número que se sale de
  * ellas es una de las respuestas malas que documenta HistoricOdometerService).
  */
-async function telematicaEnFecha(vehiculoId: string, empresaId: string, fecha: string, todas: LecturaKm[]): Promise<KmEnFecha | null> {
+async function telematicaEnFecha(
+  vehiculoId: string, empresaId: string, fecha: string, deTelematica: LecturaKm[],
+): Promise<{ resultado: KmEnFecha | null; motivo: string }> {
   try {
     const { odometroEnInstante } = await import("../../integration-hub/application/services/HistoricOdometerService.ts");
     const { ZONA_HORARIA_POR_DEFECTO } = await import("../../integration-hub/domain/meses.ts");
@@ -299,21 +312,39 @@ async function telematicaEnFecha(vehiculoId: string, empresaId: string, fecha: s
       { tenantId: empresaId, correlationId: `km-en-fecha:${vehiculoId}:${fecha}` },
       vehiculoId, instante, { zonaHoraria: ZONA_HORARIA_POR_DEFECTO },
     );
-    if (r?.estado !== "encontrado") return null;
+    if (r?.estado !== "encontrado") {
+      const motivo: Record<string, string> = {
+        sin_telematica: "El vehículo no está enlazado con ninguna cuenta de telemática.",
+        sin_lectura: "La telemática no tiene odómetro de ese día.",
+        dia_abierto: "Ese día todavía no ha cerrado: la telemática no da aún un odómetro estable.",
+        discrepancia: "La telemática ha dado dos odómetros distintos para ese día y no se ha usado ninguno.",
+        no_disponible: "No se ha podido consultar la telemática.",
+      };
+      console.warn(`[km-en-fecha] ${vehiculoId} ${fecha}: ${r?.estado} ${r?.motivo ?? ""}`);
+      return { resultado: null, motivo: motivo[String(r?.estado)] ?? "La telemática no ha dado odómetro de ese día." };
+    }
     const km = Number(r.odometro.odometerKm);
-    const antes = todas.filter((l) => l.fecha < fecha).reduce((m, l) => Math.max(m, l.km), 0);
-    const despues = todas.filter((l) => l.fecha > fecha).reduce((m, l) => Math.min(m, l.km), Infinity);
-    if (!(km > 0) || km + 5 < antes || km - 5 > despues) return null;
+    // Contraste solo con lo que también es de la telemática: un km tecleado mal
+    // en un montaje no puede tumbar el odómetro del autobús (pasó: 92.748
+    // tecleados frente a 150.000 reales).
+    const antes = deTelematica.filter((l) => l.fecha < fecha).reduce((m, l) => Math.max(m, l.km), 0);
+    const despues = deTelematica.filter((l) => l.fecha > fecha).reduce((m, l) => Math.min(m, l.km), Infinity);
+    if (!(km > 0) || km + 5 < antes || km - 5 > despues) {
+      return { resultado: null, motivo: `La telemática ha dado ${Math.round(km)} km, que no cuadra con sus propios odómetros mensuales; no se ha usado.` };
+    }
     const proveedor = String(r.odometro.provider ?? "");
     const nombre = proveedor ? proveedor.charAt(0).toUpperCase() + proveedor.slice(1) : "la telemática";
     return {
-      tipo: "telematica", km: Math.round(km), fecha,
-      detalle: `odómetro de ${nombre} al final del día` +
-        (r.odometro.corroboracion === "dos_ventanas" ? "" : " (una sola consulta, sin contrastar)"),
+      resultado: {
+        tipo: "telematica", km: Math.round(km), fecha,
+        detalle: `odómetro de ${nombre} al final del día` +
+          (r.odometro.corroboracion === "dos_ventanas" ? "" : " (una sola consulta, sin contrastar)"),
+      },
+      motivo: "",
     };
   } catch (e) {
     console.error("[km-en-fecha] telemática no disponible:", (e as any)?.message ?? e);
-    return null;
+    return { resultado: null, motivo: "No se ha podido consultar la telemática." };
   }
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { kmEnFecha, lecturasDeMeses, ultimoConocido, type LecturaKm, type MesTelematica } from "./kmEnFecha.ts";
+import { descartarIncoherentes, kmEnFecha, lecturasDeMeses, ultimoConocido, type LecturaKm, type MesTelematica } from "./kmEnFecha.ts";
 
 const rev = (fecha: string, km: number): LecturaKm => ({ km, fecha, fuente: "revision", detalle: `revisión del ${fecha}` });
 const sept: MesTelematica = { year: 2026, month: 9, inicial: 143_709, final: 151_988, distancia: 8_279, cerrado: true };
@@ -58,5 +58,34 @@ describe("kmEnFecha", () => {
   it("si la de después es menor (cambio de equipo, dedazo), no se inventa una recta", () => {
     const r = kmEnFecha("2026-09-24", [rev("2026-09-20", 150_000), rev("2026-09-28", 140_000)], []);
     expect(r.tipo).toBe("sin_datos");
+  });
+});
+
+describe("descartarIncoherentes", () => {
+  const op = (fecha: string, km: number): LecturaKm => ({ km, fecha, fuente: "operacion", detalle: `montaje del ${fecha}` });
+
+  it("el caso del 8378NBC: un montaje con 92.748 km entre lecturas de 150.000 se aparta", () => {
+    const { buenas, descartadas } = descartarIncoherentes([
+      rev("2026-09-10", 147_000), op("2026-09-24", 92_748), rev("2026-10-05", 153_000),
+    ]);
+    expect(descartadas.map((l) => l.km)).toEqual([92_748]);
+    expect(buenas.map((l) => l.km)).toEqual([147_000, 153_000]);
+  });
+
+  it("ya no da la lectura mala como «lectura real» de ese día", () => {
+    const r = kmEnFecha("2026-09-24", [rev("2026-09-20", 148_950), op("2026-09-24", 92_748), rev("2026-09-28", 151_050)], []);
+    expect(r).toMatchObject({ tipo: "interpolado", km: 150_000 });
+  });
+
+  it("con empate, se aparta la tecleada y no la de la telemática", () => {
+    const { descartadas } = descartarIncoherentes([
+      { km: 150_000, fecha: "2026-09-01", fuente: "telematica_mes", detalle: "telemática" }, op("2026-09-24", 92_748),
+    ]);
+    expect(descartadas[0].fuente).toBe("operacion");
+  });
+
+  it("un km tecleado de más tampoco se cuela como último conocido", () => {
+    const u = ultimoConocido([rev("2026-09-10", 147_000), op("2026-09-24", 1_500_000), rev("2026-10-05", 153_000), rev("2026-11-20", 163_000)]);
+    expect(u?.km).toBe(163_000);
   });
 });
