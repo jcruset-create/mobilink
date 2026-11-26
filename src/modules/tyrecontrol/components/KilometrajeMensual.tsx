@@ -90,6 +90,8 @@ export default function KilometrajeMensual({ vehiculoId }: { vehiculoId: string 
 
   const km = (v: number | null | undefined) => (v == null ? "—" : `${Math.round(v).toLocaleString("es-ES")} km`);
   const odo = (v: number) => Math.round(v).toLocaleString("es-ES");
+  const hoy = new Date();
+  const esMesActual = (m: { year: number; month: number }) => m.year === hoy.getFullYear() && m.month === hoy.getMonth() + 1;
   const meses = verTodos ? datos.meses : datos.meses.slice(0, 6);
   const ultimaSync = datos.meses.length ? Math.max(...datos.meses.map((m) => m.sincronizadoMs)) : null;
 
@@ -139,16 +141,25 @@ export default function KilometrajeMensual({ vehiculoId }: { vehiculoId: string 
                 <tr key={`${m.year}-${m.month}`} className="border-b border-slate-700/60 last:border-0">
                   <td className="py-1 pr-4 capitalize text-slate-300">{nombreDeMes(m.year, m.month)}</td>
                   <td className="py-1 pr-3 text-right font-bold tabular-nums text-slate-100">
-                    {m.estado === "ok" ? km(m.km) : <span className="font-normal text-slate-500">sin datos</span>}
+                    {m.estado === "ok" ? km(m.km) : (
+                      <span className="font-normal text-slate-500"
+                        title={m.estado === "empty"
+                          ? "El proveedor contestó, pero no tiene viajes de este vehículo ese mes: estuvo parado, con el equipo apagado o sin enlazar."
+                          : undefined}>
+                        {m.estado === "empty" && !esMesActual(m) ? "sin viajes" : "sin datos"}
+                      </span>
+                    )}
                   </td>
                   <td className="py-1 text-[10px] text-slate-500">
-                    {!m.cerrado && m.estado !== "error" && "en curso"}
+                    {/* «En curso» solo el mes de hoy: un mes pasado sin viajes no se
+                        marca cerrado (no hay con qué contrastarlo) y salía «en curso». */}
+                    {esMesActual(m) && m.estado !== "error" && "en curso"}
                     {m.estado === "error" && <span className="text-amber-400" title={m.error ?? ""}>error al sincronizar</span>}
                   </td>
                   {/* El cierre del mes en curso no es el del último día: es el de la
                       última sincronización. Se deja en blanco hasta que cierre. */}
                   <td className="py-1 pr-3 text-right tabular-nums text-slate-300">{m.estado === "ok" && m.odometroInicial ? odo(m.odometroInicial) : <span className="text-slate-600">—</span>}</td>
-                  <td className="py-1 text-right tabular-nums text-slate-300">{m.estado === "ok" && m.cerrado && m.odometroFinal ? odo(m.odometroFinal) : <span className="text-slate-600">—</span>}</td>
+                  <td className="py-1 text-right tabular-nums text-slate-300">{m.estado === "ok" && !esMesActual(m) && m.odometroFinal ? odo(m.odometroFinal) : <span className="text-slate-600">—</span>}</td>
                 </tr>
               ))}
             </tbody>
