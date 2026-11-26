@@ -8,8 +8,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  activarSeguimientoRendimiento, calcularRendimiento, datosRendimiento, desactivarSeguimientoRendimiento,
-  miles, type DatosRendimiento, type Rendimiento,
+  activarSeguimientoRendimiento, ajustarInicioRendimiento, calcularRendimiento, datosRendimiento,
+  desactivarSeguimientoRendimiento, kmMontajeDeVehiculo, miles, type DatosRendimiento, type Rendimiento,
 } from "../services/rendimiento";
 import { Modal, inputCls } from "./ui";
 
@@ -147,6 +147,8 @@ export function BloqueRendimientoVehiculo({
 }: { vehiculoId: string; activo: boolean; esAdmin: boolean; onCambio: () => void }) {
   const [filas, setFilas] = useState<DatosRendimiento[]>([]);
   const [error, setError] = useState("");
+  const [editarInicio, setEditarInicio] = useState(false);
+  const [recarga, setRecarga] = useState(0);
   useEffect(() => {
     if (!activo) return;
     let vivo = true;
@@ -154,13 +156,14 @@ export function BloqueRendimientoVehiculo({
       .then((d) => { if (vivo) setFilas(d); })
       .catch((e) => { if (vivo) setError(e?.message ?? "Error"); });
     return () => { vivo = false; };
-  }, [vehiculoId, activo]);
+  }, [vehiculoId, activo, recarga]);
   if (!activo) return null;
 
   const conCalculo = filas.map((f) => ({ f, r: calcularRendimiento(f) }));
   const proximo = conCalculo.filter((x) => x.r.vidaKm != null)
     .sort((a, b) => (a.r.quedanKm ?? 0) - (b.r.quedanKm ?? 0))[0];
   const origen = filas[0];
+  const iniciosDistintos = new Set(filas.map((f) => Number(f.km_vehiculo_inicio ?? 0))).size > 1;
 
   async function dejar() {
     if (!confirm("¿Dejar de seguir el rendimiento de este vehículo? Lo medido se conserva.")) return;
@@ -173,9 +176,13 @@ export function BloqueRendimientoVehiculo({
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <div className="text-[11px] font-bold uppercase text-amber-300">★ Rendimiento de neumáticos</div>
         {origen && <span className="text-[11px] text-slate-400">
-          {origen.desde_origen ? "desde 0 km (gomas de origen)" : `desde ${miles(origen.km_vehiculo_inicio)} km`} · retirar a {mm(origen.minimo_mm)} mm
+          {iniciosDistintos ? "inicio por rueda" : origen.desde_origen ? "desde 0 km (gomas de origen)" : `desde ${miles(origen.km_vehiculo_inicio)} km`} · retirar a {mm(origen.minimo_mm)} mm
         </span>}
-        {esAdmin && <button onClick={() => void dejar()} className="ml-auto rounded border border-slate-600 px-2 py-1 text-[11px] text-slate-300">Dejar de seguir</button>}
+        {esAdmin && filas.length > 0 && (
+          <button onClick={() => setEditarInicio(true)}
+            className="ml-auto rounded border border-sky-600 px-2 py-1 text-[11px] font-bold text-sky-300 hover:bg-sky-500/10">✎ Inicio del seguimiento</button>
+        )}
+        {esAdmin && <button onClick={() => void dejar()} className={`${filas.length > 0 ? "" : "ml-auto "}rounded border border-slate-600 px-2 py-1 text-[11px] text-slate-300`}>Dejar de seguir</button>}
       </div>
       {error && <div className="text-[12px] text-rose-300">{error}</div>}
       {proximo && (
@@ -205,7 +212,175 @@ export function BloqueRendimientoVehiculo({
           </tbody>
         </table>
       </div>
+      {editarInicio && (
+        <DialogoInicioSeguimiento vehiculoId={vehiculoId} filas={filas}
+          onClose={() => setEditarInicio(false)}
+          onHecho={() => { setEditarInicio(false); setRecarga((x) => x + 1); }} />
+      )}
     </div>
+  );
+}
+
+/**
+ * «✎ Inicio del seguimiento»: el km del vehículo y la profundidad con que
+ * empieza CADA goma, agrupadas por eje, con atajos (todas desde origen, todas
+ * desde su montaje, todo un eje) y la vista previa de cómo quedan.
+ */
+function DialogoInicioSeguimiento({ vehiculoId, filas, onClose, onHecho }: {
+  vehiculoId: string; filas: DatosRendimiento[]; onClose: () => void; onHecho: () => void;
+}) {
+  const [km, setKm] = useState<Record<string, string>>(() =>
+    Object.fromEntries(filas.map((f) => [f.neumatico_id, String(f.km_vehiculo_inicio ?? 0)])));
+  const [prof, setProf] = useState<Record<string, string>>(() =>
+    Object.fromEntries(filas.map((f) => [f.neumatico_id, String(f.profundidad_inicial_mm ?? "").replace(".", ",")])));
+  const [montaje, setMontaje] = useState<Map<string, number | null>>(new Map());
+  const [ejeKm, setEjeKm] = useState<Record<string, string>>({});
+  const [guardando, setGuardando] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let vivo = true;
+    kmMontajeDeVehiculo(vehiculoId).then((m) => { if (vivo) setMontaje(m); }).catch(() => undefined);
+    return () => { vivo = false; };
+  }, [vehiculoId]);
+
+  const ejes = [...new Set(filas.map((f) => f.eje ?? 0))].sort((a, b) => a - b);
+  const deEje = (e: number) => filas.filter((f) => (f.eje ?? 0) === e);
+  const kmActual = Math.max(0, ...filas.map((f) => Number(f.km_actual_vehiculo ?? 0)));
+  const todasA = (valor: (f: DatosRendimiento) => number | null) =>
+    setKm((k) => ({ ...k, ...Object.fromEntries(filas.map((f) => [f.neumatico_id, String(valor(f) ?? k[f.neumatico_id])])) }));
+  const montajeDe = (f: DatosRendimiento) => montaje.get(f.neumatico_id) ?? null;
+  const hayMontaje = filas.some((f) => montajeDe(f) != null);
+
+  const previa = filas.map((f) => {
+    const k = numero(km[f.neumatico_id] ?? ""), p = numero(prof[f.neumatico_id] ?? "");
+    const antes = calcularRendimiento(f);
+    const ahora = calcularRendimiento({
+      ...f,
+      km_vehiculo_inicio: k == null || Number.isNaN(k) ? null : k,
+      profundidad_inicial_mm: p == null || Number.isNaN(p) ? null : p,
+    });
+    return { f, antes, ahora, k, p };
+  });
+  const malos = previa.filter((x) => x.k == null || Number.isNaN(x.k) || x.k < 0 || x.p == null || Number.isNaN(x.p) || x.p <= 0 || x.p > 30);
+  const pasados = previa.filter((x) => x.k != null && !Number.isNaN(x.k) && kmActual > 0 && x.k > kmActual);
+  const cambiados = previa.filter((x) =>
+    x.k !== Number(x.f.km_vehiculo_inicio ?? 0) || x.p !== Number(x.f.profundidad_inicial_mm ?? NaN));
+
+  async function guardar() {
+    if (malos.length) { setError(`Revisa ${malos.map((x) => x.f.posicion).join(", ")}: km o profundidad no válidos.`); return; }
+    setGuardando(true); setError("");
+    try {
+      await ajustarInicioRendimiento(vehiculoId, previa.map((x) => ({ neumaticoId: x.f.neumatico_id, km: x.k!, profundidadMm: x.p! })));
+      onHecho();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido guardar");
+    } finally { setGuardando(false); }
+  }
+
+  const celda = "rounded border border-slate-600 bg-slate-900 px-2 py-1 text-right text-[12px] tabular-nums text-slate-100";
+  return (
+    <Modal title={`Inicio del seguimiento${filas[0]?.matricula ? ` · ${filas[0].matricula}` : ""}`} onClose={onClose} size="lg"
+      footer={<div className="flex items-center justify-end gap-2">
+        <span className="mr-auto text-[11px] text-slate-500">{cambiados.length} de {filas.length} ruedas cambiadas</span>
+        <button onClick={onClose} className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200">Cancelar</button>
+        <button onClick={() => void guardar()} disabled={guardando || cambiados.length === 0}
+          className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
+          {guardando ? "Guardando…" : "Guardar inicio"}
+        </button>
+      </div>}>
+      <div className="space-y-3 text-sm">
+        <div className="flex flex-wrap items-center gap-2 text-[12px]">
+          <span className="text-slate-400">Rellenar todas:</span>
+          <button onClick={() => todasA(() => 0)} className="rounded-lg border border-slate-600 px-2.5 py-1 text-slate-200 hover:bg-slate-700">Desde origen (0 km)</button>
+          <button onClick={() => todasA(montajeDe)} disabled={!hayMontaje}
+            className="rounded-lg border border-slate-600 px-2.5 py-1 text-slate-200 hover:bg-slate-700 disabled:opacity-40">Km de su montaje</button>
+          <span className="text-[11px] text-slate-500">o escribe el km por eje o rueda a rueda. Km del vehículo hoy: {miles(kmActual)}.</span>
+        </div>
+
+        {ejes.map((e) => {
+          const ruedas = deEje(e);
+          const montajes = [...new Set(ruedas.map(montajeDe).filter((x): x is number => x != null))];
+          return (
+            <div key={e} className="space-y-2 rounded-lg bg-slate-900/60 p-3">
+              <div className="flex flex-wrap items-center gap-2 text-[12px]">
+                <b className="text-slate-100">{e ? `Eje ${e}` : "Sin eje"}</b>
+                {montajes.length === 1 && <span className="rounded-full bg-slate-700 px-2 py-0.5 text-[10px] text-slate-200">montadas a {miles(montajes[0])} km</span>}
+                <span className="ml-auto flex items-center gap-1.5">
+                  <span className="text-slate-400">Todo el eje a</span>
+                  <input id={`eje-km-${e}`} className={`${celda} w-24`} inputMode="numeric" value={ejeKm[e] ?? ""}
+                    placeholder={montajes.length === 1 ? String(montajes[0]) : "km"}
+                    onChange={(ev) => setEjeKm((x) => ({ ...x, [e]: ev.target.value }))} />
+                  <button onClick={() => {
+                    const v = (ejeKm[e] ?? "").trim() || (montajes.length === 1 ? String(montajes[0]) : "");
+                    if (v) setKm((k) => ({ ...k, ...Object.fromEntries(ruedas.map((f) => [f.neumatico_id, v])) }));
+                  }} className="rounded border border-slate-600 px-2 py-1 text-slate-200 hover:bg-slate-700">Aplicar</button>
+                </span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[520px] text-[12px] tabular-nums">
+                  <thead className="text-[10px] uppercase text-slate-500"><tr className="text-left">
+                    <th className="py-1">Posición</th><th>Goma</th><th className="text-right">Km montaje</th>
+                    <th className="text-right">Km inicio seguimiento</th><th className="text-right">Prof. inicio (mm)</th>
+                  </tr></thead>
+                  <tbody>
+                    {ruedas.map((f) => (
+                      <tr key={f.neumatico_id} className="border-t border-slate-700/50">
+                        <td className="py-1.5 text-slate-200">{f.posicion}</td>
+                        <td className="text-sky-300">{f.numero_interno ?? f.ref_modelo ?? f.modelo ?? "—"}</td>
+                        <td className="text-right text-slate-400">{miles(montajeDe(f))}</td>
+                        <td className="text-right"><input id={`ini-km-${f.neumatico_id}`} className={`${celda} w-28`} inputMode="numeric"
+                          value={km[f.neumatico_id] ?? ""} onChange={(ev) => setKm((k) => ({ ...k, [f.neumatico_id]: ev.target.value }))} /></td>
+                        <td className="text-right"><input id={`ini-mm-${f.neumatico_id}`} className={`${celda} w-20`} inputMode="decimal"
+                          value={prof[f.neumatico_id] ?? ""} onChange={(ev) => setProf((p) => ({ ...p, [f.neumatico_id]: ev.target.value }))} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })}
+
+        {pasados.length > 0 && (
+          <div className="rounded border border-amber-500/50 bg-amber-500/10 p-2 text-[12px] text-amber-100">
+            ⚠ {pasados.map((x) => x.f.posicion).join(", ")}: el inicio es mayor que el km del vehículo hoy ({miles(kmActual)}).
+            Saldrán sin km recorridos hasta que el vehículo pase de ahí. ¿Es de otro cuentakilómetros?
+          </div>
+        )}
+
+        <div>
+          <div className="mb-1 text-[10px] font-semibold uppercase text-slate-500">Así quedaría</div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[620px] text-[12px] tabular-nums">
+              <thead className="text-[10px] uppercase text-slate-500"><tr className="text-left">
+                <th className="py-1">Posición</th><th>Origen</th><th>Hoy</th><th>Gastado</th>
+                <th className="text-right">Km antes</th><th className="text-right">Km ahora</th>
+                <th className="text-right">km/mm antes</th><th className="text-right">km/mm ahora</th>
+              </tr></thead>
+              <tbody>
+                {previa.map(({ f, antes, ahora }) => (
+                  <tr key={f.neumatico_id} className="border-t border-slate-700/50">
+                    <td className="py-1.5 text-slate-200">{f.posicion}</td>
+                    <td>{mm(ahora.origenMm)}</td><td>{mm(ahora.actualMm)}</td><td>{mm(ahora.gastadoMm)}</td>
+                    <td className="text-right text-slate-500">{miles(antes.kmGoma)}</td>
+                    <td className="text-right">{miles(ahora.kmGoma)}</td>
+                    <td className="text-right text-slate-500">{miles(antes.kmPorMm)}</td>
+                    <td className="text-right font-bold text-emerald-300" title={ahora.sinProyeccion ?? undefined}>
+                      {ahora.kmPorMm != null ? miles(ahora.kmPorMm) : <span className="font-normal text-slate-500">{ahora.sinProyeccion ?? "—"}</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            Si al montarlas no estaban nuevas, pon en «Prof. inicio» la que tenían: los km/mm se recalculan con ella.
+          </div>
+        </div>
+        {error && <div className="rounded border border-rose-500/40 bg-rose-500/10 p-2 text-[12px] text-rose-200">{error}</div>}
+      </div>
+    </Modal>
   );
 }
 
