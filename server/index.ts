@@ -17,7 +17,7 @@ import { hayCore, NOMBRE_CORE_SQL } from "./core/hayCore.ts";
 import { nombreValeParaEntrar } from "./core/nombreDeAcceso.ts";
 import { createBajaEmpleadoRouter } from "./core/bajaEmpleado.ts";
 import { createImportarNominasRouter } from "./core/importarNominas.ts";
-import { createFotoEmpleadoRouter } from "./core/fotoEmpleado.ts";
+import { almacenSupabase, createFotoEmpleadoRouter, ErrorFoto, ponerFoto } from "./core/fotoEmpleado.ts";
 import {
   createTelefonoEmpresaRouter,
   telefonoDeTecnico,
@@ -2862,7 +2862,7 @@ app.get("/api/techs", exigirCredencial(requirePanelRole), async (req, res) => {
                core
                  ? `, ${NOMBRE_CORE_SQL} AS core_nombre,
                     ${numero ? "e.numero_trabajador" : "NULL::text"} AS core_numero,
-                    e.activo AS core_activo, (e.id IS NOT NULL) AS core_enlazado
+                    e.activo AS core_activo, (e.id IS NOT NULL) AS core_enlazado, e.foto_url AS core_foto
                     ${telefonoEmpresa ? ", e.telefono_empresa AS core_tel_empresa, e.telefono AS core_tel_personal" : ""}`
                  : ""
              }
@@ -2874,11 +2874,28 @@ app.get("/api/techs", exigirCredencial(requirePanelRole), async (req, res) => {
     // El teléfono de un técnico enlazado lo pone Core (ver
     // core/telefonoEmpresa.ts). El personal solo lo ve un administrador.
     const esAdmin = telefonoEmpresa ? (await getRoleFromRequestAsync(req)) === "admin" : false;
+
+    // La foto de un técnico enlazado es la de su ficha de Core, si tiene. Se
+    // firman todas de una vez (y la dirección se reutiliza entre recargas:
+    // ver core/fotoEmpleado.ts). Si no se pueden firmar, se ve la del taller.
+    const rutasDeFoto = result.rows
+      .filter((f: any) => f.core_enlazado === true && f.core_foto)
+      .map((f: any) => String(f.core_foto));
+    const fotosDeCore: Record<string, string> =
+      rutasDeFoto.length > 0 ? await almacenSupabase.firmar(rutasDeFoto).catch(() => ({})) : {};
+
     res.json(
       result.rows.map((fila: any) => {
         const mandaCore = telefonoEmpresa && fila.core_enlazado === true;
         const { telefono, origen } = telefonoDeTecnico(fila, mandaCore, esAdmin);
-        return { ...normalizeTechRow(fila), phone: telefono, phoneOrigen: origen, phoneEnCore: mandaCore };
+        const fotoDeCore = fila.core_enlazado === true && fila.core_foto ? fotosDeCore[String(fila.core_foto)] : undefined;
+        return {
+          ...normalizeTechRow(fila),
+          ...(fotoDeCore ? { avatar: fotoDeCore } : {}),
+          phone: telefono,
+          phoneOrigen: origen,
+          phoneEnCore: mandaCore,
+        };
       })
     );
   } catch (error) {
@@ -2896,6 +2913,35 @@ async function telefonoLoPoneCore(name: string): Promise<boolean> {
     [name]
   );
   return rows.length > 0;
+}
+
+/**
+ * ¿La foto de este técnico la pone Core? (enlazado, y con foto en su ficha).
+ * Devuelve además el `avatar` que hay guardado en el taller, que en ese caso
+ * no se toca: lo que el panel manda es la dirección firmada que Core le dio,
+ * que caduca y no pinta nada en la base.
+ */
+async function fotoDeTecnicoEnCore(name: string): Promise<{ enCore: boolean; avatarDelTaller: string | null }> {
+  const { core } = await hayCore(db);
+  if (!core) return { enCore: false, avatarDelTaller: null };
+  const { rows } = await db.query(
+    `SELECT t.avatar, (e.id IS NOT NULL AND COALESCE(e.foto_url, '') <> '') AS en_core
+       FROM techs t LEFT JOIN sea_employees e ON e.id = t.employee_id
+      WHERE t.name = $1`,
+    [name]
+  );
+  return { enCore: rows[0]?.en_core === true, avatarDelTaller: rows[0]?.avatar ?? null };
+}
+
+/** La persona de Core enlazada con este técnico, o `null`. */
+async function empleadoDeTecnico(name: string): Promise<string | null> {
+  const { core } = await hayCore(db);
+  if (!core) return null;
+  const { rows } = await db.query(
+    `SELECT e.id::text AS id FROM techs t JOIN sea_employees e ON e.id = t.employee_id WHERE t.name = $1`,
+    [name]
+  );
+  return rows[0]?.id ?? null;
 }
 
 app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
@@ -2934,6 +2980,7 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
       `SELECT "roadsideCapable", "workshopId", phone FROM techs WHERE name = $1`,
       [name]
     );
+    const fotoEnCore = await fotoDeTecnicoEnCore(name);
 
     /*
      * Si el cuerpo no trae taller, se conserva el que había.
@@ -2989,7 +3036,7 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
         currentJobId ?? null,
         JSON.stringify(competencies ?? {}),
         JSON.stringify(priorities ?? {}),
-        avatar ?? null,
+        fotoEnCore.enCore ? fotoEnCore.avatarDelTaller : avatar ?? null,
         statusChangedAtMs ?? Date.now(),
         JSON.stringify(statusTotals ?? {}),
         normalizedRoadsideCapable,
@@ -3523,6 +3570,27 @@ app.post(
 
       if (!exists) {
         return res.status(404).json({ error: "Técnico no encontrado" });
+      }
+
+      /*
+       * La foto de un técnico enlazado con Core es la de su ficha de Core:
+       * se guarda allí, normalizada como todas, y no en el almacén del panel.
+       * Así da igual desde dónde se cambie: hay una sola.
+       */
+      const employeeId = await empleadoDeTecnico(name);
+      if (employeeId) {
+        try {
+          const hecha = await ponerFoto(employeeId, req.file);
+          const { rows } = await db.query(
+            `SELECT name, status, blocked, "currentJobId", competencies, priorities, avatar, employee_id
+               FROM techs WHERE name = $1`,
+            [name]
+          );
+          return res.json({ ...normalizeTechRow(rows[0]), ...(hecha.url ? { avatar: hecha.url } : {}), aviso: hecha.aviso });
+        } catch (e) {
+          if (e instanceof ErrorFoto) return res.status(e.status).json({ error: e.message, code: e.code });
+          throw e;
+        }
       }
 
       const safeName = name

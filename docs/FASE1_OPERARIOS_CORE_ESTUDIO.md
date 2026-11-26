@@ -25,9 +25,22 @@
 > - Core: foto en la cabecera de la ficha, en «Editar empleado» y en la lista.
 > - Sin migraciones: `foto_url` ya existía.
 >
-> **Falta (entrega 2)**
-> - Taller: el técnico enlazado enseña la foto de Core, y pasar a Core, una
->   vez y normalizadas, las fotos que hoy hay en `techs.avatar`.
+> **Entrega 2 (hecha el mismo día): la foto en Taller**
+> - `GET /api/techs`: la foto de un técnico enlazado es la de su ficha de Core
+>   (dirección firmada). Sin foto en Core, o si no se puede firmar, la del
+>   taller de siempre.
+> - `PUT /api/techs/:name` no escribe `avatar` de un enlazado con foto en Core:
+>   lo que manda el panel es la dirección firmada, que caduca.
+> - `POST /api/techs/:name/avatar` de un enlazado guarda la foto EN CORE,
+>   normalizada. Da igual desde dónde se cambie: hay una sola.
+> - Core → Empleados: aviso «Traer fotos de Taller» mientras haya técnicos
+>   enlazados con foto en Taller y sin foto en Core. Las pasa una vez,
+>   normalizadas, sin pisar a quien ya tiene; `techs.avatar` no se toca. Se
+>   bajan del bucket del panel por su ruta, no pidiendo la dirección guardada.
+> - Para que no parpadee en las TV (que recargan cada 15 s): cada foto nueva
+>   va a una ruta nueva (`foto-<hora>.jpg`, y se borra la anterior), el
+>   servidor reutiliza la dirección firmada de cada ruta, y el panel conserva
+>   la primera que vio (`src/modules/fotoEstable.ts`) y la renueva a las 5 h.
 >
 > **A tener en cuenta**
 > - La foto pasa por el proveedor de IA para localizar la cara, igual que ya

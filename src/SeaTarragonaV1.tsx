@@ -132,6 +132,7 @@ import {
   syncTechsWithActiveJobs,
 } from "./modules/techSync";
 import { getTechAvatarUrl } from "./modules/techAvatar";
+import { fotoEstable } from "./modules/fotoEstable";
 import {
   INITIAL_TECHS,
   createTech,
@@ -1664,7 +1665,9 @@ blocked: isUnavailableTechStatus(
       priorities: hasPriorities
         ? found.priorities
         : baseTech.priorities,
-      avatar: found.avatar ?? baseTech.avatar ?? null,
+      // La de un técnico enlazado es una dirección firmada, distinta en cada
+      // recarga: se conserva la primera para que la foto no parpadee.
+      avatar: fotoEstable(found.avatar ?? baseTech.avatar ?? null),
       statusChangedAtMs:
         found.statusChangedAtMs ?? baseTech.statusChangedAtMs ?? nowMs(),
       statusTotals: found.statusTotals ?? baseTech.statusTotals ?? {},
@@ -1806,7 +1809,11 @@ async function uploadTechAvatar(file: File, techName: string) {
     if (!response.ok) {
       const text = await response.text().catch(() => "");
       console.error("Error subiendo avatar:", response.status, text);
-      alert(`No se pudo subir la foto de ${techName}.`);
+      // La foto de un técnico enlazado se guarda en Core, que dice por qué no
+      // vale («no se ve ninguna cara», «sale más de una persona»).
+      let motivo = "";
+      try { motivo = String(JSON.parse(text)?.error ?? ""); } catch { /* no era JSON */ }
+      alert(motivo ? `No se pudo subir la foto de ${techName}: ${motivo}` : `No se pudo subir la foto de ${techName}.`);
       return;
     }
 
@@ -1817,7 +1824,7 @@ async function uploadTechAvatar(file: File, techName: string) {
         t.name === techName
           ? {
               ...t,
-              avatar: updatedTech.avatar ?? null,
+              avatar: fotoEstable(updatedTech.avatar ?? null),
             }
           : t
       )
@@ -4098,7 +4105,9 @@ async function resetAllSystem() {
         found.priorities && Object.keys(found.priorities).length > 0
           ? found.priorities
           : baseTech.priorities,
-      avatar: found.avatar ?? baseTech.avatar ?? null,
+      // La de un técnico enlazado es una dirección firmada, distinta en cada
+      // recarga: se conserva la primera para que la foto no parpadee.
+      avatar: fotoEstable(found.avatar ?? baseTech.avatar ?? null),
       statusChangedAtMs:
         found.statusChangedAtMs ?? baseTech.statusChangedAtMs ?? nowMs(),
       statusTotals: found.statusTotals ?? baseTech.statusTotals ?? {},
