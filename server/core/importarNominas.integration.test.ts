@@ -154,7 +154,7 @@ describe.runIf(RUN)("importar de las nóminas", () => {
     const a = await mod.analizarNominas(PDF, null, conexion);
     expect(a.filas.map((f) => f.tipo)).toEqual(["igual", "igual", "igual"]);
     const r = await mod.aplicarNominas(PDF, EMPRESA, { crear: ["00000003A"], actualizar: ["12345678Z"] }, conexion);
-    expect(r).toEqual({ creados: [], actualizados: [] });
+    expect(r).toEqual({ creados: [], actualizados: [], nominas: null });
     expect((await conexion.query(`SELECT count(*)::int AS n FROM sea_employees`)).rows[0].n).toBe(4);
   });
 

@@ -17,6 +17,7 @@ function persona(p: Partial<PersonaDeNomina> & { nif: string; nombre: string; ap
     nass: "43/00000001/01",
     paginas: [1],
     periodos: ["Del 01 al 30 de Noviembre de 2.026"],
+    nominas: [{ pagina: 1, periodo: "Del 01 al 30 de Noviembre de 2.026", dias: 30 }],
     ...p,
   };
 }

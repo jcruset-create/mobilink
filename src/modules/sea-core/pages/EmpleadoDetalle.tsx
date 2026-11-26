@@ -7,6 +7,7 @@ import FotoEmpleado from "../components/FotoEmpleado";
 import { Bike, Bus, Car, Caravan, Truck } from "lucide-react";
 import AccesoEmpleado from "../components/AccesoEmpleado";
 import HorarioEmpleado from "../components/HorarioEmpleado";
+import NominasEmpleado from "../components/NominasEmpleado";
 import { useEsSuperadmin } from "../../esSuperadmin";
 
 type Empleado = {
@@ -26,6 +27,8 @@ type Empleado = {
 const TABS = ["Datos personales", "Competencias", "Certificaciones", "Autorizaciones", "Formación", "Vestuario", "Documentación", "Acceso"];
 // Solo el superadministrador ve y edita el horario; va al final para no mover el resto.
 const TAB_HORARIO = TABS.length;
+// Las nóminas, igual: solo el superadministrador, y detrás del horario.
+const TAB_NOMINAS = TABS.length + 1;
 
 const ROL_BADGE: Record<string, string> = {
   admin: "bg-red-500/20 text-red-800", responsable: "bg-orange-100 text-orange-800",
@@ -153,7 +156,7 @@ export default function EmpleadoDetalle() {
   const [revMensaje, setRevMensaje] = useState("");
   const [revError, setRevError] = useState("");
   const esSuperadmin = useEsSuperadmin();
-  const tabs = esSuperadmin ? [...TABS, "Horario"] : TABS;
+  const tabs = esSuperadmin ? [...TABS, "Horario", "Nóminas"] : TABS;
 
   // Sub-data
   const [competencias, setCompetencias] = useState<any[]>([]);
@@ -1577,6 +1580,10 @@ export default function EmpleadoDetalle() {
       {tabActiva === 7 && <AccesoEmpleado empleado={empleado} />}
       {tabActiva === TAB_HORARIO && esSuperadmin && empleado && (
         <HorarioEmpleado empleadoId={empleado.id} nombre={[empleado.nombre, empleado.apellidos].filter(Boolean).join(" ")} />
+      )}
+
+      {tabActiva === TAB_NOMINAS && esSuperadmin && empleado && (
+        <NominasEmpleado employeeId={empleado.id} nombre={[empleado.nombre, empleado.apellidos].filter(Boolean).join(" ")} />
       )}
 
     </CoreLayout>

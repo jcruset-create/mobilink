@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { capitalizar, leerCabecera, leerNominas, normalizarDocumento } from "./nominasLeer.ts";
+import { capitalizar, leerCabecera, leerNominas, mesDePeriodo, normalizarDocumento } from "./nominasLeer.ts";
 
 /** Una página de nómina tal como la devuelve el lector de PDF. Datos inventados. */
 function pagina(p: {
@@ -57,6 +57,7 @@ describe("leerCabecera", () => {
       codigo: "2",
       nif: "12345678Z",
       periodo: "Del 01 al 30 de Noviembre de 2.026",
+      dias: 30,
     });
     // Ni importes ni IBAN: no hay ningún campo donde pudieran caber.
     expect(JSON.stringify(n)).not.toMatch(/553,20|IBAN|ES00/);
@@ -100,6 +101,11 @@ describe("leerNominas", () => {
       nif: "12345678Z",
       paginas: [1, 2],
       periodos: ["Del 01 al 20 de Noviembre de 2.026", "Del 21 al 25 de Noviembre de 2.026"],
+      // Cada nómina con su página: es lo que permite guardarlas sueltas.
+      nominas: [
+        { pagina: 1, periodo: "Del 01 al 20 de Noviembre de 2.026", dias: 30 },
+        { pagina: 2, periodo: "Del 21 al 25 de Noviembre de 2.026", dias: 30 },
+      ],
     });
     expect(r.empresas).toEqual([{ cif: "A00000000", nombre: "TALLERES EJEMPLO, SA" }]);
   });
@@ -115,6 +121,21 @@ describe("leerNominas", () => {
       pagina({ trabajador: "RUIZ, PEP", nif: "00000001R", empresa: "OTRA, SL", cif: "B11111111" }),
     ]);
     expect(r.empresas.map((e) => e.cif)).toEqual(["A00000000", "B11111111"]);
+  });
+});
+
+describe("mesDePeriodo", () => {
+  it("saca el año y el mes del periodo, con el punto de millar que pone la gestoría", () => {
+    expect(mesDePeriodo("Del 01 al 30 de Noviembre de 2.026")).toEqual({ anio: 2026, mes: 11 });
+    expect(mesDePeriodo("Del 16 al 31 de enero de 2027")).toEqual({ anio: 2027, mes: 1 });
+    expect(mesDePeriodo("Del 01 al 30 de SETIEMBRE de 2.026")).toEqual({ anio: 2026, mes: 9 });
+  });
+
+  it("si no se entiende, no se inventa un mes", () => {
+    expect(mesDePeriodo("")).toBeNull();
+    expect(mesDePeriodo("Paga extra de verano")).toBeNull();
+    expect(mesDePeriodo("Del 01 al 30 de Brumario de 2.026")).toBeNull();
+    expect(mesDePeriodo("Del 01 al 30 de Noviembre de 26")).toBeNull();
   });
 });
 
