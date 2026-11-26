@@ -1,5 +1,36 @@
 # Fase 1 — Estudio: Core como fuente única de operarios y usuarios
 
+> **2026-11-26 · Importar de nóminas, y el número de trabajador pasa a ser el
+> código de la gestoría.**
+>
+> Al leer el PDF de nóminas se vio que el «Nº» que se había copiado de
+> `codigo_operario` NO era el código de la nómina, sino el orden de la página
+> en el PDF (1…20). El código de verdad es el de la cabecera («000002 / 112» →
+> `2`), que es el que no cambia cuando alguien entra o sale. Decidido: el
+> número de trabajador es ese.
+>
+> **Qué se ha hecho**
+> - Core → Empleados → **Importar de nóminas**: se sube el PDF del mes, el
+>   servidor lee la cabecera de cada nómina (`server/core/nominasLeer.ts`), la
+>   compara con Core por NIF (`nominasComparar.ts`) y enseña qué pasaría:
+>   nuevos, a actualizar, iguales, de baja en Core y activos que ya no salen.
+>   Se marca y se aplica (`importarNominas.ts`), todo o nada.
+> - Los nuevos se crean en `pendiente` (falta el enlace de alta), con su
+>   empresa, su centro, DNI, Seguridad Social, antigüedad, categoría y número.
+> - A los que ya están solo se les iguala el número y se rellena lo que falte;
+>   lo que ya está puesto no se pisa. `codigo_operario` (login de ToolControl)
+>   no se toca.
+> - Nunca da de baja: quien ya no sale en la nómina solo se avisa.
+> - Del PDF se lee solo la cabecera; ni los importes ni el PDF se guardan, y
+>   al aplicar se relee el PDF (lo que entra sale del PDF, no del navegador).
+> - Sin migraciones.
+>
+> **Límites**
+> - Depende del formato de ESTA gestoría. Una página que no lo sigue se
+>   devuelve como «no reconocida»; no se inventa nada.
+> - El segundo número del código («/ 112») no se sabe qué es y no se usa.
+> - El centro de la nómina solo se usa para los nuevos.
+
 > **2026-11-24 · La baja en Core es la baja en todos los módulos; la APK de
 > Almacén mira a Core.** Decidido por el usuario.
 >
