@@ -1,5 +1,35 @@
 # Fase 1 — Estudio: Core como fuente única de operarios y usuarios
 
+> **2026-11-26 · Las nóminas, en la ficha de cada trabajador.**
+> Decidido por el usuario: solo las ve el superadministrador, la casilla del
+> importador viene marcada y se borran a mano (no hay caducidad).
+>
+> **Qué se ha hecho**
+> - `supabase/migrations/core_nominas_empleado.sql` (a mano, idempotente):
+>   tabla `sea_employee_payslips` — de quién, periodo, días, ruta del PDF,
+>   quién la subió y quién la abrió por última vez. **Ningún importe.** RLS
+>   activado y sin políticas: solo la lee el servidor.
+> - `server/core/nominasEmpleado.ts`: el PDF del mes se parte (pdf-lib) y a
+>   cada ficha va SOLO su página, al bucket privado de Core
+>   (`empleados/<id>/nominas/<año>-<mes>-<uuid>.pdf`). Volver a subir el mismo
+>   periodo sustituye la anterior. `GET /api/core/empleados/:id/nominas`,
+>   `GET …/:nominaId/pdf` y `DELETE …/:nominaId`, **solo superadministrador**;
+>   abrir y borrar quedan en la auditoría. El PDF lo sirve el servidor con la
+>   sesión delante: no hay dirección firmada que se pueda reenviar.
+> - Importador (`importarNominas.ts`, `ImportarNominas.tsx`): casilla «Guardar
+>   cada nómina en la ficha de su trabajador», marcada. Se guarda solo a quien
+>   casa por DNI (no por nombre a secas, ni a quien aún no tiene ficha); el
+>   resultado dice a quién no y por qué. Se puede importar solo para guardar
+>   nóminas, sin tocar ninguna ficha.
+> - Ficha: pestaña «Nóminas» (`NominasEmpleado.tsx`), detrás de «Horario» y,
+>   como ella, solo para el superadministrador: ver, descargar y borrar.
+> - Las nóminas no pasan por la IA en ningún momento.
+> - Sin la migración, la casilla no sale y la pestaña avisa de que falta.
+>
+> **No probado contra producción:** el bucket real de Supabase y la pantalla
+> con una sesión de verdad. Las pruebas usan un almacén simulado y personas
+> inventadas.
+
 > **2026-11-26 · La foto del empleado: una sola, en Core, normalizada (1 de 2).**
 > Decidido por el usuario: obligatoria en el enlace de alta, con IA para
 > centrar la cara, las fotos de Taller pasan a Core y el consentimiento de

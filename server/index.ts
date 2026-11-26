@@ -17,6 +17,7 @@ import { hayCore, NOMBRE_CORE_SQL } from "./core/hayCore.ts";
 import { nombreValeParaEntrar } from "./core/nombreDeAcceso.ts";
 import { createBajaEmpleadoRouter } from "./core/bajaEmpleado.ts";
 import { createImportarNominasRouter } from "./core/importarNominas.ts";
+import { createNominasEmpleadoRouter } from "./core/nominasEmpleado.ts";
 import { almacenSupabase, createFotoEmpleadoRouter, ErrorFoto, ponerFoto } from "./core/fotoEmpleado.ts";
 import {
   createTelefonoEmpresaRouter,
@@ -23938,6 +23939,8 @@ app.use("/api/public/satisfaction", createSatisfactionPublicRouter());
 app.use("/api/core/alta", createAltaOperarioAdminRouter());
 // La foto del empleado (una sola, normalizada, para todos los módulos).
 app.use("/api/core/empleados", createFotoEmpleadoRouter());
+// Las nóminas guardadas en la ficha: solo el superadministrador.
+app.use("/api/core/empleados", createNominasEmpleadoRouter());
 // Importar de las nóminas del mes los trabajadores que falten en Core.
 app.use("/api/core/empleados", createImportarNominasRouter());
 // Baja (y alta) de un empleado: la baja lo es en todos los módulos.

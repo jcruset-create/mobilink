@@ -9,7 +9,9 @@ import { apiFetch } from "../../apiFetch";
  * nada. Lo que el administrador marca se manda otra vez con el mismo PDF: lo
  * que entra en Core sale del PDF, no de esta pantalla.
  *
- * El PDF no se guarda en ningún sitio, y de él solo se lee la cabecera.
+ * De cada página solo se lee la cabecera. El PDF entero no se guarda; lo que
+ * sí se puede pedir, con su casilla, es que cada nómina se guarde suelta en la
+ * ficha de su trabajador, donde solo la ve el superadministrador.
  */
 
 type Cambio = { campo: string; etiqueta: string; actual: string | null; nuevo: string };
@@ -22,6 +24,7 @@ type Fila = {
   centro: string;
   grupo: string;
   antiguedad: string | null;
+  paginas: number[];
   tipo: "nuevo" | "actualizar" | "igual" | "baja_en_core";
   empleadoNombre: string | null;
   porNombre: boolean;
@@ -37,11 +40,14 @@ type Analisis = {
   noEnNomina: { id: string; nombre: string; numeroTrabajador: string | null }[];
   paginasNoReconocidas: number[];
   conNumero: boolean;
+  /** Se puede guardar cada nómina en la ficha de su trabajador. */
+  nominasDisponible: boolean;
 };
 
 type Resultado = {
   creados: { id: string; nombre: string; numeroTrabajador: string | null }[];
   actualizados: { id: string; nombre: string; cambios: string[] }[];
+  nominas: { guardadas: number; fichas: number; noGuardadas: { nombre: string; motivo: string }[]; error?: string } | null;
 };
 
 const fecha = (iso: string | null) => (iso ? iso.split("-").reverse().join("/") : "—");
@@ -54,6 +60,8 @@ export default function ImportarNominas({ onCerrar, onImportado }: { onCerrar: (
   const [trabajando, setTrabajando] = useState<"" | "leyendo" | "importando">("");
   const [error, setError] = useState("");
   const [resultado, setResultado] = useState<Resultado | null>(null);
+  /** Guardar cada nómina en la ficha de su trabajador. Marcada de entrada. */
+  const [guardarNominas, setGuardarNominas] = useState(true);
 
   async function analizar(fichero: File, companyId?: string) {
     setTrabajando("leyendo");
@@ -90,6 +98,7 @@ export default function ImportarNominas({ onCerrar, onImportado }: { onCerrar: (
       cuerpo.append("companyId", analisis.empresa.id);
       cuerpo.append("crear", JSON.stringify([...crear]));
       cuerpo.append("actualizar", JSON.stringify([...actualizar]));
+      if (guardarNominas && analisis.nominasDisponible) cuerpo.append("guardarNominas", "1");
       const r = await apiFetch("/api/core/empleados/importar-nominas/aplicar", { method: "POST", body: cuerpo });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(d?.error ?? "No se ha podido importar.");
@@ -114,6 +123,9 @@ export default function ImportarNominas({ onCerrar, onImportado }: { onCerrar: (
   const iguales = analisis?.filas.filter((f) => f.tipo === "igual") ?? [];
   const deBaja = analisis?.filas.filter((f) => f.tipo === "baja_en_core") ?? [];
   const marcados = crear.size + actualizar.size;
+  const seGuardan = guardarNominas && analisis?.nominasDisponible === true;
+  /** Cuántas nóminas trae el PDF (hay quien tiene dos en el mes). */
+  const totalNominas = analisis?.filas.reduce((n, f) => n + f.paginas.length, 0) ?? 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-auto bg-black/60 p-4">
@@ -123,7 +135,7 @@ export default function ImportarNominas({ onCerrar, onImportado }: { onCerrar: (
             <h2 className="text-lg font-bold">Importar de nóminas</h2>
             <p className="text-sm text-slate-400">
               Sube el PDF de nóminas del mes. Se lee solo la cabecera de cada una (nombre, NIF, Seguridad Social,
-              antigüedad, categoría y código). Los importes no se leen y el PDF no se guarda.
+              antigüedad, categoría y código); los importes no se leen.
             </p>
           </div>
           <button onClick={onCerrar} className="rounded-lg border border-slate-600 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-700/50">
@@ -166,8 +178,20 @@ export default function ImportarNominas({ onCerrar, onImportado }: { onCerrar: (
             {resultado.actualizados.length > 0 && (
               <p className="mt-1">Actualizados ({resultado.actualizados.length}): {resultado.actualizados.map((a) => a.nombre).join(", ")}.</p>
             )}
-            {resultado.creados.length + resultado.actualizados.length === 0 && (
+            {resultado.creados.length + resultado.actualizados.length === 0 && !resultado.nominas && (
               <p className="mt-1">No había nada que cambiar: ya estaba todo igual que en la nómina.</p>
+            )}
+            {resultado.nominas && !resultado.nominas.error && (
+              <p className="mt-1">
+                <b>Nóminas guardadas: {resultado.nominas.guardadas}</b>, en {resultado.nominas.fichas}{" "}
+                {resultado.nominas.fichas === 1 ? "ficha" : "fichas"}.
+              </p>
+            )}
+            {resultado.nominas?.error && <p className="mt-1 text-amber-200">⚠ {resultado.nominas.error}</p>}
+            {resultado.nominas && resultado.nominas.noGuardadas.length > 0 && (
+              <p className="mt-1 text-amber-200">
+                Sin guardar: {resultado.nominas.noGuardadas.map((n) => `${n.nombre} (${n.motivo})`).join("; ")}.
+              </p>
             )}
           </div>
         )}
@@ -264,6 +288,24 @@ export default function ImportarNominas({ onCerrar, onImportado }: { onCerrar: (
 
                 <p className="text-sm text-slate-400">Sin cambios: {iguales.length}.</p>
 
+                {analisis.nominasDisponible ? (
+                  <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-sky-800 bg-sky-500/10 p-3 text-sm">
+                    <input type="checkbox" className="mt-0.5" checked={guardarNominas} onChange={(e) => setGuardarNominas(e.target.checked)} />
+                    <span>
+                      <b>Guardar cada nómina en la ficha de su trabajador</b>
+                      <span className="block text-xs text-slate-400">
+                        El PDF se parte por páginas y a cada persona se le guarda solo la suya. Solo las ve el
+                        superadministrador. Si ese mes ya estaba guardado, se sustituye.
+                      </span>
+                    </span>
+                  </label>
+                ) : (
+                  <p className="text-xs text-slate-500">
+                    Para poder guardar cada nómina en la ficha de su trabajador falta ejecutar en Supabase la migración
+                    de las nóminas.
+                  </p>
+                )}
+
                 {!analisis.conNumero && (
                   <p className="text-sm text-amber-300">
                     Falta ejecutar la migración del número de trabajador: los nuevos se crearán sin número.
@@ -271,13 +313,16 @@ export default function ImportarNominas({ onCerrar, onImportado }: { onCerrar: (
                 )}
 
                 <div className="flex items-center justify-end gap-3 border-t border-slate-700 pt-4">
-                  <span className="text-sm text-slate-400">{crear.size} a crear · {actualizar.size} a actualizar</span>
+                  <span className="text-sm text-slate-400">
+                    {crear.size} a crear · {actualizar.size} a actualizar
+                    {seGuardan ? ` · ${totalNominas} ${totalNominas === 1 ? "nómina" : "nóminas"} a guardar` : ""}
+                  </span>
                   <button
                     onClick={() => void importar()}
-                    disabled={marcados === 0 || trabajando !== ""}
+                    disabled={(marcados === 0 && !seGuardan) || trabajando !== ""}
                     className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-bold text-white hover:bg-sky-500 disabled:opacity-40"
                   >
-                    {trabajando === "importando" ? "Importando…" : "Importar lo marcado"}
+                    {trabajando === "importando" ? "Importando…" : marcados === 0 && seGuardan ? "Guardar las nóminas" : "Importar lo marcado"}
                   </button>
                 </div>
               </>
