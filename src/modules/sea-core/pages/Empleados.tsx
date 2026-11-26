@@ -56,6 +56,27 @@ const ESTADO_ALTA: Record<string, { label: string; clase: string }> = {
   actualizando: { label: "Actualización pedida", clase: "bg-sky-500/20 text-sky-300" },
 };
 
+/**
+ * ¿Llegó el SMS del enlace? Lo dice Twilio, y el servidor se lo pregunta.
+ *
+ * «Enlace enviado» solo quiere decir que Twilio aceptó el mensaje. Debajo va
+ * lo que pasó después, que es lo que importa: si no llegó, no hay que esperar
+ * a que el trabajador rellene nada.
+ */
+type Entrega = {
+  estado: "en_camino" | "sin_confirmar" | "entregado" | "no_entregado";
+  motivo: string | null;
+  telefono: string;
+  enviadoAt: string;
+};
+
+const ENTREGA: Record<Entrega["estado"], { label: string; clase: string; ayuda: string }> = {
+  entregado:     { label: "SMS entregado",     clase: "bg-emerald-500/20 text-emerald-300", ayuda: "La operadora confirma que ha llegado al móvil." },
+  en_camino:     { label: "SMS en camino",     clase: "bg-slate-700 text-slate-300",        ayuda: "Twilio lo ha aceptado; falta que la operadora confirme la entrega." },
+  sin_confirmar: { label: "SMS sin confirmar", clase: "bg-amber-500/20 text-amber-300",     ayuda: "Hace más de 15 minutos que salió y la operadora no ha confirmado que haya llegado." },
+  no_entregado:  { label: "SMS no entregado",  clase: "bg-red-500/20 text-red-300",         ayuda: "No ha llegado al móvil." },
+};
+
 const EMPTY = {
   nombre: "", apellidos: "", dni_nie: "", num_seguridad_social: "", telefono: "", email: "",
   direccion: "", codigo_postal: "", poblacion: "", provincia: "",
@@ -96,6 +117,8 @@ export default function Empleados() {
   const [trayendoFotos, setTrayendoFotos] = useState(false);
   /** El importador de nóminas, abierto. */
   const [importando, setImportando] = useState(false);
+  /** La entrega del SMS del enlace vivo de cada empleado que tiene uno. */
+  const [entregas, setEntregas] = useState<Record<string, Entrega>>({});
 
   useEffect(() => { cargar(); }, []);
 
@@ -114,7 +137,31 @@ export default function Empleados() {
     setCargando(false);
     void cargarNumeros();
     void cargarFotos();
+    void cargarEntregas();
   }
+
+  async function cargarEntregas() {
+    try {
+      const r = await apiFetch("/api/core/alta/entregas");
+      if (!r.ok) return;
+      const d = (await r.json()) as { entregas?: Record<string, Entrega> };
+      setEntregas(d.entregas ?? {});
+    } catch {
+      // Sin esto la lista sale igual, con «Enlace enviado» a secas.
+    }
+  }
+
+  /*
+   * Un SMS tarda segundos en llegar: mientras haya alguno en camino se vuelve
+   * a mirar sola, para no tener que recargar la página. Se para sola también:
+   * a los 15 minutos el servidor deja de llamarlo «en camino».
+   */
+  const hayEnCamino = Object.values(entregas).some((x) => x.estado === "en_camino");
+  useEffect(() => {
+    if (!hayEnCamino) return;
+    const reloj = setTimeout(() => void cargarEntregas(), 20_000);
+    return () => clearTimeout(reloj);
+  }, [hayEnCamino, entregas]);
 
   async function cargarFotos() {
     try {
@@ -476,6 +523,17 @@ export default function Empleados() {
                         <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${ESTADO_ALTA[e.estado_alta!].clase}`}>
                           {ESTADO_ALTA[e.estado_alta!].label}
                         </span>
+                      )}
+                      {entregas[e.id] && ENTREGA[entregas[e.id].estado] && (
+                        <span
+                          title={`${ENTREGA[entregas[e.id].estado].ayuda} Enviado a ${entregas[e.id].telefono} el ${new Date(entregas[e.id].enviadoAt).toLocaleString("es-ES", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}.`}
+                          className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${ENTREGA[entregas[e.id].estado].clase}`}
+                        >
+                          {ENTREGA[entregas[e.id].estado].label}
+                        </span>
+                      )}
+                      {entregas[e.id]?.estado === "no_entregado" && entregas[e.id].motivo && (
+                        <span className="max-w-[13rem] text-[11px] leading-tight text-red-300">{entregas[e.id].motivo}</span>
                       )}
                     </div>
                   </td>
