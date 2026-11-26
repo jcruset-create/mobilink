@@ -263,7 +263,7 @@ async function sincronizarCuenta(
     // se intentan por partes al final de la pasada. Ver `partesDelMes.ts`.
     const porPartes: Array<{ enlace: MappingRow; mes: Mes; limites: { desde: Date; hasta: Date } }> = [];
 
-    for (const mes of meses) {
+    meses: for (const mes of meses) {
       const limites = limitesDelMes(mes, zona);
       const cerrado = mesCerrado(mes, zona, ahora);
 
@@ -355,17 +355,20 @@ async function sincronizarCuenta(
           r.abandonada =
             `${LOTES_SEGUIDOS_FALLIDOS_MAXIMO} lotes seguidos rechazados por el proveedor; se deja para la ` +
             `siguiente pasada. Último error: ${ultimo?.tipo === "error" ? ultimo.mensaje : "?"}`;
-          r.vehiculosProcesados = procesados.size;
-          r.vehiculosConKm = conKm.size;
-          r.vehiculosSinDatos = [...sinDatos].filter((id) => !conKm.has(id)).length;
-          await cerrarAuditoria(op.tenantId, cuenta, r, "error");
-          return r;
+          // No se devuelve aún: los meses cerrados que ya han fallado se
+          // intentan por partes. Si los lotes caen porque juntan unidades con
+          // un día roto (octubre de 2026: 150 así, cinco lotes seguidos
+          // enteros), abandonar aquí impedía cerrarlos NUNCA. Si es el
+          // proveedor diciendo que no a todo, la primera unidad por partes no
+          // saca ni una parte buena y se para (ver abajo).
+          break meses;
         }
       }
     }
 
-    // Por partes, con lo que quede de presupuesto. Solo si la pasada no se ha
-    // abandonado (con el proveedor diciendo que no a todo no tiene sentido).
+    // Por partes, con lo que quede de presupuesto. También tras abandonar por
+    // lotes rechazados: con el proveedor diciendo que no a todo, la primera
+    // unidad no saca ni una parte buena y el bucle se corta solo.
     let presupuesto = op.presupuestoPartes ?? PETICIONES_POR_PARTES_POR_PASADA;
     if (porPartes.length && presupuesto > 0) {
       r.porPartes = { intentados: 0, cerrados: 0, peticiones: 0, conOdometro: 0 };
@@ -410,7 +413,7 @@ async function sincronizarCuenta(
     r.vehiculosProcesados = procesados.size;
     r.vehiculosConKm = conKm.size;
     r.vehiculosSinDatos = [...sinDatos].filter((id) => !conKm.has(id)).length;
-    await cerrarAuditoria(op.tenantId, cuenta, r, r.errores > 0 ? "partial" : "ok");
+    await cerrarAuditoria(op.tenantId, cuenta, r, r.abandonada ? "error" : r.errores > 0 ? "partial" : "ok");
     return r;
   } catch (e: any) {
     anotarError(String(e?.message ?? e));
