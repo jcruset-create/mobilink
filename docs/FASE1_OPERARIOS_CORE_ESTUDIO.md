@@ -1,5 +1,34 @@
 # Fase 1 — Estudio: Core como fuente única de operarios y usuarios
 
+> **2026-11-26 · ¿Llegó el SMS del enlace? Entregado / no entregado en la lista.**
+> Lo destapó un caso real: un SMS de actualización que Twilio aceptó
+> (`mensaje_sid` relleno, `error` vacío) y que no llegó al móvil. La lista
+> decía «Actualización pedida» porque Core solo sabía que Twilio lo había
+> ACEPTADO; nunca preguntaba qué pasó después.
+>
+> **Qué se ha hecho**
+> - `supabase/migrations/core_alta_entrega_sms.sql` (a mano, idempotente):
+>   `entrega`, `entrega_codigo`, `entrega_detalle` y `entrega_at` en
+>   `sea_employee_invites`. No cambia ningún dato existente.
+> - `server/core/entregaSms.ts`: `GET /api/core/alta/entregas` (solo
+>   administradores). Core le PREGUNTA a Twilio por el identificador del
+>   mensaje —no hay webhook— y lo apunta. Así sirve también para los SMS ya
+>   mandados y no se abre una ruta pública sin sesión. Solo el último enlace de
+>   cada persona, vivo y sin abrir; lo definitivo no se vuelve a preguntar y lo
+>   pendiente, con calma (30 s al principio, luego cada 10 min; 25 por carga).
+> - `server/core/entregaSmsEstado.ts` (puro): estados de Twilio → entregado /
+>   en camino / no entregado, y los códigos 30001–30010 y 21610 en castellano.
+>   Un código que no se conoce enseña el texto de Twilio: no se inventa.
+> - Core → Empleados: bajo «Enlace enviado» / «Actualización pedida» sale «SMS
+>   entregado», «SMS en camino», «SMS sin confirmar» (más de 15 min sin
+>   respuesta de la operadora) o «SMS no entregado» con el motivo. Mientras hay
+>   alguno en camino, se vuelve a mirar sola cada 20 s.
+> - Solo informa: que no llegue no anula el enlace ni mueve la ficha.
+> - Sin la migración, la lista sale como siempre.
+>
+> **No probado contra producción:** la llamada real a Twilio (las pruebas usan
+> uno simulado) y la pantalla con una sesión de verdad.
+
 > **2026-11-26 · Las nóminas, en la ficha de cada trabajador.**
 > Decidido por el usuario: solo las ve el superadministrador, la casilla del
 > importador viene marcada y se borran a mano (no hay caducidad).

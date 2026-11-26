@@ -196,6 +196,7 @@ import {
 } from "./core/altaOperarioRouter.ts";
 import { createNumeroTrabajadorRouter } from "./core/numeroTrabajador.ts";
 import { createEnlaceTrabajadoresRouter } from "./core/enlaceTrabajadores.ts";
+import { createEntregaSmsRouter } from "./core/entregaSms.ts";
 import { createCalidadRouter } from "./satisfaction/routerInterno.ts";
 import { createSatisfactionCallbackRouter } from "./satisfaction/routerCallback.ts";
 import { RUTA_CALLBACK } from "./satisfaction/urlPublica.ts";
@@ -23936,6 +23937,9 @@ app.use("/api/public/satisfaction", createSatisfactionPublicRouter());
  * encargado exige sesión de administrador y el del operario no exige
  * nada más que el token que lleva en la URL.
  */
+// ¿Llegó el SMS del enlace? Va ANTES: en el router de abajo, `/:employeeId`
+// se quedaría con «entregas».
+app.use("/api/core/alta/entregas", createEntregaSmsRouter());
 app.use("/api/core/alta", createAltaOperarioAdminRouter());
 // La foto del empleado (una sola, normalizada, para todos los módulos).
 app.use("/api/core/empleados", createFotoEmpleadoRouter());
