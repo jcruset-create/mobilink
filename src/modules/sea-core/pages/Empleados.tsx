@@ -91,6 +91,9 @@ export default function Empleados() {
   const [soloSinNumero, setSoloSinNumero] = useState(false);
   /** Dirección firmada de la foto de cada empleado que tiene. Caduca: se pide al cargar. */
   const [fotos, setFotos] = useState<Record<string, string>>({});
+  /** Técnicos enlazados con foto en Taller y todavía sin foto en Core. */
+  const [fotosEnTaller, setFotosEnTaller] = useState(0);
+  const [trayendoFotos, setTrayendoFotos] = useState(false);
   /** El importador de nóminas, abierto. */
   const [importando, setImportando] = useState(false);
 
@@ -117,9 +120,34 @@ export default function Empleados() {
     try {
       const r = await apiFetch("/api/core/empleados/fotos");
       if (!r.ok) return;
-      setFotos(((await r.json()) as { fotos?: Record<string, string> }).fotos ?? {});
+      const d = (await r.json()) as { fotos?: Record<string, string>; pendientesDeTaller?: number };
+      setFotos(d.fotos ?? {});
+      setFotosEnTaller(d.pendientesDeTaller ?? 0);
     } catch {
       // Sin fotos la lista sale igual, con las iniciales.
+    }
+  }
+
+  /** Pasa a Core, normalizadas, las fotos que los técnicos enlazados tienen en Taller. */
+  async function traerFotosDeTaller() {
+    setTrayendoFotos(true);
+    try {
+      const r = await apiFetch("/api/core/empleados/fotos/traer-de-taller", { method: "POST" });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d?.error ?? "No se han podido traer las fotos.");
+      const pasadas: string[] = d.pasadas ?? [];
+      const saltadas: { tecnico: string; motivo: string }[] = d.saltadas ?? [];
+      setMensaje(
+        (pasadas.length ? `Fotos traídas de Taller: ${pasadas.join(", ")}.` : "No se ha traído ninguna foto.") +
+          (saltadas.length ? ` No se ha podido con: ${saltadas.map((x) => `${x.tecnico} (${x.motivo})`).join(", ")}.` : "")
+      );
+      setTimeout(() => setMensaje(""), 20000);
+      await cargarFotos();
+    } catch (e) {
+      setMensaje(e instanceof Error ? e.message : "No se han podido traer las fotos.");
+      setTimeout(() => setMensaje(""), 8000);
+    } finally {
+      setTrayendoFotos(false);
     }
   }
 
@@ -340,6 +368,20 @@ export default function Empleados() {
       {importando && <ImportarNominas onCerrar={() => setImportando(false)} onImportado={() => void cargar()} />}
 
       {mensaje && <p className="rounded-lg bg-green-50 p-3 text-sm text-green-700">{mensaje}</p>}
+
+      {/* Solo mientras haga falta: cuando no queda ninguna por traer, desaparece. */}
+      {fotosEnTaller > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-sky-800 bg-sky-500/10 p-3 text-sm text-sky-100">
+          <span>
+            {fotosEnTaller === 1 ? "Hay 1 técnico" : `Hay ${fotosEnTaller} técnicos`} con foto en Taller que aún no la{" "}
+            {fotosEnTaller === 1 ? "tiene" : "tienen"} en su ficha de Core.
+          </span>
+          <button onClick={() => void traerFotosDeTaller()} disabled={trayendoFotos}
+            className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-sky-500 disabled:opacity-60">
+            {trayendoFotos ? "Trayendo…" : "Traer fotos de Taller"}
+          </button>
+        </div>
+      )}
 
       {/* Filtros */}
       <div className="flex flex-wrap gap-2 items-center">

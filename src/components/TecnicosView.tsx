@@ -435,6 +435,11 @@ export default function TecnicosView({
                       onChange={(e) => handleTechImageUpload(e, modal.tech.name)}
                     />
                   </label>
+                  {modal.tech.employeeId && (
+                    <span className="text-[11px] text-slate-500">
+                      Es la foto de su ficha de Core: se guarda allí, recortada y centrada.
+                    </span>
+                  )}
                 </div>
               )}
 

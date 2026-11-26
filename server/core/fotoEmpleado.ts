@@ -29,10 +29,11 @@ import { Router, type Request, type RequestHandler, type Response } from "expres
 import multer from "multer";
 
 import db from "../db.ts";
-import { supabase } from "../supabase.ts";
+import { supabase, SUPABASE_STORAGE_BUCKET } from "../supabase.ts";
 import { authenticate, requireAdmin } from "./auth.ts";
 import { registrarAuditoria } from "./auditoria.ts";
 import { normalizarFoto, type Localizador, type Mirada } from "./fotoNormalizar.ts";
+import { rutaEnBucket } from "./fotosFirmadas.ts";
 import { hayIA, pedirIA } from "./openaiService.ts";
 
 /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
@@ -48,7 +49,16 @@ const MIMES = new Set(["image/jpeg", "image/png", "image/webp"]);
 /** Lo que dura una dirección firmada. Las pantallas la vuelven a pedir al recargar. */
 const CADUCIDAD_URL_S = 12 * 3600;
 
-export const rutaDeFoto = (employeeId: string) => `empleados/${employeeId}/foto.jpg`;
+/**
+ * Dónde se guarda una foto. Cada foto nueva va a una ruta NUEVA (lleva la
+ * hora), y la anterior se borra.
+ *
+ * Es lo que permite que la dirección de una foto sea estable: mientras la
+ * foto no cambie, su ruta tampoco, y las pantallas que recargan cada pocos
+ * segundos (las TV del taller) no tienen que volver a descargarla. Y cuando
+ * cambia, cambia la ruta, así que nadie se queda viendo la vieja de su caché.
+ */
+export const rutaDeFoto = (employeeId: string, ahoraMs = Date.now()) => `empleados/${employeeId}/foto-${ahoraMs}.jpg`;
 
 /** Dónde se guardan las fotos. En las pruebas, uno de mentira. */
 export type Almacen = {
@@ -68,14 +78,37 @@ export const almacenSupabase: Almacen = {
     if (error) throw new Error(`No se ha podido borrar la foto: ${error.message}`);
   },
   async firmar(rutas) {
-    if (rutas.length === 0) return {};
-    const { data, error } = await supabase.storage.from(BUCKET_CORE).createSignedUrls(rutas, CADUCIDAD_URL_S);
-    if (error || !data) return {};
     const urls: Record<string, string> = {};
-    for (const d of data) if (d.path && d.signedUrl && !d.error) urls[d.path] = d.signedUrl;
+    const ahora = Date.now();
+    const porFirmar: string[] = [];
+    for (const ruta of new Set(rutas)) {
+      const ya = firmadas.get(ruta);
+      if (ya && ya.hastaMs > ahora) urls[ruta] = ya.url;
+      else porFirmar.push(ruta);
+    }
+    if (porFirmar.length === 0) return urls;
+    const { data, error } = await supabase.storage.from(BUCKET_CORE).createSignedUrls(porFirmar, CADUCIDAD_URL_S);
+    if (error || !data) return urls;
+    for (const d of data) {
+      if (!d.path || !d.signedUrl || d.error) continue;
+      urls[d.path] = d.signedUrl;
+      firmadas.set(d.path, { url: d.signedUrl, hastaMs: ahora + REUSAR_URL_MS });
+    }
     return urls;
   },
 };
+
+/**
+ * Las direcciones ya firmadas, para no pedir una nueva en cada recarga.
+ *
+ * `GET /api/techs` se llama cada 15 segundos desde cada pantalla abierta: sin
+ * esto sería una llamada a Supabase por recarga y una dirección distinta cada
+ * vez. Se reutiliza durante la mitad de lo que vale, así que la que se entrega
+ * siempre tiene horas por delante. No hace falta invalidar nada: una foto
+ * nueva tiene otra ruta.
+ */
+const REUSAR_URL_MS = (CADUCIDAD_URL_S * 1000) / 2;
+const firmadas = new Map<string, { url: string; hastaMs: number }>();
 
 /* ── La mirada de la IA ──────────────────────────────────────────────────── */
 
@@ -154,8 +187,9 @@ export async function ponerFoto(
   if (!/^[0-9a-f-]{36}$/i.test(employeeId)) throw new ErrorFoto(404, "Ese empleado no existe.");
   if (!fichero) throw new ErrorFoto(400, "No ha llegado la foto.");
   if (!MIMES.has(fichero.mimetype)) throw new ErrorFoto(400, "La foto tiene que ser JPG, PNG o WEBP.");
-  const { rows } = await cx.query(`SELECT 1 FROM sea_employees WHERE id = $1`, [employeeId]);
+  const { rows } = await cx.query(`SELECT foto_url FROM sea_employees WHERE id = $1`, [employeeId]);
   if (!rows[0]) throw new ErrorFoto(404, "Ese empleado no existe.");
+  const anterior = rows[0].foto_url ? String(rows[0].foto_url) : "";
 
   const r = await normalizarFoto(fichero.buffer, localizar, { forzar: opciones.forzar });
   if (r.ok === false) throw new ErrorFoto(422, r.motivo, "FOTO_NO_VALE");
@@ -163,6 +197,11 @@ export async function ponerFoto(
   const ruta = rutaDeFoto(employeeId);
   await almacen.subir(ruta, r.jpeg);
   await cx.query(`UPDATE sea_employees SET foto_url = $2, updated_at = now() WHERE id = $1`, [employeeId, ruta]);
+  // La anterior ya no la apunta nadie. Si no se puede borrar, queda un
+  // fichero huérfano: molesta, pero la ficha está bien.
+  if (anterior && anterior !== ruta) {
+    await almacen.borrar(anterior).catch((e) => console.error("[Core foto]", e instanceof Error ? e.message : e));
+  }
   return { url: (await almacen.firmar([ruta]))[ruta] ?? null, aviso: r.aviso };
 }
 
@@ -203,13 +242,83 @@ export async function urlsDeFotos(deps: Dependencias = {}): Promise<Record<strin
   return porEmpleado;
 }
 
+/* ── Las fotos que ya había en Taller ────────────────────────────────────── */
+
+/** De dónde sacar el fichero de una foto de Taller. `null` = no se puede. */
+export type OrigenTaller = (avatar: string) => Promise<{ buffer: Buffer; mimetype: string } | null>;
+
+/**
+ * Las fotos de Taller están en el bucket del panel y en `techs.avatar` queda
+ * su dirección pública. Se baja con la clave del servidor a partir de la RUTA
+ * dentro de ese bucket: no se hace ninguna petición a una dirección sacada de
+ * la base, así que una fila con una dirección rara no hace que el servidor
+ * llame a donde no debe. Lo que no sea de ese bucket, se salta.
+ */
+export const origenTallerSupabase: OrigenTaller = async (avatar) => {
+  const ruta = rutaEnBucket(avatar, SUPABASE_STORAGE_BUCKET);
+  if (!ruta) return null;
+  const { data, error } = await supabase.storage.from(SUPABASE_STORAGE_BUCKET).download(ruta);
+  if (error || !data) return null;
+  return { buffer: Buffer.from(await data.arrayBuffer()), mimetype: data.type || "image/jpeg" };
+};
+
+const CANDIDATOS_DE_TALLER = `
+  FROM techs t
+  JOIN sea_employees e ON e.id = t.employee_id
+ WHERE COALESCE(t.avatar, '') <> ''
+   AND COALESCE(e.foto_url, '') = ''`;
+
+/** Cuántos técnicos enlazados tienen foto en Taller y todavía no en Core. */
+export async function fotosPendientesDeTaller(cx: Consultor = db): Promise<number> {
+  try {
+    const { rows } = await cx.query(`SELECT count(*)::int AS n ${CANDIDATOS_DE_TALLER}`);
+    return Number(rows[0]?.n ?? 0);
+  } catch {
+    // Sin taller en esta base (o sin `employee_id`): no hay nada que traer.
+    return 0;
+  }
+}
+
+export type FotosTraidas = { pasadas: string[]; saltadas: { tecnico: string; motivo: string }[] };
+
+/**
+ * Pasa a Core, normalizadas, las fotos que los técnicos enlazados tienen en
+ * Taller. Solo a quien no tiene ya foto en Core: no pisa nada.
+ *
+ * Se fuerzan: son fotos que alguien ya eligió para ese técnico, y lo que se
+ * busca es no perderlas. Si no se les encuentra la cara, se recortan al centro.
+ * `techs.avatar` no se toca: sigue ahí por si se desenlaza.
+ */
+export async function traerFotosDeTaller(deps: Dependencias & { origen?: OrigenTaller } = {}): Promise<FotosTraidas> {
+  const cx = deps.consultor ?? db;
+  const origen = deps.origen ?? origenTallerSupabase;
+  const { rows } = await cx.query(`SELECT t.name, t.avatar, e.id::text AS employee_id ${CANDIDATOS_DE_TALLER} ORDER BY t.name`);
+
+  const hecho: FotosTraidas = { pasadas: [], saltadas: [] };
+  for (const t of rows) {
+    const tecnico = String(t.name);
+    try {
+      const fichero = await origen(String(t.avatar));
+      if (!fichero) {
+        hecho.saltadas.push({ tecnico, motivo: "su foto no está en el almacén del panel" });
+        continue;
+      }
+      await ponerFoto(t.employee_id, fichero, { forzar: true }, deps);
+      hecho.pasadas.push(tecnico);
+    } catch (e) {
+      hecho.saltadas.push({ tecnico, motivo: e instanceof ErrorFoto ? e.message : "no se ha podido leer la foto" });
+    }
+  }
+  return hecho;
+}
+
 /* ── Rutas de la ficha ───────────────────────────────────────────────────── */
 
 export const subidaDeFoto = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_BYTES, files: 1 } });
 
 /** `/api/core/empleados/fotos` y `/:id/foto`: solo administradores. */
 export function createFotoEmpleadoRouter(
-  opciones: { autenticar?: RequestHandler } & Dependencias = {}
+  opciones: { autenticar?: RequestHandler; origen?: OrigenTaller } & Dependencias = {}
 ): Router {
   const r = Router();
   const guardias = [opciones.autenticar ?? authenticate, requireAdmin];
@@ -223,11 +332,32 @@ export function createFotoEmpleadoRouter(
 
   r.get("/fotos", ...guardias, async (_req: Request, res: Response) => {
     try {
-      res.json({ fotos: await urlsDeFotos(deps) });
+      res.json({
+        fotos: await urlsDeFotos(deps),
+        // Para ofrecer «Traer fotos de Taller» solo mientras haga falta.
+        pendientesDeTaller: await fotosPendientesDeTaller(deps.consultor),
+      });
     } catch (err) {
       console.error("GET /api/core/empleados/fotos:", err instanceof Error ? err.message : err);
       // Sin fotos la lista sale igual, con las iniciales.
-      res.json({ fotos: {} });
+      res.json({ fotos: {}, pendientesDeTaller: 0 });
+    }
+  });
+
+  r.post("/fotos/traer-de-taller", ...guardias, async (req: Request, res: Response) => {
+    try {
+      const hecho = await traerFotosDeTaller({ ...deps, origen: opciones.origen });
+      await registrarAuditoria({
+        empresaId: req.authCtx!.empresaId,
+        userId: req.authCtx!.userId,
+        accion: "core.empleado.foto.traer_de_taller",
+        entidad: "sea_employees",
+        detalle: { pasadas: hecho.pasadas.length, saltadas: hecho.saltadas.length },
+        ip: req.ip,
+      });
+      res.json(hecho);
+    } catch (err) {
+      responder(res, err, "POST /api/core/empleados/fotos/traer-de-taller");
     }
   });
 
