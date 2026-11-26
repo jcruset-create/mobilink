@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle } from "lucide-react";
+import Matricula from "../../../components/Matricula";
 import { minimoDeLaGoma, SIN_MINIMOS, type MinimosDeEmpresa } from "../services/umbralProfundidad";
 import { veredictoEnLaFicha } from "../services/protocoloProfundidad";
 import type { Medicion } from "../services/ultimaMedicion";
@@ -80,7 +81,7 @@ interface Props {
   puedeCalibrar: boolean;    // superadmin: puede editar imagen y coordenadas
   imagenConfig?: string | null; // imagen de la configuración de ejes: manda sobre la del tipo
   medidaPorPosicionId?: Record<string, string>; // medida configurada del vehículo por posición (para montar en vacío)
-  matricula?: string | null;   // solo para el título de los modales
+  matricula?: string | null;   // la placa de encima del plano y el título de los modales
   kmActual?: number | null;    // sugerencia al cerrar el inventario inicial
   onFicha?: (neumaticoId: string) => void;
   onChanged?: () => void;
@@ -742,6 +743,28 @@ export default function VehicleLayoutImage({
                   className="rounded-lg bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white disabled:opacity-50">✓ Aplicar plan ({totalPlan})</button>
               </div>
             )}
+          </div>
+        )}
+
+        {/*
+          De qué vehículo es este plano, dicho como se dice en la calle.
+
+          Va encima del dibujo y no en la cabecera de la sección por dónde se
+          mira: quien abre esta pantalla viene a ver las ruedas, y con media
+          flota de la misma marca y el mismo plano, un 2x4 se parece a otro
+          2x4. La placa justo ahí quita la duda sin tener que subir a buscar
+          el título.
+
+          Es el mismo componente que usa Assist en Roadside y en la TV de
+          operarios: él decide el dibujo según la matrícula —española con su
+          banda y su E, remolque en rojo, otra de la UE con su letra, y las de
+          fuera en un recuadro liso—. Aquí no se le pasa país porque el
+          vehículo de TyreControl no lo guarda: lo deduce de la matrícula, que
+          es lo que hace cuando nadie se lo dice.
+        */}
+        {matricula && (
+          <div className="mb-3 flex justify-center">
+            <Matricula plate={matricula} size="lg" />
           </div>
         )}
 
