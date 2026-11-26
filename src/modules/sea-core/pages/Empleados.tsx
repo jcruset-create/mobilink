@@ -4,6 +4,7 @@ import CoreLayout from "../layouts/CoreLayout";
 import { supabase } from "../../almacen-neumaticos/services/supabase";
 import { apiFetch } from "../../apiFetch";
 import ImportarNominas from "../components/ImportarNominas";
+import FotoEmpleado from "../components/FotoEmpleado";
 
 type Empleado = {
   id: string;
@@ -88,6 +89,8 @@ export default function Empleados() {
   const [numeros, setNumeros] = useState<Record<string, string>>({});
   const [numerosDisponibles, setNumerosDisponibles] = useState(false);
   const [soloSinNumero, setSoloSinNumero] = useState(false);
+  /** Dirección firmada de la foto de cada empleado que tiene. Caduca: se pide al cargar. */
+  const [fotos, setFotos] = useState<Record<string, string>>({});
   /** El importador de nóminas, abierto. */
   const [importando, setImportando] = useState(false);
 
@@ -107,6 +110,17 @@ export default function Empleados() {
     setCentros(cent ?? []);
     setCargando(false);
     void cargarNumeros();
+    void cargarFotos();
+  }
+
+  async function cargarFotos() {
+    try {
+      const r = await apiFetch("/api/core/empleados/fotos");
+      if (!r.ok) return;
+      setFotos(((await r.json()) as { fotos?: Record<string, string> }).fotos ?? {});
+    } catch {
+      // Sin fotos la lista sale igual, con las iniciales.
+    }
   }
 
   async function cargarNumeros() {
@@ -384,9 +398,13 @@ export default function Empleados() {
                   )}
                   <td className="p-3">
                     <Link to={`/core/empleados/${e.id}`} className="flex items-center gap-2 group">
-                      <div className="h-8 w-8 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0">
-                        {e.nombre.charAt(0).toUpperCase()}
-                      </div>
+                      {fotos[e.id] ? (
+                        <img src={fotos[e.id]} alt="" loading="lazy" className="h-8 w-8 shrink-0 rounded-full bg-slate-700 object-cover" />
+                      ) : (
+                        <div className="h-8 w-8 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0">
+                          {e.nombre.charAt(0).toUpperCase()}
+                        </div>
+                      )}
                       <div>
                         <div className="font-medium group-hover:text-blue-600">{e.nombre} {e.apellidos ?? ""}</div>
                         {e.cargo && <div className="text-xs text-slate-500">{e.cargo}</div>}
@@ -465,6 +483,31 @@ export default function Empleados() {
             <h2 className="text-lg font-bold mb-5">{editId ? "Editar empleado" : "Nuevo empleado"}</h2>
 
             <div className="space-y-4">
+              {/* La foto: de quien ya existe. A uno nuevo se le pone después, o se la hace él en el enlace. */}
+              <div>
+                <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Foto</h3>
+                {editId ? (
+                  <FotoEmpleado
+                    employeeId={editId}
+                    nombre={form.nombre || "Empleado"}
+                    url={fotos[editId] ?? null}
+                    tamano={72}
+                    onCambio={(u) =>
+                      setFotos((f) => {
+                        const n = { ...f };
+                        if (u) n[editId] = u;
+                        else delete n[editId];
+                        return n;
+                      })
+                    }
+                  />
+                ) : (
+                  <p className="text-xs text-slate-500">
+                    Se pone una vez creado el empleado, desde aquí o desde su ficha. Si le mandas el enlace de alta, se la hace él con el móvil.
+                  </p>
+                )}
+              </div>
+
               {/* Datos personales */}
               <div>
                 <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Datos personales</h3>

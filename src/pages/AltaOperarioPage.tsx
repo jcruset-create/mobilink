@@ -19,6 +19,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { API_BASE } from "../modules/workshopApi";
+import CamaraSelfie from "../modules/sea-core/components/CamaraSelfie";
 
 type Ficha = Record<string, string | null>;
 type Tallas = Record<string, string | null>;
@@ -73,6 +74,11 @@ export default function AltaOperarioPage() {
   const [ficha, setFicha] = useState<Ficha>({});
   const [tallas, setTallas] = useState<Tallas>({});
   const [documentos, setDocumentos] = useState<string[]>([]);
+  /** La foto de la persona, ya recortada por el servidor: su dirección, o null si no tiene. */
+  const [foto, setFoto] = useState<string | null>(null);
+  const [fotoAviso, setFotoAviso] = useState("");
+  const [fotoError, setFotoError] = useState("");
+  const [camara, setCamara] = useState(false);
   const [consentimientos, setConsentimientos] = useState({
     normativa: false,
     whatsapp: false,
@@ -101,6 +107,7 @@ export default function AltaOperarioPage() {
         setFicha(d.ficha ?? {});
         setTallas(d.tallas ?? {});
         setDocumentos(d.documentos ?? []);
+        setFoto(d.foto ?? null);
       })
       .catch(() => {
         if (!vivo) return;
@@ -160,6 +167,30 @@ export default function AltaOperarioPage() {
       setDocumentos(d.documentos ?? []);
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se ha podido subir la foto.");
+    } finally {
+      setSubiendo(null);
+    }
+  }
+
+  /**
+   * La foto de la persona. El servidor la recorta y la centra, y devuelve
+   * cómo queda: lo que se enseña es eso, no lo que salió de la cámara.
+   */
+  async function subirMiFoto(fichero: Blob) {
+    setCamara(false);
+    setSubiendo("foto");
+    setFotoError("");
+    setFotoAviso("");
+    try {
+      const cuerpo = new FormData();
+      cuerpo.append("foto", fichero, "foto.jpg");
+      const r = await fetch(`${url}/foto`, { method: "POST", body: cuerpo });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d?.error ?? "No se ha podido guardar la foto.");
+      setFoto(d.url ?? null);
+      setFotoAviso(d.aviso ?? "");
+    } catch (e) {
+      setFotoError(e instanceof Error ? e.message : "No se ha podido guardar la foto.");
     } finally {
       setSubiendo(null);
     }
@@ -253,7 +284,43 @@ export default function AltaOperarioPage() {
         </div>
       </Seccion>
 
-      <Seccion titulo="2 · Dónde te localizamos" nota="obligatorio">
+      <Seccion titulo="2 · Tu foto" nota="obligatorio">
+        <p className="text-xs text-slate-400">
+          Para tu ficha. Solo la cara, de frente y con luz, sin gorra ni gafas de sol. Puedes repetirla las veces que quieras.
+        </p>
+        <div className="flex flex-col items-center gap-3">
+          {foto ? (
+            <img src={foto} alt="Tu foto" className="h-40 w-40 rounded-2xl bg-slate-900 object-cover" />
+          ) : (
+            <div className="flex h-40 w-40 items-center justify-center rounded-2xl border-2 border-dashed border-slate-600 bg-slate-900">
+              <div className="h-24 w-[72px] rounded-[50%] border-2 border-dashed border-slate-600" />
+            </div>
+          )}
+          {subiendo === "foto" && <p className="text-xs text-slate-400">Guardando la foto…</p>}
+          {foto && subiendo !== "foto" && !fotoAviso && !fotoError && (
+            <p className="text-xs text-green-400">Así quedará en tu ficha.</p>
+          )}
+          {fotoAviso && (
+            <p className="w-full rounded-lg border border-amber-700 bg-amber-500/10 p-2 text-xs text-amber-200">{fotoAviso}</p>
+          )}
+          {fotoError && (
+            <p className="w-full rounded-lg border border-red-800 bg-red-950/60 p-2 text-xs text-red-200">{fotoError}</p>
+          )}
+          <button
+            type="button"
+            onClick={() => setCamara(true)}
+            disabled={subiendo === "foto"}
+            className={`h-11 w-full rounded-xl text-sm font-bold disabled:opacity-60 ${
+              foto ? "border border-slate-600 text-slate-200" : "bg-sky-600 text-white"
+            }`}
+          >
+            {foto ? "Repetir la foto" : "Hacerme la foto"}
+          </button>
+        </div>
+      </Seccion>
+      {camara && <CamaraSelfie onFoto={(f) => void subirMiFoto(f)} onCancelar={() => setCamara(false)} />}
+
+      <Seccion titulo="3 · Dónde te localizamos" nota="obligatorio">
         <div className="grid grid-cols-2 gap-3">
           <Campo label="Móvil" valor={ficha.telefono} tipo="tel" onChange={(v) => cambiar("telefono", v)} />
           <Campo label="Email" valor={ficha.email} tipo="email" onChange={(v) => cambiar("email", v)} />
@@ -266,7 +333,7 @@ export default function AltaOperarioPage() {
         </div>
       </Seccion>
 
-      <Seccion titulo="3 · Tu documentación" nota="foto con el móvil">
+      <Seccion titulo="4 · Tu documentación" nota="foto con el móvil">
         <div className="grid grid-cols-2 gap-3">
           {DOCUMENTOS.map((d) => {
             const hecha = documentos.includes(d.tipo);
@@ -328,7 +395,7 @@ export default function AltaOperarioPage() {
         </div>
       </Seccion>
 
-      <Seccion titulo="4 · Si pasa algo" nota="contacto de emergencia">
+      <Seccion titulo="5 · Si pasa algo" nota="contacto de emergencia">
         <div className="grid grid-cols-2 gap-3">
           <Campo
             label="Nombre"
@@ -344,7 +411,7 @@ export default function AltaOperarioPage() {
         </div>
       </Seccion>
 
-      <Seccion titulo="5 · Tu ropa de trabajo" nota="para el vestuario">
+      <Seccion titulo="6 · Tu ropa de trabajo" nota="para el vestuario">
         <div className="grid grid-cols-3 gap-3">
           {TALLAS.map((t) => (
             <Campo
@@ -357,7 +424,7 @@ export default function AltaOperarioPage() {
         </div>
       </Seccion>
 
-      <Seccion titulo="6 · Permisos y firma" nota="obligatorio">
+      <Seccion titulo="7 · Permisos y firma" nota="obligatorio">
         <Permiso
           marcado={consentimientos.normativa}
           onChange={(v) => setConsentimientos((c) => ({ ...c, normativa: v }))}
@@ -374,7 +441,7 @@ export default function AltaOperarioPage() {
           marcado={consentimientos.datos}
           onChange={(v) => setConsentimientos((c) => ({ ...c, datos: v }))}
         >
-          Autorizo el tratamiento de mis datos y de mi documentación para la relación laboral
+          Autorizo el tratamiento de mis datos, de mi documentación y de mi fotografía para la relación laboral
         </Permiso>
 
         <Firma firmada={firma !== ""} onFirma={setFirma} />

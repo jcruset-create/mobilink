@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import CoreLayout from "../layouts/CoreLayout";
 import { supabase } from "../../almacen-neumaticos/services/supabase";
 import { apiFetch } from "../../apiFetch";
+import FotoEmpleado from "../components/FotoEmpleado";
 import { Bike, Bus, Car, Caravan, Truck } from "lucide-react";
 import AccesoEmpleado from "../components/AccesoEmpleado";
 import HorarioEmpleado from "../components/HorarioEmpleado";
@@ -194,6 +195,18 @@ export default function EmpleadoDetalle() {
   const [numeroInput, setNumeroInput] = useState("");
   const [numeroGuardando, setNumeroGuardando] = useState(false);
   const [numeroMensaje, setNumeroMensaje] = useState<{ ok: boolean; texto: string } | null>(null);
+
+  // La foto: en la ficha hay la ruta; la dirección (firmada) la da el servidor.
+  const [fotoUrl, setFotoUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!id) return;
+    let vivo = true;
+    apiFetch("/api/core/empleados/fotos")
+      .then((r) => (r.ok ? r.json() : { fotos: {} }))
+      .then((d: { fotos?: Record<string, string> }) => { if (vivo) setFotoUrl(d.fotos?.[id] ?? null); })
+      .catch(() => undefined);
+    return () => { vivo = false; };
+  }, [id]);
 
   // Teléfono de empresa: el que enseñan los módulos (el otro es el personal).
   const [telEmpresaInput, setTelEmpresaInput] = useState("");
@@ -748,9 +761,13 @@ export default function EmpleadoDetalle() {
 
       {/* Header */}
       <div className="flex items-start gap-4">
-        <div className="h-14 w-14 rounded-full bg-slate-700 flex items-center justify-center text-xl font-bold text-slate-300 shrink-0">
-          {empleado.nombre.charAt(0).toUpperCase()}
-        </div>
+        <FotoEmpleado
+          employeeId={empleado.id}
+          nombre={empleado.nombre}
+          url={fotoUrl}
+          onCambio={setFotoUrl}
+          enColumna
+        />
         <div className="flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-2xl font-bold">{empleado.nombre} {empleado.apellidos ?? ""}</h1>

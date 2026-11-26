@@ -1,5 +1,40 @@
 # Fase 1 — Estudio: Core como fuente única de operarios y usuarios
 
+> **2026-11-26 · La foto del empleado: una sola, en Core, normalizada (1 de 2).**
+> Decidido por el usuario: obligatoria en el enlace de alta, con IA para
+> centrar la cara, las fotos de Taller pasan a Core y el consentimiento de
+> protección de datos menciona la fotografía.
+>
+> **Qué se ha hecho en esta entrega**
+> - `server/core/fotoNormalizar.ts` (puro salvo `sharp`): la pone derecha
+>   (EXIF), la recorta en cuadrado alrededor de la cabeza —siempre con la misma
+>   proporción— y la deja en JPEG de 600 px sin metadatos (ni GPS). Se rechaza
+>   solo lo que no tiene arreglo (ninguna cara, o más de una); lo dudoso
+>   (gafas de sol, poca luz, de lejos) se guarda con un aviso. Sin IA, recorte
+>   al centro.
+> - `server/core/fotoEmpleado.ts`: se guarda en el bucket privado de Core
+>   (`empleados/<id>/foto.jpg`) y `sea_employees.foto_url` lleva la RUTA; las
+>   pantallas piden direcciones firmadas. La original no se guarda. La IA es
+>   la misma que recorta los DNI: se le pide un recuadro, no quién es.
+>   `GET /api/core/empleados/fotos`, `POST` y `DELETE /:id/foto`, solo
+>   administradores (y solo ellos pueden «usarla igualmente»).
+> - Enlace de alta: paso «2 · Tu foto», con cámara frontal y óvalo de guía
+>   (`CamaraSelfie.tsx`), vista de cómo queda y repetir. **Obligatoria para
+>   enviar** (`faltaParaEnviar`), también en una actualización si aún no tiene.
+>   El consentimiento dice «…de mi documentación y de mi fotografía…».
+> - Core: foto en la cabecera de la ficha, en «Editar empleado» y en la lista.
+> - Sin migraciones: `foto_url` ya existía.
+>
+> **Falta (entrega 2)**
+> - Taller: el técnico enlazado enseña la foto de Core, y pasar a Core, una
+>   vez y normalizadas, las fotos que hoy hay en `techs.avatar`.
+>
+> **A tener en cuenta**
+> - La foto pasa por el proveedor de IA para localizar la cara, igual que ya
+>   pasan los DNI.
+> - Los consentimientos se guardan por tipo, no con su texto: el cambio de
+>   redacción vale para quien firme a partir de ahora.
+
 > **2026-11-26 · Importar de nóminas, y el número de trabajador pasa a ser el
 > código de la gestoría.**
 >
