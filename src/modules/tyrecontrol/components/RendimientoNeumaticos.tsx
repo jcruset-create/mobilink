@@ -8,8 +8,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  activarSeguimientoRendimiento, ajustarInicioRendimiento, calcularRendimiento, datosRendimiento,
-  desactivarSeguimientoRendimiento, kmMontajeDeVehiculo, miles, type DatosRendimiento, type Rendimiento,
+  activarSeguimientoRendimiento, ajustarInicioRendimiento, calcularRendimiento, costeKm, datosRendimiento,
+  desactivarSeguimientoRendimiento, euros, eurPorKm, kmMontajeDeVehiculo, miles, type DatosRendimiento, type Rendimiento,
 } from "../services/rendimiento";
 import { Modal, inputCls } from "./ui";
 
@@ -166,7 +166,13 @@ export function BloqueRendimientoVehiculo({
   }, [vehiculoId, activo, recarga]);
   if (!activo) return null;
 
-  const conCalculo = filas.map((f) => ({ f, r: calcularRendimiento(f) }));
+  const conCalculo = filas.map((f) => { const r = calcularRendimiento(f); return { f, r, c: costeKm(r, f.coste_eur) }; });
+  const conCoste = conCalculo.filter((x) => x.f.coste_eur != null && Number(x.f.coste_eur) > 0);
+  const sumaMil = conCoste.reduce((a, x) => a + (x.c.eurMilKm ?? 0), 0);
+  const sinVida = conCoste.filter((x) => x.c.eurMilKm == null).length;
+  const gastado = conCoste.reduce((a, x) => a + (x.c.gastadoEur ?? 0), 0);
+  const queda = conCoste.reduce((a, x) => a + (x.c.quedaEur ?? 0), 0);
+  const totalJuego = conCoste.reduce((a, x) => a + Number(x.f.coste_eur), 0);
   const proximo = conCalculo.filter((x) => x.r.vidaKm != null)
     .sort((a, b) => (a.r.quedanKm ?? 0) - (b.r.quedanKm ?? 0))[0];
   const origen = filas[0];
@@ -192,6 +198,14 @@ export function BloqueRendimientoVehiculo({
         {esAdmin && <button onClick={() => void dejar()} className={`${todas.length > 0 ? "" : "ml-auto "}rounded border border-slate-600 px-2 py-1 text-[11px] text-slate-300`}>Dejar de seguir</button>}
       </div>
       {error && <div className="text-[12px] text-rose-300">{error}</div>}
+      {conCoste.length > 0 && (
+        <div className="mb-2 grid gap-2 sm:grid-cols-3">
+          <Kpi t="Coste previsto del juego" v={sumaMil > 0 ? `≈ ${euros(sumaMil)} / 1.000 km` : "—"} cls="text-violet-300"
+            s={`${eurPorKm(sumaMil / 1000)} por km del vehículo · ${conCoste.length} ruedas con coste${sinVida ? ` (${sinVida} sin proyección)` : ""}`} />
+          <Kpi t="Gastado hasta hoy" v={`≈ ${euros(gastado, 0)}`} s={`de ${euros(totalJuego, 0)} del juego (${totalJuego > 0 ? Math.round((gastado / totalJuego) * 100) : 0} %)`} />
+          <Kpi t="Lo que queda de goma" v={`≈ ${euros(queda, 0)}`} s={`valor de lo que falta hasta ${mm(filas[0]?.minimo_mm ?? 3)} mm`} />
+        </div>
+      )}
       {proximo && (
         <div className="mb-2 text-[12px] text-slate-300">
           Siguiente cambio previsto: <b>{proximo.f.posicion}</b> hacia los <b>{miles(proximo.r.vidaKm)} km</b> (le quedan ≈ {miles(proximo.r.quedanKm)} km).
@@ -201,9 +215,10 @@ export function BloqueRendimientoVehiculo({
         <table className="w-full min-w-[760px] text-[12px] tabular-nums">
           <thead className="text-slate-400"><tr className="border-b border-slate-700 text-left">
             <th className="py-1.5">Posición</th><th>Goma</th><th>Origen</th><th>Hoy</th><th>Gastado</th><th>Km</th><th>km/mm</th><th>Vida proyectada</th><th>Le quedan</th>
+            {conCoste.length > 0 && <><th className="text-right">Coste</th><th className="text-right">€ / km</th><th className="text-right">€ / 1.000 km</th></>}
           </tr></thead>
           <tbody>
-            {conCalculo.map(({ f, r }) => (
+            {conCalculo.map(({ f, r, c }) => (
               <tr key={f.neumatico_id} className="border-b border-slate-700/50">
                 <td className="py-1.5 font-semibold text-slate-200">{f.posicion}</td>
                 <td><Link className="text-sky-300 hover:underline" to={`/tyrecontrol/neumaticos/${f.neumatico_id}`}
@@ -214,6 +229,13 @@ export function BloqueRendimientoVehiculo({
                 <td className="font-bold text-emerald-300">{miles(r.kmPorMm)}</td>
                 <td>{r.vidaKm != null ? `≈ ${miles(r.vidaKm)}` : <span className="text-slate-500">{r.sinProyeccion}</span>}</td>
                 <td>{r.quedanKm != null ? `≈ ${miles(r.quedanKm)}` : "—"}</td>
+                {conCoste.length > 0 && <>
+                  <td className="text-right" title={f.coste_de_ficha ? "Coste de la ficha del neumático" : undefined}>
+                    {f.coste_eur != null ? euros(Number(f.coste_eur), 0) : "—"}{f.coste_de_ficha && <span className="ml-1 text-[9px] text-slate-500">ficha</span>}
+                  </td>
+                  <td className="text-right font-bold text-violet-300" title={c.eurKmHoy != null ? `Hasta hoy lleva ${eurPorKm(c.eurKmHoy)} por km` : undefined}>{eurPorKm(c.eurKm)}</td>
+                  <td className="text-right text-violet-300">{euros(c.eurMilKm)}</td>
+                </>}
               </tr>
             ))}
           </tbody>
@@ -245,6 +267,11 @@ function DialogoInicioSeguimiento({ vehiculoId, filas, onClose, onHecho }: {
     Object.fromEntries(filas.map((f) => [f.neumatico_id, String(f.km_vehiculo_inicio ?? 0)])));
   const [prof, setProf] = useState<Record<string, string>>(() =>
     Object.fromEntries(filas.map((f) => [f.neumatico_id, String(f.profundidad_inicial_mm ?? "").replace(".", ",")])));
+  const costeTexto = (f: DatosRendimiento) => (f.coste_eur == null ? "" : String(f.coste_eur).replace(".", ","));
+  const [coste, setCoste] = useState<Record<string, string>>(() =>
+    Object.fromEntries(filas.map((f) => [f.neumatico_id, costeTexto(f)])));
+  const [costeTodas, setCosteTodas] = useState("");
+  const [ejeCoste, setEjeCoste] = useState<Record<string, string>>({});
   const [excl, setExcl] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(filas.map((f) => [f.neumatico_id, f.excluido === true])));
   const [montaje, setMontaje] = useState<Map<string, number | null>>(new Map());
@@ -268,18 +295,21 @@ function DialogoInicioSeguimiento({ vehiculoId, filas, onClose, onHecho }: {
 
   const previa = filas.map((f) => {
     const k = numero(km[f.neumatico_id] ?? ""), p = numero(prof[f.neumatico_id] ?? "");
+    const e = numero(coste[f.neumatico_id] ?? "");
+    const costeTocado = (coste[f.neumatico_id] ?? "") !== costeTexto(f);
     const antes = calcularRendimiento(f);
     const ahora = calcularRendimiento({
       ...f,
       km_vehiculo_inicio: k == null || Number.isNaN(k) ? null : k,
       profundidad_inicial_mm: p == null || Number.isNaN(p) ? null : p,
     });
-    return { f, antes, ahora, k, p };
+    return { f, antes, ahora, k, p, e, costeTocado, c: costeKm(ahora, e == null || Number.isNaN(e) ? null : e) };
   });
   const seguidas = previa.filter((x) => !excl[x.f.neumatico_id]);
-  const malos = seguidas.filter((x) => x.k == null || Number.isNaN(x.k) || x.k < 0 || x.p == null || Number.isNaN(x.p) || x.p <= 0 || x.p > 30);
+  const malos = seguidas.filter((x) => x.k == null || Number.isNaN(x.k) || x.k < 0 || x.p == null || Number.isNaN(x.p) || x.p <= 0 || x.p > 30
+    || (x.e != null && (Number.isNaN(x.e) || x.e < 0 || x.e >= 100000)));
   const pasados = seguidas.filter((x) => x.k != null && !Number.isNaN(x.k) && kmActual > 0 && x.k > kmActual);
-  const cambiados = previa.filter((x) => (excl[x.f.neumatico_id] ?? false) !== (x.f.excluido === true) || (!excl[x.f.neumatico_id] && (
+  const cambiados = previa.filter((x) => x.costeTocado || (excl[x.f.neumatico_id] ?? false) !== (x.f.excluido === true) || (!excl[x.f.neumatico_id] && (
     x.k !== Number(x.f.km_vehiculo_inicio ?? 0) || x.p !== Number(x.f.profundidad_inicial_mm ?? NaN))));
 
   async function guardar() {
@@ -291,7 +321,10 @@ function DialogoInicioSeguimiento({ vehiculoId, filas, onClose, onHecho }: {
         const fuera = excl[x.f.neumatico_id] === true;
         const km = fuera && (x.k == null || Number.isNaN(x.k) || x.k < 0) ? 0 : x.k!;
         const p = fuera && (x.p == null || Number.isNaN(x.p) || x.p <= 0 || x.p > 30) ? Number(x.f.profundidad_inicial_mm ?? 15) || 15 : x.p!;
-        return { neumaticoId: x.f.neumatico_id, km, profundidadMm: p, excluido: fuera };
+        // El coste solo viaja si se ha tocado: si no, se queda el que hubiera
+        // (o el de la ficha, que no se copia al seguimiento por no tocarlo).
+        const costeEur = x.costeTocado ? (x.e == null || Number.isNaN(x.e) ? null : x.e) : undefined;
+        return { neumaticoId: x.f.neumatico_id, km, profundidadMm: p, excluido: fuera, costeEur };
       }));
       onHecho();
     } catch (e) {
@@ -316,6 +349,11 @@ function DialogoInicioSeguimiento({ vehiculoId, filas, onClose, onHecho }: {
           <button onClick={() => todasA(() => 0)} className="rounded-lg border border-slate-600 px-2.5 py-1 text-slate-200 hover:bg-slate-700">Desde origen (0 km)</button>
           <button onClick={() => todasA(montajeDe)} disabled={!hayMontaje}
             className="rounded-lg border border-slate-600 px-2.5 py-1 text-slate-200 hover:bg-slate-700 disabled:opacity-40">Km de su montaje</button>
+          <span className="ml-2 text-slate-400">Coste de todas a</span>
+          <input id="coste-todas" className={`${celda} w-20`} inputMode="decimal" value={costeTodas} placeholder="€"
+            onChange={(ev) => setCosteTodas(ev.target.value)} />
+          <button onClick={() => { if (costeTodas.trim()) setCoste(Object.fromEntries(filas.map((f) => [f.neumatico_id, costeTodas.trim()]))); }}
+            className="rounded-lg border border-slate-600 px-2.5 py-1 text-slate-200 hover:bg-slate-700">Aplicar</button>
           <span className="text-[11px] text-slate-500">o escribe el km por eje o rueda a rueda. Km del vehículo hoy: {miles(kmActual)}.</span>
         </div>
 
@@ -332,9 +370,14 @@ function DialogoInicioSeguimiento({ vehiculoId, filas, onClose, onHecho }: {
                   <input id={`eje-km-${e}`} className={`${celda} w-24`} inputMode="numeric" value={ejeKm[e] ?? ""}
                     placeholder={montajes.length === 1 ? String(montajes[0]) : "km"}
                     onChange={(ev) => setEjeKm((x) => ({ ...x, [e]: ev.target.value }))} />
+                  <span className="text-slate-500">km</span>
+                  <input id={`eje-coste-${e}`} className={`${celda} w-20`} inputMode="decimal" value={ejeCoste[e] ?? ""} placeholder="€"
+                    onChange={(ev) => setEjeCoste((x) => ({ ...x, [e]: ev.target.value }))} />
                   <button onClick={() => {
                     const v = (ejeKm[e] ?? "").trim() || (montajes.length === 1 ? String(montajes[0]) : "");
                     if (v) setKm((k) => ({ ...k, ...Object.fromEntries(ruedas.map((f) => [f.neumatico_id, v])) }));
+                    const eur = (ejeCoste[e] ?? "").trim();
+                    if (eur) setCoste((c) => ({ ...c, ...Object.fromEntries(ruedas.map((f) => [f.neumatico_id, eur])) }));
                   }} className="rounded border border-slate-600 px-2 py-1 text-slate-200 hover:bg-slate-700">Aplicar</button>
                   {(() => {
                     const todasFuera = ruedas.every((f) => excl[f.neumatico_id]);
@@ -352,7 +395,7 @@ function DialogoInicioSeguimiento({ vehiculoId, filas, onClose, onHecho }: {
                 <table className="w-full min-w-[520px] text-[12px] tabular-nums">
                   <thead className="text-[10px] uppercase text-slate-500"><tr className="text-left">
                     <th className="py-1">Posición</th><th>Goma</th><th className="text-right">Km montaje</th>
-                    <th className="text-right">Km inicio seguimiento</th><th className="text-right">Prof. inicio (mm)</th><th />
+                    <th className="text-right">Km inicio seguimiento</th><th className="text-right">Prof. inicio (mm)</th><th className="text-right">Coste (€)</th><th />
                   </tr></thead>
                   <tbody>
                     {ruedas.map((f) => (
@@ -364,6 +407,12 @@ function DialogoInicioSeguimiento({ vehiculoId, filas, onClose, onHecho }: {
                           value={km[f.neumatico_id] ?? ""} onChange={(ev) => setKm((k) => ({ ...k, [f.neumatico_id]: ev.target.value }))} /></td>
                         <td className="text-right"><input id={`ini-mm-${f.neumatico_id}`} className={`${celda} w-20`} inputMode="decimal"
                           value={prof[f.neumatico_id] ?? ""} onChange={(ev) => setProf((p) => ({ ...p, [f.neumatico_id]: ev.target.value }))} /></td>
+                        <td className="text-right">
+                          <input id={`ini-eur-${f.neumatico_id}`} className={`${celda} w-20`} inputMode="decimal" placeholder="€"
+                            title={f.coste_de_ficha ? "Viene de la ficha del neumático; si lo cambias, se guarda en el seguimiento" : undefined}
+                            value={coste[f.neumatico_id] ?? ""} onChange={(ev) => setCoste((c) => ({ ...c, [f.neumatico_id]: ev.target.value }))} />
+                          {f.coste_de_ficha && (coste[f.neumatico_id] ?? "") === costeTexto(f) && <div className="text-[9px] text-slate-500">de la ficha</div>}
+                        </td>
                         <td className="pl-2 text-right">
                           <button onClick={() => setExcl((x) => ({ ...x, [f.neumatico_id]: !x[f.neumatico_id] }))}
                             title={excl[f.neumatico_id] ? "Volver a seguir esta rueda" : "No contar esta rueda: no tenemos datos fiables"}
@@ -395,9 +444,10 @@ function DialogoInicioSeguimiento({ vehiculoId, filas, onClose, onHecho }: {
                 <th className="py-1">Posición</th><th>Origen</th><th>Hoy</th><th>Gastado</th>
                 <th className="text-right">Km antes</th><th className="text-right">Km ahora</th>
                 <th className="text-right">km/mm antes</th><th className="text-right">km/mm ahora</th>
+                <th className="text-right">Coste</th><th className="text-right">€ / km</th><th className="text-right">€ / 1.000 km</th>
               </tr></thead>
               <tbody>
-                {previa.map(({ f, antes, ahora }) => (
+                {previa.map(({ f, antes, ahora, e, c }) => (
                   <tr key={f.neumatico_id} className="border-t border-slate-700/50">
                     <td className="py-1.5 text-slate-200">{f.posicion}</td>
                     <td>{mm(ahora.origenMm)}</td><td>{mm(ahora.actualMm)}</td><td>{mm(ahora.gastadoMm)}</td>
@@ -408,6 +458,9 @@ function DialogoInicioSeguimiento({ vehiculoId, filas, onClose, onHecho }: {
                       {excl[f.neumatico_id] ? <span className="font-normal text-amber-300">sin seguimiento</span>
                         : ahora.kmPorMm != null ? miles(ahora.kmPorMm) : <span className="font-normal text-slate-500">{ahora.sinProyeccion ?? "—"}</span>}
                     </td>
+                    <td className="text-right">{e != null && !Number.isNaN(e) ? euros(e, 0) : "—"}</td>
+                    <td className="text-right font-bold text-violet-300">{excl[f.neumatico_id] ? "—" : eurPorKm(c.eurKm)}</td>
+                    <td className="text-right text-violet-300">{excl[f.neumatico_id] ? "—" : euros(c.eurMilKm)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -441,19 +494,24 @@ export function TarjetaRendimientoNeumatico({ neumaticoId }: { neumaticoId: stri
   }, [neumaticoId]);
   if (!fila) return null;
   const r = calcularRendimiento(fila);
+  const coste = costeKm(r, fila.coste_eur);
   return (
     <div className="mt-3 rounded-lg border border-amber-600/40 bg-slate-800 p-3">
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <div className="text-[11px] font-bold uppercase text-amber-300">★ Rendimiento y proyección</div>
         <span className="text-[11px] text-slate-400">{fila.posicion} · {fila.matricula}{fila.desde_origen ? " · goma de origen" : ""}</span>
       </div>
-      <div className="mb-3 grid gap-2 sm:grid-cols-4">
+      <div className={`mb-3 grid gap-2 ${coste.eurKm != null || coste.eurKmHoy != null ? "sm:grid-cols-5" : "sm:grid-cols-4"}`}>
         <Kpi t="Origen → hoy" v={`${mm(r.origenMm)} → ${mm(r.actualMm)} mm`} s={`gastados ${mm(r.gastadoMm)} mm`} />
         <Kpi t="Km con esta goma" v={`${miles(r.kmGoma)} km`} s={fila.fuente_inicio === "manual" ? "origen indicado a mano" : "origen del catálogo"} />
         <Kpi t="Rendimiento" v={r.kmPorMm != null ? `${miles(r.kmPorMm)} km/mm` : "—"} cls="text-emerald-300"
           s={r.metodo === "recta" ? `recta con ${r.puntos.length} puntos` : r.metodo === "origen" ? "del origen al último mm bajado" : undefined} />
         <Kpi t={`Proyección a ${mm(r.minimoMm)} mm`} v={r.vidaKm != null ? `≈ ${miles(r.vidaKm)} km` : "—"}
           s={r.quedanKm != null ? `le quedan ≈ ${miles(r.quedanKm)} km` : r.sinProyeccion ?? undefined} />
+        {(coste.eurKm != null || coste.eurKmHoy != null) && (
+          <Kpi t="Coste por km" v={eurPorKm(coste.eurKm ?? coste.eurKmHoy)} cls="text-violet-300"
+            s={`${euros(Number(fila.coste_eur), 0)}${fila.coste_de_ficha ? " (ficha)" : ""} · ${coste.eurMilKm != null ? `${euros(coste.eurMilKm)} / 1.000 km previsto` : "hasta hoy, sin proyección"}`} />
+        )}
       </div>
       <GraficoRendimiento r={r} />
       <div className="text-[11px] text-slate-500">Continuo: lo medido. A trazos: la proyección. Una revisión solo añade punto a la línea si ha bajado al menos 1 mm desde el anterior; las demás salen en gris y no cuentan. Con 3 o más puntos se ajusta una recta.</div>

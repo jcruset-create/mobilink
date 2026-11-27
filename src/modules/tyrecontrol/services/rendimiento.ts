@@ -46,6 +46,10 @@ export interface DatosRendimiento {
   fuente_inicio: "catalogo" | "manual";
   /** Marcada «sin seguimiento»: no cuenta en ninguna pantalla. */
   excluido?: boolean;
+  /** Coste de la goma (€): el del seguimiento o, si no, el de su ficha. */
+  coste_eur?: number | null;
+  /** El coste viene de la ficha del neumático, no se ha puesto en el seguimiento. */
+  coste_de_ficha?: boolean;
   puntos: { km_vehiculo: number; mm: number; fecha: string }[];
 }
 
@@ -171,11 +175,14 @@ export interface GrupoRendimiento {
   conProyeccion: number;
   kmPorMm: number | null;
   vidaKm: number | null;
+  /** € por km medio de las gomas del grupo con coste y proyección. */
+  eurKm: number | null;
+  conCoste: number;
   vehiculos: string[];
 }
 
 export function agruparRendimiento(filas: DatosRendimiento[]): GrupoRendimiento[] {
-  const grupos = new Map<string, GrupoRendimiento & { _kmmm: number[]; _vida: number[] }>();
+  const grupos = new Map<string, GrupoRendimiento & { _kmmm: number[]; _vida: number[]; _eur: number[] }>();
   for (const f of filas) {
     const tipo = f.reesculturado ? "reesculturado" : f.recauchutado ? "recauchutado" : "nuevo";
     // Por la referencia del catálogo cuando la hay: «COACHZ» y «X COACH Z» son la misma.
@@ -184,18 +191,23 @@ export function agruparRendimiento(filas: DatosRendimiento[]): GrupoRendimiento[
       : [f.marca, f.modelo, f.medida]).filter(Boolean).join(" ") || "Sin modelo";
     const clave = `${modelo}|${f.eje ?? "-"}|${tipo}`;
     const g = grupos.get(clave) ?? {
-      clave, modelo, eje: f.eje, tipo, gomas: 0, conProyeccion: 0, kmPorMm: null, vidaKm: null, vehiculos: [],
-      _kmmm: [], _vida: [],
+      clave, modelo, eje: f.eje, tipo, gomas: 0, conProyeccion: 0, kmPorMm: null, vidaKm: null, eurKm: null, conCoste: 0, vehiculos: [],
+      _kmmm: [], _vida: [], _eur: [],
     };
     g.gomas += 1;
     if (!g.vehiculos.includes(f.matricula)) g.vehiculos.push(f.matricula);
     const r = calcularRendimiento(f);
     if (r.kmPorMm !== null && r.vidaKm !== null) { g.conProyeccion += 1; g._kmmm.push(r.kmPorMm); g._vida.push(r.vidaKm); }
+    const c = costeKm(r, f.coste_eur);
+    if (c.eurKm !== null) { g.conCoste += 1; g._eur.push(c.eurKm); }
     grupos.set(clave, g);
   }
   const media = (l: number[]) => (l.length ? Math.round(l.reduce((a, b) => a + b, 0) / l.length) : null);
   return [...grupos.values()]
-    .map(({ _kmmm, _vida, ...g }) => ({ ...g, kmPorMm: media(_kmmm), vidaKm: media(_vida) }))
+    .map(({ _kmmm, _vida, _eur, ...g }) => ({
+      ...g, kmPorMm: media(_kmmm), vidaKm: media(_vida),
+      eurKm: _eur.length ? _eur.reduce((a, b) => a + b, 0) / _eur.length : null,
+    }))
     .sort((a, b) => a.modelo.localeCompare(b.modelo) || (a.eje ?? 99) - (b.eje ?? 99));
 }
 
@@ -293,14 +305,57 @@ export async function kmMontajeDeVehiculo(vehiculoId: string): Promise<Map<strin
 
 /** Cambia a mano el punto de partida (km y profundidad) de cada goma. */
 export async function ajustarInicioRendimiento(
-  vehiculoId: string, inicios: { neumaticoId: string; km: number; profundidadMm: number; excluido?: boolean }[],
+  vehiculoId: string,
+  inicios: { neumaticoId: string; km: number; profundidadMm: number; excluido?: boolean; costeEur?: number | null }[],
 ): Promise<void> {
   const { error } = await supabase.rpc("tc_rendimiento_ajustar_inicio", {
     p_vehiculo: vehiculoId,
-    p_inicios: inicios.map((i) => ({ neumatico_id: i.neumaticoId, km: i.km, profundidad_mm: i.profundidadMm, excluido: i.excluido === true })),
+    p_inicios: inicios.map((i) => ({
+      neumatico_id: i.neumaticoId, km: i.km, profundidad_mm: i.profundidadMm, excluido: i.excluido === true,
+      // Solo se manda si se ha tocado: sin la clave, la base conserva el que hubiera.
+      ...(i.costeEur !== undefined ? { coste_eur: i.costeEur } : {}),
+    })),
   });
   if (error) throw new Error(error.message);
 }
+
+export interface CosteKm {
+  /** € por km, con la vida proyectada. */
+  eurKm: number | null;
+  /** € por 1.000 km, con la vida proyectada. */
+  eurMilKm: number | null;
+  /** € por km llevados hasta hoy (coste ÷ km recorridos): al principio sale alto. */
+  eurKmHoy: number | null;
+  /** Lo que ya se ha comido la goma: coste × mm gastados ÷ mm útiles (origen → mínimo). */
+  gastadoEur: number | null;
+  /** Lo que queda de goma hasta el mínimo, en €. */
+  quedaEur: number | null;
+}
+
+/** El coste por km de una goma, a partir de su rendimiento y su precio. */
+export function costeKm(r: Rendimiento, coste: number | null | undefined): CosteKm {
+  const c = n(coste);
+  const vacio = { eurKm: null, eurMilKm: null, eurKmHoy: null, gastadoEur: null, quedaEur: null };
+  if (c === null || c <= 0) return vacio;
+  const eurKm = r.vidaKm != null && r.vidaKm > 0 ? c / r.vidaKm : null;
+  const eurKmHoy = r.kmGoma != null && r.kmGoma > 0 ? c / r.kmGoma : null;
+  let gastadoEur: number | null = null;
+  if (r.origenMm != null && r.actualMm != null && r.origenMm > r.minimoMm) {
+    const frac = (r.origenMm - r.actualMm) / (r.origenMm - r.minimoMm);
+    gastadoEur = c * Math.min(1, Math.max(0, frac));
+  }
+  return {
+    eurKm, eurMilKm: eurKm != null ? eurKm * 1000 : null, eurKmHoy,
+    gastadoEur, quedaEur: gastadoEur != null ? c - gastadoEur : null,
+  };
+}
+
+/** «0,0031 €» — cuatro decimales, que el € por km es pequeño. */
+export const eurPorKm = (v: number | null | undefined) =>
+  v == null ? "—" : `${v.toLocaleString("es-ES", { minimumFractionDigits: 4, maximumFractionDigits: 4 })} €`;
+/** «3,14 €» */
+export const euros = (v: number | null | undefined, decimales = 2) =>
+  v == null ? "—" : `${v.toLocaleString("es-ES", { minimumFractionDigits: decimales, maximumFractionDigits: decimales })} €`;
 
 export const miles = (v: number | null | undefined) =>
   v === null || v === undefined ? "—" : Math.round(v).toLocaleString("es-ES");

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 vi.mock("./supabase", () => ({ supabase: {} }));
-import { agruparRendimiento, calcularRendimiento, pendiente, type DatosRendimiento } from "./rendimiento";
+import { agruparRendimiento, calcularRendimiento, costeKm, pendiente, type DatosRendimiento } from "./rendimiento";
 
 // El caso real del 7523NNB: gomas de origen, 35.471 km, X COACH Z de 14,3 mm.
 const base = {
@@ -109,5 +109,26 @@ describe("informe de rendimiento", () => {
       ["Michelin X COACH Z 295/80R22.5", 2],
       ["Michelin XCOACH 295/80R22.5", 1], // sin referencia: por su texto
     ]);
+  });
+});
+
+describe("coste por km", () => {
+  it("8774NMX eje 1 izq. a 420 €: 14,3 → 11,5 mm en 33.165 km", () => {
+    const r = calcularRendimiento({ ...base, km_actual_vehiculo: 33165, profundidad_actual_mm: 11.5, puntos: [] });
+    const c = costeKm(r, 420);
+    expect(c.eurKm).toBeCloseTo(420 / r.vidaKm!, 8);
+    expect(c.eurMilKm).toBeCloseTo(c.eurKm! * 1000, 8);
+    expect(c.eurKmHoy).toBeCloseTo(420 / 33165, 8);
+    // 2,8 mm de 11,3 útiles (14,3 → 3)
+    expect(c.gastadoEur).toBeCloseTo(420 * 2.8 / 11.3, 6);
+    expect(c.gastadoEur! + c.quedaEur!).toBeCloseTo(420, 6);
+  });
+
+  it("sin coste, o sin proyección, no inventa", () => {
+    const r = calcularRendimiento({ ...base, km_actual_vehiculo: 33165, profundidad_actual_mm: 11.5, puntos: [] });
+    expect(costeKm(r, null)).toEqual({ eurKm: null, eurMilKm: null, eurKmHoy: null, gastadoEur: null, quedaEur: null });
+    const sinVida = calcularRendimiento({ ...base, km_actual_vehiculo: 5000, profundidad_actual_mm: 13.8, puntos: [] });
+    expect(costeKm(sinVida, 420).eurKm).toBeNull();
+    expect(costeKm(sinVida, 420).eurKmHoy).toBeCloseTo(420 / 5000, 8);
   });
 });
