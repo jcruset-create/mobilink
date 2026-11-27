@@ -150,15 +150,17 @@ const mm = (v: number | null) => (v == null ? "—" : String(Math.round(v * 10) 
 export function BloqueRendimientoVehiculo({
   vehiculoId, activo, esAdmin, onCambio,
 }: { vehiculoId: string; activo: boolean; esAdmin: boolean; onCambio: () => void }) {
-  const [filas, setFilas] = useState<DatosRendimiento[]>([]);
+  const [todas, setTodas] = useState<DatosRendimiento[]>([]);
+  const filas = todas.filter((f) => !f.excluido);
+  const sinSeguir = todas.filter((f) => f.excluido);
   const [error, setError] = useState("");
   const [editarInicio, setEditarInicio] = useState(false);
   const [recarga, setRecarga] = useState(0);
   useEffect(() => {
     if (!activo) return;
     let vivo = true;
-    datosRendimiento({ vehiculoId })
-      .then((d) => { if (vivo) setFilas(d); })
+    datosRendimiento({ vehiculoId, incluirExcluidos: true })
+      .then((d) => { if (vivo) setTodas(d); })
       .catch((e) => { if (vivo) setError(e?.message ?? "Error"); });
     return () => { vivo = false; };
   }, [vehiculoId, activo, recarga]);
@@ -183,11 +185,11 @@ export function BloqueRendimientoVehiculo({
         {origen && <span className="text-[11px] text-slate-400">
           {iniciosDistintos ? "inicio por rueda" : origen.desde_origen ? "desde 0 km (gomas de origen)" : `desde ${miles(origen.km_vehiculo_inicio)} km`} · retirar a {mm(origen.minimo_mm)} mm
         </span>}
-        {esAdmin && filas.length > 0 && (
+        {esAdmin && todas.length > 0 && (
           <button onClick={() => setEditarInicio(true)}
             className="ml-auto rounded border border-sky-600 px-2 py-1 text-[11px] font-bold text-sky-300 hover:bg-sky-500/10">✎ Inicio del seguimiento</button>
         )}
-        {esAdmin && <button onClick={() => void dejar()} className={`${filas.length > 0 ? "" : "ml-auto "}rounded border border-slate-600 px-2 py-1 text-[11px] text-slate-300`}>Dejar de seguir</button>}
+        {esAdmin && <button onClick={() => void dejar()} className={`${todas.length > 0 ? "" : "ml-auto "}rounded border border-slate-600 px-2 py-1 text-[11px] text-slate-300`}>Dejar de seguir</button>}
       </div>
       {error && <div className="text-[12px] text-rose-300">{error}</div>}
       {proximo && (
@@ -217,8 +219,13 @@ export function BloqueRendimientoVehiculo({
           </tbody>
         </table>
       </div>
+      {sinSeguir.length > 0 && (
+        <div className="mt-2 text-[11px] text-slate-500">
+          Sin seguimiento (sin datos fiables): {sinSeguir.map((f) => f.posicion).join(", ")}. Se reactivan en «✎ Inicio del seguimiento».
+        </div>
+      )}
       {editarInicio && (
-        <DialogoInicioSeguimiento vehiculoId={vehiculoId} filas={filas}
+        <DialogoInicioSeguimiento vehiculoId={vehiculoId} filas={todas}
           onClose={() => setEditarInicio(false)}
           onHecho={() => { setEditarInicio(false); setRecarga((x) => x + 1); }} />
       )}
@@ -238,6 +245,8 @@ function DialogoInicioSeguimiento({ vehiculoId, filas, onClose, onHecho }: {
     Object.fromEntries(filas.map((f) => [f.neumatico_id, String(f.km_vehiculo_inicio ?? 0)])));
   const [prof, setProf] = useState<Record<string, string>>(() =>
     Object.fromEntries(filas.map((f) => [f.neumatico_id, String(f.profundidad_inicial_mm ?? "").replace(".", ",")])));
+  const [excl, setExcl] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(filas.map((f) => [f.neumatico_id, f.excluido === true])));
   const [montaje, setMontaje] = useState<Map<string, number | null>>(new Map());
   const [ejeKm, setEjeKm] = useState<Record<string, string>>({});
   const [guardando, setGuardando] = useState(false);
@@ -267,16 +276,23 @@ function DialogoInicioSeguimiento({ vehiculoId, filas, onClose, onHecho }: {
     });
     return { f, antes, ahora, k, p };
   });
-  const malos = previa.filter((x) => x.k == null || Number.isNaN(x.k) || x.k < 0 || x.p == null || Number.isNaN(x.p) || x.p <= 0 || x.p > 30);
-  const pasados = previa.filter((x) => x.k != null && !Number.isNaN(x.k) && kmActual > 0 && x.k > kmActual);
-  const cambiados = previa.filter((x) =>
-    x.k !== Number(x.f.km_vehiculo_inicio ?? 0) || x.p !== Number(x.f.profundidad_inicial_mm ?? NaN));
+  const seguidas = previa.filter((x) => !excl[x.f.neumatico_id]);
+  const malos = seguidas.filter((x) => x.k == null || Number.isNaN(x.k) || x.k < 0 || x.p == null || Number.isNaN(x.p) || x.p <= 0 || x.p > 30);
+  const pasados = seguidas.filter((x) => x.k != null && !Number.isNaN(x.k) && kmActual > 0 && x.k > kmActual);
+  const cambiados = previa.filter((x) => (excl[x.f.neumatico_id] ?? false) !== (x.f.excluido === true) || (!excl[x.f.neumatico_id] && (
+    x.k !== Number(x.f.km_vehiculo_inicio ?? 0) || x.p !== Number(x.f.profundidad_inicial_mm ?? NaN))));
 
   async function guardar() {
     if (malos.length) { setError(`Revisa ${malos.map((x) => x.f.posicion).join(", ")}: km o profundidad no válidos.`); return; }
     setGuardando(true); setError("");
     try {
-      await ajustarInicioRendimiento(vehiculoId, previa.map((x) => ({ neumaticoId: x.f.neumatico_id, km: x.k!, profundidadMm: x.p! })));
+      await ajustarInicioRendimiento(vehiculoId, previa.map((x) => {
+        // Una rueda sin seguimiento guarda lo que tenga, o algo válido si está en blanco.
+        const fuera = excl[x.f.neumatico_id] === true;
+        const km = fuera && (x.k == null || Number.isNaN(x.k) || x.k < 0) ? 0 : x.k!;
+        const p = fuera && (x.p == null || Number.isNaN(x.p) || x.p <= 0 || x.p > 30) ? Number(x.f.profundidad_inicial_mm ?? 15) || 15 : x.p!;
+        return { neumaticoId: x.f.neumatico_id, km, profundidadMm: p, excluido: fuera };
+      }));
       onHecho();
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se ha podido guardar");
@@ -320,17 +336,27 @@ function DialogoInicioSeguimiento({ vehiculoId, filas, onClose, onHecho }: {
                     const v = (ejeKm[e] ?? "").trim() || (montajes.length === 1 ? String(montajes[0]) : "");
                     if (v) setKm((k) => ({ ...k, ...Object.fromEntries(ruedas.map((f) => [f.neumatico_id, v])) }));
                   }} className="rounded border border-slate-600 px-2 py-1 text-slate-200 hover:bg-slate-700">Aplicar</button>
+                  {(() => {
+                    const todasFuera = ruedas.every((f) => excl[f.neumatico_id]);
+                    return (
+                      <button onClick={() => setExcl((x) => ({ ...x, ...Object.fromEntries(ruedas.map((f) => [f.neumatico_id, !todasFuera])) }))}
+                        title={todasFuera ? "Volver a seguir todo el eje" : "No contar este eje: no tenemos datos fiables"}
+                        className={`rounded border px-2 py-1 ${todasFuera ? "border-emerald-600 text-emerald-300 hover:bg-emerald-500/10" : "border-amber-600 text-amber-300 hover:bg-amber-500/10"}`}>
+                        {todasFuera ? "↺ Seguir eje" : "⊘ Eje sin seguimiento"}
+                      </button>
+                    );
+                  })()}
                 </span>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[520px] text-[12px] tabular-nums">
                   <thead className="text-[10px] uppercase text-slate-500"><tr className="text-left">
                     <th className="py-1">Posición</th><th>Goma</th><th className="text-right">Km montaje</th>
-                    <th className="text-right">Km inicio seguimiento</th><th className="text-right">Prof. inicio (mm)</th>
+                    <th className="text-right">Km inicio seguimiento</th><th className="text-right">Prof. inicio (mm)</th><th />
                   </tr></thead>
                   <tbody>
                     {ruedas.map((f) => (
-                      <tr key={f.neumatico_id} className="border-t border-slate-700/50">
+                      <tr key={f.neumatico_id} className={`border-t border-slate-700/50 ${excl[f.neumatico_id] ? "opacity-50" : ""}`}>
                         <td className="py-1.5 text-slate-200">{f.posicion}</td>
                         <td className="text-sky-300">{f.numero_interno ?? f.ref_modelo ?? f.modelo ?? "—"}</td>
                         <td className="text-right text-slate-400">{miles(montajeDe(f))}</td>
@@ -338,6 +364,13 @@ function DialogoInicioSeguimiento({ vehiculoId, filas, onClose, onHecho }: {
                           value={km[f.neumatico_id] ?? ""} onChange={(ev) => setKm((k) => ({ ...k, [f.neumatico_id]: ev.target.value }))} /></td>
                         <td className="text-right"><input id={`ini-mm-${f.neumatico_id}`} className={`${celda} w-20`} inputMode="decimal"
                           value={prof[f.neumatico_id] ?? ""} onChange={(ev) => setProf((p) => ({ ...p, [f.neumatico_id]: ev.target.value }))} /></td>
+                        <td className="pl-2 text-right">
+                          <button onClick={() => setExcl((x) => ({ ...x, [f.neumatico_id]: !x[f.neumatico_id] }))}
+                            title={excl[f.neumatico_id] ? "Volver a seguir esta rueda" : "No contar esta rueda: no tenemos datos fiables"}
+                            className={`whitespace-nowrap rounded border px-1.5 py-0.5 text-[11px] ${excl[f.neumatico_id] ? "border-emerald-600 text-emerald-300" : "border-slate-600 text-slate-300 hover:border-amber-600 hover:text-amber-300"}`}>
+                            {excl[f.neumatico_id] ? "↺ Seguir" : "⊘ Sin seguimiento"}
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -372,7 +405,8 @@ function DialogoInicioSeguimiento({ vehiculoId, filas, onClose, onHecho }: {
                     <td className="text-right">{miles(ahora.kmGoma)}</td>
                     <td className="text-right text-slate-500">{miles(antes.kmPorMm)}</td>
                     <td className="text-right font-bold text-emerald-300" title={ahora.sinProyeccion ?? undefined}>
-                      {ahora.kmPorMm != null ? miles(ahora.kmPorMm) : <span className="font-normal text-slate-500">{ahora.sinProyeccion ?? "—"}</span>}
+                      {excl[f.neumatico_id] ? <span className="font-normal text-amber-300">sin seguimiento</span>
+                        : ahora.kmPorMm != null ? miles(ahora.kmPorMm) : <span className="font-normal text-slate-500">{ahora.sinProyeccion ?? "—"}</span>}
                     </td>
                   </tr>
                 ))}
