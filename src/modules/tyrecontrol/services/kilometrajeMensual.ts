@@ -362,3 +362,34 @@ export interface LecturaAparato {
 }
 export const verSensores = (b: { empresaId?: string; vehiculoId: string }) =>
   pedir<SensoresVehiculo>("/sensores", { method: "POST", body: JSON.stringify(b) });
+
+/**
+ * El histórico diario de los contadores del aparato, desde nuestra base.
+ *
+ * Nunca llama al proveedor: lo escribe el reloj de las 04:00. Por eso esto sí
+ * se puede cargar al abrir la ficha.
+ */
+export interface TramoAparato {
+  desde: string; hasta: string;
+  horasTranscurridas: number;
+  horasMotor: number | null;
+  litros: number | null;
+  km: number | null;
+  l100: number | null;
+  aviso: string | null;
+}
+export interface HistoricoAparato {
+  vehiculoId: string;
+  fotos: number;
+  primeraFoto: string | null;
+  ultimaFoto: string | null;
+  pesoUltimo: { totalKg: number | null; ejes: Array<{ eje: number; kg: number }> } | null;
+  tramos: TramoAparato[];
+  ultimos30: {
+    tramos: number; conAviso: number;
+    horasMotor: number | null; litros: number | null; km: number | null; l100: number | null;
+    horasCubiertas: number;
+  };
+}
+export const historicoAparato = (vehiculoId: string, dias = 60) =>
+  pedir<HistoricoAparato>(`/lecturas/${encodeURIComponent(vehiculoId)}?dias=${dias}`);

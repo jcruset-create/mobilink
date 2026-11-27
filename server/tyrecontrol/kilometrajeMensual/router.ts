@@ -185,6 +185,71 @@ export function createKilometrajeMensualRouter(): Router {
     }
   });
 
+  /**
+   * El histórico diario de los contadores del aparato, desde NUESTRA BASE.
+   *
+   * Nunca llama al proveedor: lo escribe el reloj de las 04:00
+   * (`lecturasAparato/worker.ts`) y aquí solo se lee y se resta. Por eso
+   * puede cargarse al abrir la ficha, al revés que la lectura en vivo.
+   *
+   * Devuelve las fotos, los tramos entre fotos y la suma de los últimos 30
+   * días. Las cotas de las restas —un contador que baja, un motor que anda
+   * más horas que el reloj— están en `lecturasAparato/calculo.ts`.
+   */
+  router.get("/lecturas/:id", async (req, res) => {
+    try {
+      const usuario = await usuarioDe(req);
+      if (!usuario) return res.status(401).json({ error: "Sin sesión" });
+
+      const vehiculoId = String(req.params.id ?? "").trim();
+      const { data: v } = await supabase
+        .from("tc_vehiculos").select("id, empresa_id").eq("id", vehiculoId).maybeSingle();
+      if (!v) return res.status(404).json({ error: "Vehículo no encontrado" });
+      const empresaId = String((v as { empresa_id?: string }).empresa_id ?? "");
+      const puede = await puedeVerEmpresa({ userId: usuario.userId, esSuperadmin: usuario.esSuperadmin }, empresaId);
+      if (!puede) return res.status(404).json({ error: "Vehículo no encontrado" });
+
+      const dias = Math.min(365, Math.max(2, Number(req.query.dias) || 60));
+      const desde = new Date(Date.now() - dias * 24 * 3600 * 1000).toISOString().slice(0, 10);
+      const { data: filas } = await supabase
+        .from("tc_lecturas_aparato")
+        .select("fecha, leido_en, horas_motor, consumido_l, odometro_km, peso_total_kg, ejes")
+        .eq("vehiculo_id", vehiculoId)
+        .gte("fecha", desde)
+        .order("fecha", { ascending: true });
+
+      const { tramos, resumen } = await import("../lecturasAparato/calculo.ts");
+      const fotos = (filas ?? []).map((f: Record<string, unknown>) => ({
+        fecha: String(f.fecha),
+        leidoEnMs: Date.parse(String(f.leido_en)),
+        horasMotor: f.horas_motor == null ? null : Number(f.horas_motor),
+        consumidoL: f.consumido_l == null ? null : Number(f.consumido_l),
+        odometroKm: f.odometro_km == null ? null : Number(f.odometro_km),
+      }));
+      const ts = tramos(fotos);
+      const treinta = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+
+      res.json({
+        vehiculoId,
+        // Para que la ficha pueda decir «se empieza a guardar esta noche» en
+        // vez de enseñar un bloque vacío sin explicación.
+        fotos: fotos.length,
+        primeraFoto: fotos[0]?.fecha ?? null,
+        ultimaFoto: fotos.at(-1)?.fecha ?? null,
+        pesoUltimo: filas?.length
+          ? {
+              totalKg: filas.at(-1)!.peso_total_kg == null ? null : Number(filas.at(-1)!.peso_total_kg),
+              ejes: (filas.at(-1)!.ejes ?? []) as Array<{ eje: number; kg: number }>,
+            }
+          : null,
+        tramos: ts.slice(-dias),
+        ultimos30: resumen(ts.filter((t) => t.hasta >= treinta)),
+      });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
   // ── Lo de abajo exige administrador ──────────────────────────────────────
   router.use(async (req, res, next) => {
     try {

@@ -723,10 +723,27 @@ export class MovertisConnector
     ctx: OperationContext,
     providerVehicleId: string,
   ): Promise<{ peticion: unknown; fila: Record<string, unknown> | null }> {
-    const peticion = this.cuerpoVehiculos([providerVehicleId], true, true);
-    if (await this.enSimulacion(ctx)) return { peticion, fila: null };
+    const { peticion, filas } = await this.leerSensoresDeVarios(ctx, [providerVehicleId]);
+    return { peticion, fila: filas[0] ?? null };
+  }
+
+  /**
+   * Lo mismo para VARIOS vehículos, para el histórico diario.
+   *
+   * Uno a uno serían 751 peticiones cada noche. En tanda caben varios, pero
+   * no todos: con la flota entera la pasarela devolvió 502. Quien llame
+   * decide el tamaño y parte la tanda si falla —ver `lecturasAparato/calculo.ts`—,
+   * porque desde aquí no se sabe si el 502 fue por tamaño o por un vehículo
+   * que su servidor no sabe procesar.
+   */
+  async leerSensoresDeVarios(
+    ctx: OperationContext,
+    providerVehicleIds: string[],
+  ): Promise<{ peticion: unknown; filas: Record<string, unknown>[] }> {
+    const peticion = this.cuerpoVehiculos(providerVehicleIds, true, true);
+    if (await this.enSimulacion(ctx)) return { peticion, filas: [] };
     const datos = await this.postear(ctx, this.rutas.vehicles, peticion);
-    return { peticion, fila: filasDe(datos)[0] ?? null };
+    return { peticion, filas: filasDe(datos) };
   }
 
   /**

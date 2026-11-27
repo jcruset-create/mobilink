@@ -174,6 +174,7 @@ import { startPresenciaBases } from "./tyrecontrol/presencia/worker.ts";
 import { startRellenoKilometraje } from "./tyrecontrol/kilometrajeMensual/rellenoWorker.ts";
 import { startRellenoRevisiones } from "./tyrecontrol/kilometrajeRevisiones/worker.ts";
 import { startRellenoDiario } from "./tyrecontrol/kilometrajeRevisiones/diario.ts";
+import { startLecturasAparato } from "./tyrecontrol/lecturasAparato/worker.ts";
 import { initMapeoEmpresas } from "./tyrecontrol/empresas.ts";
 import { initTyreControlAssist } from "./tyrecontrol/schema.ts";
 import { cicloReparaciones } from "./tyrecontrol/outbox.ts";
@@ -24276,6 +24277,7 @@ initDb()
       startRellenoRevisiones(); // kilometraje del histórico de revisiones
       startRellenoDiario(); // y cada mañana, el de las revisiones de los últimos días
       startPorDondeRueda(); // km por tipo de vía de los vehículos marcados, cada mañana
+      startLecturasAparato(); // foto diaria de gasóleo, horas de motor y peso por eje
     });
   })
   .catch((error) => {
