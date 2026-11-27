@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useInformesFiltros } from "./InformesLayout";
-import { agruparRendimiento, datosRendimiento, miles, type DatosRendimiento } from "../../services/rendimiento";
+import { agruparRendimiento, datosRendimiento, euros, eurPorKm, miles, type DatosRendimiento } from "../../services/rendimiento";
 import { KpiCard } from "../../components/informes/KpiCard";
 import { TableWrap, tdCls, thCls } from "../../components/ui";
 import { descargarCSV } from "../../utils/exportar";
@@ -60,8 +60,10 @@ export default function InformeRendimiento() {
       <div className="mb-2 flex justify-end">
         <button
           onClick={() => descargarCSV("rendimiento-kilometrico.csv",
-            ["Modelo", "Eje", "Tipo", "Gomas", "Con proyección", "km/mm medio", "Vida proyectada (km)", "Vehículos"],
-            grupos.map((g) => [g.modelo, g.eje ?? "", TIPO[g.tipo] || "Nuevo", g.gomas, g.conProyeccion, g.kmPorMm ?? "", g.vidaKm ?? "", g.vehiculos.join(" ")]),
+            ["Modelo", "Eje", "Tipo", "Gomas", "Con proyección", "km/mm medio", "Vida proyectada (km)", "€/km", "€/1000 km", "Vehículos"],
+            grupos.map((g) => [g.modelo, g.eje ?? "", TIPO[g.tipo] || "Nuevo", g.gomas, g.conProyeccion, g.kmPorMm ?? "", g.vidaKm ?? "",
+              g.eurKm != null ? g.eurKm.toFixed(5).replace(".", ",") : "", g.eurKm != null ? (g.eurKm * 1000).toFixed(2).replace(".", ",") : "",
+              g.vehiculos.join(" ")]),
           )}
           className="rounded border border-slate-600 px-3 py-1 text-[12px] text-slate-200"
         >Exportar CSV</button>
@@ -69,7 +71,8 @@ export default function InformeRendimiento() {
       <TableWrap>
         <thead className="bg-slate-900"><tr>
           <th className={thCls}>Modelo</th><th className={thCls}>Eje</th><th className={thCls}>Gomas</th>
-          <th className={thCls}>km/mm medio</th><th className={thCls}>Vida proyectada</th><th className={thCls}>Vehículos</th>
+          <th className={thCls}>km/mm medio</th><th className={thCls}>Vida proyectada</th>
+          <th className={thCls}>€ / km</th><th className={thCls}>€ / 1.000 km</th><th className={thCls}>Vehículos</th>
         </tr></thead>
         <tbody>
           {grupos.map((g) => (
@@ -80,6 +83,8 @@ export default function InformeRendimiento() {
               <td className={tdCls}>{g.gomas}{g.conProyeccion < g.gomas ? <span className="text-slate-500"> ({g.conProyeccion} con proyección)</span> : null}</td>
               <td className={tdCls + " font-bold text-emerald-300"}>{miles(g.kmPorMm)}</td>
               <td className={tdCls}>{g.vidaKm != null ? `≈ ${miles(g.vidaKm)} km` : "—"}</td>
+              <td className={tdCls + " font-bold text-violet-300"} title={g.conCoste ? `${g.conCoste} de ${g.gomas} gomas con coste` : "Sin coste puesto"}>{eurPorKm(g.eurKm)}</td>
+              <td className={tdCls + " text-violet-300"}>{euros(g.eurKm != null ? g.eurKm * 1000 : null)}</td>
               <td className={tdCls}>{g.vehiculos.map((m) => {
                 const v = vehiculos.find((x) => x.matricula === m);
                 return v ? <Link key={m} className="mr-2 text-sky-300 hover:underline" to={`/tyrecontrol/vehiculos/${v.id}`}>{m}</Link> : m;
