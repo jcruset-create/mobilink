@@ -55,6 +55,9 @@ export function normalizarNombre(valor: unknown): string {
 
 export function tallerDeCentro(centro: unknown): WorkshopId | null {
   const c = normalizarNombre(centro);
+  // Los de Plana antes que los de Mobilink: «Plana Reus» contiene «reus».
+  if (c.includes("plana") && c.includes("vilanova")) return "plana-vilanova";
+  if (c.includes("plana") && c.includes("reus")) return "plana-reus";
   if (c.includes("reus")) return "sea-reus";
   if (c.includes("tarragona")) return "sea-tarragona";
   return null;

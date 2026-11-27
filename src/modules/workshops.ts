@@ -1,4 +1,4 @@
-export type WorkshopId = "sea-tarragona" | "sea-reus";
+export type WorkshopId = "sea-tarragona" | "sea-reus" | "plana-reus" | "plana-vilanova";
 
 export type Workshop = {
   id: WorkshopId;
@@ -23,6 +23,21 @@ export const WORKSHOPS: Workshop[] = [
     name: "Mobilink Reus",
     shortName: "Reus",
     city: "Reus",
+    active: true,
+  },
+  // Los talleres en las bases de Autocares Plana: personal propio allí.
+  {
+    id: "plana-reus",
+    name: "Plana Reus",
+    shortName: "Plana Reus",
+    city: "Reus",
+    active: true,
+  },
+  {
+    id: "plana-vilanova",
+    name: "Plana Vilanova",
+    shortName: "Plana Vilanova",
+    city: "Vilanova i la Geltrú",
     active: true,
   },
 ];
