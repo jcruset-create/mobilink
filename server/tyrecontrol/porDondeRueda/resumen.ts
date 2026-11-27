@@ -60,3 +60,41 @@ export function resumenFlota(filas: FilaGuardada[]) {
     };
   });
 }
+
+// ── Por qué un vehículo marcado no tiene datos ──────────────────────────────
+
+/** Lo que dejó la última vuelta del trabajo de cada mañana (en memoria del servidor). */
+export interface UltimaVuelta {
+  at: string;
+  resumen: string;
+  /** La vuelta paró porque faltaba mapa de la zona por cargar. */
+  esperandoMapa: boolean;
+}
+
+export interface DiasDeVehiculo { ok: number; sinPuntos: number; errores: number; ultimoError: string | null }
+
+export interface EstadoVias {
+  tono: "info" | "aviso" | "error";
+  texto: string;
+}
+
+/**
+ * La frase que sale en lugar de «sin datos todavía», para que se sepa si hay
+ * que esperar, revisar la telemática o nada. `null` si hay datos: entonces se
+ * enseña el reparto.
+ */
+export function estadoSinDatos(
+  d: DiasDeVehiculo, vuelta: UltimaVuelta | null, ventana: { desde: number; hasta: number },
+): EstadoVias | null {
+  if (d.ok > 0) return null;
+  if (d.errores > 0) {
+    return { tono: "error", texto: `error en ${d.errores} ${d.errores === 1 ? "día" : "días"}: ${d.ultimoError ?? "sin detalle"}` };
+  }
+  if (d.sinPuntos > 0) {
+    return { tono: "aviso", texto: `sin posiciones GPS de Movertis en ${d.sinPuntos} ${d.sinPuntos === 1 ? "día" : "días"}` };
+  }
+  if (vuelta?.esperandoMapa) {
+    return { tono: "info", texto: "cargando el mapa de la zona: la primera vez tarda alguna mañana; sigue solo" };
+  }
+  return { tono: "info", texto: `pendiente: se analiza cada mañana entre las ${ventana.desde}:00 y las ${ventana.hasta}:00` };
+}
