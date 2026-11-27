@@ -35,11 +35,20 @@
  * forma, lo dice en vez de callar.
  */
 
-/** Valores con los que Movertis dice «no hay lectura». Igual que en `mapeo.ts`. */
-export const SIN_LECTURA = [-348201.3876, 0] as const;
+/**
+ * El centinela del dispositivo para «no hay lectura». Igual que en `mapeo.ts`.
+ *
+ * El CERO no está aquí, y la primera versión de este fichero se equivocó
+ * copiándolo de `mapeo.ts` sin mirar para qué servía allí. Allí es la regla
+ * del ODÓMETRO: «un cero de odómetro total no existe en una flota que rueda».
+ * Para un contador acumulado es verdad; para el contacto, las revoluciones o
+ * la velocidad, CERO ES UN DATO —motor parado, vehículo quieto— y tratarlo de
+ * ausencia es perder justo lo que se venía a buscar. Lo decide `ceroEsNada()`.
+ */
+export const CENTINELA = -348201.3876;
 
 /** Lo que haría falta para sacar el ralentí, de mejor a peor. */
-export type Interes = "ralenti" | "horas_motor" | "contacto";
+export type Interes = "ralenti" | "horas_motor" | "revoluciones" | "contacto";
 
 export interface SensorLeido {
   nombre: string;
@@ -71,13 +80,40 @@ export function normalizar(texto: string): string {
 export function interesDe(nombre: string): Interes | null {
   const n = normalizar(nombre);
   if (/ralent|idle/.test(n)) return "ralenti";
-  if (/(hora|hour|time|tiempo)/.test(n) && /(motor|engine|marcha|contacto|ignition|operat|acc)/.test(n)) {
+  // Un contador de horas en un localizador son las horas de motor: no hay otra
+  // cosa que contar en horas. La primera versión exigía que el nombre dijera
+  // además «motor» o «engine», y con eso se le escapó HORASTOTALES, que es
+  // exactamente lo que devuelve la cuenta real. Pedir que el proveedor nombre
+  // las cosas como yo esperaba es la forma de no encontrar nunca nada.
+  if (/hora|hour/.test(n) && !/horario/.test(n)) return "horas_motor";
+  // «tiempo» y «time» sí necesitan compañía: solos valen para cualquier cosa.
+  if (/time|tiempo/.test(n) && /motor|engine|marcha|operat|contacto|ignition/.test(n)) {
     return "horas_motor";
   }
+  // Las revoluciones son mejor señal que el contacto: con la llave dada y el
+  // motor parado, el contacto dice 1 y las revoluciones dicen 0. Lo que gasta
+  // gasóleo es el motor girando.
+  if (/\brpm\b|rpm|revolucion/.test(n)) return "revoluciones";
   if (/ignition|contacto|\bcontact|\bacc\b|engine_?(on|state|status)|motor_?(on|estado|encendid)/.test(n)) {
     return "contacto";
   }
   return null;
+}
+
+/**
+ * ¿Un cero en este sensor significa «no hay lectura»?
+ *
+ * Solo en los CONTADORES ACUMULADOS: odómetro, totales, litros consumidos.
+ * Ahí un cero es imposible en un vehículo que rueda, y es la regla que ya
+ * usaba `mapeo.ts` para no borrar la vida de unos neumáticos con un 0.
+ *
+ * En todo lo demás, el cero es la lectura: velocidad 0 es «parado», RPM 0 es
+ * «motor apagado» y contacto 0 es «llave quitada». Son tres datos, no tres
+ * ausencias.
+ */
+export function ceroEsNada(nombre: string): boolean {
+  const n = normalizar(nombre);
+  return /odo|kilometr|\bkm\b|total|consumid|acumulad/.test(n);
 }
 
 /** Un valor de sensor aplanado: escalar directo, o el `value` de un objeto. */
@@ -96,12 +132,17 @@ function valorYUnidad(bruto: unknown): { valor: SensorLeido["valor"]; unidad: st
   return { valor: null, unidad: null };
 }
 
-/** ¿El valor es una lectura de verdad, o uno de los «sin dato» de Movertis? */
-export function tieneLectura(valor: SensorLeido["valor"]): boolean {
+/**
+ * ¿El valor es una lectura de verdad, o uno de los «sin dato» de Movertis?
+ *
+ * El nombre hace falta para decidir qué significa un cero: ver `ceroEsNada()`.
+ */
+export function tieneLectura(valor: SensorLeido["valor"], nombre = ""): boolean {
   if (valor === null) return false;
   if (typeof valor === "boolean") return true;
   if (typeof valor === "string") return valor.trim() !== "";
-  return !SIN_LECTURA.includes(valor as (typeof SIN_LECTURA)[number]);
+  if (valor === CENTINELA) return false;
+  return valor !== 0 || !ceroEsNada(nombre);
 }
 
 /** El nombre de un sensor dentro de una entrada en forma de objeto. */
@@ -135,14 +176,15 @@ export function sensoresDe(fila: unknown): SensorLeido[] {
 
   const lista = crudos.map(({ nombre, bruto }) => {
     const { valor, unidad } = valorYUnidad(bruto);
-    return { nombre, valor, unidad, conLectura: tieneLectura(valor), interes: interesDe(nombre) };
+    return { nombre, valor, unidad, conLectura: tieneLectura(valor, nombre), interes: interesDe(nombre) };
   });
 
   const peso = (x: SensorLeido) => (x.interes ? (x.conLectura ? 0 : 1) : 2);
   return lista.sort((a, b) => peso(a) - peso(b) || a.nombre.localeCompare(b.nombre, "es"));
 }
 
-export type Nivel = "ralenti_directo" | "horas_motor" | "solo_contacto" | "nada" | "sin_sensores";
+export type Nivel =
+  | "ralenti_directo" | "horas_motor" | "revoluciones" | "solo_contacto" | "nada" | "sin_sensores";
 
 export interface Veredicto {
   nivel: Nivel;
@@ -180,14 +222,21 @@ export function veredicto(sensores: SensorLeido[]): Veredicto {
   if (nombres("horas_motor").length) {
     return {
       nivel: "horas_motor",
-      texto: "Hay horas de motor. Con eso el ralentí sale restando el tiempo en movimiento, que ya lo tenemos de las posiciones: igual de bueno que el de Webfleet y también hacia atrás.",
-      apoyo: nombres("horas_motor"),
+      texto: "Hay horas de motor. El ralentí sale restándole el tiempo en movimiento, que ya tenemos de las posiciones. Ojo: el contador es de AHORA, no un histórico, así que hay que ir guardando una lectura al día —como ya se hace con el odómetro— y el ralentí empieza a contar desde que se monte, no del mes pasado.",
+      apoyo: [...nombres("horas_motor"), ...nombres("revoluciones")],
+    };
+  }
+  if (nombres("revoluciones").length) {
+    return {
+      nivel: "revoluciones",
+      texto: "Hay revoluciones del motor, que dicen si está girando mejor que el contacto (con la llave dada y el motor parado, el contacto miente). No hay contador de horas, así que hay que mirarlo cada pocos minutos: sale aproximado y de hoy en adelante.",
+      apoyo: nombres("revoluciones"),
     };
   }
   if (nombres("contacto").length) {
     return {
       nivel: "solo_contacto",
-      texto: "Hay contacto, pero no un contador de horas. Solo se puede ir mirando cada pocos minutos: sale aproximado y solo de hoy en adelante, nunca del mes pasado.",
+      texto: "Hay contacto, pero no un contador de horas ni revoluciones. Solo se puede ir mirando cada pocos minutos: sale aproximado, solo de hoy en adelante, y cuenta como ralentí la llave dada con el motor parado.",
       apoyo: nombres("contacto"),
     };
   }

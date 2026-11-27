@@ -319,7 +319,7 @@ export interface SensorDispositivo {
   valor: string | number | boolean | null;
   unidad: string | null;
   conLectura: boolean;
-  interes: "ralenti" | "horas_motor" | "contacto" | null;
+  interes: "ralenti" | "horas_motor" | "revoluciones" | "contacto" | null;
 }
 export interface SensoresVehiculo {
   vehiculoId: string; matricula: string | null; unidad: string;
@@ -328,7 +328,7 @@ export interface SensoresVehiculo {
   peticion: unknown;
   sensores: SensorDispositivo[];
   veredicto: {
-    nivel: "ralenti_directo" | "horas_motor" | "solo_contacto" | "nada" | "sin_sensores";
+    nivel: "ralenti_directo" | "horas_motor" | "revoluciones" | "solo_contacto" | "nada" | "sin_sensores";
     texto: string;
     apoyo: string[];
   };
