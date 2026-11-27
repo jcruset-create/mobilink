@@ -613,6 +613,7 @@ export function createKilometrajeMensualRouter(): Router {
       }
 
       const { sensoresDe, veredicto, textoParaMovertis } = await import("../movertisSensores.ts");
+      const { lecturaDeAparato, hayAlgoQueEnsenar } = await import("../lecturaAparato.ts");
       const ctx = { tenantId: empresaId, correlationId: await nextCorrelationId() };
       const limitador = limitadorDe(`${empresaId}/${cuenta.key}/${cuenta.accountKey}`, ritmoDeConfig(cuenta.config));
       await limitador.turno(ESPERA_MAXIMA_MS);
@@ -627,6 +628,7 @@ export function createKilometrajeMensualRouter(): Router {
       // mirarla a mano antes de concluir que no hay sensores.
       const crudo = JSON.stringify(fila ?? null, null, 1).slice(0, 20_000);
       const v2 = veredicto(sensores);
+      const lectura = lecturaDeAparato(sensores);
       res.json({
         vehiculoId, matricula,
         cuenta: { connectorKey: cuenta.key, accountKey: cuenta.accountKey }, unidad,
@@ -634,6 +636,9 @@ export function createKilometrajeMensualRouter(): Router {
         peticion,
         sensores,
         veredicto: v2,
+        // Lo mismo, puesto en claro: horas de motor, gasóleo, peso por eje.
+        // Va aquí y no en otra ruta porque es la misma y única petición.
+        lectura: hayAlgoQueEnsenar(lectura) ? lectura : null,
         crudo,
         // Ya armado aquí, que es donde está la función con pruebas: la pantalla
         // solo lo copia al portapapeles.

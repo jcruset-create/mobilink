@@ -23,6 +23,7 @@ import FichaTecnicaVehiculo from "../components/FichaTecnicaVehiculo";
 import FichaTecnicaItv from "../components/FichaTecnicaItv";
 import SeccionTacografo from "../components/SeccionTacografo";
 import WebfleetVehiculo from "../components/WebfleetVehiculo";
+import LecturaAparatoBloque from "../components/LecturaAparato";
 import KilometrajeMensual from "../components/KilometrajeMensual";
 import KmCabecera from "../components/KmCabecera";
 import PorDondeRueda from "../components/PorDondeRueda";
@@ -488,6 +489,11 @@ export default function VehiculoDetalle() {
       {/* Kilómetros mensuales desde la telemática: se leen de nuestra base,
           nunca del proveedor al abrir la ficha. Sin telemática no se enseña. */}
       <KilometrajeMensual vehiculoId={v.id} />
+
+      {/* Gasóleo, peso por eje y motor, del equipo de telemática. Se pide a
+          mano por la misma razón que el bloque de arriba lee de nuestra base:
+          abrir una ficha no puede costar una petición al proveedor. */}
+      {!esCliente && <LecturaAparatoBloque vehiculoId={v.id} empresaId={v.empresa_id} />}
 
       {/* Km por tipo de vía (autopista, nacional, urbana…) de los vehículos
           marcados; la casilla está dentro. Ver porDondeRueda en el servidor. */}
