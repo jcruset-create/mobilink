@@ -17,8 +17,11 @@
  * documenta y en este mismo conector ya hubo un lío de metros contra
  * kilómetros que costó caro. El porqué está en `server/tyrecontrol/lecturaAparato.ts`.
  */
-import { useState } from "react";
-import { verSensores, type LecturaAparato as Lectura } from "../services/kilometrajeMensual";
+import { useEffect, useState } from "react";
+import {
+  historicoAparato, verSensores,
+  type HistoricoAparato, type LecturaAparato as Lectura,
+} from "../services/kilometrajeMensual";
 
 const num = (n: number | null | undefined, dec = 0) =>
   n == null ? "—" : n.toLocaleString("es-ES", { minimumFractionDigits: dec, maximumFractionDigits: dec });
@@ -43,6 +46,15 @@ export default function LecturaAparatoBloque({ vehiculoId, empresaId }: {
   const [sinDatos, setSinDatos] = useState(false);
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState("");
+  const [hist, setHist] = useState<HistoricoAparato | null>(null);
+
+  // El histórico SÍ se carga solo: lo escribe el reloj de las 04:00 en nuestra
+  // base y leerlo no cuesta ninguna petición al proveedor.
+  useEffect(() => {
+    let vivo = true;
+    void historicoAparato(vehiculoId).then((h) => { if (vivo) setHist(h); }).catch(() => {});
+    return () => { vivo = false; };
+  }, [vehiculoId]);
 
   async function leer() {
     setCargando(true); setError(""); setSinDatos(false);
@@ -77,6 +89,8 @@ export default function LecturaAparatoBloque({ vehiculoId, empresaId }: {
       </div>
 
       {error && <div className="mt-2 rounded-lg bg-red-500/10 p-3 text-[13px] text-red-300">{error}</div>}
+
+      {hist && <Historico h={hist} />}
 
       {sinDatos && !error && (
         <div className="mt-2 rounded-lg border border-slate-600 bg-slate-900/40 p-3 text-[13px] text-slate-300">
@@ -163,6 +177,85 @@ export default function LecturaAparatoBloque({ vehiculoId, empresaId }: {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Lo que se ha ido guardando cada madrugada, y lo que sale de restarlo.
+ *
+ * Un tramo con aviso se enseña igual, con el motivo: un contador que baja o
+ * un salto imposible significan «equipo cambiado» o «lectura mala», y eso es
+ * información, no basura que esconder. Lo que no se hace es sumarlo.
+ */
+function Historico({ h }: { h: HistoricoAparato }) {
+  const r = h.ultimos30;
+  if (h.fotos === 0) {
+    return (
+      <div className="mt-3 rounded-lg border border-slate-700 bg-slate-900/40 p-3 text-[12px] text-slate-400">
+        Todavía no hay histórico de este vehículo. Se guarda una foto de los contadores cada madrugada a las 04:00;
+        el primer consumo por días sale con la segunda foto, o sea pasado mañana.
+      </div>
+    );
+  }
+  if (h.fotos === 1) {
+    return (
+      <div className="mt-3 rounded-lg border border-slate-700 bg-slate-900/40 p-3 text-[12px] text-slate-400">
+        Hay una sola foto, del {h.primeraFoto}. El consumo de un periodo es la resta de dos: mañana por la mañana
+        ya habrá tramo.
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-3 grid gap-2">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Últimos 30 días</span>
+        <span className="text-[10px] text-slate-500">
+          {h.fotos} fotos, de {h.primeraFoto} a {h.ultimaFoto}
+          {r.conAviso > 0 && <> · {r.conAviso} tramo(s) con algo descartado: la suma es de menos</>}
+        </span>
+      </div>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <Dato etiqueta="Gasóleo" valor={r.litros == null ? "—" : `${num(r.litros)} l`} />
+        <Dato etiqueta="Consumo" destacado valor={r.l100 == null ? "—" : `${num(r.l100, 1)} l/100 km`} />
+        <Dato etiqueta="Horas de motor" valor={r.horasMotor == null ? "—" : `${num(r.horasMotor, 1)} h`} />
+        <Dato etiqueta="Kilómetros" valor={r.km == null ? "—" : `${num(r.km)} km`} />
+      </div>
+
+      <details className="rounded-lg border border-slate-700 bg-slate-900/40 p-2">
+        <summary className="cursor-pointer text-[11px] font-bold text-slate-300">Día a día ({h.tramos.length} tramos)</summary>
+        <div className="mt-2 max-h-64 overflow-auto">
+          <table className="w-full text-[12px]">
+            <thead className="sticky top-0 bg-slate-900 text-[10px] uppercase tracking-wide text-slate-400">
+              <tr>
+                <th className="px-2 py-1 text-left">Hasta</th>
+                <th className="px-2 py-1 text-right">Gasóleo</th>
+                <th className="px-2 py-1 text-right">Km</th>
+                <th className="px-2 py-1 text-right">l/100 km</th>
+                <th className="px-2 py-1 text-right">Motor</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[...h.tramos].reverse().map((t) => (
+                <tr key={`${t.desde}-${t.hasta}`} className="border-t border-slate-800">
+                  <td className="px-2 py-1 text-slate-200">
+                    {t.hasta}
+                    {t.horasTranscurridas > 30 && (
+                      <span className="ml-1 text-[10px] text-slate-500">({Math.round(t.horasTranscurridas)} h)</span>
+                    )}
+                    {t.aviso && <div className="text-[10px] text-amber-400">{t.aviso}</div>}
+                  </td>
+                  <td className="px-2 py-1 text-right text-slate-300">{t.litros == null ? "—" : `${num(t.litros)} l`}</td>
+                  <td className="px-2 py-1 text-right text-slate-300">{t.km == null ? "—" : num(t.km)}</td>
+                  <td className="px-2 py-1 text-right text-slate-300">{t.l100 == null ? "—" : num(t.l100, 1)}</td>
+                  <td className="px-2 py-1 text-right text-slate-300">{t.horasMotor == null ? "—" : `${num(t.horasMotor, 1)} h`}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
     </div>
   );
 }
