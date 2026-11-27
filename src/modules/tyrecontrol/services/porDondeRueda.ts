@@ -64,6 +64,15 @@ export interface VehiculoFlotaVias {
   km: number;
   porTipo: PorTipo | null;
   pctUrbana: number | null;
+  /** Por qué no hay datos (null si los hay). */
+  estado?: { tono: "info" | "aviso" | "error"; texto: string } | null;
+}
+
+/** Cómo va el trabajo de cada mañana. */
+export interface TrabajoVias {
+  ultimaVuelta: { at: string; resumen: string; esperandoMapa: boolean } | null;
+  ventana: { desde: number; hasta: number };
+  mapa: { teselas: number; ultimaCarga: string | null };
 }
 
 async function pedir<T>(ruta: string, opciones: RequestInit = {}): Promise<T> {
@@ -83,7 +92,7 @@ export const analizarDiaVias = (vehiculoId: string, fecha: string) =>
   pedir<AnalisisDia>(`/vehiculo/${encodeURIComponent(vehiculoId)}/analizar`, { method: "POST", body: JSON.stringify({ fecha }) });
 
 export const porDondeRuedanFlota = (p: { empresaId?: string; desde: string; hasta: string }) =>
-  pedir<{ empresaId: string; desde: string; hasta: string; vehiculos: VehiculoFlotaVias[] }>(
+  pedir<{ empresaId: string; desde: string; hasta: string; vehiculos: VehiculoFlotaVias[]; trabajo?: TrabajoVias }>(
     `/flota?${new URLSearchParams({ ...(p.empresaId ? { empresaId: p.empresaId } : {}), desde: p.desde, hasta: p.hasta })}`,
   );
 

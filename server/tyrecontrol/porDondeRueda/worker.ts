@@ -13,10 +13,19 @@ import { supabase } from "../../supabase.ts";
 import { ErrorRitmo } from "../../integration-hub/infrastructure/ritmo.ts";
 import { ZONA_HORARIA_POR_DEFECTO } from "../../integration-hub/domain/meses.ts";
 import { analizarDia } from "./servicio.ts";
+import type { UltimaVuelta } from "./resumen.ts";
 
 const LATIDO_MS = 60 * 60 * 1000;
-const HORA_INICIO = Number(process.env.TC_VIAS_HORA_INICIO ?? 6);
-const HORA_FIN = Number(process.env.TC_VIAS_HORA_FIN ?? 10);
+export const HORA_INICIO = Number(process.env.TC_VIAS_HORA_INICIO ?? 6);
+export const HORA_FIN = Number(process.env.TC_VIAS_HORA_FIN ?? 10);
+
+/**
+ * Lo que hizo la última vuelta, para que la pantalla diga por qué un vehículo
+ * marcado aún no tiene datos (cargando el mapa, error…). En memoria: tras un
+ * reinicio vale `null` hasta la siguiente vuelta, y la pantalla lo dice así.
+ */
+let ultima: UltimaVuelta | null = null;
+export const ultimaVuelta = (): UltimaVuelta | null => ultima;
 export const DIAS_ATRAS = 7;
 /** Un día que falló no se reintenta hasta pasado esto. */
 const REINTENTO_ERROR_MS = 3 * 3600 * 1000;
@@ -71,7 +80,10 @@ export async function tickPorDondeRueda(ahora = new Date(), forzar = false): Pro
     if (error) throw new Error(error.message);
     const vehiculos = ((marcados ?? []) as { vehiculo_id: string; empresa_id: string }[])
       .map((v) => ({ vehiculo_id: String(v.vehiculo_id), empresa_id: String(v.empresa_id) }));
-    if (vehiculos.length === 0) return "sin vehículos marcados";
+    if (vehiculos.length === 0) {
+      ultima = { at: ahora.toISOString(), resumen: "sin vehículos marcados", esperandoMapa: false };
+      return "sin vehículos marcados";
+    }
     const dias = diasAMirar(ahora);
     const { data: hechos, error: e2 } = await supabase
       .from("tc_recorrido_dia").select("vehiculo_id, fecha, estado, procesado_at")
@@ -80,18 +92,22 @@ export async function tickPorDondeRueda(ahora = new Date(), forzar = false): Pro
     const cola = pendientes(vehiculos, dias, (hechos ?? []) as DiaHecho[], ahora).slice(0, DIAS_POR_VUELTA);
 
     const cuenta = { ok: 0, sin_puntos: 0, error: 0, mapa_pendiente: 0 };
+    let errorMapa: string | null = null;
     for (const p of cola) {
       try {
         const r = await analizarDia(p.empresa_id, p.vehiculo_id, p.fecha, { esperaMs: ESPERA_CUPO_MS });
         cuenta[r.estado] += 1;
-        if (r.estado === "mapa_pendiente") break; // el mapa sigue en la próxima vuelta
+        if (r.estado === "mapa_pendiente") { errorMapa = r.error; break; } // el mapa sigue en la próxima vuelta
       } catch (e) {
         if (e instanceof ErrorRitmo) break; // sin cupo: a la próxima hora
         cuenta.error += 1;
         console.error(`[por-donde-rueda] ${p.vehiculo_id} ${p.fecha}:`, (e as Error)?.message ?? e);
       }
     }
-    return `${cola.length} días en cola: ${cuenta.ok} ok, ${cuenta.sin_puntos} sin puntos, ${cuenta.error} con error, ${cuenta.mapa_pendiente} esperando mapa`;
+    const resumen = `${cola.length} días en cola: ${cuenta.ok} ok, ${cuenta.sin_puntos} sin puntos, ${cuenta.error} con error, ${cuenta.mapa_pendiente} esperando mapa` +
+      (errorMapa ? ` (${errorMapa})` : "");
+    ultima = { at: ahora.toISOString(), resumen, esperandoMapa: cuenta.mapa_pendiente > 0 };
+    return resumen;
   } finally {
     ocupado = false;
   }
