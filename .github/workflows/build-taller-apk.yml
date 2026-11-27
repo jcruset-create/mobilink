@@ -220,8 +220,21 @@ jobs:
 
             EN_PUNTA=$(grep '^version:' pubspec.yaml | awk '{print $2}')
             BUILD_PUNTA=${EN_PUNTA#*+}
-            if [ "${BUILD_PUNTA:-0}" -ge "$BUILD" ] 2>/dev/null; then
-              echo "La punta de $RAMA ya lleva $EN_PUNTA (build $BUILD_PUNTA ≥ $BUILD): nada que guardar."
+            # Nada que guardar solo si la punta lleva EXACTAMENTE nuestra
+            # versión, o un build MÁS NUEVO (otra compilación ganó la carrera).
+            #
+            # Con el mismo build pero otro nombre SÍ hay que guardar. Pasó el
+            # 27/11/2026: el PR #807 puso a mano 1.0.5+295, la CI publicó
+            # 1.0.6+295 —el 295 es el run_number, que coincidió— y, al comparar
+            # solo el build, dio por guardado lo que no lo estaba. main se quedó
+            # en 1.0.5+295 y el centro de descargas mandaba a una release que no
+            # existe (404 de GitHub).
+            if [ "$EN_PUNTA" = "$NOMBRE+$BUILD" ]; then
+              echo "La punta de $RAMA ya lleva $EN_PUNTA: nada que guardar."
+              exit 0
+            fi
+            if [ "${BUILD_PUNTA:-0}" -gt "$BUILD" ] 2>/dev/null; then
+              echo "La punta de $RAMA ya lleva $EN_PUNTA (build $BUILD_PUNTA > $BUILD): nada que guardar."
               exit 0
             fi
 

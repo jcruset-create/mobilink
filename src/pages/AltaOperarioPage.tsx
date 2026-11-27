@@ -19,16 +19,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { API_BASE } from "../modules/workshopApi";
+import CamaraDocumento from "../modules/sea-core/components/CamaraDocumento";
 import CamaraSelfie from "../modules/sea-core/components/CamaraSelfie";
 
 type Ficha = Record<string, string | null>;
 type Tallas = Record<string, string | null>;
 
 const DOCUMENTOS = [
-  { tipo: "dni_anverso", label: "DNI · delante", obligatorio: true },
-  { tipo: "dni_reverso", label: "DNI · detrás", obligatorio: true },
-  { tipo: "carnet_anverso", label: "Carnet · delante", obligatorio: false },
-  { tipo: "carnet_reverso", label: "Carnet · detrás", obligatorio: false },
+  { tipo: "dni_anverso", label: "DNI · delante", obligatorio: true,
+    titulo: "DNI · por delante", guia: "Pon el DNI sobre una mesa y encájalo en el marco, con la foto a la izquierda." },
+  { tipo: "dni_reverso", label: "DNI · detrás", obligatorio: true,
+    titulo: "DNI · por detrás", guia: "Dale la vuelta al DNI y encájalo en el marco." },
+  { tipo: "carnet_anverso", label: "Carnet · delante", obligatorio: false,
+    titulo: "Carnet de conducir · por delante", guia: "Pon el carnet sobre una mesa y encájalo en el marco, con la foto a la izquierda." },
+  { tipo: "carnet_reverso", label: "Carnet · detrás", obligatorio: false,
+    titulo: "Carnet de conducir · por detrás", guia: "Dale la vuelta al carnet y encájalo en el marco: ahí van las clases y sus fechas." },
 ] as const;
 
 const TALLAS = [
@@ -74,6 +79,8 @@ export default function AltaOperarioPage() {
   const [ficha, setFicha] = useState<Ficha>({});
   const [tallas, setTallas] = useState<Tallas>({});
   const [documentos, setDocumentos] = useState<string[]>([]);
+  /** El documento que se está fotografiando con el marco, o null. */
+  const [camaraDoc, setCamaraDoc] = useState<string | null>(null);
   /** La foto de la persona, ya recortada por el servidor: su dirección, o null si no tiene. */
   const [foto, setFoto] = useState<string | null>(null);
   const [fotoAviso, setFotoAviso] = useState("");
@@ -154,17 +161,29 @@ export default function AltaOperarioPage() {
     guardarPronto(ficha, siguiente);
   }
 
-  async function subirFoto(tipo: string, fichero: File) {
+  /**
+   * Sube la foto de un documento. Si sale bien y viene de la cámara con el
+   * marco, abre sola la siguiente que falte (el DNI por detrás después del de
+   * delante, y así): cuatro fotos seguidas sin volver al formulario.
+   */
+  async function subirFoto(tipo: string, fichero: Blob, seguir = false) {
+    setCamaraDoc(null);
     setSubiendo(tipo);
     setError("");
     try {
       const cuerpo = new FormData();
       cuerpo.append("tipo", tipo);
-      cuerpo.append("foto", fichero);
+      cuerpo.append("foto", fichero, `${tipo}.jpg`);
       const r = await fetch(`${url}/documento`, { method: "POST", body: cuerpo });
       const d = await r.json();
       if (!r.ok) throw new Error(d?.error ?? "No se ha podido subir la foto.");
-      setDocumentos(d.documentos ?? []);
+      const hechas: string[] = d.documentos ?? [];
+      setDocumentos(hechas);
+      if (seguir) {
+        const i = DOCUMENTOS.findIndex((x) => x.tipo === tipo);
+        const siguiente = DOCUMENTOS.slice(i + 1).find((x) => !hechas.includes(x.tipo));
+        if (siguiente) setCamaraDoc(siguiente.tipo);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se ha podido subir la foto.");
     } finally {
@@ -319,6 +338,22 @@ export default function AltaOperarioPage() {
         </div>
       </Seccion>
       {camara && <CamaraSelfie onFoto={(f) => void subirMiFoto(f)} onCancelar={() => setCamara(false)} />}
+      {(() => {
+        const i = DOCUMENTOS.findIndex((x) => x.tipo === camaraDoc);
+        if (i < 0) return null;
+        const d = DOCUMENTOS[i];
+        return (
+          <CamaraDocumento
+            key={d.tipo}
+            titulo={d.titulo}
+            paso={`Foto ${i + 1} de ${DOCUMENTOS.length}${d.obligatorio ? "" : " · si tienes carnet"}`}
+            guia={d.guia}
+            dorso={d.tipo.endsWith("_reverso")}
+            onFoto={(f) => void subirFoto(d.tipo, f, true)}
+            onCancelar={() => setCamaraDoc(null)}
+          />
+        );
+      })()}
 
       <Seccion titulo="3 · Dónde te localizamos" nota="obligatorio">
         <div className="grid grid-cols-2 gap-3">
@@ -338,9 +373,12 @@ export default function AltaOperarioPage() {
           {DOCUMENTOS.map((d) => {
             const hecha = documentos.includes(d.tipo);
             return (
-              <label
+              <button
+                type="button"
                 key={d.tipo}
-                className={`flex cursor-pointer flex-col gap-1 rounded-xl border p-3 ${
+                disabled={subiendo !== null}
+                onClick={() => setCamaraDoc(d.tipo)}
+                className={`flex cursor-pointer flex-col gap-1 rounded-xl border p-3 text-left disabled:opacity-60 ${
                   hecha ? "border-green-700 bg-green-900/20" : "border-dashed border-slate-600 bg-slate-900"
                 }`}
               >
@@ -354,18 +392,7 @@ export default function AltaOperarioPage() {
                         ? "Toca para hacer la foto"
                         : "Si tienes carnet"}
                 </span>
-                <input
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  className="hidden"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) void subirFoto(d.tipo, f);
-                    e.target.value = "";
-                  }}
-                />
-              </label>
+              </button>
             );
           })}
         </div>
