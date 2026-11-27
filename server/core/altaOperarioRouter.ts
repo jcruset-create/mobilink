@@ -23,6 +23,7 @@ import { supabase } from "../supabase.ts";
 import { authenticate, requireAdmin } from "./auth.ts";
 import { registrarAuditoria } from "./auditoria.ts";
 import { BUCKET_CORE, ErrorFoto, ponerFoto, subidaDeFoto, tieneFoto, urlDeFoto } from "./fotoEmpleado.ts";
+import { leerAlRecibir, lecturaVigente } from "./lecturaAlta.ts";
 import { clienteTwilio, hayCredencialesTwilio } from "./twilio.ts";
 import { hayIA, pedirIA } from "./openaiService.ts";
 import {
@@ -334,6 +335,10 @@ export function createAltaOperarioAdminRouter(): Router {
     );
 
     const invitacion = inv[0] ?? null;
+    // La lectura más reciente que haya, no solo la del último envío: pedir una
+    // actualización crea un envío nuevo sin leer, y la anterior no se ha
+    // borrado. Si falla, la ficha sale igual, con «sin leer».
+    const leido = await lecturaVigente(db, employeeId).catch(() => null);
     res.json({
       estadoAlta: emp[0].estado_alta,
       invitacion: invitacion && {
@@ -350,8 +355,9 @@ export function createAltaOperarioAdminRouter(): Router {
       documentos: await documentosConUrl(employeeId),
       firma: invitacion?.firma_path ? await urlFirmada(invitacion.firma_path) : null,
       verificacion: invitacion?.verificacion ?? null,
-      lectura: invitacion?.lectura ?? null,
-      certificacionesPropuestas: certificacionesDeLectura(invitacion?.lectura ?? null),
+      lectura: leido?.lectura ?? null,
+      lecturaDe: leido && { leidoAt: leido.leidoAt, deEnvioAnterior: leido.deEnvioAnterior },
+      certificacionesPropuestas: certificacionesDeLectura(leido?.lectura ?? null),
       consentimientos,
       puedeVerificar: hayIA(),
     });
@@ -478,13 +484,8 @@ export function createAltaOperarioAdminRouter(): Router {
       return res.status(400).json({ error: "Ese empleado no existe." });
     }
 
-    const { rows } = await db.query(
-      `SELECT lectura FROM sea_employee_invites
-        WHERE employee_id = $1 AND lectura IS NOT NULL
-        ORDER BY enviado_at DESC LIMIT 1`,
-      [employeeId]
-    );
-    const lectura = rows[0]?.lectura as Lectura | undefined;
+    // La misma que enseña la pantalla: lo que se pasa es lo que se ha visto.
+    const lectura = (await lecturaVigente(db, employeeId))?.lectura;
     if (!lectura) return res.status(409).json({ error: "Todavía no se ha leído la documentación." });
 
     const campos = fichaDeLectura(lectura);
@@ -1140,6 +1141,10 @@ export function createAltaOperarioPublicRouter(): Router {
     await db.query(`UPDATE sea_employees SET estado_alta = 'recibida' WHERE id = $1`, [inv.employee_id]);
 
     res.json({ ok: true });
+
+    // La documentación se lee sola, pero DESPUÉS de contestar: el trabajador
+    // no espera a la IA ni se entera si falla. No se espera a propósito.
+    void leerAlRecibir(db, { employeeId: inv.employee_id, invitacionId: inv.id }, { hayIA, leer: leerDocumentos });
   });
 
   return r;

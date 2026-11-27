@@ -1,5 +1,34 @@
 # Fase 1 — Estudio: Core como fuente única de operarios y usuarios
 
+> **2026-11-27 · La lectura del carnet y del DNI: que no «desaparezca», que se haga sola y que se vea.**
+> El usuario abrió su ficha y encontró «Sin leer» donde ya se había leído.
+>
+> **Qué pasaba**
+> - La lectura de la IA (número y caducidad del DNI, clases del carnet con su
+>   fecha) se guarda en el ENVÍO (`sea_employee_invites.lectura`), y la ficha
+>   miraba solo el último. Al pedir una actualización se crea un envío nuevo,
+>   sin leer: la lectura anterior seguía en la base pero dejaba de verse.
+>   **No se borraba nada.**
+> - Había que acordarse de pulsar «Leer documentación».
+> - Al «Pasar a la ficha», el número, las clases y la caducidad del carnet se
+>   guardaban en `sea_employees` pero ninguna pantalla los enseñaba.
+>
+> **Qué se ha hecho**
+> - `server/core/lecturaAlta.ts`: `lecturaVigente` —la lectura más reciente que
+>   haya, sea del envío que sea, diciendo si es de uno anterior— y
+>   `leerAlRecibir`. La ficha y «Pasar a la ficha» usan la misma.
+> - Al enviar el trabajador el formulario, la documentación **se lee sola**,
+>   después de contestarle: no espera a la IA ni se entera si falla. Si falla,
+>   queda «sin leer» y el botón de siempre sigue ahí.
+> - Lo que NO cambia: a la ficha sigue pasando solo cuando alguien pulsa «Pasar
+>   a la ficha». La IA informa, la persona decide.
+> - Ficha → Datos personales: carnet de conducir (número, clases, caducidad) y
+>   CAP si lo tiene. Las clases con su fecha siguen yendo a Certificaciones.
+> - Sin migraciones.
+>
+> **No probado contra producción:** la lectura real con la IA al recibir un
+> formulario (las pruebas usan una lectura simulada).
+
 > **2026-11-27 · La foto del empleado, con el fondo de la empresa.**
 > Pedido por el usuario: al subir una foto, cambiarle el fondo automáticamente
 > por el mural de Confortauto (eligió «el mural tal cual», con el lema).
