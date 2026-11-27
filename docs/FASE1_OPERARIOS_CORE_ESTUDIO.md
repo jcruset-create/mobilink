@@ -1,5 +1,23 @@
 # Fase 1 — Estudio: Core como fuente única de operarios y usuarios
 
+> **2026-11-27 · Las fotos del DNI y del carnet, con marco: todas iguales.**
+> Pedido por el usuario («marco fijo»): en el enlace de alta, la foto de cada
+> documento se hace con la cámara de atrás dentro de la página y un marco con
+> la forma exacta de la tarjeta (ID-1, 85,60 × 53,98 mm).
+>
+> - `CamaraDocumento.tsx`: marco fijo (sin adivinar si el documento está
+>   dentro), título y paso («Foto 1 de 4»), dibujo de cómo ponerlo, linterna
+>   si el móvil la tiene. Se guarda solo lo de dentro del marco, con un 6 % de
+>   margen para que el servidor encuentre las esquinas, a 1600 × 1009 px.
+> - `marcoDocumento.ts` (puro, con pruebas): dónde va el marco y qué píxeles de
+>   la cámara caen debajo, deshaciendo el `object-fit: cover`.
+> - Al acabar una foto se abre sola la siguiente que falte.
+> - Sin cámara (permiso denegado, navegador raro): el botón de siempre.
+> - El servidor sigue enderezando con la IA; no cambia nada en él.
+>
+> **Probado** en Chromium con una cámara simulada (tamaño de móvil): marco,
+> disparo y tamaño guardado. **No probado** con móviles reales.
+
 > **2026-11-27 · El contacto de emergencia (y la fecha de nacimiento) se ven en la ficha.**
 > El trabajador los rellena en el enlace de alta («5 · Si pasa algo»: nombre y
 > teléfono; fecha de nacimiento y nacionalidad en sus datos) y se guardaban en
