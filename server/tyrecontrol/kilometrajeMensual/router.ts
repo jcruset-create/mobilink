@@ -581,6 +581,73 @@ export function createKilometrajeMensualRouter(): Router {
   });
 
   /**
+   * «Ver los sensores»: qué calcula el dispositivo de UN vehículo. No guarda nada.
+   *
+   * Nació de una pregunta concreta: de Movertis no sabemos si un vehículo está
+   * en ralentí, porque el histórico son posiciones y nada más. Pero
+   * `showvehicles` admite la bandera `sensors` —unos 32 por vehículo que nadie
+   * ha listado nunca— y ahí puede estar la respuesta: si hay horas de motor, el
+   * ralentí sale restando el tiempo en movimiento.
+   *
+   * UNA petición, un vehículo. Con la flota entera esa bandera da 502.
+   *
+   * Cuerpo: { empresaId?, vehiculoId }
+   */
+  router.post("/sensores", async (req, res) => {
+    try {
+      const empresaId = empresaDe((req as Peticion).solicitante!, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const vehiculoId = String(req.body?.vehiculoId ?? "").trim();
+      if (!vehiculoId) return res.status(400).json({ error: "Falta el vehículo" });
+
+      const enl = await enlaceParaPrueba(empresaId, vehiculoId);
+      if ("error" in enl) return res.status(enl.estado).json({ error: enl.error });
+      const { v, cuenta, unidad, conector } = enl;
+
+      // Preguntar por los sensores no está en el puerto: es cosa de Movertis.
+      // Se comprueba que este conector sepa, en vez de dar por hecho que la
+      // cuenta es de Movertis porque lo sea la de este cliente.
+      const leer = (conector as { leerSensores?: unknown }).leerSensores;
+      if (typeof leer !== "function") {
+        return res.status(400).json({ error: `La cuenta ${cuenta.key} no sabe dar los sensores del dispositivo` });
+      }
+
+      const { sensoresDe, veredicto, textoParaMovertis } = await import("../movertisSensores.ts");
+      const ctx = { tenantId: empresaId, correlationId: await nextCorrelationId() };
+      const limitador = limitadorDe(`${empresaId}/${cuenta.key}/${cuenta.accountKey}`, ritmoDeConfig(cuenta.config));
+      await limitador.turno(ESPERA_MAXIMA_MS);
+
+      const { peticion, fila } = await (leer as (
+        c: typeof ctx, id: string,
+      ) => Promise<{ peticion: unknown; fila: Record<string, unknown> | null }>).call(conector, ctx, unidad);
+
+      const sensores = sensoresDe(fila);
+      const matricula = (v as { matricula?: string }).matricula ?? null;
+      // En crudo y recortado: si la forma no es la que esperamos, hay que poder
+      // mirarla a mano antes de concluir que no hay sensores.
+      const crudo = JSON.stringify(fila ?? null, null, 1).slice(0, 20_000);
+      const v2 = veredicto(sensores);
+      res.json({
+        vehiculoId, matricula,
+        cuenta: { connectorKey: cuenta.key, accountKey: cuenta.accountKey }, unidad,
+        pedidoEn: new Date().toISOString(),
+        peticion,
+        sensores,
+        veredicto: v2,
+        crudo,
+        // Ya armado aquí, que es donde está la función con pruebas: la pantalla
+        // solo lo copia al portapapeles.
+        texto: textoParaMovertis({ matricula, unidad, peticion, sensores, veredicto: v2, crudo }),
+      });
+    } catch (e) {
+      if (e instanceof ErrorRitmo) {
+        return res.status(429).json({ error: "El cupo de Movertis está ocupado ahora mismo; repite en unos minutos" });
+      }
+      fallo(res, e);
+    }
+  });
+
+  /**
    * «Buscar los días que fallan»: el mes de UN vehículo pedido por partes,
    * partiendo por la mitad lo que falla hasta llegar a días sueltos. Dice qué
    * días fallan y cuántos km da el mes por partes (con los días rotos
