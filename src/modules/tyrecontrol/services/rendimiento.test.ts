@@ -29,7 +29,9 @@ describe("rendimiento de un neumático", () => {
     const r = calcularRendimiento({ ...base, km_actual_vehiculo: 60000, profundidad_actual_mm: 9,
       puntos: [{ km_vehiculo: 20000, mm: 12.4, fecha: "" }, { km_vehiculo: 40000, mm: 12, fecha: "" }] });
     expect(r.metodo).toBe("recta");
-    expect(r.puntos).toHaveLength(4);
+    // El 12 a 40.000 km no ha bajado 1 mm desde el 12,4: se ve, pero no cuenta.
+    expect(r.puntos).toHaveLength(3);
+    expect(r.descartados).toEqual([{ km: 40000, mm: 12 }]);
     expect(r.kmPorMm).toBeGreaterThan(10000);
     expect(r.kmPorMm).toBeLessThan(14000);
   });
@@ -38,6 +40,28 @@ describe("rendimiento de un neumático", () => {
     const r = calcularRendimiento({ ...base, km_actual_vehiculo: 5000, profundidad_actual_mm: 13.8, puntos: [] });
     expect(r.vidaKm).toBeNull();
     expect(r.sinProyeccion).toMatch(/Poco gasto/);
+  });
+
+  it("0039LXV: solo cuenta lo que baja 1 mm; el ruido del calibre no mueve la recta", () => {
+    const ini = 502706;
+    const lecturas = [[526440, 13.7], [526694, 13.8], [527429, 14.3], [527926, 14], [528547, 13.5],
+      [529719, 13.8], [530535, 13.9], [530838, 13.8], [531204, 13.6], [531634, 13.8]]
+      .map(([km, mm]) => ({ km_vehiculo: km, mm, fecha: "" }));
+    const r = calcularRendimiento({ km_actual_vehiculo: 532519, km_vehiculo_inicio: ini, profundidad_inicial_mm: 16.5,
+      profundidad_actual_mm: 13.8, minimo_mm: 3, puntos: lecturas });
+    expect(r.puntos).toEqual([{ km: 0, mm: 16.5 }, { km: 23734, mm: 13.7 }]);
+    expect(r.descartados).toHaveLength(10); // 9 lecturas + la de hoy
+    expect(r.metodo).toBe("origen");
+    expect(r.kmPorMm).toBe(8476);
+    // La proyección sigue saliendo desde hoy (13,8 mm a 29.813 km).
+    expect(r.quedanKm).toBe(Math.round(10.8 * (23734 / 2.8)));
+    expect(r.vidaKm).toBe(29813 + r.quedanKm!);
+  });
+
+  it("baja justo 1 mm: entra", () => {
+    const r = calcularRendimiento({ ...base, km_actual_vehiculo: 10000, profundidad_actual_mm: 13.3, puntos: [] });
+    expect(r.puntos).toHaveLength(2);
+    expect(r.kmPorMm).toBe(10000);
   });
 
   it("sin profundidad de origen lo dice", () => {
