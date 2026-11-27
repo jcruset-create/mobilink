@@ -210,13 +210,14 @@ export default function ProbarMovertis({ vehiculoId, matricula, empresaId, meses
 function ResultadoSensores({ s }: { s: SensoresVehiculo }) {
   const [copiado, setCopiado] = useState(false);
   const bien = s.veredicto.nivel === "ralenti_directo" || s.veredicto.nivel === "horas_motor";
-  const regular = s.veredicto.nivel === "solo_contacto";
+  const regular = s.veredicto.nivel === "revoluciones" || s.veredicto.nivel === "solo_contacto";
   const marco = bien ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-100"
     : regular ? "border-amber-500/40 bg-amber-500/10 text-amber-100"
       : s.veredicto.nivel === "nada" ? "border-rose-500/40 bg-rose-500/10 text-rose-100"
         : "border-slate-600 bg-slate-800/40 text-slate-200";
   const etiqueta = (i: SensorDispositivo["interes"]) =>
-    i === "ralenti" ? "ralentí" : i === "horas_motor" ? "horas de motor" : i === "contacto" ? "contacto" : null;
+    i === "ralenti" ? "ralentí" : i === "horas_motor" ? "horas de motor"
+      : i === "revoluciones" ? "revoluciones" : i === "contacto" ? "contacto" : null;
 
   return (
     <div className="grid gap-2">
