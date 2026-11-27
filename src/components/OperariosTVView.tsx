@@ -469,7 +469,7 @@ function SmallJobCard({
         </span>
       </div>
 
-      <div className="text-lg font-black text-slate-950">{job.plate}</div>
+      <div className="text-lg font-black text-slate-950">{job.plate ? <Matricula plate={job.plate} size="md" /> : "—"}</div>
 
       <div className="text-xs font-semibold text-slate-700">
         {getOperationLabel(job)}
@@ -1544,7 +1544,8 @@ export default function OperariosTVView({
                         </div>
 
                         <div className="text-4xl font-black tracking-wide">
-                          {job.plate}
+                          {/* Dibujada como placa, igual que en las asistencias: la de remolque sale en rojo. */}
+                          {job.plate ? <Matricula plate={job.plate} size="xl" /> : "—"}
                         </div>
 
                         <div className="mt-1 text-xl font-bold text-slate-700">
@@ -1772,7 +1773,7 @@ export default function OperariosTVView({
                       </div>
 
                       <div className="text-xl font-black text-slate-950">
-                        {job.plate}
+                        {job.plate ? <Matricula plate={job.plate} size="lg" /> : "—"}
                       </div>
 
                       <div className="text-xs font-semibold text-violet-800">
