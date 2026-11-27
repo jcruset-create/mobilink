@@ -92,6 +92,24 @@ export function pendiente(puntos: Punto[]): number | null {
   return sxx === 0 ? null : sxy / sxx;
 }
 
+/**
+ * Cada medición, cambiada por la mediana de ella con la de antes y la de
+ * después. El origen (km 0) y la última no se tocan: el origen es un dato y la
+ * última es la de hoy, la que enseña la fila.
+ */
+export function suavizar(p: Punto[]): Punto[] {
+  // Solo entre mediciones: el origen no hace de vecino (sus 16,5 mm
+  // arrastrarían hacia arriba la primera lectura).
+  const med = p.filter((x) => x.km !== 0);
+  const suaves = new Map<Punto, Punto>();
+  med.forEach((x, i) => {
+    if (i === 0 || i === med.length - 1) return;
+    const tres = [med[i - 1].mm, x.mm, med[i + 1].mm].sort((a, b) => a - b);
+    suaves.set(x, { km: x.km, mm: tres[1] });
+  });
+  return p.map((x) => suaves.get(x) ?? x);
+}
+
 /** Cuánto tiene que bajar una medición, desde el último punto, para entrar en la línea. */
 export const BAJADA_MINIMA_MM = 1;
 
@@ -132,13 +150,19 @@ export function calcularRendimiento(d: Pick<DatosRendimiento,
   // último punto: entre medias, lo que sube y baja es el calibre, no la goma
   // (0039LXV: diez revisiones entre 13,5 y 14,3 mm en 6.000 km hacían una
   // nube y movían la recta).
+  //
+  // Y se compara la medición SUAVIZADA (mediana con la de antes y la de
+  // después), no la suelta: una lectura mala —2,3 mm entre dos de 8,5 en
+  // 0039LXV eje 2 izq. ext.— bajaba «1 mm» de golpe y hundía la recta.
+  const suave = suavizar(todos);
   const puntos: Punto[] = [];
   const descartados: Punto[] = [];
-  for (const p of todos) {
+  todos.forEach((p, i) => {
     const ref = puntos[puntos.length - 1];
-    if (!ref || p.km === 0 || p.mm <= ref.mm - BAJADA_MINIMA_MM + 1e-9) puntos.push(p);
+    const s = suave[i];
+    if (!ref || p.km === 0 || s.mm <= ref.mm - BAJADA_MINIMA_MM + 1e-9) puntos.push(s);
     else descartados.push(p);
-  }
+  });
 
   const ultimo = todos[todos.length - 1];
   const hoyMm = actualMm ?? ultimo?.mm ?? null;
@@ -147,14 +171,20 @@ export function calcularRendimiento(d: Pick<DatosRendimiento,
   const r: Rendimiento = { ...base, puntos, descartados, gastadoMm, actualMm: hoyMm, kmGoma: hoyKm };
 
   if (hoyMm === null || hoyKm === null || hoyKm <= 0) return { ...r, sinProyeccion: "Aún no ha recorrido kilómetros" };
-  const fin = puntos[puntos.length - 1];
-  if (puntos.length < 2 || fin.km <= 0) return { ...r, sinProyeccion: "Poco gasto para proyectar (aún no ha bajado 1 mm)" };
+  if (gastadoMm === null || gastadoMm < BAJADA_MINIMA_MM) {
+    return { ...r, sinProyeccion: "Poco gasto para proyectar (aún no ha bajado 1 mm)" };
+  }
 
+  // Con 3 o más puntos de la línea, la recta. Si no, del origen a HOY: los
+  // mismos números que enseña la fila (Hoy, Gastado, Km). Antes iba del
+  // origen al último punto de la línea, y dos gomas con el mismo Hoy y el
+  // mismo Gastado salían con km/mm distintos según cuál fuera su primera
+  // lectura suelta (0039LXV eje 1: 6.981 y 8.476).
   let kmPorMm: number;
   let metodo: "recta" | "origen";
   const m = puntos.length >= 3 ? pendiente(puntos) : null;
   if (m !== null && m < 0) { kmPorMm = -1 / m; metodo = "recta"; }
-  else { kmPorMm = fin.km / (origenMm - fin.mm); metodo = "origen"; }
+  else { kmPorMm = hoyKm / (origenMm - hoyMm); metodo = "origen"; }
 
   const quedanKm = Math.max(0, (hoyMm - minimoMm) * kmPorMm);
   return {

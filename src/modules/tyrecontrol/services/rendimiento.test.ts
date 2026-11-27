@@ -52,10 +52,33 @@ describe("rendimiento de un neumático", () => {
     expect(r.puntos).toEqual([{ km: 0, mm: 16.5 }, { km: 23734, mm: 13.7 }]);
     expect(r.descartados).toHaveLength(10); // 9 lecturas + la de hoy
     expect(r.metodo).toBe("origen");
-    expect(r.kmPorMm).toBe(8476);
-    // La proyección sigue saliendo desde hoy (13,8 mm a 29.813 km).
-    expect(r.quedanKm).toBe(Math.round(10.8 * (23734 / 2.8)));
+    // Del origen a hoy: 2,7 mm en 29.813 km.
+    expect(r.kmPorMm).toBe(Math.round(29813 / 2.7));
     expect(r.vidaKm).toBe(29813 + r.quedanKm!);
+  });
+
+  it("0039LXV eje 1: mismo Hoy y mismo Gastado → mismos km/mm, aunque la primera lectura difiera", () => {
+    const ini = 502706;
+    const izq = [[23734, 13.1], [23988, 14.1], [24723, 12.7], [25220, 13.8], [25841, 13.7], [27013, 13.6],
+      [27829, 13.6], [28132, 13.3], [28498, 13.6], [28928, 13.8]];
+    const der = [[23734, 13.7], [23988, 13.8], [24723, 14.3], [25220, 14], [25841, 13.5], [27013, 13.8],
+      [27829, 13.9], [28132, 13.8], [28498, 13.6], [28928, 13.8]];
+    const de = (l: number[][]) => calcularRendimiento({ km_actual_vehiculo: ini + 29382, km_vehiculo_inicio: ini,
+      profundidad_inicial_mm: 16.5, profundidad_actual_mm: 13.8, minimo_mm: 3,
+      puntos: l.map(([km, mm]) => ({ km_vehiculo: ini + km, mm, fecha: "" })) });
+    expect(de(izq).kmPorMm).toBe(de(der).kmPorMm);
+    expect(de(izq).vidaKm).toBe(de(der).vidaKm);
+  });
+
+  it("una lectura mala suelta (2,3 mm entre dos de 8,5) no entra en la línea", () => {
+    const ini = 467188;
+    const l = [[59252, 8.7], [59506, 8.5], [60241, 2.3], [60738, 8.4], [61359, 8.1], [62531, 8.3],
+      [63347, 8.7], [63650, 8.4], [64016, 8.3], [64446, 8.1]];
+    const r = calcularRendimiento({ km_actual_vehiculo: ini + 64900, km_vehiculo_inicio: ini,
+      profundidad_inicial_mm: 16.5, profundidad_actual_mm: 8.1, minimo_mm: 3,
+      puntos: l.map(([km, mm]) => ({ km_vehiculo: ini + km, mm, fecha: "" })) });
+    expect(r.puntos.some((p) => p.mm < 5)).toBe(false);
+    expect(r.kmPorMm).toBe(Math.round(64900 / 8.4));
   });
 
   it("baja justo 1 mm: entra", () => {
