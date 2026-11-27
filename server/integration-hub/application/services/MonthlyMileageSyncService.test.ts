@@ -325,10 +325,10 @@ describe("meses cerrados", () => {
     expect(vi.mocked(upsertMonthlyMileage).mock.calls[0][0]).toMatchObject({ month: 10, closed: true, syncStatus: "ok" });
   });
 
-  it("mesesQueTocan(): el en curso, el anterior y el histórico, en ese orden", () => {
+  it("mesesQueTocan(): el anterior (para cerrarlo), el en curso y el histórico, en ese orden", () => {
     const m = mesesQueTocan(AHORA, "Europe/Madrid", 3);
     expect(m).toEqual([
-      { year: 2026, month: 9 }, { year: 2026, month: 8 }, { year: 2026, month: 7 }, { year: 2026, month: 6 },
+      { year: 2026, month: 8 }, { year: 2026, month: 9 }, { year: 2026, month: 7 }, { year: 2026, month: 6 },
     ]);
   });
 });

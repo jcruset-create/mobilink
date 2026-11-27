@@ -48,6 +48,19 @@ describe("pedirPorPartes", () => {
     expect(r.peticiones).toBeLessThanOrEqual(12);
   });
 
+  it("si las partes suman más que el avance del odómetro, manda el odómetro (0179JDJ real: 1.356 frente a 657)", async () => {
+    // Los días 9 y 14 vienen inflados al pedirlos sueltos: la suma se dispara.
+    const p = proveedor({ 2: 100, 5: 90, 9: 200, 12: 124, 14: 100, 20: 43 }, [12]);
+    const inflado = async (desde: Date, hasta: Date) => {
+      const r = await p.pedir(desde, hasta);
+      return r === "vacio" ? r : { ...r, km: r.km * 2 };
+    };
+    const r = await pedirPorPartes(OCT, Z, inflado, { primeraFallida: true });
+    expect(r.km).toBe(657);
+    expect(r.ajustadoAlOdometro).toBe(true);
+    expect(r.kmPorOdometro).toBe(657);
+  });
+
   it("sin días rotos basta una petición", async () => {
     const p = proveedor({ 3: 50, 20: 70 }, []);
     const r = await pedirPorPartes(OCT, Z, p.pedir);
