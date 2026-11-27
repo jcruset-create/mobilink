@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import {
-  ESPERAS_MS, motivoDeFallo, pedirAOverpass, reintentable, servidoresDe, servidorDe,
+  ESPERAS_MS, motivoDeFallo, pedirAOverpass, reintentable, servidoresDe, servidorDe, SERVIDORES_POR_DEFECTO,
   RespuestaOverpass,
 } from "./overpass.ts";
 
@@ -29,8 +29,11 @@ const yaEsta = async () => {};
 
 describe("servidoresDe", () => {
   it("sin variable, el oficial", () => {
-    expect(servidoresDe(undefined)).toEqual([OFICIAL]);
-    expect(servidoresDe("")).toEqual([OFICIAL]);
+    // Sin configurar: el oficial primero y los espejos detrás.
+    expect(servidoresDe(undefined)).toEqual(SERVIDORES_POR_DEFECTO);
+    expect(servidoresDe("")).toEqual(SERVIDORES_POR_DEFECTO);
+    expect(SERVIDORES_POR_DEFECTO[0]).toBe(OFICIAL);
+    expect(SERVIDORES_POR_DEFECTO.length).toBeGreaterThan(1);
   });
 
   it("varios separados por comas, con espacios de más", () => {
@@ -39,7 +42,7 @@ describe("servidoresDe", () => {
 
   it("lo que no es una URL no entra", () => {
     // Una variable mal puesta no puede dejar el sistema apuntando a nada.
-    expect(servidoresDe("pon-aqui-el-espejo")).toEqual([OFICIAL]);
+    expect(servidoresDe("pon-aqui-el-espejo")).toEqual(SERVIDORES_POR_DEFECTO);
   });
 });
 
