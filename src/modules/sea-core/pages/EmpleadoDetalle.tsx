@@ -17,6 +17,9 @@ type Empleado = {
   /** El carnet de conducir: lo teclea el trabajador o se pasa de lo que lee la IA. */
   carnet_numero?: string | null; carnet_clases?: string | null; carnet_caducidad?: string | null;
   cap_numero?: string | null; cap_caducidad?: string | null;
+  /** Lo que rellena el trabajador en el enlace de alta y hasta ahora no se enseñaba. */
+  fecha_nacimiento?: string | null; nacionalidad?: string | null;
+  emergencia_nombre?: string | null; emergencia_telefono?: string | null;
   direccion: string | null; codigo_postal: string | null;
   poblacion: string | null; provincia: string | null;
   telefono: string | null; email: string | null;
@@ -855,6 +858,9 @@ export default function EmpleadoDetalle() {
               { label: "Nombre completo", value: `${empleado.nombre} ${empleado.apellidos ?? ""}` },
               { label: "DNI / NIE", value: empleado.dni_nie },
               { label: "Nº Seguridad Social", value: empleado.num_seguridad_social },
+              { label: "Fecha de nacimiento", value: empleado.fecha_nacimiento
+                ? new Date(empleado.fecha_nacimiento).toLocaleDateString("es-ES") : null },
+              { label: "Nacionalidad", value: empleado.nacionalidad ?? null },
               { label: "El DNI caduca el", value: empleado.dni_caducidad
                 ? new Date(empleado.dni_caducidad).toLocaleDateString("es-ES") : null },
               { label: "Carnet de conducir", value: empleado.carnet_numero ?? null },
@@ -885,6 +891,7 @@ export default function EmpleadoDetalle() {
               </div>
             ))}
           </div>
+          <div className="space-y-4">
           <div className="rounded-xl border border-slate-700 bg-slate-800 p-5 space-y-3">
             <h2 className="font-semibold text-slate-200">Puesto y organización</h2>
             {[
@@ -900,6 +907,40 @@ export default function EmpleadoDetalle() {
                 <span className="font-medium text-right">{value ?? "—"}</span>
               </div>
             ))}
+          </div>
+
+          {/*
+            * A quién llamar si le pasa algo. Lo rellena el trabajador en el
+            * enlace de alta («Si pasa algo»); aquí se ve, y se cambia desde
+            * «Editar». El teléfono se puede pulsar: cuando hace falta, hace
+            * falta deprisa.
+            */}
+          <div className="rounded-xl border border-slate-700 bg-slate-800 p-5 space-y-3">
+            <h2 className="font-semibold text-slate-200">En caso de emergencia</h2>
+            {empleado.emergencia_nombre || empleado.emergencia_telefono ? (
+              <>
+                <div className="flex justify-between text-sm border-b border-slate-700 pb-2">
+                  <span className="text-slate-400">Avisar a</span>
+                  <span className="font-medium text-right">{empleado.emergencia_nombre || "—"}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-400">Teléfono</span>
+                  {empleado.emergencia_telefono ? (
+                    <a href={`tel:${empleado.emergencia_telefono.replace(/[^\d+]/g, "")}`}
+                      className="font-medium text-right text-sky-300 underline-offset-2 hover:underline">
+                      {empleado.emergencia_telefono}
+                    </a>
+                  ) : (
+                    <span className="font-medium text-right">—</span>
+                  )}
+                </div>
+              </>
+            ) : (
+              <p className="text-sm text-slate-500">
+                Sin contacto de emergencia. Lo rellena el trabajador en el enlace de alta, o se pone desde «Editar».
+              </p>
+            )}
+          </div>
           </div>
 
           {/*

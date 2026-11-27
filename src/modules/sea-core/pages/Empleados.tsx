@@ -26,6 +26,8 @@ type Empleado = {
   roadside_capable: boolean;
   fecha_alta: string | null;
   estado_alta: string | null;
+  emergencia_nombre?: string | null;
+  emergencia_telefono?: string | null;
   company_id: string | null;
   work_center_id: string | null;
   sea_companies: { nombre: string } | null;
@@ -82,6 +84,7 @@ const EMPTY = {
   direccion: "", codigo_postal: "", poblacion: "", provincia: "",
   cargo: "", departamento: "", rol: "operario", codigo_operario: "",
   fecha_alta: "", activo: true, roadside_capable: false, company_id: "", work_center_id: "",
+  emergencia_nombre: "", emergencia_telefono: "",
   alta_por_enlace: false,
 };
 
@@ -129,7 +132,7 @@ export default function Empleados() {
     setCargando(true);
     const [{ data: emps }, { data: emp }, { data: cent }] = await Promise.all([
       supabase.from("sea_employees")
-        .select("id, nombre, apellidos, dni_nie, num_seguridad_social, direccion, codigo_postal, poblacion, provincia, telefono, email, cargo, departamento, rol, codigo_operario, activo, fecha_alta, company_id, work_center_id, estado_alta, sea_companies(nombre), sea_work_centers(nombre)")
+        .select("id, nombre, apellidos, dni_nie, num_seguridad_social, direccion, codigo_postal, poblacion, provincia, telefono, email, cargo, departamento, rol, codigo_operario, activo, fecha_alta, company_id, work_center_id, estado_alta, emergencia_nombre, emergencia_telefono, sea_companies(nombre), sea_work_centers(nombre)")
         .order("nombre"),
       supabase.from("sea_companies").select("id, nombre").eq("activa", true).order("nombre"),
       supabase.from("sea_work_centers").select("id, nombre").eq("activo", true).order("nombre"),
@@ -324,6 +327,8 @@ export default function Empleados() {
       roadside_capable: e.roadside_capable ?? false,
       company_id: (e as any).company_id ?? "",
       work_center_id: (e as any).work_center_id ?? "",
+      emergencia_nombre: e.emergencia_nombre ?? "",
+      emergencia_telefono: e.emergencia_telefono ?? "",
     });
     setEditId(e.id);
     setError("");
@@ -372,6 +377,8 @@ export default function Empleados() {
       roadside_capable: form.roadside_capable,
       company_id:       form.company_id || null,
       work_center_id:  form.work_center_id || null,
+      emergencia_nombre:   form.emergencia_nombre.trim() || null,
+      emergencia_telefono: form.emergencia_telefono.trim() || null,
     };
     /*
      * `estado_alta` solo se toca al crear. En una edición no: la ficha de
@@ -711,6 +718,19 @@ export default function Empleados() {
                   <div><label className="text-xs font-medium text-slate-300">Fecha de alta</label>
                     <input type="date" value={form.fecha_alta} onChange={(e) => setForm({ ...form, fecha_alta: e.target.value })}
                       className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
+                </div>
+              </div>
+
+              {/* A quién avisar. Lo rellena el trabajador en su enlace; aquí se puede corregir. */}
+              <div>
+                <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Contacto de emergencia</h3>
+                <div className="grid grid-cols-2 gap-3">
+                  <div><label className="text-xs font-medium text-slate-300">Avisar a</label>
+                    <input value={form.emergencia_nombre} onChange={(e) => setForm({ ...form, emergencia_nombre: e.target.value })}
+                      className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" placeholder="Nombre y parentesco" /></div>
+                  <div><label className="text-xs font-medium text-slate-300">Teléfono</label>
+                    <input type="tel" value={form.emergencia_telefono} onChange={(e) => setForm({ ...form, emergencia_telefono: e.target.value })}
+                      className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" placeholder="6XX XXX XXX" /></div>
                 </div>
               </div>
 
