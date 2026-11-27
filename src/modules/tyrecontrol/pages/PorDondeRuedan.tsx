@@ -4,11 +4,13 @@ import { Route as IconoRuta } from "lucide-react";
 import { listarEmpresas } from "../services/data";
 import type { Empresa } from "../types";
 import {
-  COLOR_TIPO, NOMBRE_TIPO, porDondeRuedanFlota, TIPOS_VIA, type PorTipo, type TrabajoVias, type VehiculoFlotaVias,
+  cargarMapaRegion, COLOR_TIPO, estadoMapaRegion, NOMBRE_TIPO, porDondeRuedanFlota, TIPOS_VIA,
+  type EstadoCargaMapa, type PorTipo, type TrabajoVias, type VehiculoFlotaVias,
 } from "../services/porDondeRueda";
 import { BarraTipos, Leyenda } from "../components/PorDondeRueda";
 import { useOrdenColumnas } from "../hooks/useOrdenColumnas";
 import { CabeceraOrden } from "../components/OrdenColumnas";
+import { useTyreAuth } from "../contexts/TyreAuthContext";
 
 /**
  * «Por dónde ruedan»: el reparto de km por tipo de vía de cada vehículo
@@ -148,6 +150,7 @@ export default function PorDondeRuedan() {
             </table>
           </div>
           {datos.trabajo && <LineaTrabajo t={datos.trabajo} />}
+          <CargaMapaRegion />
           <div className="text-[11px] text-slate-500">
             Calculado cada mañana con el GPS de Movertis (un punto cada ~10 s) pegado al mapa de OpenStreetMap.
             Los % son sobre los km con vía conocida; «sin vía» (cocheras, saltos del GPS) no cuenta.
@@ -181,6 +184,52 @@ function LineaTrabajo({ t }: { t: TrabajoVias }) {
           ? "no se ha cargado ningún trozo todavía. Sin mapa no se puede clasificar ningún día."
           : `${t.mapa.teselas.toLocaleString("es-ES")} trozos cargados${t.mapa.ultimaCarga ? `, el último el ${fecha(t.mapa.ultimaCarga)}` : ""}.`}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Cargar de una vez el mapa de carreteras de Cataluña desde Geofabrik, para no
+ * depender de Overpass (que a ratos no contesta al servidor). Solo super-admin.
+ */
+function CargaMapaRegion() {
+  const { perfil } = useTyreAuth();
+  const [estado, setEstado] = useState<EstadoCargaMapa | null>(null);
+  const [error, setError] = useState("");
+  const enMarcha = !!estado && !["hecho", "error"].includes(estado.fase);
+
+  useEffect(() => {
+    if (!perfil?.es_superadmin) return;
+    let vivo = true;
+    const leer = () => estadoMapaRegion().then((r) => { if (vivo) setEstado(r.estado); }).catch(() => undefined);
+    void leer();
+    const t = setInterval(() => { if (enMarcha) void leer(); }, 5_000);
+    return () => { vivo = false; clearInterval(t); };
+  }, [perfil?.es_superadmin, enMarcha]);
+
+  if (!perfil?.es_superadmin) return null;
+
+  async function cargar() {
+    if (!window.confirm("Se descarga el mapa de carreteras de Cataluña (unos 250 MB) y se guarda en la base. Tarda unos minutos y solo hace falta una vez. ¿Seguir?")) return;
+    setError("");
+    try { setEstado(await cargarMapaRegion("cataluna")); } catch (e) { setError(e instanceof Error ? e.message : "Error"); }
+  }
+
+  const cls = estado?.fase === "error" ? "text-rose-300" : estado?.fase === "hecho" ? "text-emerald-300" : "text-sky-300";
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-800/60 px-3 py-2 text-[11px] text-slate-400">
+      <span><b>Mapa de Cataluña de una vez</b> (sin depender de Overpass):</span>
+      {estado && (
+        <span className={cls}>
+          {estado.fase === "error" ? `error: ${estado.error}` : estado.detalle}
+          {enMarcha && " …"}
+        </span>
+      )}
+      {error && <span className="text-rose-300">{error}</span>}
+      <button onClick={() => void cargar()} disabled={enMarcha}
+        className="ml-auto rounded-lg border border-sky-600 px-2.5 py-1 font-bold text-sky-300 hover:bg-sky-500/10 disabled:opacity-40">
+        {estado?.fase === "hecho" ? "Volver a cargar" : "Cargar mapa de Cataluña"}
+      </button>
     </div>
   );
 }

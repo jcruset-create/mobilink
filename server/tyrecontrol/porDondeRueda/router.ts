@@ -20,6 +20,7 @@ import { reducirPuntos } from "../kilometrajeMensual/recorrido.ts";
 import { analizarDia } from "./servicio.ts";
 import { estadoSinDatos, resumenFlota, resumenVehiculo, type DiasDeVehiculo, type FilaGuardada } from "./resumen.ts";
 import { HORA_FIN, HORA_INICIO, ultimaVuelta } from "./worker.ts";
+import { estadoCarga, iniciarCarga, REGIONES } from "./cargaRegion.ts";
 
 const PAGINA = 1000;
 const FECHA = /^\d{4}-\d{2}-\d{2}$/;
@@ -162,6 +163,36 @@ export function createPorDondeRuedaRouter(): Router {
           estado: estadoSinDatos(dias.get(id) ?? { ok: 0, sinPuntos: 0, errores: 0, ultimoError: null }, vuelta, ventana),
         })),
       });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /**
+   * Cargar de una vez el mapa de carreteras de una región (Geofabrik), para no
+   * depender de Overpass. Solo super-admin: es una tarea de minutos que escribe
+   * cientos de miles de filas. Arranca en segundo plano; el progreso, en GET.
+   */
+  router.post("/mapa/region", async (req, res) => {
+    try {
+      const s = await resolverSolicitante(req);
+      if (!s) return res.status(401).json({ error: "Sin sesión" });
+      if (!s.esSuperadmin) return res.status(403).json({ error: "Solo un super-admin puede cargar el mapa de una región" });
+      const region = String((req.body as any)?.region ?? "cataluna");
+      if (!REGIONES[region]) return res.status(400).json({ error: "Región desconocida" });
+      res.json(iniciarCarga(region));
+    } catch (e) {
+      const m = e instanceof Error ? e.message : "";
+      if (/en marcha/.test(m)) return res.status(409).json({ error: m });
+      fallo(res, e);
+    }
+  });
+
+  router.get("/mapa/region", async (req, res) => {
+    try {
+      const s = await resolverSolicitante(req, { exigirAdmin: false });
+      if (!s) return res.status(401).json({ error: "Sin sesión" });
+      res.json({ estado: estadoCarga(), regiones: Object.entries(REGIONES).map(([clave, r]) => ({ clave, nombre: r.nombre })) });
     } catch (e) {
       fallo(res, e);
     }
