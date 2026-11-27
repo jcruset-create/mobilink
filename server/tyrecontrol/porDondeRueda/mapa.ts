@@ -99,11 +99,16 @@ const espera = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * servicio compartido: nada de pedir veinte a la vez). Devuelve cuántas quedan
  * sin cargar, por tope o por error; el que llama decide si espera.
  */
-export async function cargarTeselas(teselas: string[], tope = 60): Promise<{ cargadas: number; pendientes: number; error: string | null }> {
+export async function cargarTeselas(
+  teselas: string[], tope = 60, limiteMs?: number,
+): Promise<{ cargadas: number; pendientes: number; error: string | null }> {
   const faltan = await teselasQueFaltan(teselas);
   let cargadas = 0;
   let error: string | null = null;
   for (const t of faltan.slice(0, tope)) {
+    // Con plazo (petición desde la pantalla), se para a tiempo y se contesta:
+    // el proxy de Render corta una petición larga con un 502 (27/11/2026).
+    if (limiteMs != null && Date.now() >= limiteMs) break;
     try {
       const filas = await descargar(t);
       for (let i = 0; i < filas.length; i += LOTE) {

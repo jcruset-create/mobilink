@@ -89,7 +89,7 @@ export function createPorDondeRuedaRouter(): Router {
       const empresaId = String((v as { empresa_id?: string } | null)?.empresa_id ?? "");
       if (!v || (!s.esSuperadmin && empresaId !== s.empresaPropia)) return res.status(404).json({ error: "Vehículo no encontrado" });
       try {
-        const r = await analizarDia(empresaId, vehiculoId, fecha, { esperaMs: 45_000, topeTeselas: 40 });
+        const r = await analizarDia(empresaId, vehiculoId, fecha, { esperaMs: 20_000, topeTeselas: 40, plazoMapaMs: 25_000 });
         res.json({
           ...r,
           resumen: r.resumen ? { kmPuntos: r.resumen.kmPuntos, kmSinVia: r.resumen.kmSinVia, filas: r.resumen.filas } : null,

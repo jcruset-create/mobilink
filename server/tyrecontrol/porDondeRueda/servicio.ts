@@ -23,6 +23,9 @@ const RADIO_M = 30;
 
 export interface ResultadoDia {
   estado: "ok" | "sin_puntos" | "error" | "mapa_pendiente";
+  /** Con `mapa_pendiente`: trozos del mapa cargados en esta llamada y los que faltan. */
+  teselasCargadas?: number;
+  teselasPendientes?: number;
   puntos: number;
   kmResumen: number | null;
   resumen: ResumenDia | null;
@@ -78,6 +81,22 @@ export interface OpcionesDia {
   esperaMs: number;
   /** Tope de teselas nuevas que se descargan en esta llamada. */
   topeTeselas?: number;
+  /** Cuánto tiempo, como mucho, se dedica a cargar mapa en esta llamada. */
+  plazoMapaMs?: number;
+}
+
+/**
+ * Los puntos y el resumen de Movertis de un (vehículo, día), guardados unos
+ * minutos: mientras se carga el mapa de una zona nueva, la pantalla vuelve a
+ * llamar varias veces y no hay que gastar dos peticiones a Movertis en cada
+ * una.
+ */
+const RECIENTES_MS = 20 * 60 * 1000;
+const recientes = new Map<string, { t: number; puntos: PuntoDia[]; kmResumen: number | null }>();
+function recordar(clave: string, puntos: PuntoDia[], kmResumen: number | null) {
+  const ahora = Date.now();
+  for (const [k, v] of recientes) if (ahora - v.t > RECIENTES_MS) recientes.delete(k);
+  recientes.set(clave, { t: ahora, puntos, kmResumen });
 }
 
 /**
@@ -87,6 +106,11 @@ export interface OpcionesDia {
 export async function analizarDia(
   empresaId: string, vehiculoId: string, fecha: string, op: OpcionesDia,
 ): Promise<ResultadoDia & { tramos: Tramo[] }> {
+  const clave = `${vehiculoId}|${fecha}`;
+  const reciente = recientes.get(clave);
+  if (reciente && Date.now() - reciente.t <= RECIENTES_MS) {
+    return clasificarYGuardar(empresaId, vehiculoId, fecha, reciente.puntos, reciente.kmResumen, op);
+  }
   const enl = await enlaceParaPrueba(empresaId, vehiculoId);
   if ("error" in enl) throw new Error(enl.error);
   const { cuenta, unidad, conector } = enl;
@@ -126,13 +150,23 @@ export async function analizarDia(
     return { ...r, tramos: [] };
   }
 
-  const carga = await cargarTeselas(teselasDe(puntos), op.topeTeselas ?? 60);
+  recordar(clave, puntos, kmResumen);
+  return clasificarYGuardar(empresaId, vehiculoId, fecha, puntos, kmResumen, op);
+}
+
+async function clasificarYGuardar(
+  empresaId: string, vehiculoId: string, fecha: string, puntos: PuntoDia[], kmResumen: number | null, op: OpcionesDia,
+): Promise<ResultadoDia & { tramos: Tramo[] }> {
+  const limite = op.plazoMapaMs != null ? Date.now() + op.plazoMapaMs : undefined;
+  const carga = await cargarTeselas(teselasDe(puntos), op.topeTeselas ?? 60, limite);
   if (carga.pendientes > 0) {
     return {
       estado: "mapa_pendiente", puntos: puntos.length, kmResumen, resumen: null, tramos: [],
-      error: carga.error ?? `Faltan ${carga.pendientes} trozos del mapa por cargar; se sigue en la próxima vuelta.`,
+      teselasCargadas: carga.cargadas, teselasPendientes: carga.pendientes,
+      error: carga.error ?? `Faltan ${carga.pendientes} trozos del mapa por cargar.`,
     };
   }
+  recientes.delete(`${vehiculoId}|${fecha}`);
 
   const buscados = puntosABuscar(puntos);
   const resumen = resumirDia(asignarVias(puntos, buscados, await candidatas(puntos, buscados)));

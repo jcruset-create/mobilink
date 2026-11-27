@@ -48,6 +48,8 @@ export interface PorDondeRuedaVehiculo {
 export interface TramoMapa { tipo: TipoVia; ref: string | null; nombre: string | null; puntos: [number, number][] }
 export interface AnalisisDia {
   estado: "ok" | "sin_puntos" | "error" | "mapa_pendiente";
+  teselasCargadas?: number;
+  teselasPendientes?: number;
   puntos: number;
   kmResumen: number | null;
   resumen: { kmPuntos: number; kmSinVia: number; filas: { tipo: TipoVia; ref: string; km: number; segundos: number }[] } | null;
