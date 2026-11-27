@@ -4,7 +4,7 @@ import { Route as IconoRuta } from "lucide-react";
 import { listarEmpresas } from "../services/data";
 import type { Empresa } from "../types";
 import {
-  COLOR_TIPO, NOMBRE_TIPO, porDondeRuedanFlota, TIPOS_VIA, type PorTipo, type VehiculoFlotaVias,
+  COLOR_TIPO, NOMBRE_TIPO, porDondeRuedanFlota, TIPOS_VIA, type PorTipo, type TrabajoVias, type VehiculoFlotaVias,
 } from "../services/porDondeRueda";
 import { BarraTipos, Leyenda } from "../components/PorDondeRueda";
 import { useOrdenColumnas } from "../hooks/useOrdenColumnas";
@@ -43,7 +43,7 @@ const pctDe = (p: PorTipo | null, tipos: readonly string[]) => {
 export default function PorDondeRuedan() {
   const [params, setParams] = useSearchParams();
   const [empresas, setEmpresas] = useState<Empresa[]>([]);
-  const [datos, setDatos] = useState<{ empresaId: string; clave: string; vehiculos: VehiculoFlotaVias[] } | null>(null);
+  const [datos, setDatos] = useState<{ empresaId: string; clave: string; vehiculos: VehiculoFlotaVias[]; trabajo?: TrabajoVias } | null>(null);
   const [error, setError] = useState("");
   const empresaId = params.get("empresa") || empresas[0]?.id || "";
   const clave = params.get("periodo") || "30";
@@ -54,7 +54,7 @@ export default function PorDondeRuedan() {
     if (!empresaId) return;
     let vivo = true;
     porDondeRuedanFlota({ empresaId, ...periodo(clave) })
-      .then((r) => { if (vivo) { setDatos({ empresaId, clave, vehiculos: r.vehiculos }); setError(""); } })
+      .then((r) => { if (vivo) { setDatos({ empresaId, clave, vehiculos: r.vehiculos, trabajo: r.trabajo }); setError(""); } })
       .catch((e) => { if (vivo) setError(e?.message ?? "No se pudo cargar"); });
     return () => { vivo = false; };
   }, [empresaId, clave]);
@@ -138,7 +138,7 @@ export default function PorDondeRuedan() {
                     </td>
                     <td className="px-2 py-1.5 text-right tabular-nums">{v.dias}</td>
                     <td className="px-2 py-1.5 text-right font-bold tabular-nums">{num(v.km)}</td>
-                    <td className="px-2 py-1.5">{v.porTipo ? <BarraTipos porTipo={v.porTipo} /> : <span className="text-slate-500">sin datos todavía</span>}</td>
+                    <td className="px-2 py-1.5">{v.porTipo ? <BarraTipos porTipo={v.porTipo} /> : <EstadoSinDatos estado={v.estado} />}</td>
                     <td className="px-2 py-1.5 text-right font-bold tabular-nums">{v.pctUrbana == null ? "—" : `${Math.round(v.pctUrbana)} %`}</td>
                     <td className="px-2 py-1.5 text-right tabular-nums">{pctDe(v.porTipo, ["autopista", "autovia"]) ?? "—"}{v.porTipo ? " %" : ""}</td>
                     <td className="px-2 py-1.5 text-right tabular-nums">{pctDe(v.porTipo, ["nacional", "autonomica", "local"]) ?? "—"}{v.porTipo ? " %" : ""}</td>
@@ -147,6 +147,7 @@ export default function PorDondeRuedan() {
               </tbody>
             </table>
           </div>
+          {datos.trabajo && <LineaTrabajo t={datos.trabajo} />}
           <div className="text-[11px] text-slate-500">
             Calculado cada mañana con el GPS de Movertis (un punto cada ~10 s) pegado al mapa de OpenStreetMap.
             Los % son sobre los km con vía conocida; «sin vía» (cocheras, saltos del GPS) no cuenta.
@@ -156,3 +157,31 @@ export default function PorDondeRuedan() {
     </div>
   );
 }
+
+/** Por qué un vehículo marcado aún no tiene reparto. */
+function EstadoSinDatos({ estado }: { estado?: VehiculoFlotaVias["estado"] }) {
+  if (!estado) return <span className="text-slate-500">sin datos todavía</span>;
+  const cls = estado.tono === "error" ? "text-rose-300" : estado.tono === "aviso" ? "text-amber-300" : "text-slate-400";
+  return <span className={`text-[11px] ${cls}`} title={estado.texto}>{estado.texto.length > 90 ? `${estado.texto.slice(0, 90)}…` : estado.texto}</span>;
+}
+
+/** Cómo va el trabajo de cada mañana y el mapa, para no tener que adivinarlo. */
+function LineaTrabajo({ t }: { t: TrabajoVias }) {
+  const fecha = (s: string) => new Date(s).toLocaleString("es-ES", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  const v = t.ultimaVuelta;
+  return (
+    <div className={`rounded-lg px-3 py-2 text-[11px] ${t.mapa.teselas === 0 ? "bg-amber-500/10 text-amber-200" : "bg-slate-800/60 text-slate-400"}`}>
+      <div>
+        <b>Trabajo de cada mañana</b> ({t.ventana.desde}:00–{t.ventana.hasta}:00):{" "}
+        {v ? <>última vuelta el {fecha(v.at)} · {v.resumen}</> : "todavía no ha hecho ninguna vuelta desde que se reinició el servidor."}
+      </div>
+      <div>
+        <b>Mapa de carreteras:</b>{" "}
+        {t.mapa.teselas === 0
+          ? "no se ha cargado ningún trozo todavía. Sin mapa no se puede clasificar ningún día."
+          : `${t.mapa.teselas.toLocaleString("es-ES")} trozos cargados${t.mapa.ultimaCarga ? `, el último el ${fecha(t.mapa.ultimaCarga)}` : ""}.`}
+      </div>
+    </div>
+  );
+}
+

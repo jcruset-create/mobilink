@@ -18,7 +18,8 @@ import { resolverSolicitante } from "../conciliacion/router.ts";
 import { ErrorRitmo } from "../../integration-hub/infrastructure/ritmo.ts";
 import { reducirPuntos } from "../kilometrajeMensual/recorrido.ts";
 import { analizarDia } from "./servicio.ts";
-import { resumenFlota, resumenVehiculo, type FilaGuardada } from "./resumen.ts";
+import { estadoSinDatos, resumenFlota, resumenVehiculo, type DiasDeVehiculo, type FilaGuardada } from "./resumen.ts";
+import { HORA_FIN, HORA_INICIO, ultimaVuelta } from "./worker.ts";
 
 const PAGINA = 1000;
 const FECHA = /^\d{4}-\d{2}-\d{2}$/;
@@ -127,11 +128,38 @@ export function createPorDondeRuedaRouter(): Router {
       }
       const marcadosSet = new Set(marcadosIds);
       const porVehiculo = new Map(resumenFlota(filas).map((r) => [r.vehiculoId, r]));
+
+      // Qué ha pasado con cada día analizado, para decir POR QUÉ no hay datos
+      // en lugar de un «sin datos todavía» que lo mismo es esperar que un error.
+      const dias = new Map<string, DiasDeVehiculo>();
+      for (let i = 0; i < ids.length; i += 150) {
+        const { data } = await supabase.from("tc_recorrido_dia")
+          .select("vehiculo_id, fecha, estado, error").in("vehiculo_id", ids.slice(i, i + 150))
+          .gte("fecha", desde).lte("fecha", hasta).order("fecha", { ascending: false }).limit(5000);
+        for (const r of (data ?? []) as { vehiculo_id: string; estado: string; error: string | null }[]) {
+          const d = dias.get(r.vehiculo_id) ?? { ok: 0, sinPuntos: 0, errores: 0, ultimoError: null };
+          if (r.estado === "ok") d.ok++;
+          else if (r.estado === "sin_puntos") d.sinPuntos++;
+          else if (r.estado === "error") { d.errores++; d.ultimoError ??= r.error; }
+          dias.set(r.vehiculo_id, d);
+        }
+      }
+      const vuelta = ultimaVuelta();
+      const { count: teselas } = await supabase.from("tc_vias_osm_teselas").select("tesela", { count: "exact", head: true });
+      const { data: ultimaTesela } = await supabase.from("tc_vias_osm_teselas")
+        .select("cargada_at").order("cargada_at", { ascending: false }).limit(1).maybeSingle();
+      const ventana = { desde: HORA_INICIO, hasta: HORA_FIN };
+
       res.json({
         empresaId, desde, hasta,
+        trabajo: {
+          ultimaVuelta: vuelta, ventana,
+          mapa: { teselas: teselas ?? 0, ultimaCarga: (ultimaTesela as any)?.cargada_at ?? null },
+        },
         vehiculos: ids.map((id) => ({
           vehiculoId: id, ...nombres.get(id), activo: marcadosSet.has(id),
           ...(porVehiculo.get(id) ?? { dias: 0, km: 0, porTipo: null, pctUrbana: null }),
+          estado: estadoSinDatos(dias.get(id) ?? { ok: 0, sinPuntos: 0, errores: 0, ultimoError: null }, vuelta, ventana),
         })),
       });
     } catch (e) {
