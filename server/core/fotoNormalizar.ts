@@ -28,9 +28,18 @@
  *
  * Si nadie sabe decir dónde está la cabeza (sin IA, o falla), se recorta al
  * centro: peor encuadre, pero hay foto.
+ *
+ * ## El fondo
+ *
+ * Si se pasa un `fondo`, a la persona se la recorta y se la pega sobre él
+ * (`fotoFondo.ts`): todas las fotos con el mismo fondo, el de la empresa. Si
+ * el recorte no es de fiar, o falla, la foto se queda con su fondo: nunca se
+ * deja a nadie sin foto por esto.
  */
 
 import sharp from "sharp";
+
+import { ponerFondo, type FondoDeFoto } from "./fotoFondo.ts";
 
 /** Lado, en píxeles, de todas las fotos. */
 export const LADO_FOTO = 600;
@@ -121,18 +130,47 @@ export function juzgar(mirada: Mirada | null): Juicio {
   return { rechazo: null, aviso, cara };
 }
 
+/**
+ * Qué ha pasado con el fondo:
+ *  · `puesto`     — lleva el fondo de la empresa.
+ *  · `no_pedido`  — no se pidió cambiarlo.
+ *  · `no_fiable`  — no se ha distinguido bien a la persona: se deja como estaba.
+ *  · `fallo`      — no se ha podido ni intentar (el modelo no carga…): se deja
+ *                   como estaba, y se puede volver a intentar más adelante.
+ */
+export type EstadoFondo = "puesto" | "no_pedido" | "no_fiable" | "fallo";
+
 export type FotoNormalizada =
-  | { ok: true; jpeg: Buffer; aviso: string | null; conCara: boolean }
+  | { ok: true; jpeg: Buffer; aviso: string | null; conCara: boolean; fondo: EstadoFondo }
   | { ok: false; motivo: string };
+
+/** Lo más que se baja a una persona para ponerle la cabeza a su altura. */
+const BAJAR_COMO_MUCHO = 0.25;
+
+/**
+ * Cuánto hay que bajar a la persona, en proporción del lado, para que la
+ * cabeza quede a su altura de siempre.
+ *
+ * Si en la foto original sale pegada al borde de arriba, el cuadrado ideal se
+ * saldría por arriba y `recorteDeCara` lo arrima hacia dentro: la cabeza queda
+ * más alta que en las demás. Con fondo eso tiene arreglo —se la baja y el
+ * hueco se rellena con fondo—; sin fondo no, que quedaría una franja negra.
+ */
+export function bajarParaCentrar(cara: Caja, alto: number, recorte: Recorte): number {
+  const ideal = (cara.y + cara.h / 2) * alto - recorte.size * CENTRO_CABEZA;
+  const falta = (recorte.top - ideal) / recorte.size;
+  return Math.max(0, Math.min(falta, BAJAR_COMO_MUCHO));
+}
 
 /**
  * @param forzar  aceptarla aunque no se vea una sola cara (lo decide un
  *                administrador desde la ficha, nunca el formulario público)
+ * @param fondo   con qué cambiarle el fondo; sin él, se queda con el suyo
  */
 export async function normalizarFoto(
   original: Buffer,
   localizar: Localizador | null,
-  opciones: { forzar?: boolean } = {}
+  opciones: { forzar?: boolean; fondo?: FondoDeFoto | null } = {}
 ): Promise<FotoNormalizada> {
   let derecha: Buffer;
   let ancho: number;
@@ -175,12 +213,33 @@ export async function normalizarFoto(
     aviso = "Sales muy lejos y la foto queda poco nítida. Si puedes, repítela más de cerca.";
   }
 
-  // Sin `withMetadata`, sharp no copia nada del original: ni EXIF ni GPS.
-  const jpeg = await sharp(derecha)
-    .extract({ left: recorte.left, top: recorte.top, width: recorte.size, height: recorte.size })
-    .resize(LADO_FOTO, LADO_FOTO)
-    .jpeg({ quality: 86, mozjpeg: true })
-    .toBuffer();
+  const cuadro = sharp(derecha).extract({ left: recorte.left, top: recorte.top, width: recorte.size, height: recorte.size });
 
-  return { ok: true, jpeg, aviso, conCara: juicio.cara !== null };
+  let fondo: EstadoFondo = "no_pedido";
+  if (opciones.fondo) {
+    try {
+      // La cabeza, en proporciones del cuadro en vez de las de la foto entera.
+      const cara = juicio.cara && {
+        x: (juicio.cara.x * ancho - recorte.left) / recorte.size,
+        y: (juicio.cara.y * alto - recorte.top) / recorte.size,
+        w: (juicio.cara.w * ancho) / recorte.size,
+        h: (juicio.cara.h * alto) / recorte.size,
+      };
+      const conFondo = await ponerFondo(await cuadro.clone().png().toBuffer(), opciones.fondo, {
+        lado: LADO_FOTO,
+        cara,
+        bajar: juicio.cara ? bajarParaCentrar(juicio.cara, alto, recorte) * LADO_FOTO : 0,
+      });
+      if (conFondo) return { ok: true, jpeg: conFondo, aviso, conCara: juicio.cara !== null, fondo: "puesto" };
+      fondo = "no_fiable";
+    } catch (e) {
+      console.error("[Core foto] no se ha podido cambiar el fondo:", e instanceof Error ? e.message : e);
+      fondo = "fallo";
+    }
+  }
+
+  // Sin `withMetadata`, sharp no copia nada del original: ni EXIF ni GPS.
+  const jpeg = await cuadro.resize(LADO_FOTO, LADO_FOTO).jpeg({ quality: 86, mozjpeg: true }).toBuffer();
+
+  return { ok: true, jpeg, aviso, conCara: juicio.cara !== null, fondo };
 }

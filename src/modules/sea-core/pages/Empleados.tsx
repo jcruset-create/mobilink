@@ -115,6 +115,9 @@ export default function Empleados() {
   /** Técnicos enlazados con foto en Taller y todavía sin foto en Core. */
   const [fotosEnTaller, setFotosEnTaller] = useState(0);
   const [trayendoFotos, setTrayendoFotos] = useState(false);
+  /** Fotos guardadas antes de que existiera el fondo de la empresa. */
+  const [fotosSinFondo, setFotosSinFondo] = useState(0);
+  const [poniendoFondo, setPoniendoFondo] = useState(false);
   /** El importador de nóminas, abierto. */
   const [importando, setImportando] = useState(false);
   /** La entrega del SMS del enlace vivo de cada empleado que tiene uno. */
@@ -167,11 +170,46 @@ export default function Empleados() {
     try {
       const r = await apiFetch("/api/core/empleados/fotos");
       if (!r.ok) return;
-      const d = (await r.json()) as { fotos?: Record<string, string>; pendientesDeTaller?: number };
+      const d = (await r.json()) as { fotos?: Record<string, string>; pendientesDeTaller?: number; sinFondo?: number };
       setFotos(d.fotos ?? {});
       setFotosEnTaller(d.pendientesDeTaller ?? 0);
+      setFotosSinFondo(d.sinFondo ?? 0);
     } catch {
       // Sin fotos la lista sale igual, con las iniciales.
+    }
+  }
+
+  /**
+   * Les pone el fondo de la empresa a las fotos que ya estaban guardadas.
+   *
+   * El servidor lo hace por tandas (cada foto son un par de segundos), así que
+   * se le vuelve a pedir mientras queden y vaya avanzando.
+   */
+  async function ponerFondoALasFotos() {
+    setPoniendoFondo(true);
+    setError("");
+    try {
+      let puestos = 0;
+      const saltados: { nombre: string; motivo: string }[] = [];
+      for (let tanda = 0; tanda < 10; tanda++) {
+        const r = await apiFetch("/api/core/empleados/fotos/poner-fondo", { method: "POST" });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d?.error ?? "No se ha podido poner el fondo.");
+        const hechos: string[] = d.puestos ?? [];
+        puestos += hechos.length;
+        saltados.push(...((d.saltados ?? []) as { nombre: string; motivo: string }[]));
+        if (!d.quedan || hechos.length === 0) break;
+      }
+      setMensaje(
+        `Fondo puesto en ${puestos} ${puestos === 1 ? "foto" : "fotos"}.` +
+          (saltados.length ? ` Sin cambiar: ${saltados.map((x) => `${x.nombre} (${x.motivo})`).join("; ")}.` : "")
+      );
+      setTimeout(() => setMensaje(""), 12000);
+      await cargarFotos();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se ha podido poner el fondo.");
+    } finally {
+      setPoniendoFondo(false);
     }
   }
 
@@ -426,6 +464,20 @@ export default function Empleados() {
           <button onClick={() => void traerFotosDeTaller()} disabled={trayendoFotos}
             className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-sky-500 disabled:opacity-60">
             {trayendoFotos ? "Trayendo…" : "Traer fotos de Taller"}
+          </button>
+        </div>
+      )}
+
+      {/* Igual: solo mientras quede alguna foto de las de antes. */}
+      {fotosSinFondo > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-sky-800 bg-sky-500/10 p-3 text-sm text-sky-100">
+          <span>
+            {fotosSinFondo === 1 ? "Hay 1 foto guardada" : `Hay ${fotosSinFondo} fotos guardadas`} sin el fondo de la empresa.
+            Las nuevas ya salen con él.
+          </span>
+          <button onClick={() => void ponerFondoALasFotos()} disabled={poniendoFondo}
+            className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-sky-500 disabled:opacity-60">
+            {poniendoFondo ? "Poniendo el fondo…" : "Poner el fondo"}
           </button>
         </div>
       )}

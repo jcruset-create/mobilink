@@ -1,8 +1,10 @@
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 
+import { LADO_SILUETA, type FondoDeFoto } from "./fotoFondo.ts";
 import {
   LADO_FOTO,
+  bajarParaCentrar,
   cajaValida,
   juzgar,
   normalizarFoto,
@@ -198,5 +200,105 @@ describe("normalizarFoto", () => {
     expect(await normalizarFoto(Buffer.from("esto no es una foto"), null)).toEqual({ ok: false, motivo: expect.stringMatching(/No se ha podido leer/) });
     const sello = await sharp({ create: { width: 100, height: 100, channels: 3, background: "#808080" } }).jpeg().toBuffer();
     expect(await normalizarFoto(sello, null)).toEqual({ ok: false, motivo: expect.stringMatching(/demasiado pequeña/) });
+  });
+});
+
+describe("el fondo", () => {
+  const CABEZA = { left: 700, top: 300, width: 200, height: 300 };
+  const esVerde = ([r, g, b]: number[]) => g > 200 && r < 70 && b < 70;
+
+  /**
+   * Un «modelo» de mentira: persona es lo que sea rojo. Y un fondo todo verde.
+   */
+  const fondoDePrueba = (cambio: Partial<FondoDeFoto> = {}): FondoDeFoto => ({
+    silueta: async (rgb) => {
+      const alfa = new Uint8Array(LADO_SILUETA * LADO_SILUETA);
+      for (let i = 0; i < alfa.length; i++) alfa[i] = rgb[i * 3] > 200 && rgb[i * 3 + 1] < 80 ? 255 : 0;
+      return alfa;
+    },
+    imagen: async (lado) => sharp({ create: { width: lado, height: lado, channels: 3, background: "#00ff00" } }).png().toBuffer(),
+    ...cambio,
+  });
+
+  it("si no se pide, la foto se queda con el suyo", async () => {
+    const original = await (await foto(1200, 1600, CABEZA)).toBuffer();
+    const r = await normalizarFoto(original, async () => unaCara(caja(1200, 1600, CABEZA)));
+    if (!r.ok) throw new Error(r.motivo);
+    expect(r.fondo).toBe("no_pedido");
+    expect(esGris(await pixel(r.jpeg, 100, 264))).toBe(true);
+  });
+
+  it("con fondo: la «cabeza» sigue donde toca y lo de detrás es el fondo nuevo", async () => {
+    const original = await (await foto(1200, 1600, CABEZA)).toBuffer();
+    const r = await normalizarFoto(original, async () => unaCara(caja(1200, 1600, CABEZA)), { fondo: fondoDePrueba() });
+    if (!r.ok) throw new Error(r.motivo);
+    expect(r).toMatchObject({ fondo: "puesto", conCara: true, aviso: null });
+    const meta = await sharp(r.jpeg).metadata();
+    expect([meta.width, meta.height, meta.format]).toEqual([LADO_FOTO, LADO_FOTO, "jpeg"]);
+    expect(esRojo(await pixel(r.jpeg, 300, 264))).toBe(true);
+    expect(esVerde(await pixel(r.jpeg, 300, 60))).toBe(true);
+    expect(esVerde(await pixel(r.jpeg, 100, 264))).toBe(true);
+    expect(esVerde(await pixel(r.jpeg, 560, 40))).toBe(true);
+  });
+
+  it("si no se distingue a la persona, la foto se guarda igual, con su fondo", async () => {
+    const original = await (await foto(1200, 1600, CABEZA)).toBuffer();
+    const nadie = fondoDePrueba({ silueta: async () => new Uint8Array(LADO_SILUETA * LADO_SILUETA) });
+    const r = await normalizarFoto(original, async () => unaCara(caja(1200, 1600, CABEZA)), { fondo: nadie });
+    if (!r.ok) throw new Error(r.motivo);
+    expect(r.fondo).toBe("no_fiable");
+    expect(esRojo(await pixel(r.jpeg, 300, 264))).toBe(true);
+    expect(esGris(await pixel(r.jpeg, 100, 264))).toBe(true);
+  });
+
+  it("si el modelo revienta, la foto se guarda igual: nadie se queda sin foto por esto", async () => {
+    const original = await (await foto(1200, 1600, CABEZA)).toBuffer();
+    const roto = fondoDePrueba({
+      silueta: async () => {
+        throw new Error("el modelo no carga");
+      },
+    });
+    const r = await normalizarFoto(original, async () => unaCara(caja(1200, 1600, CABEZA)), { fondo: roto });
+    if (!r.ok) throw new Error(r.motivo);
+    expect(r.fondo).toBe("fallo");
+    expect(esGris(await pixel(r.jpeg, 100, 264))).toBe(true);
+  });
+
+  it("una foto rechazada se sigue rechazando: el fondo no la salva", async () => {
+    const original = await (await foto(1200, 1600, CABEZA)).toBuffer();
+    const r = await normalizarFoto(original, async () => ({ caras: 0, cara: null, seVeBien: false, motivo: "" }), { fondo: fondoDePrueba() });
+    expect(r.ok).toBe(false);
+  });
+
+  it("a quien sale pegado arriba se le baja la cabeza a su altura, que ahora hay con qué rellenar", async () => {
+    // La cabeza empieza a 20 px del borde: el cuadrado ideal se saldría 94 px
+    // por arriba, así que sin fondo la cabeza queda más alta que en las demás.
+    const arriba = { left: 500, top: 20, width: 200, height: 300 };
+    const original = await (await foto(1200, 1600, arriba)).toBuffer();
+    const mirar = async () => unaCara(caja(1200, 1600, arriba));
+
+    const sin = await normalizarFoto(original, mirar);
+    const con = await normalizarFoto(original, mirar, { fondo: fondoDePrueba() });
+    if (!sin.ok || !con.ok) throw new Error("no ha salido");
+
+    // Sin fondo: la cabeza va de y=20 a y=320 (se queda arriba).
+    expect(esRojo(await pixel(sin.jpeg, 300, 40))).toBe(true);
+    // Con fondo: baja a su sitio de siempre, de 114 a 414.
+    expect(esVerde(await pixel(con.jpeg, 300, 60))).toBe(true);
+    expect(esRojo(await pixel(con.jpeg, 300, 130))).toBe(true);
+    expect(esRojo(await pixel(con.jpeg, 300, 400))).toBe(true);
+    expect(esVerde(await pixel(con.jpeg, 300, 440))).toBe(true);
+  });
+
+  it("bajarParaCentrar: solo cuando el recorte se arrimó por arriba, y con tope", () => {
+    const cara = (top: number) => caja(1200, 1600, { left: 500, top, width: 200, height: 300 });
+    // En su sitio: nada que bajar.
+    expect(bajarParaCentrar(cara(300), 1600, recorteDeCara(cara(300), 1200, 1600))).toBe(0);
+    // Pegada arriba: lo que le falta, en proporción del lado (94 de 600).
+    expect(bajarParaCentrar(cara(20), 1600, recorteDeCara(cara(20), 1200, 1600))).toBeCloseTo(94 / 600, 3);
+    // Pegada abajo: el recorte se arrimó hacia arriba; no se sube a nadie.
+    expect(bajarParaCentrar(cara(1300), 1600, recorteDeCara(cara(1300), 1200, 1600))).toBe(0);
+    // Con la cabeza medio fuera de la foto, no se la baja más de un cuarto.
+    expect(bajarParaCentrar({ x: 0.4, y: 0, w: 0.2, h: 0.02 }, 1600, { left: 0, top: 0, size: 1200 })).toBe(0.25);
   });
 });
