@@ -149,9 +149,6 @@ export default function KmFlota() {
       {aviso && <div className="mb-3 rounded-lg bg-emerald-500/10 p-3 text-sm text-emerald-300">{aviso}</div>}
       {cargando && <div className="text-sm text-slate-400">Cargando…</div>}
 
-      {/* El km de HOY de cada vehículo: no depende del año elegido. */}
-      {empresaId && <div className="mb-4"><KmActualFlota empresaId={empresaId} /></div>}
-
       {!cargando && datos && meses.length === 0 && (
         <div className="rounded-lg border border-slate-700 bg-slate-800/50 p-4 text-sm text-slate-400">
           Esta empresa no tiene km mensuales de telemática{ano ? ` en ${ano}` : ""}.
@@ -263,6 +260,12 @@ export default function KmFlota() {
           </div>
         </div>
       )}
+
+      {/*
+        El km de HOY de cada vehículo, al final y plegado: arriba, al llegar
+        los 700 vehículos, empujaba toda la página hacia abajo sin pedirlo.
+      */}
+      {empresaId && <div className="mt-4"><KmActualFlota empresaId={empresaId} /></div>}
     </div>
   );
 }
