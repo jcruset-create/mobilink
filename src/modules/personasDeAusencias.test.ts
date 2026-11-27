@@ -22,6 +22,8 @@ const empleados = [
 describe("personasDeAusencias", () => {
   it("el taller sale del nombre del centro", () => {
     expect(tallerDeCentro("Mobilink Reus")).toBe("sea-reus");
+    expect(tallerDeCentro("Plana Reus")).toBe("plana-reus");
+    expect(tallerDeCentro("Autocares Plana - Vilanova")).toBe("plana-vilanova");
     expect(tallerDeCentro("Oficina TARRAGONA")).toBe("sea-tarragona");
     expect(tallerDeCentro("Central")).toBeNull();
     expect(tallerDeCentro(null)).toBeNull();
