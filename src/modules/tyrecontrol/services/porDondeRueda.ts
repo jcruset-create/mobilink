@@ -107,3 +107,22 @@ export async function activarAnalisisVias(vehiculoId: string, activo: boolean): 
 /** km/h medios de una suma; null si no hay tiempo. */
 export const velocidadMedia = (s: Suma) => (s.segundos > 60 ? Math.round(s.km / (s.segundos / 3600)) : null);
 export const kmDe = (p: PorTipo) => TIPOS_VIA.reduce((s, t) => s + p[t].km, 0);
+
+/** La carga de una vez del mapa de carreteras de una región (sin Overpass). */
+export interface EstadoCargaMapa {
+  region: string;
+  fase: "descargando" | "leyendo vías" | "leyendo nodos" | "guardando vías" | "guardando teselas" | "hecho" | "error";
+  detalle: string;
+  inicio: string;
+  fin: string | null;
+  vias: number;
+  teselas: number;
+  error: string | null;
+}
+
+export const estadoMapaRegion = () =>
+  pedir<{ estado: EstadoCargaMapa | null; regiones: { clave: string; nombre: string }[] }>("/mapa/region");
+
+export const cargarMapaRegion = (region: string) =>
+  pedir<EstadoCargaMapa>("/mapa/region", { method: "POST", body: JSON.stringify({ region }) });
+
