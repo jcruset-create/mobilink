@@ -47,6 +47,8 @@ export interface MesPorPartes {
   diasFallidos: number[];
   /** Km puestos con el odómetro de las partes vecinas. */
   kmPorOdometro: number;
+  /** La suma de las partes pasaba del avance del odómetro y se ha tomado este. */
+  ajustadoAlOdometro?: boolean;
   peticiones: number;
   partes: Parte[];
   motivo?: string;
@@ -149,13 +151,27 @@ export function combinarPartes(partes: Parte[]): Omit<MesPorPartes, "peticiones"
   const conOdo = orden.filter((p) => p.resultado.tipo === "ok" && p.resultado.odometroInicial != null);
   const ini = conOdo[0]?.resultado;
   const fin = [...orden].reverse().find((p) => p.resultado.tipo === "ok" && p.resultado.odometroFinal != null)?.resultado;
-  return {
-    diasFallidos, viajes, kmPorOdometro,
-    km: km + kmPorOdometro,
-    odometroInicial: ini?.tipo === "ok" ? ini.odometroInicial : null,
-    odometroFinal: fin?.tipo === "ok" ? fin.odometroFinal : null,
-  };
+  const odometroInicial = ini?.tipo === "ok" ? ini.odometroInicial : null;
+  const odometroFinal = fin?.tipo === "ok" ? fin.odometroFinal : null;
+  const total = km + kmPorOdometro;
+
+  // Pedidas por días, las partes de al lado del día roto pueden traer km de
+  // más: 0179JDJ en octubre sumaba 1.356 km con el odómetro avanzando 657
+  // (26667399: 4.492 frente a 1.177). Los viajes pueden perder tramos, nunca
+  // inventarlos: si la suma pasa del avance del odómetro del mes, manda él.
+  const avance = odometroInicial != null && odometroFinal != null ? odometroFinal - odometroInicial : null;
+  if (avance != null && avance > 0 && total > avance * MARGEN_SOBRE_ODOMETRO) {
+    return { diasFallidos, viajes, kmPorOdometro: avance, ajustadoAlOdometro: true, km: avance, odometroInicial, odometroFinal };
+  }
+  return { diasFallidos, viajes, kmPorOdometro, km: total, odometroInicial, odometroFinal };
 }
+
+/**
+ * Cuánto puede pasar la suma de las partes del avance del odómetro. En los
+ * meses cerrados de una pieza la razón sale 1,00 (mediana) y 1,01 (p90) en
+ * 399 vehículos de Empresa Plana, octubre de 2026.
+ */
+export const MARGEN_SOBRE_ODOMETRO = 1.1;
 
 function rango([a, b]: [number, number]): number[] {
   return Array.from({ length: b - a + 1 }, (_, i) => a + i);

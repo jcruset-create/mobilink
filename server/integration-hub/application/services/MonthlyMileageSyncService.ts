@@ -436,21 +436,14 @@ export function mesesQueTocan(ahora: Date, zona: string, mesesHistorico = MESES_
     m = mesAnterior(m);
     lista.push(m);
   }
-  // Los primeros días del mes, CERRAR el anterior va antes que actualizar el
-  // en curso (que a esas alturas apenas tiene nada): si la pasada se queda a
-  // medias, que lo que falte sea lo que mañana se vuelve a pedir de todos
-  // modos, no el cierre del mes.
-  if (total > 0 && diaDelMes(ahora, zona) <= DIAS_CIERRE_PRIMERO) [lista[0], lista[1]] = [lista[1], lista[0]];
+  // CERRAR el anterior va antes que actualizar el en curso: si la pasada se
+  // queda a medias, que lo que falte sea lo que mañana se vuelve a pedir de
+  // todos modos, no el cierre del mes. Antes solo los primeros 7 días; el 27
+  // de noviembre la pasada seguía abandonándose en noviembre sin llegar a los
+  // 101 de octubre que quedaban por cerrar. Con el anterior ya cerrado no
+  // cuesta nada: los cerrados no se vuelven a pedir.
+  if (total > 0) [lista[0], lista[1]] = [lista[1], lista[0]];
   return lista;
-}
-
-/** Días del mes en los que el anterior se pide antes que el en curso. */
-export const DIAS_CIERRE_PRIMERO = 7;
-
-function diaDelMes(ahora: Date, zona: string): number {
-  const d = new Intl.DateTimeFormat("en-US", { timeZone: zona, day: "numeric" })
-    .formatToParts(ahora).find((p) => p.type === "day")?.value;
-  return Number(d ?? 1);
 }
 
 /** Un entero de la config, o `undefined` si no lo hay. */
