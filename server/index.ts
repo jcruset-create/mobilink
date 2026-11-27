@@ -14725,7 +14725,16 @@ app.post("/api/partes-trabajo/leer", exigirCredencial(requirePanelRole), async (
 
     const datos = await extractJson({
       strict: true,
-      maxTokens: 2000,
+      /*
+       * Tokens de sobra. Con 2000, un parte largo —muchas líneas de material
+       * y servicios— devolvía el JSON a medias y salía «la respuesta del
+       * modelo llegó cortada». Además, con un modelo razonador lo que piensa
+       * antes de contestar también descuenta de aquí (ver el OCR de la
+       * matrícula en server/recepcionVehiculos/router.ts). Un parte entero
+       * no pasa de unos miles de tokens; el tope es para no desbocarse, no
+       * para ahorrar.
+       */
+      maxTokens: 16000,
       images: imagenes,
       archivos,
       system: [
