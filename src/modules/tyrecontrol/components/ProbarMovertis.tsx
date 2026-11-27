@@ -7,7 +7,8 @@
  */
 import { useState } from "react";
 import {
-  probarVehiculo, probarVehiculoPorPartes, type PruebaPorPartes, type PruebaVehiculo, type RespuestaPrueba,
+  probarVehiculo, probarVehiculoPorPartes, verSensores,
+  type PruebaPorPartes, type PruebaVehiculo, type RespuestaPrueba, type SensorDispositivo, type SensoresVehiculo,
 } from "../services/kilometrajeMensual";
 import { Modal } from "./ui";
 
@@ -41,6 +42,19 @@ export default function ProbarMovertis({ vehiculoId, matricula, empresaId, meses
   const [copiado, setCopiado] = useState(false);
   const [partes, setPartes] = useState<PruebaPorPartes | null>(null);
   const [buscando, setBuscando] = useState(false);
+  const [sensores, setSensores] = useState<SensoresVehiculo | null>(null);
+  const [pidiendoSensores, setPidiendoSensores] = useState(false);
+
+  async function pedirSensores() {
+    setPidiendoSensores(true); setError(""); setSensores(null);
+    try {
+      setSensores(await verSensores({ empresaId, vehiculoId }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se han podido pedir los sensores");
+    } finally {
+      setPidiendoSensores(false);
+    }
+  }
 
   async function buscarDias() {
     const [year, month] = mes.split("-").map(Number);
@@ -121,6 +135,20 @@ export default function ProbarMovertis({ vehiculoId, matricula, empresaId, meses
         </div>
         {error && <div className="rounded-lg bg-red-500/10 p-3 text-red-300">{error}</div>}
 
+        <div className="grid gap-2 rounded-lg border border-slate-700 bg-slate-900/40 p-3">
+          <p className="text-[12px] text-slate-400">
+            <b className="text-slate-300">¿Se puede saber el ralentí de este vehículo?</b> Del histórico de Movertis no:
+            son posiciones y nada más, así que parado con el motor en marcha y aparcado son el mismo dato. Pero el
+            dispositivo calcula una treintena de sensores que nadie ha mirado nunca. Esto los pide y dice qué se puede
+            hacer con ellos. <b className="text-slate-300">Una petición, no guarda nada.</b>
+          </p>
+          <button onClick={() => void pedirSensores()} disabled={pidiendoSensores}
+            className="justify-self-start rounded-lg border border-slate-500 px-3 py-1.5 text-sm font-bold text-slate-200 hover:bg-slate-700/40 disabled:opacity-50">
+            {pidiendoSensores ? "Pidiendo…" : "🔌 Ver los sensores del dispositivo"}
+          </button>
+          {sensores && <ResultadoSensores s={sensores} />}
+        </div>
+
         {prueba && (
           <>
             <div className={`rounded-lg border p-3 ${/problema es de Movertis|fallo general/.test(prueba.conclusion) ? "border-rose-500/50 bg-rose-500/10 text-rose-100" : "border-emerald-500/40 bg-emerald-500/10 text-emerald-100"}`}>
@@ -168,6 +196,79 @@ export default function ProbarMovertis({ vehiculoId, matricula, empresaId, meses
         )}
       </div>
     </Modal>
+  );
+}
+
+/**
+ * Los sensores del dispositivo y qué se puede hacer con ellos.
+ *
+ * El veredicto manda el color, y los sensores que importan van marcados y
+ * primeros. Un sensor que existe pero viene sin lectura se enseña igual, en
+ * gris: es la diferencia entre «no lo tiene» y «lo tiene y está vacío», y la
+ * segunda se arregla probando con otro vehículo.
+ */
+function ResultadoSensores({ s }: { s: SensoresVehiculo }) {
+  const [copiado, setCopiado] = useState(false);
+  const bien = s.veredicto.nivel === "ralenti_directo" || s.veredicto.nivel === "horas_motor";
+  const regular = s.veredicto.nivel === "solo_contacto";
+  const marco = bien ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-100"
+    : regular ? "border-amber-500/40 bg-amber-500/10 text-amber-100"
+      : s.veredicto.nivel === "nada" ? "border-rose-500/40 bg-rose-500/10 text-rose-100"
+        : "border-slate-600 bg-slate-800/40 text-slate-200";
+  const etiqueta = (i: SensorDispositivo["interes"]) =>
+    i === "ralenti" ? "ralentí" : i === "horas_motor" ? "horas de motor" : i === "contacto" ? "contacto" : null;
+
+  return (
+    <div className="grid gap-2">
+      <div className={`rounded-lg border p-3 text-[13px] ${marco}`}>
+        {s.veredicto.texto}
+        {s.veredicto.apoyo.length > 0 && (
+          <div className="mt-1 text-[11px] opacity-80">Sensores: {s.veredicto.apoyo.join(", ")}</div>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+        <span>{s.sensores.length} sensores · unidad {s.unidad} · {s.cuenta.connectorKey}/{s.cuenta.accountKey}</span>
+        <button
+          onClick={() => {
+            void navigator.clipboard.writeText(s.texto).then(() => setCopiado(true)).catch(() => setCopiado(false));
+          }}
+          className="rounded border border-sky-700 px-2 py-0.5 font-bold text-sky-300 hover:bg-sky-500/10">
+          {copiado ? "✔ Copiado" : "Copiar para Movertis"}
+        </button>
+      </div>
+      {s.sensores.length > 0 && (
+        <div className="max-h-64 overflow-auto rounded-lg border border-slate-700">
+          <table className="w-full text-[12px]">
+            <thead className="sticky top-0 bg-slate-900 text-[10px] uppercase tracking-wide text-slate-400">
+              <tr>
+                <th className="px-3 py-1.5 text-left">Sensor</th>
+                <th className="px-3 py-1.5 text-left">Valor</th>
+                <th className="px-3 py-1.5 text-left">Sirve para</th>
+              </tr>
+            </thead>
+            <tbody>
+              {s.sensores.map((x) => (
+                <tr key={x.nombre} className={`border-t border-slate-800 ${x.interes ? "bg-slate-800/40" : ""}`}>
+                  <td className="px-3 py-1.5 font-mono text-slate-200">{x.nombre}</td>
+                  <td className={`px-3 py-1.5 ${x.conLectura ? "text-slate-200" : "text-slate-500"}`}>
+                    {x.conLectura ? <>{String(x.valor)}{x.unidad ? ` ${x.unidad}` : ""}</> : "sin lectura"}
+                  </td>
+                  <td className="px-3 py-1.5">
+                    {x.interes
+                      ? <span className="rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-bold text-sky-300">{etiqueta(x.interes)}</span>
+                      : <span className="text-slate-600">—</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <details className="text-[11px] text-slate-400">
+        <summary className="cursor-pointer">Lo que contestó Movertis, en crudo</summary>
+        <pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap break-all rounded bg-slate-950 p-2 text-[10px] text-slate-300">{s.crudo}</pre>
+      </details>
+    </div>
   );
 }
 

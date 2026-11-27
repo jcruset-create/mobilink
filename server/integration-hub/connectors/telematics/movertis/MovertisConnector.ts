@@ -697,6 +697,39 @@ export class MovertisConnector
   }
 
   /**
+   * Los sensores que el dispositivo calcula para UN vehículo. Diagnóstico.
+   *
+   * No está en el puerto de telemática y no lo usa ningún job: es para la
+   * pantalla «ver los sensores» de la prueba de Movertis. El puerto describe
+   * lo que toda telemática sabe hacer, y esto es una pregunta a Movertis en
+   * particular, así que vive aquí y quien la llame comprueba antes que el
+   * conector la tiene.
+   *
+   * Existe porque de Movertis no sabemos si un vehículo está en ralentí y la
+   * respuesta puede estar aquí: si entre estos sensores hay horas de motor, el
+   * ralentí se calcula restando el tiempo en movimiento. Nadie los ha listado
+   * nunca; `server/tyrecontrol/movertisSensores.ts` los clasifica.
+   *
+   * UN vehículo y no la flota: con la bandera `sensors` y los 751 de la cuenta
+   * real, la pasarela devolvió 502 (son unos 32 sensores por vehículo). Pedirla
+   * «de paso» para todos es la forma de convertir una consulta que funciona en
+   * una que se cae, y eso ya está escrito en `cuerpoVehiculos`.
+   *
+   * Devuelve la fila entera, no solo `sensors`, porque el diagnóstico también
+   * enseña la respuesta en crudo: si la forma no es la que esperamos, hay que
+   * poder mirarla a mano en vez de quedarse con que «no hay sensores».
+   */
+  async leerSensores(
+    ctx: OperationContext,
+    providerVehicleId: string,
+  ): Promise<{ peticion: unknown; fila: Record<string, unknown> | null }> {
+    const peticion = this.cuerpoVehiculos([providerVehicleId], true, true);
+    if (await this.enSimulacion(ctx)) return { peticion, fila: null };
+    const datos = await this.postear(ctx, this.rutas.vehicles, peticion);
+    return { peticion, fila: filasDe(datos)[0] ?? null };
+  }
+
+  /**
    * La posición de TODA la cuenta en una sola llamada.
    *
    * Es `showvehicles` con `lastMessagePosition`, y sustituye a 751 llamadas a

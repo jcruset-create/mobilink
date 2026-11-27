@@ -306,3 +306,35 @@ export interface PruebaRecorrido {
 }
 export const probarRecorrido = (b: { empresaId?: string; vehiculoId: string; fecha: string }) =>
   pedir<PruebaRecorrido>("/probar-recorrido", { method: "POST", body: JSON.stringify(b) });
+
+/**
+ * «Ver los sensores»: qué calcula el dispositivo de este vehículo.
+ *
+ * Sirve para saber si de Movertis se puede sacar el ralentí. Lo decide el
+ * veredicto: con horas de motor, sí y hacia atrás; con solo contacto, a base
+ * de muestreos y solo de hoy en adelante; sin ninguno, no.
+ */
+export interface SensorDispositivo {
+  nombre: string;
+  valor: string | number | boolean | null;
+  unidad: string | null;
+  conLectura: boolean;
+  interes: "ralenti" | "horas_motor" | "contacto" | null;
+}
+export interface SensoresVehiculo {
+  vehiculoId: string; matricula: string | null; unidad: string;
+  cuenta: { connectorKey: string; accountKey: string };
+  pedidoEn: string;
+  peticion: unknown;
+  sensores: SensorDispositivo[];
+  veredicto: {
+    nivel: "ralenti_directo" | "horas_motor" | "solo_contacto" | "nada" | "sin_sensores";
+    texto: string;
+    apoyo: string[];
+  };
+  crudo: string;
+  /** Ya redactado por el servidor, para «Copiar para Movertis». */
+  texto: string;
+}
+export const verSensores = (b: { empresaId?: string; vehiculoId: string }) =>
+  pedir<SensoresVehiculo>("/sensores", { method: "POST", body: JSON.stringify(b) });
