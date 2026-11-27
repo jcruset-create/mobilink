@@ -7,6 +7,7 @@ import SeaTarragonaV1 from "./SeaTarragonaV1";
 import RoadsideOperatorPage from "./pages/RoadsideOperatorPage";
 import WorkshopOperatorPage from "./pages/WorkshopOperatorPage";
 import RoadsideTrackingPage from "./pages/RoadsideTrackingPage";
+import OtfTrackingPage from "./pages/OtfTrackingPage";
 import RoadsideReportPage from "./pages/RoadsideReportPage";
 import SatisfactionPublicPage from "./pages/SatisfactionPublicPage";
 import AltaOperarioPage from "./pages/AltaOperarioPage";
@@ -175,6 +176,8 @@ export default function App() {
       <Route path="/operario/taller" element={<WorkshopOperatorPage />} />
       <Route path="/seguimiento/:token" element={<RoadsideTrackingPage />} />
       <Route path="/track/:token" element={<RoadsideTrackingPage />} />
+      {/* Seguimiento público de una OTF (enlace para el responsable de la base). */}
+      <Route path="/seguimiento-otf/:token" element={<OtfTrackingPage />} />
       <Route path="/informe/:token" element={<RoadsideReportPage />} />
       {/* Valoración pública: sin sesión, igual que el seguimiento y el informe. */}
       <Route path="/valoracion/:token" element={<SatisfactionPublicPage />} />
