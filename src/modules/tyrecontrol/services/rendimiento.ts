@@ -44,6 +44,8 @@ export interface DatosRendimiento {
   km_vehiculo_inicio: number | null;
   profundidad_inicial_mm: number | null;
   fuente_inicio: "catalogo" | "manual";
+  /** Marcada «sin seguimiento»: no cuenta en ninguna pantalla. */
+  excluido?: boolean;
   puntos: { km_vehiculo: number; mm: number; fecha: string }[];
 }
 
@@ -178,12 +180,16 @@ export function agruparRendimiento(filas: DatosRendimiento[]): GrupoRendimiento[
 
 // ── Base de datos ──────────────────────────────────────────────────────────
 
-export async function datosRendimiento(f: { vehiculoId?: string | null; empresaId?: string | null } = {}): Promise<DatosRendimiento[]> {
+export async function datosRendimiento(
+  f: { vehiculoId?: string | null; empresaId?: string | null; incluirExcluidos?: boolean } = {},
+): Promise<DatosRendimiento[]> {
   const { data, error } = await supabase.rpc("tc_rendimiento_datos", {
     p_vehiculo: f.vehiculoId ?? null, p_empresa: f.empresaId ?? null,
   });
   if (error) throw new Error(error.message);
-  return conKmReconstruido((data ?? []) as DatosRendimiento[], f);
+  const filas = (data ?? []) as DatosRendimiento[];
+  // Las ruedas «sin seguimiento» solo las quiere la ventana que las reactiva.
+  return conKmReconstruido(f.incluirExcluidos ? filas : filas.filter((x) => !x.excluido), f);
 }
 
 /** Por encima de esto un odómetro es de otra unidad (Movertis ha dado 8 millones). */
@@ -266,11 +272,11 @@ export async function kmMontajeDeVehiculo(vehiculoId: string): Promise<Map<strin
 
 /** Cambia a mano el punto de partida (km y profundidad) de cada goma. */
 export async function ajustarInicioRendimiento(
-  vehiculoId: string, inicios: { neumaticoId: string; km: number; profundidadMm: number }[],
+  vehiculoId: string, inicios: { neumaticoId: string; km: number; profundidadMm: number; excluido?: boolean }[],
 ): Promise<void> {
   const { error } = await supabase.rpc("tc_rendimiento_ajustar_inicio", {
     p_vehiculo: vehiculoId,
-    p_inicios: inicios.map((i) => ({ neumatico_id: i.neumaticoId, km: i.km, profundidad_mm: i.profundidadMm })),
+    p_inicios: inicios.map((i) => ({ neumatico_id: i.neumaticoId, km: i.km, profundidad_mm: i.profundidadMm, excluido: i.excluido === true })),
   });
   if (error) throw new Error(error.message);
 }
