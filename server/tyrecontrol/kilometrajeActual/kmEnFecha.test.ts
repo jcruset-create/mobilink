@@ -166,3 +166,21 @@ describe("odómetro reconstruido (8378NBC: montaje del 24/09 con 92.748 km)", ()
     expect(u?.km).toBe(92_748);
   });
 });
+
+describe("meses sin viajes: desconocidos, no «0 km»", () => {
+  const revMayo: LecturaKm = { km: 66_463, fecha: "2026-05-30", fuente: "revision", detalle: "revisión del 30/05/2026" };
+  const montaje: LecturaKm = { km: 92_748, fecha: "2026-09-24", fuente: "operacion", detalle: "montaje del 24/09/2026" };
+  // Junio-agosto no vienen (sin viajes en Movertis): no hay fila.
+  const meses: MesTelematica[] = [
+    { year: 2026, month: 5, inicial: 59_597, final: 66_690, distancia: 7_090, cerrado: true },
+    { year: 2026, month: 9, inicial: null, final: null, distancia: 8_279, cerrado: true },
+  ];
+
+  it("el 31/07 no se reconstruye cruzando meses sin dato (ni desde mayo ni desde septiembre)", () => {
+    expect(reconstruir("2026-07-31", [revMayo, montaje], meses, "2026-11-26")).toBeNull();
+  });
+
+  it("el 31/05 se ancla a la revisión de mayo, no al montaje de septiembre", () => {
+    expect(reconstruir("2026-05-31", [revMayo, montaje], meses, "2026-11-26")?.ancla.km).toBe(66_463);
+  });
+});

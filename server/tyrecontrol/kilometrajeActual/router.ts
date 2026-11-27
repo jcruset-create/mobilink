@@ -452,19 +452,24 @@ async function lecturasDelVehiculo(vehiculoId: string, empresaId: string, v: Veh
 
 /**
  * Las filas mensuales del Hub → meses de la telemática, una por mes: si el
- * vehículo está en dos cuentas, la que trajo km. Un mes «empty» es dato: el
- * proveedor contestó y no hubo viajes (rodó 0). Uno con error no entra: no se
- * sabe cuánto rodó y la reconstrucción no puede atravesarlo.
+ * vehículo está en dos cuentas, la que trajo km.
+ *
+ * Un mes sin viajes («empty») NO se da por «rodó 0 km». El 8378NBC lo enseñó:
+ * junio-agosto sin viajes en Movertis, pero entre la revisión de mayo (66.463)
+ * y el montaje del 24/09 (92.748) rodó unos 20.000 km. Movertis no distingue
+ * un autobús parado de un equipo que no registró, así que esos meses quedan
+ * como desconocidos, igual que uno con error: la reconstrucción no los
+ * atraviesa y se ancla a la lectura real del otro lado.
  */
 function aMeses(filas: any[], ahora: Date, mesCerrado: any, zona: string): MesTelematica[] {
   const porMes = new Map<string, MesTelematica>();
   for (const f of filas) {
-    if (f.sync_status !== "ok" && f.sync_status !== "empty") continue;
+    if (f.sync_status !== "ok") continue;
     const m: MesTelematica = {
       year: f.year, month: f.month,
-      inicial: f.sync_status === "ok" ? f.initial_odometer_km : null,
-      final: f.sync_status === "ok" ? f.final_odometer_km : null,
-      distancia: f.sync_status === "ok" ? f.distance_km : 0,
+      inicial: f.initial_odometer_km,
+      final: f.final_odometer_km,
+      distancia: f.distance_km,
       cerrado: mesCerrado({ year: f.year, month: f.month }, zona, ahora),
     };
     const k = `${f.year}-${f.month}`;
