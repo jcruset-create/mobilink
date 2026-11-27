@@ -47,6 +47,7 @@ import {
   ErrorNeumaticos, limpiarNeumaticos, resumenPosiciones, textoNeumaticos, type NeumaticosTrabajo,
 } from "./otf/neumaticosTc.ts";
 import { catalogoTc, montarTrabajoEnTc, planoTc, vehiculoParaOtf } from "./otf/neumaticosTcServicio.ts";
+import { sustitucionPorFoto } from "./otf/matriculaFoto.ts";
 import {
   borrarPosicionTablet,
   guardarPosicionTablet,
@@ -141,7 +142,7 @@ import {
 } from "./documentos/servicio.ts";
 import { tipoDesdeKindAssist as tipoDocumentoDesdeKind } from "./documentos/tipos.ts";
 import { normalizarMatricula as normalizarMatriculaTc } from "./tyrecontrol/matricula.ts";
-import { INSTRUCCION_PAIS, paisParaGuardar } from "./matriculaPais.ts";
+import { INSTRUCCION_PAIS, paisLeidoValido, paisParaGuardar } from "./matriculaPais.ts";
 import { horaCapturaValida, horaDeLaFirma } from "./horaCaptura.ts";
 import { hitosDeAsistencia, lineaDeTiempo, resumenMovimientos, ventanaDeAsistencia } from "./assist/movimientos.ts";
 import {
@@ -19798,6 +19799,8 @@ function normalizeOtfTrabajo(row: any) {
     updatedAtMs: row.updatedAtMs != null ? Number(row.updatedAtMs) : null,
     matriculaLeida: row.matriculaLeida ?? null,
     matriculaNoCoincide: row.matriculaNoCoincide === true,
+    // La que puso la oficina, si la foto la cambió (server/otf/matriculaFoto.ts).
+    platePlanificada: row.platePlanificada ?? null,
     checklist: Array.isArray(row.checklist) ? row.checklist : null,
     // Cambio de neumáticos: el plano con las ruedas marcadas, el neumático y
     // si se registró en TyreControl. Los textos van hechos para la tablet.
@@ -20770,11 +20773,12 @@ app.post(
        * base con cuarenta remolques iguales, cambiar ruedas al equivocado es
        * fácil. Si no se lee, no se dice nada (no bloquea: la luz, el barro…).
        */
-      let matricula: { leida: string | null; esperada: string | null; coincide: boolean | null } | null = null;
+      let matricula: { leida: string | null; esperada: string | null; coincide: boolean | null; sustituida?: boolean } | null = null;
       if (kind === "matricula") {
         try {
           const t = (await db.query(
-            `SELECT plate, "plateRemolque", "tipoVehiculo" FROM otf_trabajos WHERE id = $1`, [tid]
+            `SELECT "otfId", plate, "plateRemolque", "platePlanificada", "tipoVehiculo", neumaticos, "tcMontaje"
+               FROM otf_trabajos WHERE id = $1`, [tid]
           )).rows[0];
           const esRemolque = /remolque/i.test(String(t?.tipoVehiculo ?? ""));
           const lectura = await detectarMatriculaYPais(pub.publicUrl, { preferColor: esRemolque ? "red" : "white" });
@@ -20789,10 +20793,37 @@ app.post(
           const esperadas = [t?.plate, t?.plateRemolque].map(normalizePlateText).filter(Boolean);
           const coincide = leida && esperadas.length ? esperadas.includes(leida) : null;
           matricula = { leida, esperada: esperadas[0] ?? null, coincide };
-          if (leida) {
+          // La matrícula de la foto manda: sustituye a la del trabajo.
+          const cambio = t ? sustitucionPorFoto(leida, t, normalizePlateText) : null;
+          if (cambio) {
             await db.query(
-              `UPDATE otf_trabajos SET "matriculaLeida" = $2, "matriculaNoCoincide" = $3 WHERE id = $1`,
-              [tid, leida, coincide === false]
+              `UPDATE otf_trabajos
+                  SET plate = $2, "platePlanificada" = $3, "paisMatricula" = $4,
+                      "matriculaLeida" = $2, "matriculaNoCoincide" = false, "updatedAtMs" = $5
+                WHERE id = $1`,
+              [tid, cambio.plate, cambio.platePlanificada, paisLeidoValido(lectura.pais), Date.now()]
+            );
+            matricula.sustituida = true;
+            /*
+             * Cambio de neumáticos: el vehículo de TyreControl era el de la
+             * matrícula planificada. Si aún no se ha registrado el montaje, se
+             * busca el de la foto; si no está, se dará de alta con ella.
+             */
+            const n = t.neumaticos;
+            const montado = t.tcMontaje && ["hecho", "en_curso"].includes(String(t.tcMontaje.estado));
+            if (n && !montado) {
+              const v = await vehiculoParaOtf(Number(t.otfId), cambio.plate).catch(() => null);
+              const nuevo = {
+                ...n,
+                tcVehiculoId: v?.estado === "FOUND" ? v.vehiculo?.id ?? null : null,
+                tcEmpresaId: v?.tcEmpresaId ?? n.tcEmpresaId ?? null,
+              };
+              await db.query(`UPDATE otf_trabajos SET neumaticos = $2::jsonb WHERE id = $1`, [tid, JSON.stringify(nuevo)]);
+            }
+          } else if (leida) {
+            await db.query(
+              `UPDATE otf_trabajos SET "matriculaLeida" = $2, "matriculaNoCoincide" = false WHERE id = $1`,
+              [tid, leida]
             );
           }
         } catch (err: any) {
@@ -21030,8 +21061,11 @@ async function buildOtfReportPdfBuffer(id: number): Promise<Buffer | null> {
           L, doc.y, { width: W }
         );
       }
-      if (t.matriculaNoCoincide && t.matriculaLeida) {
-        doc.fontSize(8).font("Helvetica-Oblique").text(`Aviso: en la foto se leyó ${t.matriculaLeida}, no la matrícula del trabajo`, L, doc.y, { width: W });
+      // La matrícula es la leída en la foto; se deja dicho qué se había planificado.
+      if (t.platePlanificada && t.platePlanificada !== t.plate) {
+        doc.fontSize(8).font("Helvetica-Oblique").fillColor("#475467")
+          .text(`Matrícula leída en la foto. Planificada como ${t.platePlanificada}.`, L, doc.y, { width: W });
+        doc.fillColor("#000000");
       }
 
       if (t.status === "no_realizado") {

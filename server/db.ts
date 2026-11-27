@@ -965,6 +965,17 @@ export async function initDb() {
     ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS "tcMontaje" JSONB;
     ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS "matriculaLeida" TEXT;
     ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS "matriculaNoCoincide" BOOLEAN NOT NULL DEFAULT false;
+    -- La matrícula de la foto manda (server/otf/matriculaFoto.ts): sustituye a
+    -- la del trabajo, y la que puso la oficina queda aquí.
+    ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS "platePlanificada" TEXT;
+    -- Los que ya tenían una lectura distinta, de antes de esta regla: se
+    -- corrigen igual (una sola vez: después ya no quedan con el aviso).
+    UPDATE otf_trabajos
+       SET "platePlanificada" = COALESCE("platePlanificada", plate),
+           plate = "matriculaLeida",
+           "paisMatricula" = NULL,
+           "matriculaNoCoincide" = false
+     WHERE "matriculaNoCoincide" = true AND "matriculaLeida" IS NOT NULL AND length("matriculaLeida") >= 4;
     -- Lo marcado de la lista de comprobación al finalizar ([{texto, hecho, valor}]).
     ALTER TABLE otf_trabajos ADD COLUMN IF NOT EXISTS checklist JSONB;
     -- Aviso al responsable de la base al llegar, y correo del informe.

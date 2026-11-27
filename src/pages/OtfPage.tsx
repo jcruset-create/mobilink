@@ -870,8 +870,9 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
                   {t.checklist.map((c: any) => `${c.hecho ? "✓" : "✗"} ${c.texto}${c.valor ? ` (${c.valor})` : ""}`).join(" · ")}
                 </div>
               )}
-              {t.matriculaNoCoincide && t.matriculaLeida && (
-                <div className="text-xs font-bold text-amber-300">⚠ En la foto se leyó {t.matriculaLeida}, no {t.plate}</div>
+              {/* La matrícula de la foto manda: ya está puesta arriba. */}
+              {t.platePlanificada && t.platePlanificada !== t.plate && (
+                <div className="text-xs text-sky-300">📷 Matrícula leída en la foto · planificada como {t.platePlanificada}</div>
               )}
               {(t.fotos ?? []).length > 0 && (
                 <div className="mt-1 flex gap-1">
