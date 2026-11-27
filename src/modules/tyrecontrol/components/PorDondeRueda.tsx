@@ -191,11 +191,25 @@ function AnalizarDia({ vehiculoId, matricula, onClose }: { vehiculoId: string; m
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState("");
 
+  const [progreso, setProgreso] = useState("");
+
+  /**
+   * La primera vez en una zona hay que bajar su mapa, por tandas cortas (una
+   * petición larga la corta Render con un 502). Mientras cada vuelta cargue
+   * algo, se vuelve a llamar sola; los puntos de Movertis se reaprovechan.
+   */
   async function analizar() {
-    setCargando(true); setError(""); setR(null);
-    try { setR(await analizarDiaVias(vehiculoId, fecha)); }
+    setCargando(true); setError(""); setR(null); setProgreso("");
+    try {
+      let res = await analizarDiaVias(vehiculoId, fecha);
+      for (let vuelta = 0; res.estado === "mapa_pendiente" && (res.teselasCargadas ?? 0) > 0 && vuelta < 40; vuelta++) {
+        setProgreso(`Cargando el mapa de la zona… faltan ${res.teselasPendientes ?? "?"} trozos`);
+        res = await analizarDiaVias(vehiculoId, fecha);
+      }
+      setR(res);
+    }
     catch (e) { setError(e instanceof Error ? e.message : "No se pudo analizar"); }
-    finally { setCargando(false); }
+    finally { setCargando(false); setProgreso(""); }
   }
 
   const todos = r?.tramos.flatMap((t) => t.puntos) ?? [];
@@ -216,7 +230,7 @@ function AnalizarDia({ vehiculoId, matricula, onClose }: { vehiculoId: string; m
           </label>
           <button onClick={() => void analizar()} disabled={cargando}
             className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-sky-500 disabled:opacity-50">
-            {cargando ? "Analizando… (el mapa puede tardar la primera vez)" : "Analizar"}
+            {cargando ? (progreso || "Analizando… (el mapa puede tardar la primera vez)") : "Analizar"}
           </button>
           <span className="text-[10px] text-slate-500">2 peticiones a Movertis. El resultado se guarda.</span>
         </div>
