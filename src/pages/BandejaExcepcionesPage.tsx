@@ -8,6 +8,7 @@
  * Vacía es una buena noticia y se dice así, no con una tabla en blanco.
  */
 
+import { apiFetch } from "../modules/apiFetch";
 import { useCallback, useEffect, useState } from "react";
 import { API_BASE, getAdminHeaders } from "../modules/workshopApi";
 
@@ -59,7 +60,7 @@ export default function BandejaExcepcionesPage() {
 
   const cargar = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/excepciones/bandeja`, { headers: getAdminHeaders() });
+      const res = await apiFetch(`${API_BASE}/api/excepciones/bandeja`, { headers: getAdminHeaders() });
       const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error(data?.error ?? "Error de servidor");
       setB(data);

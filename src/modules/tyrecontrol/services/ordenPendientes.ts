@@ -92,6 +92,41 @@ export function compararUnidad(a: string | null, b: string | null): number {
   return comparador.compare(va, vb);
 }
 
+/** Orden por número de unidad al tocar la cabecera: mayor→menor, menor→mayor, y vuelta al original. */
+export type SentidoUnidad = "desc" | "asc" | null;
+
+export const siguienteSentido = (s: SentidoUnidad): SentidoUnidad => (s === null ? "desc" : s === "desc" ? "asc" : null);
+
+/**
+ * Ordena por número de unidad sin tocar el array de entrada. Sin sentido,
+ * devuelve el orden tal cual vino. Los que no tienen número van SIEMPRE al
+ * final, también de mayor a menor: un hueco no es ni el más alto ni el más bajo.
+ */
+export function ordenarPorUnidad<T>(filas: T[], sentido: SentidoUnidad, unidad: (f: T) => string | null): T[] {
+  return ordenarPorTexto(filas, sentido, unidad);
+}
+
+/**
+ * Lo mismo para la matrícula. «—» (revisión sin vehículo) cuenta como vacío y
+ * va al final. Se compara como la lee una persona (`compararMatricula`).
+ */
+export function ordenarPorMatricula<T>(filas: T[], sentido: SentidoUnidad, matricula: (f: T) => string | null): T[] {
+  return ordenarPorTexto(filas, sentido, (f) => {
+    const m = (matricula(f) ?? "").trim();
+    return m === "—" ? "" : m;
+  });
+}
+
+export function ordenarPorTexto<T>(filas: T[], sentido: SentidoUnidad, valor: (f: T) => string | null): T[] {
+  if (!sentido) return filas;
+  return [...filas].sort((x, y) => {
+    const a = valor(x), b = valor(y);
+    const vacioA = !(a ?? "").trim(), vacioB = !(b ?? "").trim();
+    if (vacioA || vacioB) return compararUnidad(a, b); // los vacíos, al final
+    return sentido === "asc" ? compararUnidad(a, b) : compararUnidad(b, a);
+  });
+}
+
 export function compararPosicion(a: Sitio, b: Sitio): number {
   const ga = grupoDeSitio(a);
   const gb = grupoDeSitio(b);

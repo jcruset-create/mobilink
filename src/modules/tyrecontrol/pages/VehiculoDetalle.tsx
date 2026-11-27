@@ -23,7 +23,10 @@ import FichaTecnicaVehiculo from "../components/FichaTecnicaVehiculo";
 import FichaTecnicaItv from "../components/FichaTecnicaItv";
 import SeccionTacografo from "../components/SeccionTacografo";
 import WebfleetVehiculo from "../components/WebfleetVehiculo";
+import LecturaAparatoBloque from "../components/LecturaAparato";
 import KilometrajeMensual from "../components/KilometrajeMensual";
+import KmCabecera from "../components/KmCabecera";
+import PorDondeRueda from "../components/PorDondeRueda";
 import { BloqueRendimientoVehiculo, DialogoSeguirRendimiento } from "../components/RendimientoNeumaticos";
 import { estadoSeguimientoRendimiento } from "../services/rendimiento";
 import PlanMantenimientoVehiculo from "../components/PlanMantenimiento";
@@ -308,21 +311,19 @@ export default function VehiculoDetalle() {
             Sin seguimiento
           </span>
         )}
-        <span className="ml-2 text-lg font-black text-slate-100">
-          {Number(v.km_actual).toLocaleString("es-ES")} <span className="text-xs font-normal text-slate-400">km</span>
-        </span>
         {/*
-          De dónde salen esos kilómetros y, si vinieron de la telemática,
-          cuándo se leyeron. La fecha sale de la última revisión que la
-          registró: abrir la ficha NO pregunta al proveedor —esa regla está
-          escrita en kilometrajeMensual/router.ts— y aquí se respeta.
+          Los km: al abrir se ve el último conocido (el mayor entre revisiones,
+          montajes y telemática, con su fecha) y se pregunta a la telemática el
+          de ahora en segundo plano. Ver KmCabecera y kilometrajeActual/router.ts.
         */}
-        <span className="text-[11px] text-slate-500" title="Procedencia del kilometraje">
-          ({explicarKm({
+        <KmCabecera
+          vehiculoId={v.id}
+          kmActual={v.km_actual}
+          procedencia={explicarKm({
             origen: v.origen_km,
             capturadoAt: revisiones.find((r) => r.km_capturado_at)?.km_capturado_at,
-          }) ?? ORIGEN_KM_LABELS[v.origen_km]})
-        </span>
+          }) ?? ORIGEN_KM_LABELS[v.origen_km]}
+        />
         {/*
           Dónde está el vehículo ahora. Los tonos separan lo que se sabe de lo
           que se supone: verde afirma que está ahí, gris es «esto es lo último
@@ -489,6 +490,15 @@ export default function VehiculoDetalle() {
           nunca del proveedor al abrir la ficha. Sin telemática no se enseña. */}
       <KilometrajeMensual vehiculoId={v.id} />
 
+      {/* Gasóleo, peso por eje y motor, del equipo de telemática. Se pide a
+          mano por la misma razón que el bloque de arriba lee de nuestra base:
+          abrir una ficha no puede costar una petición al proveedor. */}
+      {!esCliente && <LecturaAparatoBloque vehiculoId={v.id} empresaId={v.empresa_id} />}
+
+      {/* Km por tipo de vía (autopista, nacional, urbana…) de los vehículos
+          marcados; la casilla está dentro. Ver porDondeRueda en el servidor. */}
+      <PorDondeRueda vehiculoId={v.id} matricula={v.matricula} />
+
       {dialogoRend && (
         <DialogoSeguirRendimiento
           vehiculoId={v.id} matricula={v.matricula} kmActual={v.km_actual ?? null}
@@ -614,6 +624,8 @@ export default function VehiculoDetalle() {
           onChanged={cargar}
           onTipoChanged={cargar}
           onOperaciones={() => setModalOps(true)}
+          onRevisarResto={esCliente ? undefined : (actuadas) =>
+            navigate(`/tyrecontrol/revision-vehiculo?vehiculo=${v.id}&empresa=${v.empresa_id}${actuadas.length ? `&actuadas=${actuadas.join(",")}` : ""}`)}
         />
       </div>
 

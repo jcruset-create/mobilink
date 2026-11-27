@@ -9,6 +9,8 @@ import {
 } from "../../components/informes/CabeceraInforme";
 import { useTyreAuth } from "../../contexts/TyreAuthContext";
 import { Donut, BarList, ColumnChart, LineChart } from "../../components/informes/charts";
+import { useOrdenColumnas } from "../../hooks/useOrdenColumnas";
+import { CabeceraOrden } from "../../components/OrdenColumnas";
 
 /**
  * Informe ejecutivo mensual: una sola pantalla que responde "¿cómo está la
@@ -358,6 +360,8 @@ export default function InformeEjecutivo() {
   }, [filtros]);
 
   const insights = useMemo(() => (d ? conclusiones(d) : []), [d]);
+  // Tabla «Estado por vehículo»: tocar «Matrícula» la reordena. Antes de los return: es un hook.
+  const orden = useOrdenColumnas(d ? d.vehiculos : [], { matricula: (v) => v.matricula });
 
   if (cargando) return <div className="p-6 text-sm text-slate-400">Calculando el informe…</div>;
   if (error) {
@@ -885,12 +889,12 @@ export default function InformeEjecutivo() {
           <table className="w-full text-[12px]">
             <thead className="sticky top-0 bg-slate-800 text-slate-400">
               <tr className="border-b border-slate-700 text-left">
-                <th className="py-1.5">Estado</th><th>Matrícula</th><th>Base</th>
+                <th className="py-1.5">Estado</th><th><CabeceraOrden col="matricula" orden={orden}>Matrícula</CabeceraOrden></th><th>Base</th>
                 <th>Neum.</th><th>Mín. mm</th><th>Media mm</th><th>Últ. revisión</th>
               </tr>
             </thead>
             <tbody>
-              {d.vehiculos.map((v) => (
+              {orden.filas.map((v) => (
                 <tr key={v.matricula} className="border-b border-slate-700/50">
                   {/* Punto + texto: el estado nunca se transmite solo por color. */}
                   <td className={`py-1.5 whitespace-nowrap font-semibold ${SEMAFORO[v.semaforo].color}`}>

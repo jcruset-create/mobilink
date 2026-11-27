@@ -16,6 +16,7 @@
  *    para investigar, confuso en el día a día.
  */
 
+import { apiFetch } from "../modules/apiFetch";
 import { useCallback, useEffect, useState } from "react";
 import { API_BASE, getAdminHeaders } from "../modules/workshopApi";
 
@@ -88,7 +89,7 @@ export default function TimelineAsistencia({ assistanceId }: { assistanceId: num
       const qs = new URLSearchParams();
       if (tecnicos) qs.set("tecnicos", "true");
       if (cadena) qs.set("cadena", "true");
-      const res = await fetch(
+      const res = await apiFetch(
         `${API_BASE}/api/roadside-assistances/${assistanceId}/timeline?${qs}`,
         { headers: getAdminHeaders() },
       );

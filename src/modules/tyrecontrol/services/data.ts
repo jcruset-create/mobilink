@@ -945,6 +945,100 @@ export async function kilometrajeActualVehiculo(vehiculoId: string): Promise<Lec
   return j as LecturaKmActual;
 }
 
+/** Una lectura de km con su fecha y de dónde sale. */
+export interface LecturaKmFicha {
+  km: number;
+  fecha: string;
+  fuente: "revision" | "operacion" | "telematica_mes" | "vehiculo";
+  detalle: string;
+}
+
+/** El odómetro de hoy desde la última lectura real + km de viajes. */
+export interface KmReconstruido {
+  km: number;
+  fecha: string;
+  ancla: LecturaKmFicha;
+  /** Km de viajes desde la lectura real (negativo si es anterior). */
+  rodados: number;
+}
+
+/** Odómetro de un mes: el de Movertis si cuadra; si no, el reconstruido (y el de Movertis para tacharlo). */
+export interface OdometroMes {
+  year: number;
+  month: number;
+  inicio: number | null;
+  cierre: number | null;
+  fuenteInicio: "movertis" | "reconstruido" | null;
+  fuenteCierre: "movertis" | "reconstruido" | null;
+  movertisInicio: number | null;
+  movertisCierre: number | null;
+}
+
+export interface KmFicha {
+  /** El mayor km conocido, con su fecha. `null` si no hay ninguna lectura. */
+  ultimo: LecturaKmFicha | null;
+  reconstruido?: KmReconstruido | null;
+  odometrosMes?: OdometroMes[];
+  /** La lectura de ahora de la telemática (solo con `vivo`). */
+  /** `estado: "no_fiable"`: la telemática dio un odómetro parado (`kmTelematica`) y no se usa. */
+  lectura: (LecturaKmActual & { consultadoAt?: string; kmTelematica?: number | null }) | null;
+  /** Se ha guardado como km del vehículo. */
+  guardado: boolean;
+}
+
+/** Los km de la cabecera de la ficha. Con `vivo`, pregunta también a la telemática. */
+export async function kmFichaVehiculo(vehiculoId: string, vivo: boolean): Promise<KmFicha> {
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/kilometraje-actual/ficha/${vehiculoId}?vivo=${vivo ? 1 : 0}`, {
+    headers: await authHeaders(),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || "No se han podido leer los kilómetros");
+  return j as KmFicha;
+}
+
+export type KmEnFechaRespuesta = (
+  | { tipo: "lectura" | "telematica" | "estimado"; km: number; fecha: string; detalle: string }
+  | { tipo: "reconstruido"; km: number; fecha: string; detalle: string; ancla: LecturaKmFicha; rodados: number }
+  | { tipo: "interpolado"; km: number; fecha: string; anterior: LecturaKmFicha; siguiente: LecturaKmFicha }
+  | { tipo: "sin_datos"; fecha: string; motivo: string }
+) & {
+  /** Lecturas de ese día que no cuadran con las demás y no se han usado. */
+  avisos?: string[];
+  /** Por qué la telemática no ha dado el odómetro exacto, si no lo ha dado. */
+  telematica?: string;
+};
+
+export interface KmActualVehiculo {
+  vehiculoId: string;
+  matricula: string;
+  km: number | null;
+  procedencia: "movertis" | "reconstruido" | "ultimo" | "sin_ancla";
+  detalle: string;
+  odometroMovertis: number | null;
+  movertisCuadra: boolean | null;
+  kmViajes: number | null;
+}
+
+/** El km actual de cada vehículo con telemática de una empresa, con su procedencia. */
+export async function kmActualFlota(empresaId: string): Promise<KmActualVehiculo[]> {
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/kilometraje-actual/flota?empresa=${encodeURIComponent(empresaId)}`, {
+    headers: await authHeaders(),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || "No se han podido calcular los km de la flota");
+  return ((j as any).vehiculos ?? []) as KmActualVehiculo[];
+}
+
+/** Los km que tenía el vehículo en una fecha (`YYYY-MM-DD`), con su procedencia. */
+export async function kmEnFechaVehiculo(vehiculoId: string, fecha: string): Promise<KmEnFechaRespuesta> {
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/kilometraje-actual/en-fecha/${vehiculoId}?fecha=${encodeURIComponent(fecha)}`, {
+    headers: await authHeaders(),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || "No se han podido calcular los kilómetros");
+  return j as KmEnFechaRespuesta;
+}
+
 export async function inventarioInicialFinalizar(params: {
   vehiculoId: string; km?: number | null; origenKm?: string;
 }): Promise<{ revision_id: string; ya_estaba: boolean; posiciones?: number }> {

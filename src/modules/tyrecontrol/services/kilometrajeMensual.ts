@@ -240,3 +240,156 @@ export const revisarCoherencia = (b: { empresaId?: string; aplicar?: boolean }) 
 // El texto de los meses vive en su propio módulo, sin red, para poder
 // probarlo. Se reexporta para no romper a quien ya lo importaba de aquí.
 export { nombreDeMes, mesCorto, listaDeMeses, detalleDeMeses } from "./mesesEtiqueta";
+
+// ── Km de toda la flota por meses y años (pantalla «Km de la flota») ────────
+export interface MesDeFlota {
+  year: number; month: number;
+  kmAutenticos: number; vehiculosAutenticos: number;
+  kmProvisionales: number; vehiculosProvisionales: number;
+  descartados: number; kmDescartados: number; sinDato: number;
+  estado: "cerrado" | "incompleto" | "en_curso";
+  cuentasSinCerrar: Array<{ connectorKey: string; accountKey: string }>;
+}
+export interface AnoDeFlota { year: number; kmAutenticos: number; mesesCerrados: number; mediaMensual: number | null; kmProvisionales: number }
+export interface KmDeFlota { empresaId: string; vehiculosActivos: number; meses: MesDeFlota[]; anos: AnoDeFlota[] }
+
+export const kmDeFlota = (empresaId?: string) =>
+  pedir<KmDeFlota>(`/flota${empresaId ? `?empresa=${encodeURIComponent(empresaId)}` : ""}`);
+
+// ── «Probar con Movertis» un solo vehículo (no guarda nada) ────────────────
+export type RespuestaPrueba =
+  | { tipo: "ok"; km: number; odometroInicial: number | null; odometroFinal: number | null; viajes: number | null }
+  | { tipo: "vacio" }
+  | { tipo: "error"; mensaje: string }
+  | { tipo: "sin_turno" };
+export interface VentanaProbada {
+  clave: "mes" | "q1" | "q2" | "semana" | "dia" | "anterior" | "control";
+  etiqueta: string; desde: string; hasta: string; unidad: string;
+  peticion: { units: number[]; initial_date: number; end_date: number };
+  respuesta: RespuestaPrueba;
+}
+export interface PruebaVehiculo {
+  vehiculoId: string; matricula: string | null;
+  cuenta: { connectorKey: string; accountKey: string }; unidad: string; unidadControl: string | null;
+  probadoEn: string; resultados: VentanaProbada[]; conclusion: string;
+}
+export const probarVehiculo = (b: { empresaId?: string; vehiculoId: string; year: number; month: number }) =>
+  pedir<PruebaVehiculo>("/probar-vehiculo", { method: "POST", body: JSON.stringify(b) });
+
+/** «Buscar los días que fallan»: el mes pedido por partes (no guarda nada). */
+export interface PartePrueba {
+  desde: string; hasta: string; dias: [number, number];
+  resultado:
+    | { tipo: "ok"; km: number; odometroInicial: number | null; odometroFinal: number | null; viajes: number | null }
+    | { tipo: "error"; mensaje: string }
+    | { tipo: "sin_turno" };
+}
+export interface PruebaPorPartes {
+  vehiculoId: string; matricula: string | null; unidad: string; probadoEn: string;
+  km: number | null; kmPorOdometro: number; odometroInicial: number | null; odometroFinal: number | null;
+  viajes: number; diasFallidos: number[]; peticiones: number; motivo: string | null; partes: PartePrueba[];
+}
+export const probarVehiculoPorPartes = (b: { empresaId?: string; vehiculoId: string; year: number; month: number }) =>
+  pedir<PruebaPorPartes>("/probar-vehiculo/partes", { method: "POST", body: JSON.stringify(b) });
+
+/** «🗺 Recorrido»: los puntos de un vehículo en un día y si bastan para saber la carretera. */
+export interface PruebaRecorrido {
+  vehiculoId: string; matricula: string | null; unidad: string; fecha: string; desde: string; hasta: string;
+  errorPuntos: string | null; kmResumen: number | null; errorResumen: string | null;
+  estadistica: {
+    puntos: number; primero: string | null; ultimo: string | null;
+    intervaloMediana: number | null; intervaloP90: number | null; intervaloMaximo: number | null;
+    huecos: number; minutosEnHuecos: number; conVelocidad: number; kmPorPuntos: number;
+    veredicto: "suficiente" | "justo" | "insuficiente" | "sin_datos"; explicacion: string;
+  };
+  puntos: Array<{ t: number; lat: number; lng: number; velocidad: number | null }>;
+}
+export const probarRecorrido = (b: { empresaId?: string; vehiculoId: string; fecha: string }) =>
+  pedir<PruebaRecorrido>("/probar-recorrido", { method: "POST", body: JSON.stringify(b) });
+
+/**
+ * «Ver los sensores»: qué calcula el dispositivo de este vehículo.
+ *
+ * Sirve para saber si de Movertis se puede sacar el ralentí. Lo decide el
+ * veredicto: con horas de motor, sí y hacia atrás; con solo contacto, a base
+ * de muestreos y solo de hoy en adelante; sin ninguno, no.
+ */
+export interface SensorDispositivo {
+  nombre: string;
+  valor: string | number | boolean | null;
+  unidad: string | null;
+  conLectura: boolean;
+  interes: "ralenti" | "horas_motor" | "revoluciones" | "contacto" | null;
+}
+export interface SensoresVehiculo {
+  vehiculoId: string; matricula: string | null; unidad: string;
+  cuenta: { connectorKey: string; accountKey: string };
+  pedidoEn: string;
+  peticion: unknown;
+  sensores: SensorDispositivo[];
+  veredicto: {
+    nivel: "ralenti_directo" | "horas_motor" | "revoluciones" | "solo_contacto" | "nada" | "sin_sensores";
+    texto: string;
+    apoyo: string[];
+  };
+  crudo: string;
+  /** Ya redactado por el servidor, para «Copiar para Movertis». */
+  texto: string;
+  /** Los sensores puestos en claro. `null` si el aparato no da nada de esto. */
+  lectura: LecturaAparato | null;
+}
+
+/**
+ * Lo que el aparato sabe del vehículo: horas de motor, gasóleo consumido,
+ * peso por eje y el estado de ahora mismo.
+ *
+ * `deposito` y `otros` van SIN unidad a propósito: Movertis no las documenta
+ * y ponerle un «%» a un número es inventarse el dato. Lo que sí está derivado
+ * —el consumo medio— se comprueba antes en el servidor.
+ */
+export interface LecturaAparato {
+  horasMotor: number | null;
+  consumidoL: number | null;
+  odometroKm: number | null;
+  consumoMedioL100: number | null;
+  rpm: number | null;
+  velocidadKmh: number | null;
+  contacto: boolean | null;
+  ejes: Array<{ eje: number; kg: number }>;
+  pesoTotalKg: number | null;
+  deposito: Array<{ nombre: string; valor: number | string | boolean }>;
+  otros: Array<{ nombre: string; valor: number | string | boolean }>;
+}
+export const verSensores = (b: { empresaId?: string; vehiculoId: string }) =>
+  pedir<SensoresVehiculo>("/sensores", { method: "POST", body: JSON.stringify(b) });
+
+/**
+ * El histórico diario de los contadores del aparato, desde nuestra base.
+ *
+ * Nunca llama al proveedor: lo escribe el reloj de las 04:00. Por eso esto sí
+ * se puede cargar al abrir la ficha.
+ */
+export interface TramoAparato {
+  desde: string; hasta: string;
+  horasTranscurridas: number;
+  horasMotor: number | null;
+  litros: number | null;
+  km: number | null;
+  l100: number | null;
+  aviso: string | null;
+}
+export interface HistoricoAparato {
+  vehiculoId: string;
+  fotos: number;
+  primeraFoto: string | null;
+  ultimaFoto: string | null;
+  pesoUltimo: { totalKg: number | null; ejes: Array<{ eje: number; kg: number }> } | null;
+  tramos: TramoAparato[];
+  ultimos30: {
+    tramos: number; conAviso: number;
+    horasMotor: number | null; litros: number | null; km: number | null; l100: number | null;
+    horasCubiertas: number;
+  };
+}
+export const historicoAparato = (vehiculoId: string, dias = 60) =>
+  pedir<HistoricoAparato>(`/lecturas/${encodeURIComponent(vehiculoId)}?dias=${dias}`);

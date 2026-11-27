@@ -697,6 +697,56 @@ export class MovertisConnector
   }
 
   /**
+   * Los sensores que el dispositivo calcula para UN vehículo. Diagnóstico.
+   *
+   * No está en el puerto de telemática y no lo usa ningún job: es para la
+   * pantalla «ver los sensores» de la prueba de Movertis. El puerto describe
+   * lo que toda telemática sabe hacer, y esto es una pregunta a Movertis en
+   * particular, así que vive aquí y quien la llame comprueba antes que el
+   * conector la tiene.
+   *
+   * Existe porque de Movertis no sabemos si un vehículo está en ralentí y la
+   * respuesta puede estar aquí: si entre estos sensores hay horas de motor, el
+   * ralentí se calcula restando el tiempo en movimiento. Nadie los ha listado
+   * nunca; `server/tyrecontrol/movertisSensores.ts` los clasifica.
+   *
+   * UN vehículo y no la flota: con la bandera `sensors` y los 751 de la cuenta
+   * real, la pasarela devolvió 502 (son unos 32 sensores por vehículo). Pedirla
+   * «de paso» para todos es la forma de convertir una consulta que funciona en
+   * una que se cae, y eso ya está escrito en `cuerpoVehiculos`.
+   *
+   * Devuelve la fila entera, no solo `sensors`, porque el diagnóstico también
+   * enseña la respuesta en crudo: si la forma no es la que esperamos, hay que
+   * poder mirarla a mano en vez de quedarse con que «no hay sensores».
+   */
+  async leerSensores(
+    ctx: OperationContext,
+    providerVehicleId: string,
+  ): Promise<{ peticion: unknown; fila: Record<string, unknown> | null }> {
+    const { peticion, filas } = await this.leerSensoresDeVarios(ctx, [providerVehicleId]);
+    return { peticion, fila: filas[0] ?? null };
+  }
+
+  /**
+   * Lo mismo para VARIOS vehículos, para el histórico diario.
+   *
+   * Uno a uno serían 751 peticiones cada noche. En tanda caben varios, pero
+   * no todos: con la flota entera la pasarela devolvió 502. Quien llame
+   * decide el tamaño y parte la tanda si falla —ver `lecturasAparato/calculo.ts`—,
+   * porque desde aquí no se sabe si el 502 fue por tamaño o por un vehículo
+   * que su servidor no sabe procesar.
+   */
+  async leerSensoresDeVarios(
+    ctx: OperationContext,
+    providerVehicleIds: string[],
+  ): Promise<{ peticion: unknown; filas: Record<string, unknown>[] }> {
+    const peticion = this.cuerpoVehiculos(providerVehicleIds, true, true);
+    if (await this.enSimulacion(ctx)) return { peticion, filas: [] };
+    const datos = await this.postear(ctx, this.rutas.vehicles, peticion);
+    return { peticion, filas: filasDe(datos) };
+  }
+
+  /**
    * La posición de TODA la cuenta en una sola llamada.
    *
    * Es `showvehicles` con `lastMessagePosition`, y sustituye a 751 llamadas a

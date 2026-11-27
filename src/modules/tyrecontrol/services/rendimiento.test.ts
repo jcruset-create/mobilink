@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 vi.mock("./supabase", () => ({ supabase: {} }));
-import { agruparRendimiento, calcularRendimiento, pendiente, type DatosRendimiento } from "./rendimiento";
+import { agruparRendimiento, calcularRendimiento, costeKm, pendiente, type DatosRendimiento } from "./rendimiento";
 
 // El caso real del 7523NNB: gomas de origen, 35.471 km, X COACH Z de 14,3 mm.
 const base = {
@@ -29,7 +29,9 @@ describe("rendimiento de un neumático", () => {
     const r = calcularRendimiento({ ...base, km_actual_vehiculo: 60000, profundidad_actual_mm: 9,
       puntos: [{ km_vehiculo: 20000, mm: 12.4, fecha: "" }, { km_vehiculo: 40000, mm: 12, fecha: "" }] });
     expect(r.metodo).toBe("recta");
-    expect(r.puntos).toHaveLength(4);
+    // El 12 a 40.000 km no ha bajado 1 mm desde el 12,4: se ve, pero no cuenta.
+    expect(r.puntos).toHaveLength(3);
+    expect(r.descartados).toEqual([{ km: 40000, mm: 12 }]);
     expect(r.kmPorMm).toBeGreaterThan(10000);
     expect(r.kmPorMm).toBeLessThan(14000);
   });
@@ -38,6 +40,51 @@ describe("rendimiento de un neumático", () => {
     const r = calcularRendimiento({ ...base, km_actual_vehiculo: 5000, profundidad_actual_mm: 13.8, puntos: [] });
     expect(r.vidaKm).toBeNull();
     expect(r.sinProyeccion).toMatch(/Poco gasto/);
+  });
+
+  it("0039LXV: solo cuenta lo que baja 1 mm; el ruido del calibre no mueve la recta", () => {
+    const ini = 502706;
+    const lecturas = [[526440, 13.7], [526694, 13.8], [527429, 14.3], [527926, 14], [528547, 13.5],
+      [529719, 13.8], [530535, 13.9], [530838, 13.8], [531204, 13.6], [531634, 13.8]]
+      .map(([km, mm]) => ({ km_vehiculo: km, mm, fecha: "" }));
+    const r = calcularRendimiento({ km_actual_vehiculo: 532519, km_vehiculo_inicio: ini, profundidad_inicial_mm: 16.5,
+      profundidad_actual_mm: 13.8, minimo_mm: 3, puntos: lecturas });
+    expect(r.puntos).toEqual([{ km: 0, mm: 16.5 }, { km: 23734, mm: 13.7 }]);
+    expect(r.descartados).toHaveLength(10); // 9 lecturas + la de hoy
+    expect(r.metodo).toBe("origen");
+    // Del origen a hoy: 2,7 mm en 29.813 km.
+    expect(r.kmPorMm).toBe(Math.round(29813 / 2.7));
+    expect(r.vidaKm).toBe(29813 + r.quedanKm!);
+  });
+
+  it("0039LXV eje 1: mismo Hoy y mismo Gastado → mismos km/mm, aunque la primera lectura difiera", () => {
+    const ini = 502706;
+    const izq = [[23734, 13.1], [23988, 14.1], [24723, 12.7], [25220, 13.8], [25841, 13.7], [27013, 13.6],
+      [27829, 13.6], [28132, 13.3], [28498, 13.6], [28928, 13.8]];
+    const der = [[23734, 13.7], [23988, 13.8], [24723, 14.3], [25220, 14], [25841, 13.5], [27013, 13.8],
+      [27829, 13.9], [28132, 13.8], [28498, 13.6], [28928, 13.8]];
+    const de = (l: number[][]) => calcularRendimiento({ km_actual_vehiculo: ini + 29382, km_vehiculo_inicio: ini,
+      profundidad_inicial_mm: 16.5, profundidad_actual_mm: 13.8, minimo_mm: 3,
+      puntos: l.map(([km, mm]) => ({ km_vehiculo: ini + km, mm, fecha: "" })) });
+    expect(de(izq).kmPorMm).toBe(de(der).kmPorMm);
+    expect(de(izq).vidaKm).toBe(de(der).vidaKm);
+  });
+
+  it("una lectura mala suelta (2,3 mm entre dos de 8,5) no entra en la línea", () => {
+    const ini = 467188;
+    const l = [[59252, 8.7], [59506, 8.5], [60241, 2.3], [60738, 8.4], [61359, 8.1], [62531, 8.3],
+      [63347, 8.7], [63650, 8.4], [64016, 8.3], [64446, 8.1]];
+    const r = calcularRendimiento({ km_actual_vehiculo: ini + 64900, km_vehiculo_inicio: ini,
+      profundidad_inicial_mm: 16.5, profundidad_actual_mm: 8.1, minimo_mm: 3,
+      puntos: l.map(([km, mm]) => ({ km_vehiculo: ini + km, mm, fecha: "" })) });
+    expect(r.puntos.some((p) => p.mm < 5)).toBe(false);
+    expect(r.kmPorMm).toBe(Math.round(64900 / 8.4));
+  });
+
+  it("baja justo 1 mm: entra", () => {
+    const r = calcularRendimiento({ ...base, km_actual_vehiculo: 10000, profundidad_actual_mm: 13.3, puntos: [] });
+    expect(r.puntos).toHaveLength(2);
+    expect(r.kmPorMm).toBe(10000);
   });
 
   it("sin profundidad de origen lo dice", () => {
@@ -85,5 +132,26 @@ describe("informe de rendimiento", () => {
       ["Michelin X COACH Z 295/80R22.5", 2],
       ["Michelin XCOACH 295/80R22.5", 1], // sin referencia: por su texto
     ]);
+  });
+});
+
+describe("coste por km", () => {
+  it("8774NMX eje 1 izq. a 420 €: 14,3 → 11,5 mm en 33.165 km", () => {
+    const r = calcularRendimiento({ ...base, km_actual_vehiculo: 33165, profundidad_actual_mm: 11.5, puntos: [] });
+    const c = costeKm(r, 420);
+    expect(c.eurKm).toBeCloseTo(420 / r.vidaKm!, 8);
+    expect(c.eurMilKm).toBeCloseTo(c.eurKm! * 1000, 8);
+    expect(c.eurKmHoy).toBeCloseTo(420 / 33165, 8);
+    // 2,8 mm de 11,3 útiles (14,3 → 3)
+    expect(c.gastadoEur).toBeCloseTo(420 * 2.8 / 11.3, 6);
+    expect(c.gastadoEur! + c.quedaEur!).toBeCloseTo(420, 6);
+  });
+
+  it("sin coste, o sin proyección, no inventa", () => {
+    const r = calcularRendimiento({ ...base, km_actual_vehiculo: 33165, profundidad_actual_mm: 11.5, puntos: [] });
+    expect(costeKm(r, null)).toEqual({ eurKm: null, eurMilKm: null, eurKmHoy: null, gastadoEur: null, quedaEur: null });
+    const sinVida = calcularRendimiento({ ...base, km_actual_vehiculo: 5000, profundidad_actual_mm: 13.8, puntos: [] });
+    expect(costeKm(sinVida, 420).eurKm).toBeNull();
+    expect(costeKm(sinVida, 420).eurKmHoy).toBeCloseTo(420 / 5000, 8);
   });
 });

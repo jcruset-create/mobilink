@@ -38,6 +38,15 @@ import { entidadSyncDe } from "../../integration-hub/application/services/Monthl
 import { compararMeses, mesDe, mesesEntre, ZONA_HORARIA_POR_DEFECTO, type Mes } from "../../integration-hub/domain/meses.ts";
 import { resumirKilometraje } from "./resumen.ts";
 import { rankingDeKilometraje, type VehiculoDeFlota } from "./ranking.ts";
+import { resumenDeFlota } from "./flota.ts";
+import { conclusion, ventanasDePrueba, type Respuesta, type ResultadoVentana, type Ventana } from "./prueba.ts";
+import { resolveTelematicsConnectors } from "../../integration-hub/connectors/ConnectorRegistry.ts";
+import { listVehicleMappings, nextCorrelationId } from "../../integration-hub/infrastructure/repositories.ts";
+import { ErrorRitmo, limitadorDe, ritmoDeConfig } from "../../integration-hub/infrastructure/ritmo.ts";
+import { sabeResumirViajes } from "../../integration-hub/domain/telematics.ts";
+import { pedirPorPartes } from "../../integration-hub/domain/partesDelMes.ts";
+import { estadisticaRecorrido, reducirPuntos, type PuntoRecorrido } from "./recorrido.ts";
+import { medianocheEn } from "../../integration-hub/domain/meses.ts";
 import { iniciarRelleno, pararRelleno, tareasDeEmpresa } from "./rellenoWorker.ts";
 import { intervaloValido } from "./relleno.ts";
 import { contarPorClase, mesesQueFaltan, proveedorDe } from "./huecos.ts";
@@ -57,6 +66,61 @@ const ESPERA_MAXIMA_MS = 45_000;
 const PAGINA_FLOTA = 500;
 
 type Peticion = Request & { solicitante?: Solicitante };
+
+/** El vehículo, su cuenta de telemática y su unidad, para las pruebas con el proveedor. */
+export async function enlaceParaPrueba(empresaId: string, vehiculoId: string) {
+  const { data: v } = await supabase
+    .from("tc_vehiculos").select("id, empresa_id, matricula").eq("id", vehiculoId).maybeSingle();
+  if (!v || String((v as { empresa_id?: string }).empresa_id ?? "") !== empresaId) {
+    return { error: "Vehículo no encontrado", estado: 404 } as const;
+  }
+  const cuentas = await resolveTelematicsConnectors(empresaId);
+  for (const c of cuentas) {
+    const enlaces = await listVehicleMappings({ tenantId: empresaId, system: c.key, accountKey: c.accountKey });
+    const e = enlaces.find((x) => x.mobilink_id === vehiculoId && x.active !== false);
+    if (!e) continue;
+    const conector = c.connector;
+    if (!sabeResumirViajes(conector)) return { error: "Esta cuenta no sabe resumir viajes", estado: 400 } as const;
+    return { v, cuenta: c, unidad: String(e.external_code), conector };
+  }
+  return { error: "Este vehículo no está enlazado con ninguna cuenta de telemática", estado: 400 } as const;
+}
+
+/** La zona horaria de la cuenta de telemática activa de la empresa. */
+async function zonaDeEmpresa(empresaId: string): Promise<string> {
+  const configs = await listConnectorConfigs(empresaId);
+  const activa = configs.find((c: { enabled?: boolean }) => c.enabled) as { config?: { zonaHoraria?: unknown } } | undefined;
+  return String(activa?.config?.zonaHoraria ?? ZONA_HORARIA_POR_DEFECTO);
+}
+
+/**
+ * La flota activa de la empresa, paginada. Nada de traerla de golpe ni de
+ * meter 751 identificadores en un filtro: eso viaja en la URL y ya rompió una
+ * vez el barrido de presencia en producción.
+ */
+async function flotaActiva(empresaId: string): Promise<VehiculoDeFlota[]> {
+  const flota: VehiculoDeFlota[] = [];
+  for (let desde = 0; ; desde += PAGINA_FLOTA) {
+    const { data, error } = await supabase
+      .from("tc_vehiculos")
+      .select("id, matricula, numero_unidad")
+      .eq("empresa_id", empresaId)
+      .eq("activo", true)
+      .order("matricula")
+      .range(desde, desde + PAGINA_FLOTA - 1);
+    if (error) throw new Error(`No se pudo leer la flota: ${error.message}`);
+    const pagina = data ?? [];
+    for (const v of pagina) {
+      flota.push({
+        id: String((v as any).id),
+        matricula: (v as any).matricula ?? null,
+        numeroUnidad: (v as any).numero_unidad ?? null,
+      });
+    }
+    if (pagina.length < PAGINA_FLOTA) break;
+  }
+  return flota;
+}
 
 /** Sesión → usuario. Sin rol: para leer basta con poder ver la empresa. */
 async function usuarioDe(req: Request): Promise<{ userId: string; esSuperadmin: boolean } | null> {
@@ -116,6 +180,71 @@ export function createKilometrajeMensualRouter(): Router {
       const filas = await listMonthlyMileage({ tenantId: empresaId, mobilinkId: vehiculoId });
       const zona = String((configs.find((c: any) => c.enabled)?.config as any)?.zonaHoraria ?? ZONA_HORARIA_POR_DEFECTO);
       res.json({ vehiculoId, empresaId, hayTelemetria, ...resumirKilometraje(filas, mesDe(new Date(), zona)) });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /**
+   * El histórico diario de los contadores del aparato, desde NUESTRA BASE.
+   *
+   * Nunca llama al proveedor: lo escribe el reloj de las 04:00
+   * (`lecturasAparato/worker.ts`) y aquí solo se lee y se resta. Por eso
+   * puede cargarse al abrir la ficha, al revés que la lectura en vivo.
+   *
+   * Devuelve las fotos, los tramos entre fotos y la suma de los últimos 30
+   * días. Las cotas de las restas —un contador que baja, un motor que anda
+   * más horas que el reloj— están en `lecturasAparato/calculo.ts`.
+   */
+  router.get("/lecturas/:id", async (req, res) => {
+    try {
+      const usuario = await usuarioDe(req);
+      if (!usuario) return res.status(401).json({ error: "Sin sesión" });
+
+      const vehiculoId = String(req.params.id ?? "").trim();
+      const { data: v } = await supabase
+        .from("tc_vehiculos").select("id, empresa_id").eq("id", vehiculoId).maybeSingle();
+      if (!v) return res.status(404).json({ error: "Vehículo no encontrado" });
+      const empresaId = String((v as { empresa_id?: string }).empresa_id ?? "");
+      const puede = await puedeVerEmpresa({ userId: usuario.userId, esSuperadmin: usuario.esSuperadmin }, empresaId);
+      if (!puede) return res.status(404).json({ error: "Vehículo no encontrado" });
+
+      const dias = Math.min(365, Math.max(2, Number(req.query.dias) || 60));
+      const desde = new Date(Date.now() - dias * 24 * 3600 * 1000).toISOString().slice(0, 10);
+      const { data: filas } = await supabase
+        .from("tc_lecturas_aparato")
+        .select("fecha, leido_en, horas_motor, consumido_l, odometro_km, peso_total_kg, ejes")
+        .eq("vehiculo_id", vehiculoId)
+        .gte("fecha", desde)
+        .order("fecha", { ascending: true });
+
+      const { tramos, resumen } = await import("../lecturasAparato/calculo.ts");
+      const fotos = (filas ?? []).map((f: Record<string, unknown>) => ({
+        fecha: String(f.fecha),
+        leidoEnMs: Date.parse(String(f.leido_en)),
+        horasMotor: f.horas_motor == null ? null : Number(f.horas_motor),
+        consumidoL: f.consumido_l == null ? null : Number(f.consumido_l),
+        odometroKm: f.odometro_km == null ? null : Number(f.odometro_km),
+      }));
+      const ts = tramos(fotos);
+      const treinta = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+
+      res.json({
+        vehiculoId,
+        // Para que la ficha pueda decir «se empieza a guardar esta noche» en
+        // vez de enseñar un bloque vacío sin explicación.
+        fotos: fotos.length,
+        primeraFoto: fotos[0]?.fecha ?? null,
+        ultimaFoto: fotos.at(-1)?.fecha ?? null,
+        pesoUltimo: filas?.length
+          ? {
+              totalKg: filas.at(-1)!.peso_total_kg == null ? null : Number(filas.at(-1)!.peso_total_kg),
+              ejes: (filas.at(-1)!.ejes ?? []) as Array<{ eje: number; kg: number }>,
+            }
+          : null,
+        tramos: ts.slice(-dias),
+        ultimos30: resumen(ts.filter((t) => t.hasta >= treinta)),
+      });
     } catch (e) {
       fallo(res, e);
     }
@@ -428,29 +557,7 @@ export function createKilometrajeMensualRouter(): Router {
       const empresaId = empresaDe((req as Peticion).solicitante!, req.query.empresa);
       if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
 
-      // La flota activa, paginada. Nada de traerla de golpe ni de meter 751
-      // identificadores en un filtro: eso viaja en la URL y ya rompió una vez
-      // el barrido de presencia en producción.
-      const flota: VehiculoDeFlota[] = [];
-      for (let desde = 0; ; desde += PAGINA_FLOTA) {
-        const { data, error } = await supabase
-          .from("tc_vehiculos")
-          .select("id, matricula, numero_unidad")
-          .eq("empresa_id", empresaId)
-          .eq("activo", true)
-          .order("matricula")
-          .range(desde, desde + PAGINA_FLOTA - 1);
-        if (error) throw new Error(`No se pudo leer la flota: ${error.message}`);
-        const pagina = data ?? [];
-        for (const v of pagina) {
-          flota.push({
-            id: String((v as any).id),
-            matricula: (v as any).matricula ?? null,
-            numeroUnidad: (v as any).numero_unidad ?? null,
-          });
-        }
-        if (pagina.length < PAGINA_FLOTA) break;
-      }
+      const flota = await flotaActiva(empresaId);
 
       // Un año hacia atrás basta: la media solo mira los doce últimos meses
       // completos, así que traer más sería cargar filas para descartarlas.
@@ -460,9 +567,278 @@ export function createKilometrajeMensualRouter(): Router {
         desdeYear: ahora.getFullYear() - 1,
       });
 
-      const configs = await listConnectorConfigs(empresaId);
-      const zona = String((configs.find((c: any) => c.enabled)?.config as any)?.zonaHoraria ?? ZONA_HORARIA_POR_DEFECTO);
+      const zona = await zonaDeEmpresa(empresaId);
       res.json({ empresaId, ...rankingDeKilometraje(filas, flota, mesDe(ahora, zona)) });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /**
+   * «Probar con Movertis»: pide el resumen de UN vehículo con varias
+   * ventanas (mes, quincenas, semana, día, mes anterior) y la misma petición
+   * con otra unidad que sí funciona. No guarda nada. Ver `prueba.ts`.
+   *
+   * Cuerpo: { empresaId?, vehiculoId, year, month }
+   */
+  router.post("/probar-vehiculo", async (req, res) => {
+    try {
+      const empresaId = empresaDe((req as Peticion).solicitante!, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const vehiculoId = String(req.body?.vehiculoId ?? "").trim();
+      const mes = mesDeCuerpo(req.body);
+      if (!vehiculoId || !mes) return res.status(400).json({ error: "Falta el vehículo o el mes" });
+
+      const enl = await enlaceParaPrueba(empresaId, vehiculoId);
+      if ("error" in enl) return res.status(enl.estado).json({ error: enl.error });
+      const { v, cuenta, unidad, conector } = enl;
+
+      const zona = String(cuenta.config.zonaHoraria ?? ZONA_HORARIA_POR_DEFECTO);
+      const ventanas = ventanasDePrueba(mes, zona);
+
+      // Control: la unidad de la misma cuenta que MÁS rodó ese mes, con el mes
+      // cerrado y bien. Una que no se movió no demuestra nada (contesta 0 km
+      // con cualquier cosa): con muchos viajes, si funciona, el problema no es
+      // el volumen.
+      const filas = await listMonthlyMileageByTenant({ tenantId: empresaId, desdeYear: mes.year });
+      const control = filas
+        .filter((f) => f.system === cuenta.key && f.account_key === cuenta.accountKey
+          && f.year === mes.year && f.month === mes.month && f.sync_status === "ok" && f.closed && f.mobilink_id !== vehiculoId)
+        .sort((a, b) => Number(b.distance_km ?? 0) - Number(a.distance_km ?? 0))[0];
+
+      const ctx = { tenantId: empresaId, correlationId: await nextCorrelationId() };
+      const limitador = limitadorDe(`${empresaId}/${cuenta.key}/${cuenta.accountKey}`, ritmoDeConfig(cuenta.config));
+      const pedir = async (u: string, w: Ventana): Promise<ResultadoVentana> => {
+        const peticion = { units: [Number(u)], initial_date: w.desde.getTime(), end_date: w.hasta.getTime() };
+        let respuesta: Respuesta;
+        try {
+          await limitador.turno(ESPERA_MAXIMA_MS);
+          const r = await conector.getTripSummary(ctx, [u], { from: w.desde, to: w.hasta });
+          const s = r.find((x) => String(x.providerVehicleId) === u);
+          respuesta = s
+            ? { tipo: "ok", km: Math.round(s.distanceKm), odometroInicial: s.initialOdometerKm ?? null, odometroFinal: s.finalOdometerKm ?? null, viajes: s.trips ?? null }
+            : { tipo: "vacio" };
+        } catch (e) {
+          respuesta = e instanceof ErrorRitmo ? { tipo: "sin_turno" } : { tipo: "error", mensaje: e instanceof Error ? e.message : String(e) };
+        }
+        return { ...w, unidad: u, peticion, respuesta };
+      };
+
+      // En serie: son pocas y van por el mismo limitador que el job.
+      const resultados: ResultadoVentana[] = [];
+      for (const w of ventanas) resultados.push(await pedir(unidad, w));
+      if (control) {
+        const ctl = await pedir(String(control.external_code), { ...ventanas[0], clave: "control", etiqueta: `${ventanas[0].etiqueta} · unidad de control` });
+        resultados.push(ctl);
+      }
+
+      res.json({
+        vehiculoId, matricula: (v as { matricula?: string }).matricula ?? null,
+        cuenta: { connectorKey: cuenta.key, accountKey: cuenta.accountKey }, unidad,
+        unidadControl: control ? String(control.external_code) : null,
+        probadoEn: new Date().toISOString(),
+        resultados: resultados.map((r) => ({ ...r, desde: r.desde.toISOString(), hasta: r.hasta.toISOString() })),
+        conclusion: conclusion(resultados),
+      });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /**
+   * «Ver los sensores»: qué calcula el dispositivo de UN vehículo. No guarda nada.
+   *
+   * Nació de una pregunta concreta: de Movertis no sabemos si un vehículo está
+   * en ralentí, porque el histórico son posiciones y nada más. Pero
+   * `showvehicles` admite la bandera `sensors` —unos 32 por vehículo que nadie
+   * ha listado nunca— y ahí puede estar la respuesta: si hay horas de motor, el
+   * ralentí sale restando el tiempo en movimiento.
+   *
+   * UNA petición, un vehículo. Con la flota entera esa bandera da 502.
+   *
+   * Cuerpo: { empresaId?, vehiculoId }
+   */
+  router.post("/sensores", async (req, res) => {
+    try {
+      const empresaId = empresaDe((req as Peticion).solicitante!, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const vehiculoId = String(req.body?.vehiculoId ?? "").trim();
+      if (!vehiculoId) return res.status(400).json({ error: "Falta el vehículo" });
+
+      const enl = await enlaceParaPrueba(empresaId, vehiculoId);
+      if ("error" in enl) return res.status(enl.estado).json({ error: enl.error });
+      const { v, cuenta, unidad, conector } = enl;
+
+      // Preguntar por los sensores no está en el puerto: es cosa de Movertis.
+      // Se comprueba que este conector sepa, en vez de dar por hecho que la
+      // cuenta es de Movertis porque lo sea la de este cliente.
+      const leer = (conector as { leerSensores?: unknown }).leerSensores;
+      if (typeof leer !== "function") {
+        return res.status(400).json({ error: `La cuenta ${cuenta.key} no sabe dar los sensores del dispositivo` });
+      }
+
+      const { sensoresDe, veredicto, textoParaMovertis } = await import("../movertisSensores.ts");
+      const { lecturaDeAparato, hayAlgoQueEnsenar } = await import("../lecturaAparato.ts");
+      const ctx = { tenantId: empresaId, correlationId: await nextCorrelationId() };
+      const limitador = limitadorDe(`${empresaId}/${cuenta.key}/${cuenta.accountKey}`, ritmoDeConfig(cuenta.config));
+      await limitador.turno(ESPERA_MAXIMA_MS);
+
+      const { peticion, fila } = await (leer as (
+        c: typeof ctx, id: string,
+      ) => Promise<{ peticion: unknown; fila: Record<string, unknown> | null }>).call(conector, ctx, unidad);
+
+      const sensores = sensoresDe(fila);
+      const matricula = (v as { matricula?: string }).matricula ?? null;
+      // En crudo y recortado: si la forma no es la que esperamos, hay que poder
+      // mirarla a mano antes de concluir que no hay sensores.
+      const crudo = JSON.stringify(fila ?? null, null, 1).slice(0, 20_000);
+      const v2 = veredicto(sensores);
+      const lectura = lecturaDeAparato(sensores);
+      res.json({
+        vehiculoId, matricula,
+        cuenta: { connectorKey: cuenta.key, accountKey: cuenta.accountKey }, unidad,
+        pedidoEn: new Date().toISOString(),
+        peticion,
+        sensores,
+        veredicto: v2,
+        // Lo mismo, puesto en claro: horas de motor, gasóleo, peso por eje.
+        // Va aquí y no en otra ruta porque es la misma y única petición.
+        lectura: hayAlgoQueEnsenar(lectura) ? lectura : null,
+        crudo,
+        // Ya armado aquí, que es donde está la función con pruebas: la pantalla
+        // solo lo copia al portapapeles.
+        texto: textoParaMovertis({ matricula, unidad, peticion, sensores, veredicto: v2, crudo }),
+      });
+    } catch (e) {
+      if (e instanceof ErrorRitmo) {
+        return res.status(429).json({ error: "El cupo de Movertis está ocupado ahora mismo; repite en unos minutos" });
+      }
+      fallo(res, e);
+    }
+  });
+
+  /**
+   * «Buscar los días que fallan»: el mes de UN vehículo pedido por partes,
+   * partiendo por la mitad lo que falla hasta llegar a días sueltos. Dice qué
+   * días fallan y cuántos km da el mes por partes (con los días rotos
+   * rellenados con el odómetro). Es lo mismo que hace la sincronización de la
+   * noche con los meses cerrados que fallan enteros. No guarda nada.
+   *
+   * Cuerpo: { empresaId?, vehiculoId, year, month }
+   */
+  router.post("/probar-recorrido", async (req, res) => {
+    // «🗺 Recorrido»: los puntos que da Movertis de UN vehículo en UN día y si
+    // bastan para saber por qué carretera va. No guarda nada. Ver recorrido.ts.
+    try {
+      const empresaId = empresaDe((req as Peticion).solicitante!, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const vehiculoId = String(req.body?.vehiculoId ?? "").trim();
+      const fecha = String(req.body?.fecha ?? "").trim();
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(fecha);
+      if (!vehiculoId || !m) return res.status(400).json({ error: "Falta el vehículo o la fecha (AAAA-MM-DD)" });
+      const enl = await enlaceParaPrueba(empresaId, vehiculoId);
+      if ("error" in enl) return res.status(enl.estado).json({ error: enl.error });
+      const { v, cuenta, unidad, conector } = enl;
+      const zona = String(cuenta.config.zonaHoraria ?? ZONA_HORARIA_POR_DEFECTO);
+      const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+      const desde = medianocheEn(y, mo, d, zona);
+      const manana = new Date(Date.UTC(y, mo - 1, d + 1)); // el día siguiente, también a fin de mes
+      const finDia = medianocheEn(manana.getUTCFullYear(), manana.getUTCMonth() + 1, manana.getUTCDate(), zona);
+      const ventana = { from: desde, to: finDia };
+      const ctx = { tenantId: empresaId, correlationId: await nextCorrelationId() };
+      const limitador = limitadorDe(`${empresaId}/${cuenta.key}/${cuenta.accountKey}`, ritmoDeConfig(cuenta.config));
+
+      let puntos: PuntoRecorrido[] = [];
+      let errorPuntos: string | null = null;
+      try {
+        await limitador.turno(ESPERA_MAXIMA_MS);
+        const lecturas = await conector.getTelemetryHistory(ctx, unidad, ventana);
+        puntos = lecturas
+          .filter((l) => l.latitude != null && l.longitude != null)
+          .map((l) => ({ t: l.capturedAt.getTime(), lat: Number(l.latitude), lng: Number(l.longitude), velocidad: l.speedKmh ?? null }));
+      } catch (e) {
+        errorPuntos = e instanceof ErrorRitmo ? "Límite de peticiones: repite en unos minutos." : e instanceof Error ? e.message : String(e);
+      }
+
+      let kmResumen: number | null = null;
+      let errorResumen: string | null = null;
+      try {
+        await limitador.turno(ESPERA_MAXIMA_MS);
+        const [s] = await conector.getTripSummary(ctx, [unidad], ventana);
+        kmResumen = s ? Math.round(s.distanceKm * 10) / 10 : 0;
+      } catch (e) {
+        errorResumen = e instanceof ErrorRitmo ? "Límite de peticiones" : e instanceof Error ? e.message : String(e);
+      }
+
+      res.json({
+        vehiculoId, matricula: (v as { matricula?: string }).matricula ?? null, unidad, fecha,
+        desde: desde.toISOString(), hasta: finDia.toISOString(),
+        errorPuntos, kmResumen, errorResumen,
+        estadistica: estadisticaRecorrido(puntos, kmResumen),
+        puntos: reducirPuntos(puntos, 2000),
+      });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  router.post("/probar-vehiculo/partes", async (req, res) => {
+    try {
+      const empresaId = empresaDe((req as Peticion).solicitante!, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const vehiculoId = String(req.body?.vehiculoId ?? "").trim();
+      const mes = mesDeCuerpo(req.body);
+      if (!vehiculoId || !mes) return res.status(400).json({ error: "Falta el vehículo o el mes" });
+      const enl = await enlaceParaPrueba(empresaId, vehiculoId);
+      if ("error" in enl) return res.status(enl.estado).json({ error: enl.error });
+      const { v, cuenta, unidad, conector } = enl;
+      const zona = String(cuenta.config.zonaHoraria ?? ZONA_HORARIA_POR_DEFECTO);
+      const ctx = { tenantId: empresaId, correlationId: await nextCorrelationId() };
+      const limitador = limitadorDe(`${empresaId}/${cuenta.key}/${cuenta.accountKey}`, ritmoDeConfig(cuenta.config));
+
+      const m = await pedirPorPartes(mes, zona, async (desde, hasta) => {
+        try {
+          await limitador.turno(ESPERA_MAXIMA_MS);
+        } catch (e) {
+          if (e instanceof ErrorRitmo) return null;
+          throw e;
+        }
+        const [s] = await conector.getTripSummary(ctx, [unidad], { from: desde, to: hasta });
+        if (!s) return "vacio";
+        return { km: s.distanceKm, odometroInicial: s.initialOdometerKm ?? null, odometroFinal: s.finalOdometerKm ?? null, viajes: s.trips ?? null };
+      }, { primeraFallida: true, maxPeticiones: 16 });
+
+      res.json({
+        vehiculoId, matricula: (v as { matricula?: string }).matricula ?? null, unidad,
+        probadoEn: new Date().toISOString(),
+        km: m.km == null ? null : Math.round(m.km), kmPorOdometro: Math.round(m.kmPorOdometro),
+        odometroInicial: m.odometroInicial, odometroFinal: m.odometroFinal, viajes: m.viajes,
+        diasFallidos: m.diasFallidos, peticiones: m.peticiones, motivo: m.motivo ?? null,
+        partes: m.partes
+          .sort((a, b) => a.dias[0] - b.dias[0])
+          .map((p) => ({ ...p, desde: p.desde.toISOString(), hasta: p.hasta.toISOString() })),
+      });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /**
+   * Km de toda la flota por meses y por años (pantalla «Km de la flota»).
+   * Solo suma lo auténtico: ver `flota.ts`. Todo el histórico guardado.
+   */
+  router.get("/flota", async (req, res) => {
+    try {
+      const empresaId = empresaDe((req as Peticion).solicitante!, req.query.empresa);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const flota = await flotaActiva(empresaId);
+      const filas = await listMonthlyMileageByTenant({ tenantId: empresaId });
+      const zona = await zonaDeEmpresa(empresaId);
+      res.json({
+        empresaId,
+        vehiculosActivos: flota.length,
+        ...resumenDeFlota(filas, new Set(flota.map((v) => v.id)), mesDe(new Date(), zona)),
+      });
     } catch (e) {
       fallo(res, e);
     }

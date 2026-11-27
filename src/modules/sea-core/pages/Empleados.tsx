@@ -3,6 +3,8 @@ import { Link } from "react-router-dom";
 import CoreLayout from "../layouts/CoreLayout";
 import { supabase } from "../../almacen-neumaticos/services/supabase";
 import { apiFetch } from "../../apiFetch";
+import ImportarNominas from "../components/ImportarNominas";
+import FotoEmpleado from "../components/FotoEmpleado";
 
 type Empleado = {
   id: string;
@@ -54,6 +56,27 @@ const ESTADO_ALTA: Record<string, { label: string; clase: string }> = {
   actualizando: { label: "Actualización pedida", clase: "bg-sky-500/20 text-sky-300" },
 };
 
+/**
+ * ¿Llegó el SMS del enlace? Lo dice Twilio, y el servidor se lo pregunta.
+ *
+ * «Enlace enviado» solo quiere decir que Twilio aceptó el mensaje. Debajo va
+ * lo que pasó después, que es lo que importa: si no llegó, no hay que esperar
+ * a que el trabajador rellene nada.
+ */
+type Entrega = {
+  estado: "en_camino" | "sin_confirmar" | "entregado" | "no_entregado";
+  motivo: string | null;
+  telefono: string;
+  enviadoAt: string;
+};
+
+const ENTREGA: Record<Entrega["estado"], { label: string; clase: string; ayuda: string }> = {
+  entregado:     { label: "SMS entregado",     clase: "bg-emerald-500/20 text-emerald-300", ayuda: "La operadora confirma que ha llegado al móvil." },
+  en_camino:     { label: "SMS en camino",     clase: "bg-slate-700 text-slate-300",        ayuda: "Twilio lo ha aceptado; falta que la operadora confirme la entrega." },
+  sin_confirmar: { label: "SMS sin confirmar", clase: "bg-amber-500/20 text-amber-300",     ayuda: "Hace más de 15 minutos que salió y la operadora no ha confirmado que haya llegado." },
+  no_entregado:  { label: "SMS no entregado",  clase: "bg-red-500/20 text-red-300",         ayuda: "No ha llegado al móvil." },
+};
+
 const EMPTY = {
   nombre: "", apellidos: "", dni_nie: "", num_seguridad_social: "", telefono: "", email: "",
   direccion: "", codigo_postal: "", poblacion: "", provincia: "",
@@ -87,6 +110,18 @@ export default function Empleados() {
   const [numeros, setNumeros] = useState<Record<string, string>>({});
   const [numerosDisponibles, setNumerosDisponibles] = useState(false);
   const [soloSinNumero, setSoloSinNumero] = useState(false);
+  /** Dirección firmada de la foto de cada empleado que tiene. Caduca: se pide al cargar. */
+  const [fotos, setFotos] = useState<Record<string, string>>({});
+  /** Técnicos enlazados con foto en Taller y todavía sin foto en Core. */
+  const [fotosEnTaller, setFotosEnTaller] = useState(0);
+  const [trayendoFotos, setTrayendoFotos] = useState(false);
+  /** Fotos guardadas antes de que existiera el fondo de la empresa. */
+  const [fotosSinFondo, setFotosSinFondo] = useState(0);
+  const [poniendoFondo, setPoniendoFondo] = useState(false);
+  /** El importador de nóminas, abierto. */
+  const [importando, setImportando] = useState(false);
+  /** La entrega del SMS del enlace vivo de cada empleado que tiene uno. */
+  const [entregas, setEntregas] = useState<Record<string, Entrega>>({});
 
   useEffect(() => { cargar(); }, []);
 
@@ -104,6 +139,101 @@ export default function Empleados() {
     setCentros(cent ?? []);
     setCargando(false);
     void cargarNumeros();
+    void cargarFotos();
+    void cargarEntregas();
+  }
+
+  async function cargarEntregas() {
+    try {
+      const r = await apiFetch("/api/core/alta/entregas");
+      if (!r.ok) return;
+      const d = (await r.json()) as { entregas?: Record<string, Entrega> };
+      setEntregas(d.entregas ?? {});
+    } catch {
+      // Sin esto la lista sale igual, con «Enlace enviado» a secas.
+    }
+  }
+
+  /*
+   * Un SMS tarda segundos en llegar: mientras haya alguno en camino se vuelve
+   * a mirar sola, para no tener que recargar la página. Se para sola también:
+   * a los 15 minutos el servidor deja de llamarlo «en camino».
+   */
+  const hayEnCamino = Object.values(entregas).some((x) => x.estado === "en_camino");
+  useEffect(() => {
+    if (!hayEnCamino) return;
+    const reloj = setTimeout(() => void cargarEntregas(), 20_000);
+    return () => clearTimeout(reloj);
+  }, [hayEnCamino, entregas]);
+
+  async function cargarFotos() {
+    try {
+      const r = await apiFetch("/api/core/empleados/fotos");
+      if (!r.ok) return;
+      const d = (await r.json()) as { fotos?: Record<string, string>; pendientesDeTaller?: number; sinFondo?: number };
+      setFotos(d.fotos ?? {});
+      setFotosEnTaller(d.pendientesDeTaller ?? 0);
+      setFotosSinFondo(d.sinFondo ?? 0);
+    } catch {
+      // Sin fotos la lista sale igual, con las iniciales.
+    }
+  }
+
+  /**
+   * Les pone el fondo de la empresa a las fotos que ya estaban guardadas.
+   *
+   * El servidor lo hace por tandas (cada foto son un par de segundos), así que
+   * se le vuelve a pedir mientras queden y vaya avanzando.
+   */
+  async function ponerFondoALasFotos() {
+    setPoniendoFondo(true);
+    setError("");
+    try {
+      let puestos = 0;
+      const saltados: { nombre: string; motivo: string }[] = [];
+      for (let tanda = 0; tanda < 10; tanda++) {
+        const r = await apiFetch("/api/core/empleados/fotos/poner-fondo", { method: "POST" });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d?.error ?? "No se ha podido poner el fondo.");
+        const hechos: string[] = d.puestos ?? [];
+        puestos += hechos.length;
+        saltados.push(...((d.saltados ?? []) as { nombre: string; motivo: string }[]));
+        if (!d.quedan || hechos.length === 0) break;
+      }
+      setMensaje(
+        `Fondo puesto en ${puestos} ${puestos === 1 ? "foto" : "fotos"}.` +
+          (saltados.length ? ` Sin cambiar: ${saltados.map((x) => `${x.nombre} (${x.motivo})`).join("; ")}.` : "")
+      );
+      setTimeout(() => setMensaje(""), 12000);
+      await cargarFotos();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se ha podido poner el fondo.");
+    } finally {
+      setPoniendoFondo(false);
+    }
+  }
+
+  /** Pasa a Core, normalizadas, las fotos que los técnicos enlazados tienen en Taller. */
+  async function traerFotosDeTaller() {
+    setTrayendoFotos(true);
+    try {
+      const r = await apiFetch("/api/core/empleados/fotos/traer-de-taller", { method: "POST" });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d?.error ?? "No se han podido traer las fotos.");
+      const pasadas: string[] = d.pasadas ?? [];
+      const saltadas: { tecnico: string; motivo: string }[] = d.saltadas ?? [];
+      setMensaje(
+        (pasadas.length ? `Fotos traídas de Taller: ${pasadas.join(", ")}.` : "No se ha traído ninguna foto.") +
+          (saltadas.length ? ` No se ha podido con: ${saltadas.map((x) => `${x.tecnico} (${x.motivo})`).join(", ")}.` : "")
+      );
+      setTimeout(() => setMensaje(""), 20000);
+      await cargarFotos();
+    } catch (e) {
+      setMensaje(e instanceof Error ? e.message : "No se han podido traer las fotos.");
+      setTimeout(() => setMensaje(""), 8000);
+    } finally {
+      setTrayendoFotos(false);
+    }
   }
 
   async function cargarNumeros() {
@@ -307,13 +437,50 @@ export default function Empleados() {
           <h1 className="text-2xl font-bold">Empleados</h1>
           <p className="text-sm text-slate-400">{filtrados.length} empleados</p>
         </div>
-        <button onClick={abrirNuevo}
-          className="rounded-xl bg-slate-800 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-500">
-          + Nuevo empleado
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={() => setImportando(true)}
+            title="Dar de alta a los trabajadores nuevos a partir del PDF de nóminas del mes"
+            className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-700/50">
+            Importar de nóminas
+          </button>
+          <button onClick={abrirNuevo}
+            className="rounded-xl bg-slate-800 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-500">
+            + Nuevo empleado
+          </button>
+        </div>
       </div>
 
+      {importando && <ImportarNominas onCerrar={() => setImportando(false)} onImportado={() => void cargar()} />}
+
       {mensaje && <p className="rounded-lg bg-green-50 p-3 text-sm text-green-700">{mensaje}</p>}
+
+      {/* Solo mientras haga falta: cuando no queda ninguna por traer, desaparece. */}
+      {fotosEnTaller > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-sky-800 bg-sky-500/10 p-3 text-sm text-sky-100">
+          <span>
+            {fotosEnTaller === 1 ? "Hay 1 técnico" : `Hay ${fotosEnTaller} técnicos`} con foto en Taller que aún no la{" "}
+            {fotosEnTaller === 1 ? "tiene" : "tienen"} en su ficha de Core.
+          </span>
+          <button onClick={() => void traerFotosDeTaller()} disabled={trayendoFotos}
+            className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-sky-500 disabled:opacity-60">
+            {trayendoFotos ? "Trayendo…" : "Traer fotos de Taller"}
+          </button>
+        </div>
+      )}
+
+      {/* Igual: solo mientras quede alguna foto de las de antes. */}
+      {fotosSinFondo > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-sky-800 bg-sky-500/10 p-3 text-sm text-sky-100">
+          <span>
+            {fotosSinFondo === 1 ? "Hay 1 foto guardada" : `Hay ${fotosSinFondo} fotos guardadas`} sin el fondo de la empresa.
+            Las nuevas ya salen con él.
+          </span>
+          <button onClick={() => void ponerFondoALasFotos()} disabled={poniendoFondo}
+            className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-sky-500 disabled:opacity-60">
+            {poniendoFondo ? "Poniendo el fondo…" : "Poner el fondo"}
+          </button>
+        </div>
+      )}
 
       {/* Filtros */}
       <div className="flex flex-wrap gap-2 items-center">
@@ -372,9 +539,13 @@ export default function Empleados() {
                   )}
                   <td className="p-3">
                     <Link to={`/core/empleados/${e.id}`} className="flex items-center gap-2 group">
-                      <div className="h-8 w-8 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0">
-                        {e.nombre.charAt(0).toUpperCase()}
-                      </div>
+                      {fotos[e.id] ? (
+                        <img src={fotos[e.id]} alt="" loading="lazy" className="h-8 w-8 shrink-0 rounded-full bg-slate-700 object-cover" />
+                      ) : (
+                        <div className="h-8 w-8 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-300 shrink-0">
+                          {e.nombre.charAt(0).toUpperCase()}
+                        </div>
+                      )}
                       <div>
                         <div className="font-medium group-hover:text-blue-600">{e.nombre} {e.apellidos ?? ""}</div>
                         {e.cargo && <div className="text-xs text-slate-500">{e.cargo}</div>}
@@ -404,6 +575,17 @@ export default function Empleados() {
                         <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${ESTADO_ALTA[e.estado_alta!].clase}`}>
                           {ESTADO_ALTA[e.estado_alta!].label}
                         </span>
+                      )}
+                      {entregas[e.id] && ENTREGA[entregas[e.id].estado] && (
+                        <span
+                          title={`${ENTREGA[entregas[e.id].estado].ayuda} Enviado a ${entregas[e.id].telefono} el ${new Date(entregas[e.id].enviadoAt).toLocaleString("es-ES", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}.`}
+                          className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${ENTREGA[entregas[e.id].estado].clase}`}
+                        >
+                          {ENTREGA[entregas[e.id].estado].label}
+                        </span>
+                      )}
+                      {entregas[e.id]?.estado === "no_entregado" && entregas[e.id].motivo && (
+                        <span className="max-w-[13rem] text-[11px] leading-tight text-red-300">{entregas[e.id].motivo}</span>
                       )}
                     </div>
                   </td>
@@ -453,6 +635,31 @@ export default function Empleados() {
             <h2 className="text-lg font-bold mb-5">{editId ? "Editar empleado" : "Nuevo empleado"}</h2>
 
             <div className="space-y-4">
+              {/* La foto: de quien ya existe. A uno nuevo se le pone después, o se la hace él en el enlace. */}
+              <div>
+                <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Foto</h3>
+                {editId ? (
+                  <FotoEmpleado
+                    employeeId={editId}
+                    nombre={form.nombre || "Empleado"}
+                    url={fotos[editId] ?? null}
+                    tamano={72}
+                    onCambio={(u) =>
+                      setFotos((f) => {
+                        const n = { ...f };
+                        if (u) n[editId] = u;
+                        else delete n[editId];
+                        return n;
+                      })
+                    }
+                  />
+                ) : (
+                  <p className="text-xs text-slate-500">
+                    Se pone una vez creado el empleado, desde aquí o desde su ficha. Si le mandas el enlace de alta, se la hace él con el móvil.
+                  </p>
+                )}
+              </div>
+
               {/* Datos personales */}
               <div>
                 <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Datos personales</h3>

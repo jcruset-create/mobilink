@@ -469,7 +469,7 @@ function PresupuestarModal({ otf, onClose }: { otf: any; onClose: () => void }) 
     let vivo = true;
     (async () => {
       try {
-        const res = await fetch(`/api/v1/erp/work-orders/${otf.id}/quote-preview`, { headers });
+        const res = await apiFetch(`/api/v1/erp/work-orders/${otf.id}/quote-preview`, { headers });
         const data = await res.json();
         if (!vivo) return;
         if (!res.ok) throw new Error(data?.message || data?.error || `Error ${res.status}`);
@@ -487,7 +487,7 @@ function PresupuestarModal({ otf, onClose }: { otf: any; onClose: () => void }) 
     setCreando(true);
     setError(null);
     try {
-      const res = await fetch(`/api/v1/erp/work-orders/${otf.id}/sales-quote`, {
+      const res = await apiFetch(`/api/v1/erp/work-orders/${otf.id}/sales-quote`, {
         method: "POST",
         headers,
         body: JSON.stringify({ permitirSinMapear: forzar }),
@@ -663,7 +663,8 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
   const faltaParaAnadir = !plate.trim()
     ? "Indica la matrícula."
     : conNeumaticos && !neumaticos
-      ? faltaNeumaticos ?? "Marca las ruedas y elige el neumático."
+      // Siempre con la salida: sin plano, el trabajo se puede añadir igual.
+      ? `${faltaNeumaticos ?? "Marca las ruedas y elige el neumático."} O desmarca «Cambio de neumáticos» para añadirlo sin plano.`
       : !trabajoPlantilla.trim() && !detalle.trim() && !neumaticos
         ? "Elige un trabajo de la plantilla o escribe el detalle manual."
         : null;

@@ -118,6 +118,9 @@ export function PlanoRuedas({
   );
 }
 
+/** Caracteres de matrícula a partir de los que se busca el vehículo en TyreControl. */
+const MIN_MATRICULA = 2;
+
 export default function OtfNeumaticos({
   otfId, plate, onChange, inicial,
 }: {
@@ -163,7 +166,10 @@ export default function OtfNeumaticos({
   const limpia = plate.toUpperCase().replace(/\s+/g, "");
   useEffect(() => {
     setVeh(null); setPlano(null); setSeleccion([]); setTipoId(""); setError(null);
-    if (limpia.length < 5) return;
+    // Desde 2 caracteres: hay matrículas cortas (remolques, especiales, números
+    // internos de flota). Con 5 de mínimo, «SM» no enseñaba el selector de tipo
+    // y el botón pedía elegirlo igualmente: no había forma de seguir.
+    if (limpia.length < MIN_MATRICULA) return;
     let vivo = true;
     const t = setTimeout(() => {
       leer<Vehiculo>(`/api/otf/${otfId}/tc-vehiculo?plate=${encodeURIComponent(limpia)}`)
@@ -211,7 +217,9 @@ export default function OtfNeumaticos({
 
   // Lo que se enviará, y qué falta.
   useEffect(() => {
-    const falta = !plano ? (veh?.estado === "FOUND" ? "El vehículo no tiene plano en TyreControl." : "Elige el tipo de vehículo.")
+    const falta = limpia.length < MIN_MATRICULA ? "Escribe la matrícula para ver el plano del vehículo."
+      : !veh ? (error ?? "Consultando TyreControl…")
+      : !plano ? (veh.estado === "FOUND" ? "El vehículo no tiene plano en TyreControl." : "Elige el tipo de vehículo (TyreControl) debajo de la casilla de neumáticos.")
       : seleccion.length === 0 ? "Marca las ruedas en el plano."
       : !medida.trim() ? "Indica la medida del neumático."
       : null;
@@ -224,10 +232,10 @@ export default function OtfNeumaticos({
       medida: medida.trim().toUpperCase(), condicion, destinoRetirado: destino,
     }, null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [plano, seleccion, medida, ref, condicion, destino, busca, veh]);
+  }, [plano, seleccion, medida, ref, condicion, destino, busca, veh, limpia, error]);
 
   const inputCls = "w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100";
-  if (limpia.length < 5) return <p className="text-xs text-slate-400">Escribe la matrícula para ver el plano del vehículo.</p>;
+  if (limpia.length < MIN_MATRICULA) return <p className="text-xs text-slate-400">Escribe la matrícula para ver el plano del vehículo.</p>;
   if (error) return <p className="text-xs font-semibold text-amber-300">{error}</p>;
   if (!veh) return <p className="text-xs text-slate-400">Consultando TyreControl…</p>;
 

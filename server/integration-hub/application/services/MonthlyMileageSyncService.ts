@@ -51,8 +51,22 @@ import {
 } from "../../infrastructure/repositories.ts";
 import { ErrorRitmo, limitadorDe, ritmoDeConfig } from "../../infrastructure/ritmo.ts";
 import { resolveTelematicsConnectors } from "../../connectors/ConnectorRegistry.ts";
+import { pedirPorPartes } from "../../domain/partesDelMes.ts";
 
 export const FUENTE = "summarytrips";
+/** Mes cerrado pedido por partes porque el mes entero fallaba. Ver `partesDelMes.ts`. */
+export const FUENTE_PARTES = "summarytrips_partes";
+/** Igual, y con días que fallan solos rellenados con el odómetro de los vecinos. */
+export const FUENTE_PARTES_ODOMETRO = "summarytrips_partes_odometro";
+/**
+ * Cuántas peticiones puede gastar UNA pasada en pedir meses por partes.
+ * Se suma al trabajo normal y va por el mismo limitador: con 12 cada 5
+ * minutos, 250 son unas dos horas, lo que cabe en la madrugada después de la
+ * pasada normal. Lo que no quepa, la noche siguiente (el mes sigue sin cerrar).
+ */
+export const PETICIONES_POR_PARTES_POR_PASADA = 250;
+/** Tope por unidad y mes: un día roto se aísla con unas diez. */
+const PETICIONES_POR_PARTES_POR_UNIDAD = 16;
 export const MESES_HISTORICO_POR_DEFECTO = 12;
 const UNIDADES_POR_PETICION_POR_DEFECTO = 25;
 const UNIDADES_POR_PETICION_MAXIMO = 100;
@@ -68,6 +82,23 @@ const UNIDADES_POR_PETICION_MAXIMO = 100;
  * cerrados ya no se piden).
  */
 const LOTES_SEGUIDOS_FALLIDOS_MAXIMO = 5;
+
+/*
+ * Un lote rechazado se PARTE para aislar al vehículo que lo tumba.
+ *
+ * Visto en producción (octubre y noviembre de 2026, Autocares Plana): Movertis
+ * contesta «Cannot read properties of undefined (reading 'toString')» a todo
+ * el lote cuando UNA de sus unidades le sienta mal. Con 25 por petición, siete
+ * de cada nueve lotes caían enteros, el cortacircuito saltaba y el mes anterior
+ * se quedaba sin cerrar para cientos de vehículos que no tenían nada.
+ *
+ * Así que un rechazo (no un 503 ni una credencial) se parte en dos mitades y
+ * se vuelve a pedir cada una, y la que falle se vuelve a partir, hasta dejar
+ * solo al culpable con su error. Si las DOS mitades fallan enteras no es una
+ * unidad rara: es el proveedor diciendo que no a todo, y no se sigue partiendo
+ * (eso sería martillear con más peticiones). Con un culpable en 25 son unas
+ * diez peticiones más, todas por el limitador.
+ */
 
 /** Prefijo de la entrada en `integration_sync_state`; la cuenta va detrás. */
 export const ENTIDAD_SYNC = "vehicle_monthly_mileage";
@@ -100,6 +131,8 @@ export interface OpcionesSyncMensual {
   esperaMaximaMs?: number;
   /** Para pruebas. */
   ahora?: Date;
+  /** Peticiones para pedir por partes los meses cerrados que fallan enteros. 0 = no. */
+  presupuestoPartes?: number;
 }
 
 export interface ResumenCuentaMensual {
@@ -127,6 +160,8 @@ export interface ResumenCuentaMensual {
   abandonada?: string;
   /** Se abandonó por no tener turno con el proveedor, sin llegar a preguntar. */
   sinCupo?: boolean;
+  /** Meses cerrados que fallaban enteros y se han pedido por partes. */
+  porPartes?: { intentados: number; cerrados: number; peticiones: number; conOdometro: number };
 }
 
 export interface ResumenSyncMensual {
@@ -136,9 +171,9 @@ export interface ResumenSyncMensual {
 
 /** Lo que devuelve el proveedor para un vehículo, o por qué no. */
 type Resultado =
-  | { tipo: "ok"; resumen: TripSummary }
+  | { tipo: "ok"; resumen: TripSummary; fuente?: string }
   | { tipo: "vacio" }
-  | { tipo: "error"; mensaje: string };
+  | { tipo: "error"; mensaje: string; divisible?: boolean };
 
 export async function syncMonthlyMileage(op: OpcionesSyncMensual): Promise<ResumenSyncMensual> {
   const ctx: OperationContext = { tenantId: op.tenantId, correlationId: await nextCorrelationId() };
@@ -224,8 +259,11 @@ async function sincronizarCuenta(
     const conKm = new Set<string>();
     const sinDatos = new Set<string>();
     let lotesSeguidosFallidos = 0;
+    // Meses CERRADOS que el proveedor rechaza aunque la unidad se pida sola:
+    // se intentan por partes al final de la pasada. Ver `partesDelMes.ts`.
+    const porPartes: Array<{ enlace: MappingRow; mes: Mes; limites: { desde: Date; hasta: Date } }> = [];
 
-    for (const mes of meses) {
+    meses: for (const mes of meses) {
       const limites = limitesDelMes(mes, zona);
       const cerrado = mesCerrado(mes, zona, ahora);
 
@@ -262,7 +300,12 @@ async function sincronizarCuenta(
           return r;
         }
         r.peticiones += 1;
-        const porVehiculo = await pedirLote(ctx, conector, tanda, limites);
+        const primera = await pedirLote(ctx, conector, tanda, limites);
+        const porVehiculo = await partirSiHaceFalta(tanda, primera, async (parte) => {
+          await limitador.turno(op.esperaMaximaMs);
+          r.peticiones += 1;
+          return pedirLote(ctx, conector, parte, limites);
+        });
 
         // Un lote entero en error es una respuesta del proveedor, no un
         // vehículo raro: se cuentan seguidos y, pasado el tope, se para.
@@ -286,6 +329,7 @@ async function sincronizarCuenta(
 
           if (res.tipo === "error") {
             anotarError(`${claveDeMes(mes)} ${enlace.external_code}: ${res.mensaje}`);
+            if (cerrado && res.divisible) porPartes.push({ enlace, mes, limites });
             // Con la credencial rechazada, cada petición más es cupo quemado.
             if (res.mensaje.startsWith("AUTH:")) {
               await guardarFila(op.tenantId, cuenta, enlace, mes, limites, zona, res, cerrado);
@@ -311,19 +355,65 @@ async function sincronizarCuenta(
           r.abandonada =
             `${LOTES_SEGUIDOS_FALLIDOS_MAXIMO} lotes seguidos rechazados por el proveedor; se deja para la ` +
             `siguiente pasada. Último error: ${ultimo?.tipo === "error" ? ultimo.mensaje : "?"}`;
-          r.vehiculosProcesados = procesados.size;
-          r.vehiculosConKm = conKm.size;
-          r.vehiculosSinDatos = [...sinDatos].filter((id) => !conKm.has(id)).length;
-          await cerrarAuditoria(op.tenantId, cuenta, r, "error");
-          return r;
+          // No se devuelve aún: los meses cerrados que ya han fallado se
+          // intentan por partes. Si los lotes caen porque juntan unidades con
+          // un día roto (octubre de 2026: 150 así, cinco lotes seguidos
+          // enteros), abandonar aquí impedía cerrarlos NUNCA. Si es el
+          // proveedor diciendo que no a todo, la primera unidad por partes no
+          // saca ni una parte buena y se para (ver abajo).
+          break meses;
         }
+      }
+    }
+
+    // Por partes, con lo que quede de presupuesto. También tras abandonar por
+    // lotes rechazados: con el proveedor diciendo que no a todo, la primera
+    // unidad no saca ni una parte buena y el bucle se corta solo.
+    let presupuesto = op.presupuestoPartes ?? PETICIONES_POR_PARTES_POR_PASADA;
+    if (porPartes.length && presupuesto > 0) {
+      r.porPartes = { intentados: 0, cerrados: 0, peticiones: 0, conOdometro: 0 };
+      for (const { enlace, mes, limites } of porPartes) {
+        if (presupuesto < 4) break;
+        r.porPartes.intentados += 1;
+        const m = await pedirPorPartes(mes, zona, async (desde, hasta) => {
+          try {
+            await limitador.turno(op.esperaMaximaMs);
+          } catch (e) {
+            if (e instanceof ErrorRitmo) return null;
+            throw e;
+          }
+          r.peticiones += 1;
+          const [s] = await conector.getTripSummary(ctx, [enlace.external_code], { from: desde, to: hasta });
+          if (!s) return "vacio";
+          return { km: s.distanceKm, odometroInicial: s.initialOdometerKm ?? null, odometroFinal: s.finalOdometerKm ?? null, viajes: s.trips ?? null };
+        }, { primeraFallida: true, maxPeticiones: Math.min(PETICIONES_POR_PARTES_POR_UNIDAD, presupuesto) });
+        presupuesto -= m.peticiones;
+        r.porPartes.peticiones += m.peticiones;
+        // Ni una parte buena: no es un día roto, es el proveedor diciendo que
+        // no a todo. Se deja el resto para otra pasada en vez de gastar cupo.
+        if (!m.partes.some((p) => p.resultado.tipo === "ok")) break;
+        if (m.km == null) continue; // sigue en error: otra noche, o a mano
+        r.porPartes.cerrados += 1;
+        if (m.kmPorOdometro > 0) r.porPartes.conOdometro += 1;
+        conKm.add(enlace.mobilink_id);
+        r.kmTotales += m.km;
+        await guardarFila(op.tenantId, cuenta, enlace, mes, limites, zona, {
+          tipo: "ok",
+          fuente: m.kmPorOdometro > 0 ? FUENTE_PARTES_ODOMETRO : FUENTE_PARTES,
+          resumen: {
+            provider: cuenta.key, accountKey: cuenta.accountKey, providerVehicleId: enlace.external_code,
+            window: { from: limites.desde, to: limites.hasta },
+            distanceKm: m.km, initialOdometerKm: m.odometroInicial ?? undefined,
+            finalOdometerKm: m.odometroFinal ?? undefined, trips: m.viajes,
+          } as TripSummary,
+        }, true);
       }
     }
 
     r.vehiculosProcesados = procesados.size;
     r.vehiculosConKm = conKm.size;
     r.vehiculosSinDatos = [...sinDatos].filter((id) => !conKm.has(id)).length;
-    await cerrarAuditoria(op.tenantId, cuenta, r, r.errores > 0 ? "partial" : "ok");
+    await cerrarAuditoria(op.tenantId, cuenta, r, r.abandonada ? "error" : r.errores > 0 ? "partial" : "ok");
     return r;
   } catch (e: any) {
     anotarError(String(e?.message ?? e));
@@ -346,6 +436,13 @@ export function mesesQueTocan(ahora: Date, zona: string, mesesHistorico = MESES_
     m = mesAnterior(m);
     lista.push(m);
   }
+  // CERRAR el anterior va antes que actualizar el en curso: si la pasada se
+  // queda a medias, que lo que falte sea lo que mañana se vuelve a pedir de
+  // todos modos, no el cierre del mes. Antes solo los primeros 7 días; el 27
+  // de noviembre la pasada seguía abandonándose en noviembre sin llegar a los
+  // 101 de octubre que quedaban por cerrar. Con el anterior ya cerrado no
+  // cuesta nada: los cerrados no se vuelven a pedir.
+  if (total > 0) [lista[0], lista[1]] = [lista[1], lista[0]];
   return lista;
 }
 
@@ -359,6 +456,44 @@ function tamanoDeLote(v: unknown): number {
   const n = Number(v);
   if (!Number.isFinite(n) || n < 1) return UNIDADES_POR_PETICION_POR_DEFECTO;
   return Math.min(UNIDADES_POR_PETICION_MAXIMO, Math.floor(n));
+}
+
+/** ¿Todo el lote en error? */
+const todoError = (tanda: MappingRow[], res: Map<string, Resultado>) =>
+  tanda.length > 0 && tanda.every((e) => res.get(e.mobilink_id)?.tipo === "error");
+
+/**
+ * Si el lote entero vino rechazado, lo parte en mitades hasta aislar a quien
+ * lo tumba (ver la cabecera). `pedir` pasa por el limitador y cuenta la
+ * petición. Si el limitador no da turno a tiempo, se deja de partir y lo que
+ * falte queda con el error del lote: se reintentará en la siguiente pasada.
+ * Exportada para probarla sin proveedor.
+ */
+export async function partirSiHaceFalta(
+  tanda: MappingRow[],
+  res: Map<string, Resultado>,
+  pedir: (parte: MappingRow[]) => Promise<Map<string, Resultado>>,
+): Promise<Map<string, Resultado>> {
+  if (tanda.length < 2 || !todoError(tanda, res)) return res;
+  const primero = res.get(tanda[0].mobilink_id);
+  if (primero?.tipo !== "error" || !primero.divisible) return res;
+
+  const mitad = Math.ceil(tanda.length / 2);
+  const a = tanda.slice(0, mitad);
+  const b = tanda.slice(mitad);
+  // Sin turno a tiempo se deja de partir: lo que no se ha podido volver a
+  // pedir se queda con el error del lote.
+  const pedirSinTurno = async (parte: MappingRow[]) => {
+    try { return await pedir(parte); } catch (e) { if (e instanceof ErrorRitmo) return null; throw e; }
+  };
+  const ra = await pedirSinTurno(a);
+  if (!ra) return res;
+  const rb = await pedirSinTurno(b);
+  if (!rb) return new Map([...res, ...ra]);
+  // Las dos mitades rechazadas enteras: es el proveedor, no una unidad.
+  if (todoError(a, ra) && todoError(b, rb)) return new Map([...ra, ...rb]);
+  const [fa, fb] = [await partirSiHaceFalta(a, ra, pedir), await partirSiHaceFalta(b, rb, pedir)];
+  return new Map([...fa, ...fb]);
 }
 
 /** Una petición al proveedor por un lote, con el resultado repartido por vehículo. */
@@ -385,7 +520,10 @@ async function pedirLote(
     const mensaje = err instanceof IntegrationError && err.kind === "AUTH"
       ? `AUTH: ${err.message}`
       : String(err?.message ?? e);
-    for (const en of tanda) salida.set(en.mobilink_id, { tipo: "error", mensaje });
+    // Solo un rechazo de la petición se puede aislar partiendo el lote; un
+    // fallo pasajero (503, red) o de credencial no lo arregla partir.
+    const divisible = err instanceof IntegrationError && err.kind === "PERMANENT";
+    for (const en of tanda) salida.set(en.mobilink_id, { tipo: "error", mensaje, divisible });
   }
   return salida;
 }
@@ -405,7 +543,7 @@ async function guardarFila(
     mobilinkId: enlace.mobilink_id, externalCode: enlace.external_code,
     year: mes.year, month: mes.month,
     periodStartMs: limites.desde.getTime(), periodEndMs: limites.hasta.getTime(),
-    timezone: zona, source: FUENTE,
+    timezone: zona, source: res.tipo === "ok" && res.fuente ? res.fuente : FUENTE,
   };
   if (res.tipo === "ok") {
     await upsertMonthlyMileage({
@@ -459,6 +597,7 @@ async function cerrarAuditoria(
         muestraErrores: r.muestraErrores, kmTotales: redondear(r.kmTotales),
         unidadesPorPeticion: r.unidadesPorPeticion, zonaHoraria: r.zonaHoraria,
         abandonada: r.abandonada ?? null,
+        porPartes: r.porPartes ?? null,
       }),
     });
   } catch (e: any) {

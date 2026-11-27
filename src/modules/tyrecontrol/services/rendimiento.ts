@@ -15,6 +15,7 @@
  */
 
 import { supabase } from "./supabase";
+import { kmActualFlota, kmFichaVehiculo } from "./data";
 
 export interface DatosRendimiento {
   vehiculo_id: string;
@@ -43,14 +44,25 @@ export interface DatosRendimiento {
   km_vehiculo_inicio: number | null;
   profundidad_inicial_mm: number | null;
   fuente_inicio: "catalogo" | "manual";
+  /** Marcada «sin seguimiento»: no cuenta en ninguna pantalla. */
+  excluido?: boolean;
+  /** Coste de la goma (€): el del seguimiento o, si no, el de su ficha. */
+  coste_eur?: number | null;
+  /** El coste viene de la ficha del neumático, no se ha puesto en el seguimiento. */
+  coste_de_ficha?: boolean;
   puntos: { km_vehiculo: number; mm: number; fecha: string }[];
 }
 
 export interface Punto { km: number; mm: number }
 
 export interface Rendimiento {
-  /** Puntos usados, ordenados por km de la goma. */
+  /**
+   * Los puntos de la línea, ordenados por km de la goma: el origen y cada
+   * medición que ha bajado al menos 1 mm desde el punto anterior.
+   */
   puntos: Punto[];
+  /** Mediciones que no han bajado 1 mm desde el último punto: se ven, no cuentan. */
+  descartados: Punto[];
   kmGoma: number | null;
   origenMm: number | null;
   actualMm: number | null;
@@ -80,6 +92,27 @@ export function pendiente(puntos: Punto[]): number | null {
   return sxx === 0 ? null : sxy / sxx;
 }
 
+/**
+ * Cada medición, cambiada por la mediana de ella con la de antes y la de
+ * después. El origen (km 0) y la última no se tocan: el origen es un dato y la
+ * última es la de hoy, la que enseña la fila.
+ */
+export function suavizar(p: Punto[]): Punto[] {
+  // Solo entre mediciones: el origen no hace de vecino (sus 16,5 mm
+  // arrastrarían hacia arriba la primera lectura).
+  const med = p.filter((x) => x.km !== 0);
+  const suaves = new Map<Punto, Punto>();
+  med.forEach((x, i) => {
+    if (i === 0 || i === med.length - 1) return;
+    const tres = [med[i - 1].mm, x.mm, med[i + 1].mm].sort((a, b) => a - b);
+    suaves.set(x, { km: x.km, mm: tres[1] });
+  });
+  return p.map((x) => suaves.get(x) ?? x);
+}
+
+/** Cuánto tiene que bajar una medición, desde el último punto, para entrar en la línea. */
+export const BAJADA_MINIMA_MM = 1;
+
 export function calcularRendimiento(d: Pick<DatosRendimiento,
   "km_actual_vehiculo" | "km_vehiculo_inicio" | "profundidad_inicial_mm" | "profundidad_actual_mm" | "minimo_mm" | "puntos">,
 ): Rendimiento {
@@ -91,7 +124,7 @@ export function calcularRendimiento(d: Pick<DatosRendimiento,
   const kmGoma = inicio !== null && kmVeh !== null ? Math.max(0, kmVeh - inicio) : null;
 
   const base: Rendimiento = {
-    puntos: [], kmGoma, origenMm, actualMm, gastadoMm: null, kmPorMm: null,
+    puntos: [], descartados: [], kmGoma, origenMm, actualMm, gastadoMm: null, kmPorMm: null,
     quedanKm: null, vidaKm: null, minimoMm, metodo: null, sinProyeccion: null,
   };
   if (origenMm === null) return { ...base, sinProyeccion: "Falta la profundidad de origen" };
@@ -109,19 +142,44 @@ export function calcularRendimiento(d: Pick<DatosRendimiento,
     if (km !== null && mm !== null && km >= inicio) meter(km - inicio, mm);
   }
   if (kmGoma !== null && actualMm !== null && !porKm.has(kmGoma)) meter(kmGoma, actualMm);
-  const puntos = [...porKm.entries()]
+  const todos = [...porKm.entries()]
     .map(([km, l]) => ({ km, mm: l.reduce((a, b) => a + b, 0) / l.length }))
     .sort((a, b) => a.km - b.km);
 
-  const ultimo = puntos[puntos.length - 1];
+  // Solo entra en la línea una medición que ha bajado al menos 1 mm desde el
+  // último punto: entre medias, lo que sube y baja es el calibre, no la goma
+  // (0039LXV: diez revisiones entre 13,5 y 14,3 mm en 6.000 km hacían una
+  // nube y movían la recta).
+  //
+  // Y se compara la medición SUAVIZADA (mediana con la de antes y la de
+  // después), no la suelta: una lectura mala —2,3 mm entre dos de 8,5 en
+  // 0039LXV eje 2 izq. ext.— bajaba «1 mm» de golpe y hundía la recta.
+  const suave = suavizar(todos);
+  const puntos: Punto[] = [];
+  const descartados: Punto[] = [];
+  todos.forEach((p, i) => {
+    const ref = puntos[puntos.length - 1];
+    const s = suave[i];
+    if (!ref || p.km === 0 || s.mm <= ref.mm - BAJADA_MINIMA_MM + 1e-9) puntos.push(s);
+    else descartados.push(p);
+  });
+
+  const ultimo = todos[todos.length - 1];
   const hoyMm = actualMm ?? ultimo?.mm ?? null;
   const hoyKm = kmGoma ?? ultimo?.km ?? null;
   const gastadoMm = hoyMm !== null ? Math.round((origenMm - hoyMm) * 10) / 10 : null;
-  const r: Rendimiento = { ...base, puntos, gastadoMm, actualMm: hoyMm, kmGoma: hoyKm };
+  const r: Rendimiento = { ...base, puntos, descartados, gastadoMm, actualMm: hoyMm, kmGoma: hoyKm };
 
   if (hoyMm === null || hoyKm === null || hoyKm <= 0) return { ...r, sinProyeccion: "Aún no ha recorrido kilómetros" };
-  if (gastadoMm === null || gastadoMm < 1) return { ...r, sinProyeccion: "Poco gasto para proyectar (menos de 1 mm)" };
+  if (gastadoMm === null || gastadoMm < BAJADA_MINIMA_MM) {
+    return { ...r, sinProyeccion: "Poco gasto para proyectar (aún no ha bajado 1 mm)" };
+  }
 
+  // Con 3 o más puntos de la línea, la recta. Si no, del origen a HOY: los
+  // mismos números que enseña la fila (Hoy, Gastado, Km). Antes iba del
+  // origen al último punto de la línea, y dos gomas con el mismo Hoy y el
+  // mismo Gastado salían con km/mm distintos según cuál fuera su primera
+  // lectura suelta (0039LXV eje 1: 6.981 y 8.476).
   let kmPorMm: number;
   let metodo: "recta" | "origen";
   const m = puntos.length >= 3 ? pendiente(puntos) : null;
@@ -147,11 +205,14 @@ export interface GrupoRendimiento {
   conProyeccion: number;
   kmPorMm: number | null;
   vidaKm: number | null;
+  /** € por km medio de las gomas del grupo con coste y proyección. */
+  eurKm: number | null;
+  conCoste: number;
   vehiculos: string[];
 }
 
 export function agruparRendimiento(filas: DatosRendimiento[]): GrupoRendimiento[] {
-  const grupos = new Map<string, GrupoRendimiento & { _kmmm: number[]; _vida: number[] }>();
+  const grupos = new Map<string, GrupoRendimiento & { _kmmm: number[]; _vida: number[]; _eur: number[] }>();
   for (const f of filas) {
     const tipo = f.reesculturado ? "reesculturado" : f.recauchutado ? "recauchutado" : "nuevo";
     // Por la referencia del catálogo cuando la hay: «COACHZ» y «X COACH Z» son la misma.
@@ -160,29 +221,82 @@ export function agruparRendimiento(filas: DatosRendimiento[]): GrupoRendimiento[
       : [f.marca, f.modelo, f.medida]).filter(Boolean).join(" ") || "Sin modelo";
     const clave = `${modelo}|${f.eje ?? "-"}|${tipo}`;
     const g = grupos.get(clave) ?? {
-      clave, modelo, eje: f.eje, tipo, gomas: 0, conProyeccion: 0, kmPorMm: null, vidaKm: null, vehiculos: [],
-      _kmmm: [], _vida: [],
+      clave, modelo, eje: f.eje, tipo, gomas: 0, conProyeccion: 0, kmPorMm: null, vidaKm: null, eurKm: null, conCoste: 0, vehiculos: [],
+      _kmmm: [], _vida: [], _eur: [],
     };
     g.gomas += 1;
     if (!g.vehiculos.includes(f.matricula)) g.vehiculos.push(f.matricula);
     const r = calcularRendimiento(f);
     if (r.kmPorMm !== null && r.vidaKm !== null) { g.conProyeccion += 1; g._kmmm.push(r.kmPorMm); g._vida.push(r.vidaKm); }
+    const c = costeKm(r, f.coste_eur);
+    if (c.eurKm !== null) { g.conCoste += 1; g._eur.push(c.eurKm); }
     grupos.set(clave, g);
   }
   const media = (l: number[]) => (l.length ? Math.round(l.reduce((a, b) => a + b, 0) / l.length) : null);
   return [...grupos.values()]
-    .map(({ _kmmm, _vida, ...g }) => ({ ...g, kmPorMm: media(_kmmm), vidaKm: media(_vida) }))
+    .map(({ _kmmm, _vida, _eur, ...g }) => ({
+      ...g, kmPorMm: media(_kmmm), vidaKm: media(_vida),
+      eurKm: _eur.length ? _eur.reduce((a, b) => a + b, 0) / _eur.length : null,
+    }))
     .sort((a, b) => a.modelo.localeCompare(b.modelo) || (a.eje ?? 99) - (b.eje ?? 99));
 }
 
 // ── Base de datos ──────────────────────────────────────────────────────────
 
-export async function datosRendimiento(f: { vehiculoId?: string | null; empresaId?: string | null } = {}): Promise<DatosRendimiento[]> {
+export async function datosRendimiento(
+  f: { vehiculoId?: string | null; empresaId?: string | null; incluirExcluidos?: boolean } = {},
+): Promise<DatosRendimiento[]> {
   const { data, error } = await supabase.rpc("tc_rendimiento_datos", {
     p_vehiculo: f.vehiculoId ?? null, p_empresa: f.empresaId ?? null,
   });
   if (error) throw new Error(error.message);
-  return (data ?? []) as DatosRendimiento[];
+  const filas = (data ?? []) as DatosRendimiento[];
+  // Las ruedas «sin seguimiento» solo las quiere la ventana que las reactiva.
+  return conKmReconstruido(f.incluirExcluidos ? filas : filas.filter((x) => !x.excluido), f);
+}
+
+/** Por encima de esto un odómetro es de otra unidad (Movertis ha dado 8 millones). */
+const ODOMETRO_IMPOSIBLE_KM = 3_000_000;
+
+/** Vehículos que se piden uno a uno; con más, hace falta la empresa. */
+const MAX_VEHICULOS_SUELTOS = 5;
+
+/**
+ * El km del vehículo con el que se calcula el rendimiento.
+ *
+ * La base lo saca del mayor entre el km del vehículo, sus revisiones y el
+ * odómetro mensual de Movertis, y ese odómetro no vale para la mayoría de la
+ * flota: parado desde 08/2026, acumulado por GPS o en otra unidad. Aquí se
+ * sustituye por el RECONSTRUIDO —la última lectura real (revisión o montaje)
+ * más los km de viajes de la telemática desde entonces— o, si no se puede
+ * reconstruir, por el último km real. Es el mismo que enseña la ficha.
+ *
+ * Si el servidor no contesta se queda el de la base, salvo que sea imposible:
+ * el rendimiento no puede dejar de salir porque falle esta consulta.
+ */
+async function conKmReconstruido(
+  filas: DatosRendimiento[],
+  f: { vehiculoId?: string | null; empresaId?: string | null },
+): Promise<DatosRendimiento[]> {
+  if (!filas.length) return filas;
+  const km = new Map<string, number | null>();
+  try {
+    const vehiculos = [...new Set(filas.map((x) => x.vehiculo_id))];
+    if (f.empresaId && vehiculos.length > MAX_VEHICULOS_SUELTOS) {
+      for (const v of await kmActualFlota(f.empresaId)) km.set(v.vehiculoId, v.km);
+    } else if (vehiculos.length <= MAX_VEHICULOS_SUELTOS) {
+      await Promise.all(vehiculos.map(async (id) => {
+        const r = await kmFichaVehiculo(id, false);
+        km.set(id, r.reconstruido?.km ?? r.ultimo?.km ?? null);
+      }));
+    }
+  } catch { /* sin servidor: se queda el de la base */ }
+  return filas.map((x) => {
+    const nuevo = km.get(x.vehiculo_id);
+    if (nuevo != null) return { ...x, km_actual_vehiculo: nuevo };
+    const deLaBase = Number(x.km_actual_vehiculo);
+    return Number.isFinite(deLaBase) && deLaBase >= ODOMETRO_IMPOSIBLE_KM ? { ...x, km_actual_vehiculo: null } : x;
+  });
 }
 
 export async function estadoSeguimientoRendimiento(vehiculoId: string): Promise<{
@@ -209,6 +323,69 @@ export async function desactivarSeguimientoRendimiento(vehiculoId: string): Prom
   const { error } = await supabase.rpc("tc_rendimiento_desactivar", { p_vehiculo: vehiculoId });
   if (error) throw new Error(error.message);
 }
+
+/** El km de montaje de cada goma montada (para ofrecerlo como inicio). Solo lee. */
+export async function kmMontajeDeVehiculo(vehiculoId: string): Promise<Map<string, number | null>> {
+  const { data, error } = await supabase.from("tc_montajes_actuales")
+    .select("neumatico_id, km_montaje").eq("vehiculo_id", vehiculoId);
+  if (error) throw new Error(error.message);
+  return new Map(((data ?? []) as { neumatico_id: string; km_montaje: number | null }[])
+    .map((m) => [m.neumatico_id, m.km_montaje == null ? null : Number(m.km_montaje)]));
+}
+
+/** Cambia a mano el punto de partida (km y profundidad) de cada goma. */
+export async function ajustarInicioRendimiento(
+  vehiculoId: string,
+  inicios: { neumaticoId: string; km: number; profundidadMm: number; excluido?: boolean; costeEur?: number | null }[],
+): Promise<void> {
+  const { error } = await supabase.rpc("tc_rendimiento_ajustar_inicio", {
+    p_vehiculo: vehiculoId,
+    p_inicios: inicios.map((i) => ({
+      neumatico_id: i.neumaticoId, km: i.km, profundidad_mm: i.profundidadMm, excluido: i.excluido === true,
+      // Solo se manda si se ha tocado: sin la clave, la base conserva el que hubiera.
+      ...(i.costeEur !== undefined ? { coste_eur: i.costeEur } : {}),
+    })),
+  });
+  if (error) throw new Error(error.message);
+}
+
+export interface CosteKm {
+  /** € por km, con la vida proyectada. */
+  eurKm: number | null;
+  /** € por 1.000 km, con la vida proyectada. */
+  eurMilKm: number | null;
+  /** € por km llevados hasta hoy (coste ÷ km recorridos): al principio sale alto. */
+  eurKmHoy: number | null;
+  /** Lo que ya se ha comido la goma: coste × mm gastados ÷ mm útiles (origen → mínimo). */
+  gastadoEur: number | null;
+  /** Lo que queda de goma hasta el mínimo, en €. */
+  quedaEur: number | null;
+}
+
+/** El coste por km de una goma, a partir de su rendimiento y su precio. */
+export function costeKm(r: Rendimiento, coste: number | null | undefined): CosteKm {
+  const c = n(coste);
+  const vacio = { eurKm: null, eurMilKm: null, eurKmHoy: null, gastadoEur: null, quedaEur: null };
+  if (c === null || c <= 0) return vacio;
+  const eurKm = r.vidaKm != null && r.vidaKm > 0 ? c / r.vidaKm : null;
+  const eurKmHoy = r.kmGoma != null && r.kmGoma > 0 ? c / r.kmGoma : null;
+  let gastadoEur: number | null = null;
+  if (r.origenMm != null && r.actualMm != null && r.origenMm > r.minimoMm) {
+    const frac = (r.origenMm - r.actualMm) / (r.origenMm - r.minimoMm);
+    gastadoEur = c * Math.min(1, Math.max(0, frac));
+  }
+  return {
+    eurKm, eurMilKm: eurKm != null ? eurKm * 1000 : null, eurKmHoy,
+    gastadoEur, quedaEur: gastadoEur != null ? c - gastadoEur : null,
+  };
+}
+
+/** «0,0031 €» — cuatro decimales, que el € por km es pequeño. */
+export const eurPorKm = (v: number | null | undefined) =>
+  v == null ? "—" : `${v.toLocaleString("es-ES", { minimumFractionDigits: 4, maximumFractionDigits: 4 })} €`;
+/** «3,14 €» */
+export const euros = (v: number | null | undefined, decimales = 2) =>
+  v == null ? "—" : `${v.toLocaleString("es-ES", { minimumFractionDigits: decimales, maximumFractionDigits: decimales })} €`;
 
 export const miles = (v: number | null | undefined) =>
   v === null || v === undefined ? "—" : Math.round(v).toLocaleString("es-ES");

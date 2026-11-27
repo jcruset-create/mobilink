@@ -5,6 +5,8 @@ import type { EstadoHistorialEntry, AuditoriaEntry, OperacionVinculada } from ".
 import type { Empresa, OperacionNeumatico, TipoOperacion, Vehiculo, EstadoOperacion, Perfil, ReservaNeumatico, PrioridadOperacion, OperacionMovimiento, OperacionAdjunto } from "../types";
 import { TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS, ESTADO_OPERACION_BADGE, PRIORIDAD_OPERACION_LABELS } from "../types";
 import { TableWrap, tdCls, thCls, inputCls, Modal, Field } from "../components/ui";
+import { useOrdenColumnas } from "../hooks/useOrdenColumnas";
+import { CabeceraOrden } from "../components/OrdenColumnas";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 import { esHistoricoAlbaran, textoNeumaticoHistorico, textoPosicionHistorica, textoRetirado } from "../../../../shared/historicoAlbaran";
 
@@ -278,6 +280,13 @@ export default function Operaciones() {
     } catch (e: any) { setMsg(e?.message || "Error al guardar el coste"); } finally { setSavingCoste(false); }
   }
 
+  // Tocar «Vehículo» ordena por matrícula: la lista (solo la página que se
+  // ve) y la tabla de reservas.
+  const orden = useOrdenColumnas(items, { matricula: (o) => o.vehiculo?.matricula });
+  const ordenReservas = useOrdenColumnas(reservas ?? [], {
+    matricula: (r) => (r as { vehiculo?: { matricula?: string | null } | null }).vehiculo?.matricula,
+  });
+
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -322,14 +331,14 @@ export default function Operaciones() {
           {/* "Nº" a secas se confundía con el número de intervención, que es
               otra serie distinta (tc_intervenciones.numero, texto). */}
           <th className={thCls} title="Número de operación. No es el número de intervención.">Nº operación</th>
-          <th className={thCls}>Fecha</th><th className={thCls}>Empresa</th><th className={thCls}>Vehículo</th>
+          <th className={thCls}>Fecha</th><th className={thCls}>Empresa</th><th className={thCls}><CabeceraOrden col="matricula" orden={orden}>Vehículo</CabeceraOrden></th>
           <th className={thCls}>Tipo</th><th className={thCls}>Estado</th><th className={thCls}>Neumático</th><th className={thCls}>Posición</th>
           <th className={thCls}>Km</th><th className={thCls}>Motivo</th><th className={thCls}>Destino</th>{!esCliente && <th className={thCls}>Coste</th>}<th className={thCls}>Acciones</th>
         </tr></thead>
         <tbody>
           {loading ? <tr><td className={tdCls + " text-slate-500"} colSpan={13}>Cargando…</td></tr>
           : items.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={13}>Sin operaciones.</td></tr>
-          : items.map((o) => (
+          : orden.filas.map((o) => (
             <tr key={o.id} className="border-t border-slate-700/60">
               <td className={tdCls + " font-mono text-slate-500"}>{o.numero_operacion ? `#${o.numero_operacion}` : "—"}</td>
               <td className={tdCls + " text-slate-400"}>{o.fecha_operacion}</td>
@@ -530,11 +539,11 @@ export default function Operaciones() {
           ) : (
             <TableWrap>
               <thead className="bg-slate-900"><tr>
-                <th className={thCls}>Neumático</th><th className={thCls}>Empresa</th><th className={thCls}>Vehículo</th>
+                <th className={thCls}>Neumático</th><th className={thCls}>Empresa</th><th className={thCls}><CabeceraOrden col="matricula" orden={ordenReservas}>Vehículo</CabeceraOrden></th>
                 <th className={thCls}>Prevista</th><th className={thCls}></th>
               </tr></thead>
               <tbody>
-                {reservas.map((r) => (
+                {ordenReservas.filas.map((r) => (
                   <tr key={r.id} className="border-t border-slate-700/60">
                     <td className={tdCls + " text-slate-200"}>{r.neumatico?.numero_interno ?? r.neumatico?.codigo_interno ?? "—"}{r.neumatico ? ` · ${r.neumatico.marca ?? ""} ${r.neumatico.medida ?? ""}` : ""}</td>
                     <td className={tdCls + " text-slate-400"}>{(r as any).empresa?.nombre ?? "—"}</td>

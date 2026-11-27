@@ -12,6 +12,7 @@
  * hacer falta de verdad.
  */
 
+import { apiFetch } from "../modules/apiFetch";
 import { useEffect, useMemo, useState } from "react";
 
 import AssistSidebar from "../components/AssistSidebar";
@@ -69,6 +70,7 @@ const input = "rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-
 
 export default function BandejaCalidadPage() {
   const [bandeja, setBandeja] = useState<Bandeja | null>(null);
+  const [errorCarga, setErrorCarga] = useState("");
   const [filtros, setFiltros] = useState({ estado: "", prioridad: "", motivo: "", rol: "", abiertos: true });
   const [pagina, setPagina] = useState(1);
   const [abierto, setAbierto] = useState<number | null>(() => {
@@ -90,10 +92,16 @@ export default function BandejaCalidadPage() {
 
   useEffect(() => {
     let vivo = true;
-    fetch(`${API_BASE}/api/calidad/casos?${consulta}`, { headers: getAdminHeaders() })
-      .then((r) => r.json())
-      .then((b) => { if (vivo) setBandeja(b); })
-      .catch(() => { if (vivo) setBandeja(null); });
+    apiFetch(`${API_BASE}/api/calidad/casos?${consulta}`, { headers: getAdminHeaders() })
+      // Un error del servidor ({"error": …}) no son los datos: tomarlo por
+      // ellos dejaba la pantalla en blanco al buscar los contadores.
+      .then(async (r) => {
+        const b = await r.json().catch(() => null);
+        if (!r.ok || !b?.contadores) throw new Error(b?.error ?? `Error ${r.status} al cargar la bandeja`);
+        return b as Bandeja;
+      })
+      .then((b) => { if (vivo) { setBandeja(b); setErrorCarga(""); } })
+      .catch((e) => { if (vivo) { setBandeja(null); setErrorCarga(e?.message ?? "No se pudo cargar la bandeja"); } });
     return () => { vivo = false; };
   }, [consulta, recarga]);
 
@@ -114,6 +122,10 @@ export default function BandejaCalidadPage() {
             </div>
           )}
         </header>
+
+        {errorCarga && (
+          <div className="mb-3 rounded-xl border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-300">{errorCarga}</div>
+        )}
 
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-300">
@@ -265,8 +277,12 @@ function PanelCaso({ casoId, onCerrar, onCambio }: {
 
   useEffect(() => {
     let vivo = true;
-    fetch(`${API_BASE}/api/calidad/casos/${casoId}`, { headers: getAdminHeaders() })
-      .then((r) => r.json())
+    apiFetch(`${API_BASE}/api/calidad/casos/${casoId}`, { headers: getAdminHeaders() })
+      .then(async (r) => {
+        const x = await r.json().catch(() => null);
+        if (!r.ok || !x?.contexto) throw new Error(x?.error ?? `Error ${r.status}`);
+        return x;
+      })
       .then((x) => { if (vivo) setD(x); })
       .catch(() => { if (vivo) setD(null); });
     return () => { vivo = false; };
@@ -276,7 +292,7 @@ function PanelCaso({ casoId, onCerrar, onCambio }: {
     if (ocupado) return;
     setOcupado(true); setError(null);
     try {
-      const r = await fetch(`${API_BASE}/api/calidad/casos/${casoId}${ruta}`, {
+      const r = await apiFetch(`${API_BASE}/api/calidad/casos/${casoId}${ruta}`, {
         method: ruta ? "POST" : "PATCH",
         headers: { "Content-Type": "application/json", ...getAdminHeaders() },
         body: JSON.stringify(cuerpo),

@@ -22,6 +22,8 @@ import db from "../db.ts";
 import { supabase } from "../supabase.ts";
 import { authenticate, requireAdmin } from "./auth.ts";
 import { registrarAuditoria } from "./auditoria.ts";
+import { BUCKET_CORE, ErrorFoto, ponerFoto, subidaDeFoto, tieneFoto, urlDeFoto } from "./fotoEmpleado.ts";
+import { leerAlRecibir, lecturaVigente } from "./lecturaAlta.ts";
 import { clienteTwilio, hayCredencialesTwilio } from "./twilio.ts";
 import { hayIA, pedirIA } from "./openaiService.ts";
 import {
@@ -61,7 +63,7 @@ import {
 } from "./altaOperario.ts";
 
 /** Bucket PRIVADO. Hay que crearlo a mano en Supabase, sin marcar «Public». */
-const BUCKET = process.env.SUPABASE_CORE_DOCS_BUCKET || "core-documentos";
+const BUCKET = BUCKET_CORE;
 
 /** Una foto de móvil con la cámara al máximo no pasa de aquí. */
 const MAX_BYTES = 8 * 1024 * 1024;
@@ -333,6 +335,10 @@ export function createAltaOperarioAdminRouter(): Router {
     );
 
     const invitacion = inv[0] ?? null;
+    // La lectura más reciente que haya, no solo la del último envío: pedir una
+    // actualización crea un envío nuevo sin leer, y la anterior no se ha
+    // borrado. Si falla, la ficha sale igual, con «sin leer».
+    const leido = await lecturaVigente(db, employeeId).catch(() => null);
     res.json({
       estadoAlta: emp[0].estado_alta,
       invitacion: invitacion && {
@@ -349,8 +355,9 @@ export function createAltaOperarioAdminRouter(): Router {
       documentos: await documentosConUrl(employeeId),
       firma: invitacion?.firma_path ? await urlFirmada(invitacion.firma_path) : null,
       verificacion: invitacion?.verificacion ?? null,
-      lectura: invitacion?.lectura ?? null,
-      certificacionesPropuestas: certificacionesDeLectura(invitacion?.lectura ?? null),
+      lectura: leido?.lectura ?? null,
+      lecturaDe: leido && { leidoAt: leido.leidoAt, deEnvioAnterior: leido.deEnvioAnterior },
+      certificacionesPropuestas: certificacionesDeLectura(leido?.lectura ?? null),
       consentimientos,
       puedeVerificar: hayIA(),
     });
@@ -477,13 +484,8 @@ export function createAltaOperarioAdminRouter(): Router {
       return res.status(400).json({ error: "Ese empleado no existe." });
     }
 
-    const { rows } = await db.query(
-      `SELECT lectura FROM sea_employee_invites
-        WHERE employee_id = $1 AND lectura IS NOT NULL
-        ORDER BY enviado_at DESC LIMIT 1`,
-      [employeeId]
-    );
-    const lectura = rows[0]?.lectura as Lectura | undefined;
+    // La misma que enseña la pantalla: lo que se pasa es lo que se ha visto.
+    const lectura = (await lecturaVigente(db, employeeId))?.lectura;
     if (!lectura) return res.status(409).json({ error: "Todavía no se ha leído la documentación." });
 
     const campos = fichaDeLectura(lectura);
@@ -1006,6 +1008,8 @@ export function createAltaOperarioPublicRouter(): Router {
       ficha: rows[0] ?? {},
       tallas: tallas[0] ?? {},
       documentos: await documentosDe(inv.employee_id),
+      // La foto de la persona, si ya la tiene: para enseñársela y no pedírsela otra vez.
+      foto: await urlDeFoto(inv.employee_id).catch(() => null),
     });
   });
 
@@ -1019,6 +1023,29 @@ export function createAltaOperarioPublicRouter(): Router {
     const { ficha, errores } = validarFicha(req.body);
     await guardarFicha(invitacion!.employee_id, ficha);
     res.json({ ok: true, errores });
+  });
+
+  /**
+   * La foto de la persona. Se guarda ya recortada y centrada; volver a
+   * mandarla sustituye a la anterior.
+   *
+   * Aquí no hay «usarla igualmente»: si no se ve una cara (o se ven dos), se
+   * repite. Eso solo lo puede saltar un administrador desde la ficha.
+   */
+  r.post("/:token/foto", subidaDeFoto.single("foto"), async (req: Request, res: Response) => {
+    if (!pasaLimite(req, res, "alta-foto", LIMITE_ESCRITURA)) return;
+
+    const invitacion = await invitacionPorToken(String(req.params.token ?? ""));
+    if (motivoCerrado(invitacion)) return res.status(409).json({ error: "El enlace ya no vale." });
+
+    try {
+      const hecha = await ponerFoto(invitacion!.employee_id, req.file);
+      res.json({ ok: true, url: hecha.url, aviso: hecha.aviso });
+    } catch (e) {
+      if (e instanceof ErrorFoto) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[Core alta] no se ha podido guardar la foto:", e instanceof Error ? e.message : e);
+      res.status(500).json({ error: "No se ha podido guardar la foto. Inténtalo otra vez." });
+    }
   });
 
   /** Una de las cuatro fotos. Volver a mandarla sustituye a la anterior. */
@@ -1065,6 +1092,7 @@ export function createAltaOperarioPublicRouter(): Router {
     const consentimientos = leerConsentimientos(req.body?.consentimientos);
     const firma = String(req.body?.firma ?? "");
     const falta = faltaParaEnviar({
+      foto: await tieneFoto(inv.employee_id),
       documentos: await documentosDe(inv.employee_id),
       consentimientos,
       firma: firma.startsWith("data:image/"),
@@ -1113,6 +1141,10 @@ export function createAltaOperarioPublicRouter(): Router {
     await db.query(`UPDATE sea_employees SET estado_alta = 'recibida' WHERE id = $1`, [inv.employee_id]);
 
     res.json({ ok: true });
+
+    // La documentación se lee sola, pero DESPUÉS de contestar: el trabajador
+    // no espera a la IA ni se entera si falla. No se espera a propósito.
+    void leerAlRecibir(db, { employeeId: inv.employee_id, invitacionId: inv.id }, { hayIA, leer: leerDocumentos });
   });
 
   return r;

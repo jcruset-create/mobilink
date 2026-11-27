@@ -16,6 +16,9 @@ import { supabase, supabaseAnonAuth, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_
 import { hayCore, NOMBRE_CORE_SQL } from "./core/hayCore.ts";
 import { nombreValeParaEntrar } from "./core/nombreDeAcceso.ts";
 import { createBajaEmpleadoRouter } from "./core/bajaEmpleado.ts";
+import { createImportarNominasRouter } from "./core/importarNominas.ts";
+import { createNominasEmpleadoRouter } from "./core/nominasEmpleado.ts";
+import { almacenSupabase, createFotoEmpleadoRouter, ErrorFoto, ponerFoto } from "./core/fotoEmpleado.ts";
 import {
   createTelefonoEmpresaRouter,
   telefonoDeTecnico,
@@ -140,6 +143,11 @@ import { tipoDesdeKindAssist as tipoDocumentoDesdeKind } from "./documentos/tipo
 import { normalizarMatricula as normalizarMatriculaTc } from "./tyrecontrol/matricula.ts";
 import { INSTRUCCION_PAIS, paisParaGuardar } from "./matriculaPais.ts";
 import { horaCapturaValida, horaDeLaFirma } from "./horaCaptura.ts";
+import { hitosDeAsistencia, lineaDeTiempo, resumenMovimientos, ventanaDeAsistencia } from "./assist/movimientos.ts";
+import {
+  detalleParaExcel, estadisticas as calcularEstadisticas, fichaCliente, filtrar as filtrarEstadisticas,
+  nombreCliente, opcionesFiltros, porMes, type FilaEstadistica, type Filtros as FiltrosEstadistica,
+} from "./assist/estadisticas.ts";
 import { decidirCambioDeDatos, mensajeDeCorreo } from "./tyrecontrol/usuarioDatos.ts";
 import { puedeVerEmpresaDeRequest as puedeVerEmpresaTc, puedeVerEmpresa as puedeVerEmpresaTcCtx, puedeOperarEnEmpresa } from "./tyrecontrol/empresaAcceso.ts";
 import {
@@ -154,6 +162,8 @@ import { createPresenciaRouter } from "./tyrecontrol/presencia/router.ts";
 import { createSateliteRouter } from "./tyrecontrol/satelite/router.ts";
 import { createUbicacionRouter } from "./tyrecontrol/ubicacion/router.ts";
 import { createKilometrajeMensualRouter } from "./tyrecontrol/kilometrajeMensual/router.ts";
+import { createPorDondeRuedaRouter } from "./tyrecontrol/porDondeRueda/router.ts";
+import { startPorDondeRueda } from "./tyrecontrol/porDondeRueda/worker.ts";
 import { createAltaOperativaRouter } from "./tyrecontrol/altaOperativa/router.ts";
 import { createKilometrajeActualRouter } from "./tyrecontrol/kilometrajeActual/router.ts";
 import { createKmFichaRouter } from "./tyrecontrol/kilometrajeRevisiones/router.ts";
@@ -164,6 +174,7 @@ import { startPresenciaBases } from "./tyrecontrol/presencia/worker.ts";
 import { startRellenoKilometraje } from "./tyrecontrol/kilometrajeMensual/rellenoWorker.ts";
 import { startRellenoRevisiones } from "./tyrecontrol/kilometrajeRevisiones/worker.ts";
 import { startRellenoDiario } from "./tyrecontrol/kilometrajeRevisiones/diario.ts";
+import { startLecturasAparato } from "./tyrecontrol/lecturasAparato/worker.ts";
 import { initMapeoEmpresas } from "./tyrecontrol/empresas.ts";
 import { initTyreControlAssist } from "./tyrecontrol/schema.ts";
 import { cicloReparaciones } from "./tyrecontrol/outbox.ts";
@@ -186,6 +197,7 @@ import {
 } from "./core/altaOperarioRouter.ts";
 import { createNumeroTrabajadorRouter } from "./core/numeroTrabajador.ts";
 import { createEnlaceTrabajadoresRouter } from "./core/enlaceTrabajadores.ts";
+import { createEntregaSmsRouter } from "./core/entregaSms.ts";
 import { createCalidadRouter } from "./satisfaction/routerInterno.ts";
 import { createSatisfactionCallbackRouter } from "./satisfaction/routerCallback.ts";
 import { RUTA_CALLBACK } from "./satisfaction/urlPublica.ts";
@@ -2853,7 +2865,7 @@ app.get("/api/techs", exigirCredencial(requirePanelRole), async (req, res) => {
                core
                  ? `, ${NOMBRE_CORE_SQL} AS core_nombre,
                     ${numero ? "e.numero_trabajador" : "NULL::text"} AS core_numero,
-                    e.activo AS core_activo, (e.id IS NOT NULL) AS core_enlazado
+                    e.activo AS core_activo, (e.id IS NOT NULL) AS core_enlazado, e.foto_url AS core_foto
                     ${telefonoEmpresa ? ", e.telefono_empresa AS core_tel_empresa, e.telefono AS core_tel_personal" : ""}`
                  : ""
              }
@@ -2865,11 +2877,28 @@ app.get("/api/techs", exigirCredencial(requirePanelRole), async (req, res) => {
     // El teléfono de un técnico enlazado lo pone Core (ver
     // core/telefonoEmpresa.ts). El personal solo lo ve un administrador.
     const esAdmin = telefonoEmpresa ? (await getRoleFromRequestAsync(req)) === "admin" : false;
+
+    // La foto de un técnico enlazado es la de su ficha de Core, si tiene. Se
+    // firman todas de una vez (y la dirección se reutiliza entre recargas:
+    // ver core/fotoEmpleado.ts). Si no se pueden firmar, se ve la del taller.
+    const rutasDeFoto = result.rows
+      .filter((f: any) => f.core_enlazado === true && f.core_foto)
+      .map((f: any) => String(f.core_foto));
+    const fotosDeCore: Record<string, string> =
+      rutasDeFoto.length > 0 ? await almacenSupabase.firmar(rutasDeFoto).catch(() => ({})) : {};
+
     res.json(
       result.rows.map((fila: any) => {
         const mandaCore = telefonoEmpresa && fila.core_enlazado === true;
         const { telefono, origen } = telefonoDeTecnico(fila, mandaCore, esAdmin);
-        return { ...normalizeTechRow(fila), phone: telefono, phoneOrigen: origen, phoneEnCore: mandaCore };
+        const fotoDeCore = fila.core_enlazado === true && fila.core_foto ? fotosDeCore[String(fila.core_foto)] : undefined;
+        return {
+          ...normalizeTechRow(fila),
+          ...(fotoDeCore ? { avatar: fotoDeCore } : {}),
+          phone: telefono,
+          phoneOrigen: origen,
+          phoneEnCore: mandaCore,
+        };
       })
     );
   } catch (error) {
@@ -2887,6 +2916,35 @@ async function telefonoLoPoneCore(name: string): Promise<boolean> {
     [name]
   );
   return rows.length > 0;
+}
+
+/**
+ * ¿La foto de este técnico la pone Core? (enlazado, y con foto en su ficha).
+ * Devuelve además el `avatar` que hay guardado en el taller, que en ese caso
+ * no se toca: lo que el panel manda es la dirección firmada que Core le dio,
+ * que caduca y no pinta nada en la base.
+ */
+async function fotoDeTecnicoEnCore(name: string): Promise<{ enCore: boolean; avatarDelTaller: string | null }> {
+  const { core } = await hayCore(db);
+  if (!core) return { enCore: false, avatarDelTaller: null };
+  const { rows } = await db.query(
+    `SELECT t.avatar, (e.id IS NOT NULL AND COALESCE(e.foto_url, '') <> '') AS en_core
+       FROM techs t LEFT JOIN sea_employees e ON e.id = t.employee_id
+      WHERE t.name = $1`,
+    [name]
+  );
+  return { enCore: rows[0]?.en_core === true, avatarDelTaller: rows[0]?.avatar ?? null };
+}
+
+/** La persona de Core enlazada con este técnico, o `null`. */
+async function empleadoDeTecnico(name: string): Promise<string | null> {
+  const { core } = await hayCore(db);
+  if (!core) return null;
+  const { rows } = await db.query(
+    `SELECT e.id::text AS id FROM techs t JOIN sea_employees e ON e.id = t.employee_id WHERE t.name = $1`,
+    [name]
+  );
+  return rows[0]?.id ?? null;
 }
 
 app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
@@ -2925,6 +2983,7 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
       `SELECT "roadsideCapable", "workshopId", phone FROM techs WHERE name = $1`,
       [name]
     );
+    const fotoEnCore = await fotoDeTecnicoEnCore(name);
 
     /*
      * Si el cuerpo no trae taller, se conserva el que había.
@@ -2980,7 +3039,7 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
         currentJobId ?? null,
         JSON.stringify(competencies ?? {}),
         JSON.stringify(priorities ?? {}),
-        avatar ?? null,
+        fotoEnCore.enCore ? fotoEnCore.avatarDelTaller : avatar ?? null,
         statusChangedAtMs ?? Date.now(),
         JSON.stringify(statusTotals ?? {}),
         normalizedRoadsideCapable,
@@ -3514,6 +3573,27 @@ app.post(
 
       if (!exists) {
         return res.status(404).json({ error: "Técnico no encontrado" });
+      }
+
+      /*
+       * La foto de un técnico enlazado con Core es la de su ficha de Core:
+       * se guarda allí, normalizada como todas, y no en el almacén del panel.
+       * Así da igual desde dónde se cambie: hay una sola.
+       */
+      const employeeId = await empleadoDeTecnico(name);
+      if (employeeId) {
+        try {
+          const hecha = await ponerFoto(employeeId, req.file);
+          const { rows } = await db.query(
+            `SELECT name, status, blocked, "currentJobId", competencies, priorities, avatar, employee_id
+               FROM techs WHERE name = $1`,
+            [name]
+          );
+          return res.json({ ...normalizeTechRow(rows[0]), ...(hecha.url ? { avatar: hecha.url } : {}), aviso: hecha.aviso });
+        } catch (e) {
+          if (e instanceof ErrorFoto) return res.status(e.status).json({ error: e.message, code: e.code });
+          throw e;
+        }
       }
 
       const safeName = name
@@ -6146,6 +6226,193 @@ app.patch("/api/assist-panel-users/:userId", requireSupervisorRole, async (req, 
   }
 });
 
+/* =========================================================
+   ESTADÍSTICAS DE ASISTENCIAS (cálculo en server/assist/estadisticas.ts)
+========================================================= */
+
+/**
+ * Las filas de un periodo, con lo que las estadísticas necesitan y la tabla no
+ * tiene: firma, fotos, valoración y distancia de la base al punto. Respeta el
+ * taller del usuario como la lista de asistencias.
+ */
+async function filasEstadistica(
+  desdeMs: number,
+  hastaMs: number,
+  tallerId: number | null,
+): Promise<FilaEstadistica[]> {
+  const params: unknown[] = [desdeMs, hastaMs, TIPO_SALIDA];
+  const porTaller = tallerId != null ? `AND a."tallerId" = $${params.push(tallerId)}` : "";
+  const base = `
+    SELECT a.*,
+           EXISTS (SELECT 1 FROM roadside_assistance_files f WHERE f."assistanceId" = a.id AND f.kind = 'firma') AS "conFirma",
+           EXISTS (SELECT 1 FROM roadside_assistance_files f WHERE f."assistanceId" = a.id AND f.kind <> 'firma') AS "conFotos"
+           %VALORACION%
+      FROM roadside_assistances a
+     WHERE a."createdAtMs" BETWEEN $1 AND $2
+       AND COALESCE(a.tipo, '') <> $3
+       ${porTaller}`;
+  const valoracion = `,
+           (SELECT AVG(x."scaleValue")::float
+              FROM survey_instances si
+              JOIN survey_responses r ON r."surveyInstanceId" = si.id
+              JOIN survey_answers x ON x."surveyResponseId" = r.id AND x."questionCode" = 'overall_rating'
+             WHERE si."sourceSystem" = 'assist' AND si."assistanceId" = a.id::text) AS valoracion`;
+  // Sin el módulo de encuestas instalado, las estadísticas salen igual.
+  const r = await db
+    .query(base.replace("%VALORACION%", valoracion), params)
+    .catch(() => db.query(base.replace("%VALORACION%", ", NULL::float AS valoracion"), params));
+
+  const configs = new Map<string, Promise<any>>();
+  const configDe = (w: string | null) => {
+    const k = w ?? "";
+    if (!configs.has(k)) configs.set(k, getWorkshopConfig(w).catch(() => ({})));
+    return configs.get(k)!;
+  };
+  const num = (v: unknown) => (v == null || v === "" ? null : Number.isFinite(Number(v)) ? Number(v) : null);
+  return Promise.all(
+    r.rows.map(async (row: any): Promise<FilaEstadistica> => {
+      const cfg = await configDe(row.workshopId ?? null);
+      const tLat = parseFloat(cfg?.taller_lat);
+      const tLng = parseFloat(cfg?.taller_lng);
+      const lat = num(row.latitude);
+      const lng = num(row.longitude);
+      const distanciaKm =
+        lat != null && lng != null && Number.isFinite(tLat) && Number.isFinite(tLng)
+          ? Math.round(haversineDistanceM(tLat, tLng, lat, lng) / 100) / 10
+          : null;
+      return {
+        id: Number(row.id),
+        status: String(row.status ?? ""),
+        createdAtMs: Number(row.createdAtMs),
+        assignedAtMs: num(row.assignedAtMs),
+        departedAtMs: num(row.departedAtMs),
+        arrivedAtPointMs: num(row.arrivedAtPointMs),
+        inicioReparacionAtMs: num(row.inicioReparacionAtMs),
+        finishedAtMs: num(row.finishedAtMs),
+        arrivedAtWorkshopMs: num(row.arrivedAtWorkshopMs),
+        cancelledAtMs: num(row.cancelledAtMs),
+        customerName: row.customerName ?? null,
+        clientId: num(row.clientId),
+        assignedTechName: row.assignedTechName ?? null,
+        assignedVehicleName: row.assignedVehicleName ?? null,
+        webfleetVehicleId: row.webfleetVehicleId ?? null,
+        tipo: row.tipo ?? null,
+        origen: row.origen ?? null,
+        motivo: row.motivo ?? null,
+        descripcionAveria: row.descripcionAveria ?? null,
+        plate: row.plate ?? null,
+        plateRemolque: row.plateRemolque ?? null,
+        esRemolque: Boolean(row.esRemolque),
+        address: row.address ?? null,
+        plateMismatch: Boolean(row.plateMismatch),
+        waStatus: row.waStatus ?? null,
+        kmRecorridos: num(row.kmRecorridos),
+        distanciaKm,
+        valoracion: num(row.valoracion),
+        conFirma: Boolean(row.conFirma),
+        conFotos: Boolean(row.conFotos),
+      };
+    })
+  );
+}
+
+/** El periodo y los filtros de la petición; null si el periodo no vale. */
+function periodoEstadistica(q: any): { desdeMs: number; hastaMs: number; filtros: FiltrosEstadistica } | null {
+  const desdeMs = Number(q.desde);
+  const hastaMs = Number(q.hasta);
+  if (!Number.isFinite(desdeMs) || !Number.isFinite(hastaMs) || hastaMs <= desdeMs) return null;
+  // Más de dos años de golpe no hace falta y sería una consulta enorme.
+  if (hastaMs - desdeMs > 2 * 366 * 24 * 3600_000) return null;
+  const txt = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  return {
+    desdeMs,
+    hastaMs,
+    filtros: {
+      cliente: txt(q.cliente), operario: txt(q.operario), furgoneta: txt(q.furgoneta),
+      tipoAveria: txt(q.tipoAveria), origen: txt(q.origen),
+    },
+  };
+}
+
+/** El taller cuyas asistencias puede ver quien pregunta (como la lista). */
+async function tallerParaEstadistica(req: any): Promise<{ tallerId: number | null } | null> {
+  const panelUser = await getAssistPanelUser(req);
+  if (!panelUser) return { tallerId: null };
+  if (panelUser.esAdmin) {
+    const sel = req.query.tallerId != null ? Number(req.query.tallerId) : NaN;
+    return { tallerId: Number.isFinite(sel) ? sel : null };
+  }
+  if (panelUser.tallerId != null) return { tallerId: panelUser.tallerId };
+  return null; // sin taller y sin ser admin: nada
+}
+
+app.get("/api/roadside-assistances/estadisticas", requireSupervisorRole, async (req, res) => {
+  try {
+    const p = periodoEstadistica(req.query);
+    if (!p) return res.status(400).json({ error: "Periodo no válido (desde/hasta en ms, máximo dos años)" });
+    const taller = await tallerParaEstadistica(req);
+    if (!taller) return res.status(403).json({ error: "Sin taller asignado" });
+
+    // El periodo anterior, de la misma duración, para comparar.
+    const largo = p.hastaMs - p.desdeMs;
+    const todas = await filasEstadistica(p.desdeMs - largo, p.hastaMs, taller.tallerId);
+    const actuales = todas.filter((a) => a.createdAtMs >= p.desdeMs);
+    const anteriores = todas.filter((a) => a.createdAtMs < p.desdeMs);
+    const filas = filtrarEstadisticas(actuales, p.filtros);
+
+    const datos = calcularEstadisticas(filas, filtrarEstadisticas(anteriores, p.filtros), p.desdeMs, p.hastaMs);
+    // Para abrir las de cada alerta sin otra petición.
+    const enAlertas = new Set(datos.alertas.flatMap((a) => a.ids));
+    const fichas = Object.fromEntries(
+      filas.filter((a) => enAlertas.has(a.id)).map((a) => [
+        a.id,
+        { id: a.id, createdAtMs: a.createdAtMs, cliente: nombreCliente(a), matricula: a.plate || a.plateRemolque || "", operario: a.assignedTechName },
+      ])
+    );
+    res.json({
+      desdeMs: p.desdeMs,
+      hastaMs: p.hastaMs,
+      opciones: opcionesFiltros(actuales),
+      ...datos,
+      fichas,
+      detalle: String(req.query.detalle ?? "") === "1" ? detalleParaExcel(filas) : undefined,
+    });
+  } catch (error: any) {
+    console.error("GET estadisticas error:", error);
+    res.status(500).json({ error: error?.message || "Error calculando estadísticas" });
+  }
+});
+
+// Ficha de un cliente: lo del periodo, más su evolución de los últimos 12 meses.
+app.get("/api/roadside-assistances/estadisticas/cliente", requireSupervisorRole, async (req, res) => {
+  try {
+    const p = periodoEstadistica(req.query);
+    if (!p || !p.filtros.cliente) return res.status(400).json({ error: "Faltan el cliente o el periodo" });
+    const taller = await tallerParaEstadistica(req);
+    if (!taller) return res.status(403).json({ error: "Sin taller asignado" });
+
+    const largo = p.hastaMs - p.desdeMs;
+    const anio = 366 * 24 * 3600_000;
+    const desdeCarga = Math.min(p.desdeMs - largo, p.hastaMs - anio);
+    const todas = filtrarEstadisticas(await filasEstadistica(desdeCarga, p.hastaMs, taller.tallerId), { cliente: p.filtros.cliente });
+    const filas = todas.filter((a) => a.createdAtMs >= p.desdeMs);
+    const anteriores = todas.filter((a) => a.createdAtMs >= p.desdeMs - largo && a.createdAtMs < p.desdeMs);
+    const datos = calcularEstadisticas(filas, anteriores, p.desdeMs, p.hastaMs);
+    res.json({
+      cliente: p.filtros.cliente,
+      desdeMs: p.desdeMs,
+      hastaMs: p.hastaMs,
+      ...datos,
+      ...fichaCliente(filas),
+      // La evolución, con el año entero aunque el periodo sea un mes.
+      porMes: porMes(todas.filter((a) => a.createdAtMs >= p.hastaMs - anio)),
+    });
+  } catch (error: any) {
+    console.error("GET estadisticas cliente error:", error);
+    res.status(500).json({ error: error?.message || "Error calculando la ficha" });
+  }
+});
+
 app.get("/api/roadside-assistances", exigirCredencial(authenticate), async (req, res) => {
   try {
     const includeClosed = String(req.query.includeClosed || "") === "true";
@@ -6469,6 +6736,48 @@ async function etaEstimadaDeAsistencia(row: any): Promise<EtaEstimada | null> {
  */
 const cacheKmAsistencia = new Map<number, { atMs: number; km: number; fuente: "furgoneta" | "tablet" }>();
 const TTL_KM_ASISTENCIA_MS = 2 * 60_000;
+
+/*
+ * Km de las asistencias cerradas, guardados para las estadísticas. Poco a
+ * poco (unas pocas cada vez) para no saturar Webfleet: las nuevas entran en
+ * cuanto se cierran y las antiguas (último año) se van rellenando solas.
+ */
+let rellenandoKm = false;
+async function rellenarKmAsistencias(lote = 4) {
+  if (rellenandoKm) return;
+  rellenandoKm = true;
+  try {
+    const r = await db.query(
+      `SELECT * FROM roadside_assistances
+        WHERE "kmCalculadoAtMs" IS NULL
+          AND "departedAtMs" IS NOT NULL
+          AND ("arrivedAtWorkshopMs" IS NOT NULL OR "cancelledAtMs" IS NOT NULL)
+          AND "createdAtMs" > $1
+        ORDER BY "createdAtMs" DESC
+        LIMIT $2`,
+      [Date.now() - 400 * 24 * 3600_000, lote]
+    );
+    for (const row of r.rows) {
+      const a = normalizeRoadsideAssistanceRow(row);
+      const km = await kmRecorridosDeAsistencia(a).catch(() => null);
+      await db.query(
+        `UPDATE roadside_assistances SET "kmRecorridos" = $2, "kmFuente" = $3, "kmCalculadoAtMs" = $4 WHERE id = $1`,
+        [a.id, km ? Math.round(km.km * 10) / 10 : null, km?.fuente ?? null, Date.now()]
+      );
+      // Webfleet limita las consultas por minuto, y la usan también otras partes.
+      await new Promise((ok) => setTimeout(ok, 5000));
+    }
+  } catch (e: any) {
+    console.error("rellenarKmAsistencias:", e?.message ?? e);
+  } finally {
+    rellenandoKm = false;
+  }
+}
+
+function startRellenoKmAsistencias() {
+  setTimeout(() => void rellenarKmAsistencias(), 60_000);
+  setInterval(() => void rellenarKmAsistencias(), 5 * 60_000);
+}
 
 async function kmRecorridosDeAsistencia(
   a: ReturnType<typeof normalizeRoadsideAssistanceRow>
@@ -11649,6 +11958,10 @@ app.get("/api/webfleet/vehicle/:objectno/tracking-report.pdf", requireAdminRole,
  * no pasar de una consulta por segundo: se espera entre una y otra, y a partir
  * de 15 paradas se dan las coordenadas.
  */
+// Nombres ya buscados en Nominatim (por coordenada redondeada a ~10 m): volver a
+// abrir el mismo informe no repite las consultas, que van a una por segundo.
+const cacheNombresParada = new Map<string, string>();
+
 async function nombresDeParadas(paradas: { lat: number; lng: number }[]): Promise<string[]> {
   const lugares = await db
     .query(`SELECT nombre, lat, lng FROM roadside_known_places WHERE active = true`)
@@ -11665,7 +11978,14 @@ async function nombresDeParadas(paradas: { lat: number; lng: number }[]): Promis
       continue;
     }
     const coords = `${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}`;
-    if (consultas >= 15) {
+    const clave = `${p.lat.toFixed(4)},${p.lng.toFixed(4)}`;
+    const guardado = cacheNombresParada.get(clave);
+    if (guardado) {
+      nombres.push(guardado);
+      continue;
+    }
+    // Pocas consultas y cortas: el informe tardaba más de un minuto en salir.
+    if (consultas >= 8) {
       nombres.push(coords);
       continue;
     }
@@ -11674,12 +11994,16 @@ async function nombresDeParadas(paradas: { lat: number; lng: number }[]): Promis
     try {
       const resp = await fetch(
         `https://nominatim.openstreetmap.org/reverse?lat=${p.lat}&lon=${p.lng}&format=json&zoom=17`,
-        { headers: { "User-Agent": "sea-tarragona-app/1.0" }, signal: AbortSignal.timeout(5000) }
+        { headers: { "User-Agent": "sea-tarragona-app/1.0" }, signal: AbortSignal.timeout(3000) }
       );
       const data: any = resp.ok ? await resp.json() : null;
       // La dirección entera es larguísima («…, Tarragonès, Tarragona,
       // Catalunya, 43006, España»): con las tres primeras partes basta.
       const corto = String(data?.display_name ?? "").split(",").slice(0, 3).join(",").trim();
+      if (corto) {
+        if (cacheNombresParada.size > 5000) cacheNombresParada.clear();
+        cacheNombresParada.set(clave, corto);
+      }
       nombres.push(corto || coords);
     } catch {
       nombres.push(coords);
@@ -11850,6 +12174,44 @@ app.get("/api/roadside-assistances/:id/tablet-report.pdf", requireSupervisorRole
 });
 
 // Por asistencia (recorrido durante la asistencia: salida → llegada al taller o ahora)
+// Movimientos y paradas de la furgoneta durante la asistencia, para verlos en
+// pantalla (mapa + línea de tiempo). Misma ventana y mismo mínimo de parada
+// que el PDF de seguimiento de abajo, para que digan lo mismo.
+app.get("/api/roadside-assistances/:id/movimientos", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    const r = await db.query(`SELECT * FROM roadside_assistances WHERE id = $1 LIMIT 1`, [id]);
+    if (r.rows.length === 0) return res.status(404).json({ error: "Asistencia no encontrada" });
+    const a = normalizeRoadsideAssistanceRow(r.rows[0]);
+    const hitos = hitosDeAsistencia(a as any);
+    if (!a.webfleetVehicleId) {
+      return res.json({ disponible: false, motivo: "La asistencia no tiene furgoneta Webfleet asignada", hitos });
+    }
+    const { desdeMs, hastaMs } = ventanaDeAsistencia(a);
+    const [trips, track] = await Promise.all([
+      getWebfleetTrips(a.webfleetVehicleId, desdeMs, hastaMs),
+      getWebfleetTracks(a.webfleetVehicleId, desdeMs, hastaMs).catch(() => [] as { lat: number; lng: number }[]),
+    ]);
+    const tramos = lineaDeTiempo(trips, hitos);
+    // Un mapa con miles de puntos pesa; uno de cada N basta para dibujar la línea.
+    const paso = Math.max(1, Math.ceil(track.length / 1500));
+    res.json({
+      disponible: true,
+      vehiculo: a.assignedVehicleName || a.webfleetVehicleId,
+      desdeMs,
+      hastaMs,
+      resumen: resumenMovimientos(tramos),
+      tramos,
+      hitos,
+      track: track.filter((_, i) => i % paso === 0 || i === track.length - 1).map((p) => [p.lat, p.lng]),
+    });
+  } catch (error: any) {
+    console.error("GET movimientos asistencia error:", error);
+    res.status(502).json({ error: error?.message || "No se pudieron leer los movimientos de Webfleet" });
+  }
+});
+
 app.get("/api/roadside-assistances/:id/tracking-report.pdf", requireSupervisorRole, async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -19061,12 +19423,42 @@ app.post("/api/whatsapp-capture/sessions/:id/apply", requireAdminRole, async (re
       return res.json({ ok: true, assistance: updated.rows[0] });
     }
 
+    // El país de la matrícula, leído de la banda azul de la foto.
+    if (field === "paisMatricula") {
+      const pais = paisMatriculaDe(value);
+      if (!pais) return res.status(400).json({ error: "País no válido" });
+      await db.query(
+        `UPDATE roadside_assistances SET "paisMatricula" = $2, "updatedAtMs" = $3 WHERE id = $1`,
+        [jobId, pais, Date.now()]
+      );
+      const updated = await db.query(`SELECT * FROM roadside_assistances WHERE id = $1`, [jobId]);
+      return res.json({ ok: true, assistance: updated.rows[0] });
+    }
+
     if (!ALLOWED_FIELDS[field]) return res.status(400).json({ error: "Campo no permitido" });
 
     await db.query(
       `UPDATE roadside_assistances SET ${ALLOWED_FIELDS[field]} = $2, "updatedAtMs" = $3 WHERE id = $1`,
       [jobId, value, Date.now()]
     );
+
+    /*
+     * Al aplicar la matrícula del camión va con ella el país que la IA leyó en
+     * la misma foto, si la matrícula es la misma y la oficina no había puesto
+     * ya uno. Sin esto, una placa italiana leída por WhatsApp salía dibujada
+     * como española.
+     */
+    if (field === "plate") {
+      const sug = session.rows[0].ai_suggestions;
+      const ia = typeof sug === "string" ? (() => { try { return JSON.parse(sug); } catch { return null; } })() : sug;
+      const pais = paisParaGuardar(ia?.paisMatricula, ia?.plate, String(value ?? ""), normalizePlateText);
+      if (pais) {
+        await db.query(
+          `UPDATE roadside_assistances SET "paisMatricula" = $2 WHERE id = $1 AND "paisMatricula" IS NULL`,
+          [jobId, pais]
+        );
+      }
+    }
 
     const updated = await db.query(
       `SELECT * FROM roadside_assistances WHERE id = $1`,
@@ -23522,6 +23914,7 @@ app.use("/api/tyrecontrol/satelite", createSateliteRouter());
 app.use("/api/tyrecontrol/ubicacion", createUbicacionRouter());
 // Kilómetros mensuales: mismo motivo que la conciliación para ir ANTES del router general.
 app.use("/api/tyrecontrol/kilometraje-mensual", createKilometrajeMensualRouter());
+app.use("/api/tyrecontrol/por-donde-rueda", createPorDondeRuedaRouter());
 // El alta operativa va ANTES del router general de TyreControl, igual que el
 // de kilometraje mensual: si no, la ruta genérica se lo come.
 app.use("/api/tyrecontrol/alta-operativa", createAltaOperativaRouter());
@@ -23545,7 +23938,16 @@ app.use("/api/public/satisfaction", createSatisfactionPublicRouter());
  * encargado exige sesión de administrador y el del operario no exige
  * nada más que el token que lleva en la URL.
  */
+// ¿Llegó el SMS del enlace? Va ANTES: en el router de abajo, `/:employeeId`
+// se quedaría con «entregas».
+app.use("/api/core/alta/entregas", createEntregaSmsRouter());
 app.use("/api/core/alta", createAltaOperarioAdminRouter());
+// La foto del empleado (una sola, normalizada, para todos los módulos).
+app.use("/api/core/empleados", createFotoEmpleadoRouter());
+// Las nóminas guardadas en la ficha: solo el superadministrador.
+app.use("/api/core/empleados", createNominasEmpleadoRouter());
+// Importar de las nóminas del mes los trabajadores que falten en Core.
+app.use("/api/core/empleados", createImportarNominasRouter());
 // Baja (y alta) de un empleado: la baja lo es en todos los módulos.
 app.use("/api/core/empleados", createBajaEmpleadoRouter());
 // Teléfono de empresa de la ficha (el que enseñan los módulos).
@@ -23838,6 +24240,7 @@ initDb()
       void conectarPersistenciaLimites(); // bloqueos de login que sobreviven a un reinicio
       startAgendaWhatsAppReminderChecker();
       startWorkshopAutoStandbyChecker();
+      startRellenoKmAsistencias(); // km de las cerradas, para las estadísticas
       startRecobrosNotifierChecker();
       startCaducidadRecordatoriosChecker(); // avisos WhatsApp/SMS de caducidad de tacógrafo
       startWebfleetSync(); // sincronización periódica de "vehículos en base"
@@ -23873,6 +24276,8 @@ initDb()
       startRellenoKilometraje();
       startRellenoRevisiones(); // kilometraje del histórico de revisiones
       startRellenoDiario(); // y cada mañana, el de las revisiones de los últimos días
+      startPorDondeRueda(); // km por tipo de vía de los vehículos marcados, cada mañana
+      startLecturasAparato(); // foto diaria de gasóleo, horas de motor y peso por eje
     });
   })
   .catch((error) => {

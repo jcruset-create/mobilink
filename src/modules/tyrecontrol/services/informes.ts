@@ -197,7 +197,9 @@ export async function desgaste(f: FiltrosInformes): Promise<DesgasteNeumatico[]>
  * de otro. Si algún día hacen falta, que sea con un control a la vista.
  */
 export async function kmPorMm(f: FiltrosInformes): Promise<KmPorMmFila[]> {
-  const { data, error } = await supabase.rpc("tc_informes_km_por_mm", { p_empresa: f.empresaId ?? null });
+  // La versión por referencia del catálogo y con las gomas en seguimiento desde
+  // origen (ver supabase/migrations/tyrecontrol_km_por_mm_referencia.sql).
+  const { data, error } = await supabase.rpc("tc_informes_km_por_mm_referencia", { p_empresa: f.empresaId ?? null });
   if (error) throw new Error(error.message);
   return (data ?? []) as KmPorMmFila[];
 }

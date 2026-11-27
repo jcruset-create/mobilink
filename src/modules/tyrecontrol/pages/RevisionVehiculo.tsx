@@ -89,6 +89,12 @@ export default function RevisionVehiculo() {
   const [presionesCatalogo, setPresionesCatalogo] = useState<Record<string, number>>({});
 
   const [searchParams] = useSearchParams();
+  // Posiciones en las que se acaba de actuar con el plan de trabajo del plano:
+  // entran con la profundidad de su ficha y solo se miden las demás.
+  const actuadas = useMemo(
+    () => new Set((searchParams.get("actuadas") ?? "").split(",").map((x) => x.trim()).filter(Boolean)),
+    [searchParams],
+  );
 
   useEffect(() => {
     listarPresionesCatalogoPorModelo().then(setPresionesCatalogo).catch(() => setPresionesCatalogo({}));
@@ -128,6 +134,15 @@ export default function RevisionVehiculo() {
     const det = await listarDetalleRevision(r.id);
     const mapa: Record<string, Detalle> = {};
     for (const d of det) mapa[d.posicion_id] = d;
+    // Las posiciones que aún no se han tocado (sin mm ni presión) salen con la
+    // presión recomendada, igual que al empezar una revisión nueva.
+    for (const p of posiciones) {
+      const m = montajePorPosicion.get(p.id);
+      const d = mapa[p.id];
+      if (!m || d?.no_accesible || d?.neumatico_ausente || d?.profundidad_mm != null || d?.presion_bar != null) continue;
+      const presion = referenciasDePosicion(p.id).presionRecomendada;
+      if (presion != null) mapa[p.id] = { ...(d ?? { posicion_id: p.id, neumatico_id: m.neumatico_id ?? null }), presion_bar: presion };
+    }
     setDetalles(mapa);
     setKmVehiculo(r.km_vehiculo != null ? String(r.km_vehiculo) : "");
     // La fecha del borrador manda sobre la de hoy: si se empezó a pasar el
@@ -350,7 +365,17 @@ export default function RevisionVehiculo() {
       setRevision(r);
       const inicial: Record<string, Detalle> = {};
       posiciones.forEach((p) => {
-        inicial[p.id] = { posicion_id: p.id, neumatico_id: montajePorPosicion.get(p.id)?.neumatico_id ?? null };
+        const m = montajePorPosicion.get(p.id);
+        // La presión sale puesta con la recomendada de la tarjeta: lo normal es
+        // que esté bien, y si varía el técnico la cambia. Solo en esta pantalla.
+        const refs = m ? referenciasDePosicion(p.id) : null;
+        const presion = refs?.presionRecomendada ?? null;
+        inicial[p.id] = { posicion_id: p.id, neumatico_id: m?.neumatico_id ?? null, ...(presion != null ? { presion_bar: presion } : {}) };
+        // Rueda del plan de trabajo: ya se ha actuado sobre ella, entra con la
+        // profundidad que tiene su ficha (la nueva, la del corte…).
+        if (m && actuadas.has(p.id) && refs?.ultimaProfundidad != null) {
+          inicial[p.id] = { ...inicial[p.id], profundidad_mm: refs.ultimaProfundidad, observaciones: "Actuada en el plan de trabajo" };
+        }
       });
       setDetalles(inicial);
     } catch (e: any) { setMsg(e?.message || "Error al crear la revisión"); } finally { setSaving(false); }
@@ -389,7 +414,9 @@ export default function RevisionVehiculo() {
       const d = detalles[p.id];
       const ocupado = !!montajePorPosicion.get(p.id);
       if (!ocupado || d?.no_accesible || d?.neumatico_ausente) return false;
-      return d?.profundidad_mm == null && d?.presion_bar == null;
+      // La presión ya viene puesta de serie: lo que demuestra que se ha medido
+      // es la profundidad.
+      return d?.profundidad_mm == null;
     });
     if (faltan.length > 0) {
       setMsg(`Faltan posiciones por medir: ${faltan.map((p) => p.codigo_posicion).join(", ")}. Márcalas como "no accesible" si no se pueden medir, o complétalas.`);
@@ -536,6 +563,14 @@ export default function RevisionVehiculo() {
             </div>
           )}
 
+          {actuadas.size > 0 && (
+            <div className="mt-2 rounded border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-[12px] text-sky-200">
+              Vienes del plan de trabajo: las {actuadas.size} ruedas en las que se ha actuado
+              ({posiciones.filter((p) => actuadas.has(p.id)).map((p) => p.codigo_posicion).join(", ") || "—"}) entran con la profundidad de su ficha.
+              Solo hay que medir las demás.
+            </div>
+          )}
+
           <button onClick={iniciarRevision} disabled={saving} className="mt-3 rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">Iniciar revisión</button>
 
           {historialRevisiones.length > 0 && (
@@ -653,7 +688,10 @@ export default function RevisionVehiculo() {
                 <div key={p.id} className="rounded-lg bg-slate-800 p-3">
                   <div className="mb-1 flex items-center justify-between">
                     <span className="text-[13px] font-bold text-sky-300">{p.codigo_posicion}</span>
-                    {d.alerta_generada && <span className="rounded-full bg-rose-500/30 px-2 py-0.5 text-[10px] font-bold text-rose-200">Alerta</span>}
+                    <span className="flex items-center gap-1">
+                      {actuadas.has(p.id) && <span className="rounded-full bg-sky-500/20 px-2 py-0.5 text-[10px] font-bold text-sky-200">Del plan</span>}
+                      {d.alerta_generada && <span className="rounded-full bg-rose-500/30 px-2 py-0.5 text-[10px] font-bold text-rose-200">Alerta</span>}
+                    </span>
                   </div>
                   <div className="mb-1 flex items-start justify-between gap-2 text-[11px] text-slate-400">
                     {/*

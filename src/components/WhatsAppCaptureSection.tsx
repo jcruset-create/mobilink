@@ -230,6 +230,7 @@ const AI_FIELD_LABELS: { key: keyof WhatsAppAiSuggestions; label: string; applyK
   { key: "conductorTelefono", label: "Teléfono del conductor", applyKey: "customerPhone" },
   { key: "plate", label: "Matrícula camión", applyKey: "plate" },
   { key: "plateRemolque", label: "Matrícula remolque", applyKey: "plateRemolque" },
+  { key: "paisMatricula", label: "País de la matrícula", applyKey: "paisMatricula" },
   { key: "vehicleBrand", label: "Marca vehículo" },
   { key: "vehicleModel", label: "Modelo vehículo" },
   { key: "vehicleDescription", label: "Descripción vehículo", applyKey: "vehicleDescription" },

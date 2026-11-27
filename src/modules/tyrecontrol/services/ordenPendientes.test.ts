@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  ordenarPorMatricula, ordenarPorUnidad, siguienteSentido,
   compararMatricula, compararPosicion, compararUnidad, grupoDeSitio,
   ordenarPendientes, recuentoPorGrupo, sitioDeVehiculo,
   type FilaPendiente, type Sitio,
@@ -190,5 +191,35 @@ describe("sitioDeVehiculo", () => {
     const s = sitioDeVehiculo(presencia({ estado: "STALE_POSITION" }), undefined);
     expect(s).toEqual({ tono: "viejo", base: null });
     expect(grupoDeSitio(s)).toBe(3);
+  });
+});
+
+describe("ordenarPorUnidad (cabecera «Nº unidad» del histórico)", () => {
+  const filas = [{ u: "1305" }, { u: null }, { u: "1523" }, { u: "987" }, { u: "1486" }];
+  const u = (f: { u: string | null }) => f.u;
+  it("primer toque de mayor a menor, como número y con los vacíos al final", () => {
+    expect(ordenarPorUnidad(filas, "desc", u).map(u)).toEqual(["1523", "1486", "1305", "987", null]);
+  });
+  it("segundo toque de menor a mayor", () => {
+    expect(ordenarPorUnidad(filas, "asc", u).map(u)).toEqual(["987", "1305", "1486", "1523", null]);
+  });
+  it("tercer toque: como estaba, sin tocar el original", () => {
+    expect(ordenarPorUnidad(filas, null, u)).toBe(filas);
+    expect(filas.map(u)).toEqual(["1305", null, "1523", "987", "1486"]);
+  });
+  it("el ciclo de toques", () => {
+    expect(siguienteSentido(null)).toBe("desc");
+    expect(siguienteSentido("desc")).toBe("asc");
+    expect(siguienteSentido("asc")).toBeNull();
+  });
+});
+
+describe("ordenarPorMatricula (cabecera «Matrícula» del histórico)", () => {
+  const filas = [{ m: "6495HTN" }, { m: "—" }, { m: "2302HVH" }, { m: "9266KKK" }];
+  const m = (f: { m: string }) => f.m;
+  it("primer toque de mayor a menor, segundo de menor a mayor, sin vehículo al final", () => {
+    expect(ordenarPorMatricula(filas, "desc", m).map(m)).toEqual(["9266KKK", "6495HTN", "2302HVH", "—"]);
+    expect(ordenarPorMatricula(filas, "asc", m).map(m)).toEqual(["2302HVH", "6495HTN", "9266KKK", "—"]);
+    expect(ordenarPorMatricula(filas, null, m)).toBe(filas);
   });
 });

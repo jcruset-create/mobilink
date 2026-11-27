@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { asignarBaseHabitual, calcularBaseHabitual, type BaseHabitual } from "../services/data";
 import type { Empresa } from "../types";
 import { Modal, TableWrap, tdCls, thCls, inputCls } from "./ui";
+import { useOrdenColumnas } from "../hooks/useOrdenColumnas";
+import { CabeceraOrden } from "./OrdenColumnas";
 
 /**
  * Poner la base en la ficha de los vehículos a partir de dónde han estado.
@@ -39,6 +41,9 @@ export default function ModalBaseHabitual({ empresas, empresaInicial, onClose, o
       .finally(() => { if (vivo) setCargando(false); });
     return () => { vivo = false; };
   }, [empresaId, dias]);
+
+  // Tocar «Matrícula» ordena la tabla.
+  const orden = useOrdenColumnas(filas, { matricula: (f) => f.matricula });
 
   // Lo que cambiaría de verdad con la casilla tal como está.
   const cambiaria = (f: BaseHabitual) =>
@@ -109,13 +114,13 @@ export default function ModalBaseHabitual({ empresas, empresaInicial, onClose, o
       <TableWrap>
         <table className="w-full text-sm">
           <thead><tr>
-            <th className={thCls}>Matrícula</th><th className={thCls}>Base actual</th><th className={thCls}>Base propuesta</th>
+            <th className={thCls}><CabeceraOrden col="matricula" orden={orden}>Matrícula</CabeceraOrden></th><th className={thCls}>Base actual</th><th className={thCls}>Base propuesta</th>
             <th className={thCls}>Horas</th><th className={thCls}>%</th><th className={thCls}>Noches</th>
             <th className={thCls}>2ª opción</th><th className={thCls}>Decisión</th><th className={thCls}></th>
           </tr></thead>
           <tbody>
             {!cargando && filas.length === 0 && <tr><td colSpan={9} className={`${tdCls} text-slate-500`}>Sin vehículos activos.</td></tr>}
-            {filas.map((f) => (
+            {orden.filas.map((f) => (
               <tr key={f.vehiculo_id} className={`border-t border-slate-700/60 ${cambiaria(f) ? "" : "text-slate-400"}`}>
                 <td className={`${tdCls} font-mono`}>{f.matricula}</td>
                 <td className={tdCls}>{f.base_actual ?? "—"}</td>

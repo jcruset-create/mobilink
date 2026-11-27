@@ -7,6 +7,8 @@ import {
 import { useInformesFiltros } from "./InformesLayout";
 import { arcosDeQuesito } from "../../services/quesito";
 import { useTyreAuth } from "../../contexts/TyreAuthContext";
+import { useOrdenColumnas } from "../../hooks/useOrdenColumnas";
+import { CabeceraOrden } from "../../components/OrdenColumnas";
 import {
   evolucionMensual, informeMensual,
   type EvolucionInforme, type FilaFichaInforme, type InformeMensual as Datos,
@@ -222,6 +224,8 @@ function BarrasEvolucion({ meses }: { meses: EvolucionInforme["meses"] }) {
 function ListaDePatio({ filas, posiciones }: {
   filas: FilaFichaInforme[]; posiciones: number[];
 }) {
+  // Antes del return temprano: tocar «Nº bus» o «Matrícula» ordena la lista.
+  const orden = useOrdenColumnas(filas, { matricula: (f) => f.matricula, unidad: (f) => f.numeroUnidad });
   if (filas.length === 0) {
     return <p className="text-[12px] text-slate-400 print:text-slate-600">Ningún vehículo en esta banda.</p>;
   }
@@ -230,20 +234,20 @@ function ListaDePatio({ filas, posiciones }: {
       <table className="w-full border-collapse text-[11px] tabular-nums">
         <thead>
           <tr className="border-b border-slate-600 text-left text-[10px] uppercase text-slate-400 print:text-slate-600">
-            <th className="py-1 pr-2 font-bold">Nº bus</th>
+            <th className="py-1 pr-2 font-bold"><CabeceraOrden col="unidad" orden={orden}>Nº bus</CabeceraOrden></th>
             {posiciones.map((p) => <th key={p} className="px-1 py-1 text-right font-bold">{p}</th>)}
             <th className="px-2 py-1 text-right font-bold">Peor</th>
             <th className="px-2 py-1 font-bold">Última rev.</th>
             <th className="px-2 py-1 font-bold">Medida</th>
             <th className="px-2 py-1 font-bold">Base</th>
-            <th className="px-2 py-1 font-bold">Matrícula</th>
+            <th className="px-2 py-1 font-bold"><CabeceraOrden col="matricula" orden={orden}>Matrícula</CabeceraOrden></th>
             {/* Las dos columnas que el taller rellena a mano sobre el papel. */}
             <th className="px-2 py-1 font-bold">Observaciones</th>
             <th className="px-2 py-1 font-bold">Pte. reparar</th>
           </tr>
         </thead>
         <tbody>
-          {filas.map((f) => (
+          {orden.filas.map((f) => (
             <tr key={f.vehiculoId} className="border-b border-slate-700/60 print:border-slate-300">
               <td className="py-1 pr-2 font-bold text-slate-100 print:text-black">{f.numeroUnidad ?? "—"}</td>
               {f.profundidades.map((v, j) => (

@@ -8,6 +8,10 @@ import {
 import { detalleDeMeses, listaDeMeses } from "../services/mesesEtiqueta";
 import { listarEmpresas } from "../services/data";
 import { rutaConFiltros } from "../services/navegacionVolver";
+import ProbarMovertis from "../components/ProbarMovertis";
+import ProbarRecorrido from "../components/ProbarRecorrido";
+import { useOrdenColumnas } from "../hooks/useOrdenColumnas";
+import { CabeceraOrden } from "../components/OrdenColumnas";
 import type { Empresa } from "../types";
 
 /**
@@ -125,6 +129,9 @@ export default function RankingKilometraje() {
         (v.numeroUnidad ?? "").toLowerCase().includes(q),
     );
   }, [datos, busqueda]);
+
+  // Tocar «Matrícula» o «Unidad» reordena lo que se ve; el puesto no cambia.
+  const orden = useOrdenColumnas(filtrados, { matricula: (v) => v.matricula, unidad: (v) => v.numeroUnidad });
 
   const nombreEmpresa = empresas.find((e) => e.id === empresaId)?.nombre ?? "";
 
@@ -266,8 +273,8 @@ export default function RankingKilometraje() {
               <thead className="bg-slate-800 text-slate-400">
                 <tr>
                   <th className="px-3 py-2 text-right">#</th>
-                  <th className="px-3 py-2 text-left">Matrícula</th>
-                  <th className="px-3 py-2 text-left">Unidad</th>
+                  <th className="px-3 py-2 text-left"><CabeceraOrden col="matricula" orden={orden}>Matrícula</CabeceraOrden></th>
+                  <th className="px-3 py-2 text-left"><CabeceraOrden col="unidad" orden={orden}>Unidad</CabeceraOrden></th>
                   <th className="px-3 py-2 text-right">km / año</th>
                   {/* La columna que impide que la cifra engañe. Ver la cabecera. */}
                   <th className="px-3 py-2 text-right">sobre</th>
@@ -281,7 +288,7 @@ export default function RankingKilometraje() {
                 {/* El puesto es el del ranking completo, no el de la lista
                     filtrada: buscar una matrícula no puede cambiar en qué
                     posición va ese autobús. */}
-                {filtrados.map((v) => (
+                {orden.filas.map((v) => (
                   <Fila key={v.vehiculoId} v={v} puesto={datos.vehiculos.indexOf(v) + 1} num={num}
                         empresaId={empresaId} volverAqui={volverAqui}
                         onRehecho={() => setRecarga((n) => n + 1)} />
@@ -331,6 +338,8 @@ function Fila({ v, puesto, num, empresaId, volverAqui, onRehecho }: {
 }) {
   const [rehaciendo, setRehaciendo] = useState(false);
   const [aviso, setAviso] = useState("");
+  const [probar, setProbar] = useState(false);
+  const [recorrido, setRecorrido] = useState(false);
   const huecosConocidos = v.mesesSinDato + v.mesesConError;
 
   /*
@@ -451,7 +460,36 @@ function Fila({ v, puesto, num, empresaId, volverAqui, onRehecho }: {
             <RefreshCw className={`inline h-3 w-3 ${rehaciendo ? "animate-spin" : ""}`} />
             <span className="ml-1">{rehaciendo ? "Pidiendo…" : "Rehacer"}</span>
           </button>
+          {/* Prueba de diagnóstico: varias ventanas y una unidad de control. No guarda nada. */}
+          <button
+            onClick={() => setProbar(true)}
+            disabled={!empresaId}
+            title="Prueba a Movertis con varias ventanas de fechas para ver qué falla. No guarda nada"
+            className="rounded-lg border border-slate-600 px-2 py-1 text-[11px] font-bold text-slate-300 hover:bg-slate-700/40 disabled:opacity-40"
+          >
+            🔬 Probar
+          </button>
+          <button
+            onClick={() => setRecorrido(true)}
+            disabled={!empresaId}
+            title="Los puntos GPS de un día en el mapa: ¿bastan para saber por qué carretera va? No guarda nada"
+            className="rounded-lg border border-slate-600 px-2 py-1 text-[11px] font-bold text-slate-300 hover:bg-slate-700/40 disabled:opacity-40"
+          >
+            🗺 Recorrido
+          </button>
         </div>
+        {recorrido && (
+          <ProbarRecorrido vehiculoId={v.vehiculoId} matricula={v.matricula ?? null} empresaId={empresaId} onClose={() => setRecorrido(false)} />
+        )}
+        {probar && (
+          <ProbarMovertis
+            vehiculoId={v.vehiculoId}
+            matricula={v.matricula ?? null}
+            empresaId={empresaId}
+            mesesConError={v.mesesConErrorDetalle}
+            onClose={() => setProbar(false)}
+          />
+        )}
       </td>
     </tr>
   );

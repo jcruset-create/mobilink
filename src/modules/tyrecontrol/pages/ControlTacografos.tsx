@@ -9,6 +9,8 @@ import {
 } from "../services/data";
 import type { Empresa } from "../types";
 import { TableWrap, tdCls, thCls } from "../components/ui";
+import { useOrdenColumnas } from "../hooks/useOrdenColumnas";
+import { CabeceraOrden } from "../components/OrdenColumnas";
 
 /**
  * Control de tacógrafos: a quién le toca, de más urgente a menos.
@@ -122,6 +124,9 @@ export default function ControlTacografos() {
   }, [empresaId, base, texto, estados, venceAntesDe, incluirBaja, generaciones]);
 
   useEffect(() => { void cargar(); }, [cargar]);
+
+  // Tocar «Matrícula» o «Unidad» ordena la tabla (no el CSV).
+  const orden = useOrdenColumnas(d?.filas ?? [], { matricula: (f) => f.matricula, unidad: (f) => f.numeroUnidad });
 
   const alternar = (e: EstadoTacografo) =>
     setEstados((a) => a.includes(e) ? a.filter((x) => x !== e) : [...a, e]);
@@ -276,7 +281,7 @@ export default function ControlTacografos() {
           </p>
           <TableWrap>
             <thead><tr>
-              <th className={thCls}>Matrícula</th><th className={thCls}>Unidad</th>
+              <th className={thCls}><CabeceraOrden col="matricula" orden={orden}>Matrícula</CabeceraOrden></th><th className={thCls}><CabeceraOrden col="unidad" orden={orden}>Unidad</CabeceraOrden></th>
               <th className={thCls}>Base</th><th className={thCls}>Estado</th>
               <th className={thCls}>Última</th><th className={thCls}>Tipo y resultado</th>
               <th className={thCls}>Próxima</th><th className={thCls}>Plazo</th>
@@ -284,7 +289,7 @@ export default function ControlTacografos() {
               <th className={thCls}></th>
             </tr></thead>
             <tbody>
-              {d.filas.map((f) => (
+              {orden.filas.map((f) => (
                 <tr key={f.vehiculoId} className={f.activo ? "" : "opacity-60"}>
                   <td className={`${tdCls} font-bold`}>
                     {f.matricula ?? "—"}

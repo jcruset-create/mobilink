@@ -1,5 +1,209 @@
 # Fase 1 — Estudio: Core como fuente única de operarios y usuarios
 
+> **2026-11-27 · La lectura del carnet y del DNI: que no «desaparezca», que se haga sola y que se vea.**
+> El usuario abrió su ficha y encontró «Sin leer» donde ya se había leído.
+>
+> **Qué pasaba**
+> - La lectura de la IA (número y caducidad del DNI, clases del carnet con su
+>   fecha) se guarda en el ENVÍO (`sea_employee_invites.lectura`), y la ficha
+>   miraba solo el último. Al pedir una actualización se crea un envío nuevo,
+>   sin leer: la lectura anterior seguía en la base pero dejaba de verse.
+>   **No se borraba nada.**
+> - Había que acordarse de pulsar «Leer documentación».
+> - Al «Pasar a la ficha», el número, las clases y la caducidad del carnet se
+>   guardaban en `sea_employees` pero ninguna pantalla los enseñaba.
+>
+> **Qué se ha hecho**
+> - `server/core/lecturaAlta.ts`: `lecturaVigente` —la lectura más reciente que
+>   haya, sea del envío que sea, diciendo si es de uno anterior— y
+>   `leerAlRecibir`. La ficha y «Pasar a la ficha» usan la misma.
+> - Al enviar el trabajador el formulario, la documentación **se lee sola**,
+>   después de contestarle: no espera a la IA ni se entera si falla. Si falla,
+>   queda «sin leer» y el botón de siempre sigue ahí.
+> - Lo que NO cambia: a la ficha sigue pasando solo cuando alguien pulsa «Pasar
+>   a la ficha». La IA informa, la persona decide.
+> - Ficha → Datos personales: carnet de conducir (número, clases, caducidad) y
+>   CAP si lo tiene. Las clases con su fecha siguen yendo a Certificaciones.
+> - Sin migraciones.
+>
+> **No probado contra producción:** la lectura real con la IA al recibir un
+> formulario (las pruebas usan una lectura simulada).
+
+> **2026-11-27 · La foto del empleado, con el fondo de la empresa.**
+> Pedido por el usuario: al subir una foto, cambiarle el fondo automáticamente
+> por el mural de Confortauto (eligió «el mural tal cual», con el lema).
+>
+> **Cómo, y qué NO se hace**
+> - Se RECORTA a la persona y se pega sobre el mural: la cara y la ropa son los
+>   píxeles de la foto que se hizo. No se usa IA generativa para «cambiar el
+>   fondo», que redibuja la foto entera y puede retocar la cara.
+> - El modelo que recorta («Selfie Multiclass» de MediaPipe, Apache 2.0) va
+>   dentro del programa (`server/core/recursos/`, 16 MB) y se ejecuta en el
+>   servidor con `onnxruntime-web`: la foto no sale a ningún servicio de fuera
+>   y no cuesta nada por foto. Medio segundo por foto.
+>
+> **Qué se ha hecho**
+> - `server/core/fotoFondo.ts` (puro): recorte, silueta maciza por dentro y
+>   suave en el borde, y composición. Si la silueta no es de fiar (casi nada,
+>   casi todo, o no cubre la cabeza localizada), **no se toca la foto**.
+> - `server/core/fotoSilueta.ts`: el modelo y el mural. El modelo se carga al
+>   usarlo y se suelta a los 10 minutos.
+> - `fotoNormalizar.ts`: el fondo es un paso más de la normalización, así que
+>   vale para todas las entradas (ficha, enlace de alta, Taller, «Traer fotos
+>   de Taller»). Y como ahora hay con qué rellenar, a quien sale pegado al
+>   borde de arriba se le baja la cabeza a su altura de siempre.
+> - La ruta de la foto dice cómo quedó, sin columna nueva: `…-f.jpg` con fondo,
+>   `…-s.jpg` sin él y así se queda, sin marca = sin intentar.
+> - Core → Empleados: aviso «Poner el fondo» para las fotos que ya había
+>   (`POST /api/core/empleados/fotos/poner-fondo`, por tandas).
+> - Ficha: tras guardar, «Dejarla sin cambiar el fondo», por si un recorte no
+>   convence. Solo administradores; el enlace de alta no lo ofrece.
+> - Si el modelo falla, la foto se guarda igual con su fondo. Interruptor:
+>   `CORE_FOTO_FONDO=0` lo apaga sin desplegar.
+> - Sin migraciones.
+>
+> **No probado contra producción:** el almacén real de Supabase, la memoria y
+> el tiempo en Render, y fotos de móvil reales (poca luz, pelo largo): las
+> pruebas usan una figura sin cara y un retrato público.
+
+> **2026-11-26 · ¿Llegó el SMS del enlace? Entregado / no entregado en la lista.**
+> Lo destapó un caso real: un SMS de actualización que Twilio aceptó
+> (`mensaje_sid` relleno, `error` vacío) y que no llegó al móvil. La lista
+> decía «Actualización pedida» porque Core solo sabía que Twilio lo había
+> ACEPTADO; nunca preguntaba qué pasó después.
+>
+> **Qué se ha hecho**
+> - `supabase/migrations/core_alta_entrega_sms.sql` (a mano, idempotente):
+>   `entrega`, `entrega_codigo`, `entrega_detalle` y `entrega_at` en
+>   `sea_employee_invites`. No cambia ningún dato existente.
+> - `server/core/entregaSms.ts`: `GET /api/core/alta/entregas` (solo
+>   administradores). Core le PREGUNTA a Twilio por el identificador del
+>   mensaje —no hay webhook— y lo apunta. Así sirve también para los SMS ya
+>   mandados y no se abre una ruta pública sin sesión. Solo el último enlace de
+>   cada persona, vivo y sin abrir; lo definitivo no se vuelve a preguntar y lo
+>   pendiente, con calma (30 s al principio, luego cada 10 min; 25 por carga).
+> - `server/core/entregaSmsEstado.ts` (puro): estados de Twilio → entregado /
+>   en camino / no entregado, y los códigos 30001–30010 y 21610 en castellano.
+>   Un código que no se conoce enseña el texto de Twilio: no se inventa.
+> - Core → Empleados: bajo «Enlace enviado» / «Actualización pedida» sale «SMS
+>   entregado», «SMS en camino», «SMS sin confirmar» (más de 15 min sin
+>   respuesta de la operadora) o «SMS no entregado» con el motivo. Mientras hay
+>   alguno en camino, se vuelve a mirar sola cada 20 s.
+> - Solo informa: que no llegue no anula el enlace ni mueve la ficha.
+> - Sin la migración, la lista sale como siempre.
+>
+> **No probado contra producción:** la llamada real a Twilio (las pruebas usan
+> uno simulado) y la pantalla con una sesión de verdad.
+
+> **2026-11-26 · Las nóminas, en la ficha de cada trabajador.**
+> Decidido por el usuario: solo las ve el superadministrador, la casilla del
+> importador viene marcada y se borran a mano (no hay caducidad).
+>
+> **Qué se ha hecho**
+> - `supabase/migrations/core_nominas_empleado.sql` (a mano, idempotente):
+>   tabla `sea_employee_payslips` — de quién, periodo, días, ruta del PDF,
+>   quién la subió y quién la abrió por última vez. **Ningún importe.** RLS
+>   activado y sin políticas: solo la lee el servidor.
+> - `server/core/nominasEmpleado.ts`: el PDF del mes se parte (pdf-lib) y a
+>   cada ficha va SOLO su página, al bucket privado de Core
+>   (`empleados/<id>/nominas/<año>-<mes>-<uuid>.pdf`). Volver a subir el mismo
+>   periodo sustituye la anterior. `GET /api/core/empleados/:id/nominas`,
+>   `GET …/:nominaId/pdf` y `DELETE …/:nominaId`, **solo superadministrador**;
+>   abrir y borrar quedan en la auditoría. El PDF lo sirve el servidor con la
+>   sesión delante: no hay dirección firmada que se pueda reenviar.
+> - Importador (`importarNominas.ts`, `ImportarNominas.tsx`): casilla «Guardar
+>   cada nómina en la ficha de su trabajador», marcada. Se guarda solo a quien
+>   casa por DNI (no por nombre a secas, ni a quien aún no tiene ficha); el
+>   resultado dice a quién no y por qué. Se puede importar solo para guardar
+>   nóminas, sin tocar ninguna ficha.
+> - Ficha: pestaña «Nóminas» (`NominasEmpleado.tsx`), detrás de «Horario» y,
+>   como ella, solo para el superadministrador: ver, descargar y borrar.
+> - Las nóminas no pasan por la IA en ningún momento.
+> - Sin la migración, la casilla no sale y la pestaña avisa de que falta.
+>
+> **No probado contra producción:** el bucket real de Supabase y la pantalla
+> con una sesión de verdad. Las pruebas usan un almacén simulado y personas
+> inventadas.
+
+> **2026-11-26 · La foto del empleado: una sola, en Core, normalizada (1 de 2).**
+> Decidido por el usuario: obligatoria en el enlace de alta, con IA para
+> centrar la cara, las fotos de Taller pasan a Core y el consentimiento de
+> protección de datos menciona la fotografía.
+>
+> **Qué se ha hecho en esta entrega**
+> - `server/core/fotoNormalizar.ts` (puro salvo `sharp`): la pone derecha
+>   (EXIF), la recorta en cuadrado alrededor de la cabeza —siempre con la misma
+>   proporción— y la deja en JPEG de 600 px sin metadatos (ni GPS). Se rechaza
+>   solo lo que no tiene arreglo (ninguna cara, o más de una); lo dudoso
+>   (gafas de sol, poca luz, de lejos) se guarda con un aviso. Sin IA, recorte
+>   al centro.
+> - `server/core/fotoEmpleado.ts`: se guarda en el bucket privado de Core
+>   (`empleados/<id>/foto.jpg`) y `sea_employees.foto_url` lleva la RUTA; las
+>   pantallas piden direcciones firmadas. La original no se guarda. La IA es
+>   la misma que recorta los DNI: se le pide un recuadro, no quién es.
+>   `GET /api/core/empleados/fotos`, `POST` y `DELETE /:id/foto`, solo
+>   administradores (y solo ellos pueden «usarla igualmente»).
+> - Enlace de alta: paso «2 · Tu foto», con cámara frontal y óvalo de guía
+>   (`CamaraSelfie.tsx`), vista de cómo queda y repetir. **Obligatoria para
+>   enviar** (`faltaParaEnviar`), también en una actualización si aún no tiene.
+>   El consentimiento dice «…de mi documentación y de mi fotografía…».
+> - Core: foto en la cabecera de la ficha, en «Editar empleado» y en la lista.
+> - Sin migraciones: `foto_url` ya existía.
+>
+> **Entrega 2 (hecha el mismo día): la foto en Taller**
+> - `GET /api/techs`: la foto de un técnico enlazado es la de su ficha de Core
+>   (dirección firmada). Sin foto en Core, o si no se puede firmar, la del
+>   taller de siempre.
+> - `PUT /api/techs/:name` no escribe `avatar` de un enlazado con foto en Core:
+>   lo que manda el panel es la dirección firmada, que caduca.
+> - `POST /api/techs/:name/avatar` de un enlazado guarda la foto EN CORE,
+>   normalizada. Da igual desde dónde se cambie: hay una sola.
+> - Core → Empleados: aviso «Traer fotos de Taller» mientras haya técnicos
+>   enlazados con foto en Taller y sin foto en Core. Las pasa una vez,
+>   normalizadas, sin pisar a quien ya tiene; `techs.avatar` no se toca. Se
+>   bajan del bucket del panel por su ruta, no pidiendo la dirección guardada.
+> - Para que no parpadee en las TV (que recargan cada 15 s): cada foto nueva
+>   va a una ruta nueva (`foto-<hora>.jpg`, y se borra la anterior), el
+>   servidor reutiliza la dirección firmada de cada ruta, y el panel conserva
+>   la primera que vio (`src/modules/fotoEstable.ts`) y la renueva a las 5 h.
+>
+> **A tener en cuenta**
+> - La foto pasa por el proveedor de IA para localizar la cara, igual que ya
+>   pasan los DNI.
+> - Los consentimientos se guardan por tipo, no con su texto: el cambio de
+>   redacción vale para quien firme a partir de ahora.
+
+> **2026-11-26 · Importar de nóminas, y el número de trabajador pasa a ser el
+> código de la gestoría.**
+>
+> Al leer el PDF de nóminas se vio que el «Nº» que se había copiado de
+> `codigo_operario` NO era el código de la nómina, sino el orden de la página
+> en el PDF (1…20). El código de verdad es el de la cabecera («000002 / 112» →
+> `2`), que es el que no cambia cuando alguien entra o sale. Decidido: el
+> número de trabajador es ese.
+>
+> **Qué se ha hecho**
+> - Core → Empleados → **Importar de nóminas**: se sube el PDF del mes, el
+>   servidor lee la cabecera de cada nómina (`server/core/nominasLeer.ts`), la
+>   compara con Core por NIF (`nominasComparar.ts`) y enseña qué pasaría:
+>   nuevos, a actualizar, iguales, de baja en Core y activos que ya no salen.
+>   Se marca y se aplica (`importarNominas.ts`), todo o nada.
+> - Los nuevos se crean en `pendiente` (falta el enlace de alta), con su
+>   empresa, su centro, DNI, Seguridad Social, antigüedad, categoría y número.
+> - A los que ya están solo se les iguala el número y se rellena lo que falte;
+>   lo que ya está puesto no se pisa. `codigo_operario` (login de ToolControl)
+>   no se toca.
+> - Nunca da de baja: quien ya no sale en la nómina solo se avisa.
+> - Del PDF se lee solo la cabecera; ni los importes ni el PDF se guardan, y
+>   al aplicar se relee el PDF (lo que entra sale del PDF, no del navegador).
+> - Sin migraciones.
+>
+> **Límites**
+> - Depende del formato de ESTA gestoría. Una página que no lo sigue se
+>   devuelve como «no reconocida»; no se inventa nada.
+> - El segundo número del código («/ 112») no se sabe qué es y no se usa.
+> - El centro de la nómina solo se usa para los nuevos.
+
 > **2026-11-24 · La baja en Core es la baja en todos los módulos; la APK de
 > Almacén mira a Core.** Decidido por el usuario.
 >
