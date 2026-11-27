@@ -14,6 +14,9 @@ type Empleado = {
   id: string; nombre: string; apellidos: string | null;
   dni_nie: string | null; num_seguridad_social: string | null;
   dni_caducidad: string | null;
+  /** El carnet de conducir: lo teclea el trabajador o se pasa de lo que lee la IA. */
+  carnet_numero?: string | null; carnet_clases?: string | null; carnet_caducidad?: string | null;
+  cap_numero?: string | null; cap_caducidad?: string | null;
   direccion: string | null; codigo_postal: string | null;
   poblacion: string | null; provincia: string | null;
   telefono: string | null; email: string | null;
@@ -71,6 +74,8 @@ type Revision = {
       capNumero: string | null; capCaducidad: string | null; nota: string;
     };
   } | null;
+  /** De cuándo es esa lectura, y si es de un envío anterior al último. */
+  lecturaDe?: { leidoAt: string | null; deEnvioAnterior: boolean } | null;
   certificacionesPropuestas: Array<{ nombre: string; caducidad: string; numero: string | null }>;
   consentimientos: Array<{ tipo: string; aceptado: boolean; fecha: string | null }>;
   puedeVerificar: boolean;
@@ -852,6 +857,20 @@ export default function EmpleadoDetalle() {
               { label: "Nº Seguridad Social", value: empleado.num_seguridad_social },
               { label: "El DNI caduca el", value: empleado.dni_caducidad
                 ? new Date(empleado.dni_caducidad).toLocaleDateString("es-ES") : null },
+              { label: "Carnet de conducir", value: empleado.carnet_numero ?? null },
+              { label: "Clases del carnet", value: empleado.carnet_clases ?? null },
+              { label: "El carnet caduca el", value: empleado.carnet_caducidad
+                ? new Date(empleado.carnet_caducidad).toLocaleDateString("es-ES") : null },
+              // El CAP solo lo tiene quien lleva camión o autobús: sin él, ni se enseña.
+              ...(empleado.cap_numero || empleado.cap_caducidad
+                ? [{
+                    label: "CAP",
+                    value: [
+                      empleado.cap_numero,
+                      empleado.cap_caducidad ? `caduca el ${new Date(empleado.cap_caducidad).toLocaleDateString("es-ES")}` : null,
+                    ].filter(Boolean).join(" · "),
+                  }]
+                : []),
               { label: "Dirección", value: direccionCompleta(empleado) },
               { label: "Email", value: empleado.email },
               ...("telefono_empresa" in (empleado as any)
@@ -1443,7 +1462,8 @@ export default function EmpleadoDetalle() {
                   <p className="text-sm leading-6 text-slate-400">
                     Sin leer. La IA saca de las fotos el número y la caducidad del DNI, y del carnet
                     las clases que tiene <b className="text-slate-300">con la fecha de cada una</b>.
-                    Lo leído se enseña aquí; a la ficha pasa cuando tú le des al botón.
+                    Se lee sola cuando el trabajador envía la ficha; si en un minuto no aparece aquí,
+                    pulsa «Leer documentación». A la ficha pasa cuando tú le des al botón.
                   </p>
                 ) : (
                   <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -1461,8 +1481,14 @@ export default function EmpleadoDetalle() {
                         <p className="text-[11px] text-slate-500">{revision.lectura.identidad.nota}</p>
                       )}
                       <p className="pt-2 text-[11px] text-slate-500">
-                        Leído el {fechaHora(revision.invitacion?.leidoAt)}
+                        Leído el {fechaHora(revision.lecturaDe?.leidoAt ?? revision.invitacion?.leidoAt)}
                       </p>
+                      {revision.lecturaDe?.deEnvioAnterior && (
+                        <p className="rounded-lg border border-amber-800 bg-amber-500/10 p-2 text-[11px] leading-snug text-amber-200">
+                          Es la lectura de un envío anterior: después se le mandó otro enlace. Si ha cambiado
+                          alguna foto, pulsa «Volver a leer».
+                        </p>
+                      )}
                     </div>
 
                     <div className="space-y-2">
