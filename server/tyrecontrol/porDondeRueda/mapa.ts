@@ -71,10 +71,10 @@ export function consultaOverpass(tesela: string): string {
   return `[out:json][timeout:90];way["highway"~"${CLASES}"](${s},${w},${n},${e});out tags geom;`;
 }
 
-async function descargar(tesela: string): Promise<FilaVia[]> {
+async function descargar(tesela: string, timeoutMs?: number): Promise<FilaVia[]> {
   // Los reintentos y el cambio de servidor los lleva el cliente: aquí solo se
   // pide la tesela y se traduce lo que venga.
-  const json = await pedirAOverpass(consultaOverpass(tesela), { servidores: servidores() });
+  const json = await pedirAOverpass(consultaOverpass(tesela), { servidores: servidores(), timeoutMs });
   return filasDeOverpass(json as { elements?: ElementoOverpass[] });
 }
 
@@ -110,7 +110,9 @@ export async function cargarTeselas(
     // el proxy de Render corta una petición larga con un 502 (27/11/2026).
     if (limiteMs != null && Date.now() >= limiteMs) break;
     try {
-      const filas = await descargar(t);
+      // Desde la pantalla, cada intento cabe en el plazo: si un servidor no
+      // contesta en 20 s se pasa al siguiente en vez de esperar dos minutos.
+      const filas = await descargar(t, limiteMs != null ? 20_000 : undefined);
       for (let i = 0; i < filas.length; i += LOTE) {
         const { error: e } = await supabase.from("tc_vias_osm").upsert(filas.slice(i, i + LOTE), { onConflict: "osm_id" });
         if (e) throw new Error(`No se pudieron guardar las vías: ${e.message}`);

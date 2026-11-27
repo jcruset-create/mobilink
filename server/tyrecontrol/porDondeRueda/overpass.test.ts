@@ -28,9 +28,10 @@ const sinConexion = () => new TypeError("fetch failed");
 const yaEsta = async () => {};
 
 describe("servidoresDe", () => {
-  it("sin variable, el oficial", () => {
-    expect(servidoresDe(undefined)).toEqual([OFICIAL]);
-    expect(servidoresDe("")).toEqual([OFICIAL]);
+  it("sin variable, el oficial primero y dos espejos detrás", () => {
+    expect(servidoresDe(undefined)[0]).toBe(OFICIAL);
+    expect(servidoresDe(undefined)).toHaveLength(3);
+    expect(servidoresDe("")).toEqual(servidoresDe(undefined));
   });
 
   it("varios separados por comas, con espacios de más", () => {
@@ -39,7 +40,7 @@ describe("servidoresDe", () => {
 
   it("lo que no es una URL no entra", () => {
     // Una variable mal puesta no puede dejar el sistema apuntando a nada.
-    expect(servidoresDe("pon-aqui-el-espejo")).toEqual([OFICIAL]);
+    expect(servidoresDe("pon-aqui-el-espejo")).toEqual(servidoresDe(undefined));
   });
 });
 
