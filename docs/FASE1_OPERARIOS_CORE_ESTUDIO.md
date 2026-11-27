@@ -1,5 +1,19 @@
 # Fase 1 — Estudio: Core como fuente única de operarios y usuarios
 
+> **2026-11-27 · El contacto de emergencia (y la fecha de nacimiento) se ven en la ficha.**
+> El trabajador los rellena en el enlace de alta («5 · Si pasa algo»: nombre y
+> teléfono; fecha de nacimiento y nacionalidad en sus datos) y se guardaban en
+> `sea_employees` (`emergencia_nombre`, `emergencia_telefono`,
+> `fecha_nacimiento`, `nacionalidad`), pero ninguna pantalla de Core los
+> enseñaba ni dejaba cambiarlos.
+>
+> - Ficha → Datos personales: tarjeta «En caso de emergencia» (avisar a y
+>   teléfono, que se puede pulsar para llamar), y fecha de nacimiento y
+>   nacionalidad.
+> - «Editar empleado»: sección «Contacto de emergencia» para corregirlo o
+>   ponerlo a quien no pasó por el enlace.
+> - Sin migraciones: las columnas existen desde `core_alta_operario.sql`.
+
 > **2026-11-27 · La lectura del carnet y del DNI: que no «desaparezca», que se haga sola y que se vea.**
 > El usuario abrió su ficha y encontró «Sin leer» donde ya se había leído.
 >
