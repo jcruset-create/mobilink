@@ -36,16 +36,28 @@ export const ESPERAS_MS = [2_000, 6_000, 15_000];
 const HTTP_REINTENTABLES = new Set([429, 500, 502, 503, 504]);
 
 /**
+ * Sin variable, el oficial y dos espejos públicos (sin clave, misma API).
+ * El 27/11/2026 el oficial dejó de contestar al servidor durante la mañana
+ * después de haber cargado 14 teselas: con un solo servidor, «Analizar un
+ * día» se quedaba en «OpenStreetMap no contesta».
+ */
+export const SERVIDORES_POR_DEFECTO = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.private.coffee/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
+];
+
+/**
  * Los servidores a los que preguntar, en orden.
  *
- * Varios separados por comas. Vacío o sin variable: el oficial.
+ * Varios separados por comas. Vacío o sin variable: los de por defecto.
  */
 export function servidoresDe(valor: string | undefined | null): string[] {
   const lista = String(valor ?? "")
     .split(",")
     .map((s) => s.trim())
     .filter((s) => /^https?:\/\//i.test(s));
-  return lista.length ? lista : ["https://overpass-api.de/api/interpreter"];
+  return lista.length ? lista : [...SERVIDORES_POR_DEFECTO];
 }
 
 /** El nombre del servidor, para poder decir cuál ha fallado. */
