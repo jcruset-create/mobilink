@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'offline_store.dart';
+import 'filtro_rebote.dart';
 import 'pitido_medicion.dart';
 import 'rfid_service.dart';
 import 'tlgx_probe_service.dart';
@@ -94,6 +95,8 @@ class ProbeSession extends ChangeNotifier {
   // ── Pitido de confirmación ─────────────────────────────────────────────────
   //
   // Va por el mismo canal que todo lo demás: no abre otra conexión.
+  final FiltroRebote _rebote = FiltroRebote();
+
   late final PitidoDeMedicion _pitido = PitidoDeMedicion((cmd) => _asegurarProbe().enviar(cmd));
 
   /// La lectura de profundidad [lectura] ya está registrada: la sonda pita una
@@ -240,6 +243,13 @@ class ProbeSession extends ChangeNotifier {
     // resto, así que profundidad y presión siguen llegando con normalidad.
     _rfid?.manejarLinea(line);
     final r = parsearLinea(line);
+    // La sonda repite a veces la misma profundidad dos veces seguidas: sin
+    // este filtro, con medición doble, el eco cerraba la rueda (ver
+    // filtro_rebote.dart).
+    if (r.tipo == LecturaTipo.profundidad && r.valor != null && !_rebote.acepta(r.valor!, DateTime.now())) {
+      debugPrint('[sonda] profundidad repetida descartada: ${r.raw}');
+      return;
+    }
     LecturaSonda emitir = r;
     switch (r.tipo) {
       case LecturaTipo.profundidad:
@@ -271,6 +281,7 @@ class ProbeSession extends ChangeNotifier {
   void _onState(bool estado) {
     conectada = estado;
     if (estado) {
+      _rebote.reiniciar();
       autoReconectando = false;
       armada = false; // ya está enlazada: no hay nada a la espera
       _rearme?.cancel();
