@@ -68,7 +68,8 @@ describe("las lecturas del panel llevan credencial", () => {
         /fetch(?:WithTimeout)?\(\s*`?[^`')]*?(\/api\/[A-Za-z0-9\-/_${}.:]+)/g
       )) {
         const ruta = llamada[1];
-        if (!protegidas.some((p) => ruta.startsWith(p))) continue;
+        // Por segmento entero: /api/otf-tracking (público) no es /api/otf.
+        if (!protegidas.some((p) => ruta === p || ruta.startsWith(`${p}/`))) continue;
 
         // Hasta el cierre de la llamada, no 400 caracteres a ojo.
         const resto = texto.slice(llamada.index! + llamada[0].length);

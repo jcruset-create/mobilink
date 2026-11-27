@@ -48,6 +48,7 @@ import {
 } from "./otf/neumaticosTc.ts";
 import { catalogoTc, montarTrabajoEnTc, planoTc, vehiculoParaOtf } from "./otf/neumaticosTcServicio.ts";
 import { sustitucionPorFoto } from "./otf/matriculaFoto.ts";
+import { enlaceCaducado, fasesParaInforme, hitosDeOtf, textoCorreoSalida, ventanaDeOtf } from "./otf/seguimiento.ts";
 import {
   borrarPosicionTablet,
   guardarPosicionTablet,
@@ -11840,7 +11841,11 @@ async function buildVehicleTrackingPdfBuffer(
   objectno: string,
   fromMs: number,
   toMs: number,
-  opts: { minStopSec?: number; plate?: string | null; titleExtra?: string } = {}
+  opts: {
+    minStopSec?: number; plate?: string | null; titleExtra?: string;
+    /** Momentos con hora para el resumen (las fases de una OTF). */
+    fases?: { etiqueta: string; ms: number | null }[];
+  } = {}
 ): Promise<Buffer> {
   const minStopSec = opts.minStopSec ?? 180;
 
@@ -11885,6 +11890,12 @@ async function buildVehicleTrackingPdfBuffer(
   row("Nº de paradas:", String(stops.length));
   row("Primera salida:", firstStart ? formatDateEs(firstStart) : "-");
   row("Última llegada:", lastEnd ? formatDateEs(lastEnd) : "-");
+  if (opts.fases?.length) {
+    doc.moveDown(0.6);
+    doc.fontSize(13).font("Helvetica-Bold").text("Fases");
+    doc.moveDown(0.3);
+    for (const f of opts.fases) row(`${f.etiqueta}:`, f.ms ? formatDateEs(f.ms) : "-");
+  }
 
   if (track.length > 0 || stops.length > 0) {
     doc.moveDown(0.8);
@@ -17468,6 +17479,7 @@ async function vigilarOtfs() {
             `UPDATE otf SET "departedAtMs" = COALESCE("departedAtMs", $2), "updatedAtMs" = $2 WHERE id = $1`,
             [o.id, now]
           );
+          void enviarSeguimientoOtf(Number(o.id), "salida"); // el enlace al cliente
         } else if (cambio.enCaminoBaseAtMs) {
           await db.query(
             `UPDATE otf SET "enCaminoBaseAtMs" = COALESCE("enCaminoBaseAtMs", $2), "updatedAtMs" = $2 WHERE id = $1`,
@@ -17478,6 +17490,8 @@ async function vigilarOtfs() {
             `UPDATE otf SET "arrivedAtWorkshopMs" = COALESCE("arrivedAtWorkshopMs", $2), "updatedAtMs" = $2 WHERE id = $1`,
             [o.id, now]
           );
+          // El recorrido, con un margen para que Webfleet cierre el último trayecto.
+          setTimeout(() => void enviarSeguimientoOtf(Number(o.id), "final"), 10 * 60_000);
         }
         if (cambio.nota) console.log(`✓ OTF #${o.id}: ${cambio.nota} (${Math.round(distTallerM)} m del taller)`);
       } catch (err) {
@@ -19759,6 +19773,11 @@ function normalizeOtf(row: any) {
     avisoLlegadaResultado: row.avisoLlegadaResultado ?? null,
     informeEnviadoAtMs: row.informeEnviadoAtMs != null ? Number(row.informeEnviadoAtMs) : null,
     informeResultado: row.informeResultado ?? null,
+    // Los correos del seguimiento (enlace al salir, recorrido al volver).
+    seguimientoAvisoAtMs: row.seguimientoAvisoAtMs != null ? Number(row.seguimientoAvisoAtMs) : null,
+    seguimientoAvisoResultado: row.seguimientoAvisoResultado ?? null,
+    seguimientoInformeAtMs: row.seguimientoInformeAtMs != null ? Number(row.seguimientoInformeAtMs) : null,
+    seguimientoInformeResultado: row.seguimientoInformeResultado ?? null,
     updatedAtMs: Number(row.updatedAtMs ?? Date.now()),
   };
 }
@@ -19957,74 +19976,292 @@ app.get("/api/otf-en-curso", exigirCredencial(requirePanelRole), async (_req, re
  * /api/roadside-tracking para una asistencia (posición de la furgoneta, ETA,
  * taller), pero sin token: lo lee cualquier rol del panel.
  */
+/*
+ * El seguimiento de una OTF: posición de la furgoneta, ETA (a la base o, de
+ * vuelta, al taller), taller y matrícula de la furgoneta. Lo usan la tarjeta
+ * de Pantalla técnicos, el panel de OTF y el enlace público del cliente.
+ */
+async function seguimientoDeOtf(row: any) {
+  const otf = normalizeOtf(row);
+  const id = otf.id;
+  const t = await db.query(
+    `SELECT MIN("updatedAtMs") AS "primerTrabajoMs" FROM otf_trabajos WHERE "otfId" = $1 AND status <> 'pendiente'`,
+    [id]
+  );
+  const primerTrabajoMs = t.rows[0]?.primerTrabajoMs != null ? Number(t.rows[0].primerTrabajoMs) : null;
+
+  let workshop: { lat: number; lng: number } | null = null;
+  try {
+    const wcfg = await getWorkshopConfig(otf.workshopId);
+    const wlat = parseFloat(wcfg.taller_lat);
+    const wlng = parseFloat(wcfg.taller_lng);
+    if (Number.isFinite(wlat) && Number.isFinite(wlng)) workshop = { lat: wlat, lng: wlng };
+  } catch { /* sin config */ }
+
+  let vehiclePosition: { lat: number; lng: number; speedKmh: number | null; moving: boolean | null } | null = null;
+  let eta: { minutos: number; km: string } | null = null;
+  const sigue = otfSigueEnCurso(otf);
+  if (sigue && otf.webfleetVehicleId) {
+    try {
+      const pos = await getWebfleetVehiclePosition(otf.webfleetVehicleId);
+      vehiclePosition = { lat: pos.lat, lng: pos.lng, speedKmh: pos.speedKmh, moving: pos.moving };
+      // Ida: hacia la base hasta que llega; vuelta: hacia el taller.
+      const destino =
+        otf.status === "finalizada"
+          ? otf.enCaminoBaseAtMs != null ? workshop : null
+          : otf.arrivedAtBaseMs == null && otf.lat != null && otf.lng != null
+            ? { lat: otf.lat, lng: otf.lng }
+            : null;
+      if (destino) {
+        try {
+          const e = await calcularETA({ lat: pos.lat, lng: pos.lng }, destino);
+          eta = { minutos: e.minutos, km: e.kilometros };
+        } catch { /* sin ETA */ }
+      }
+    } catch { /* sin posición */ }
+  }
+
+  let vanPlate: string | null = null;
+  try {
+    const vp = otf.webfleetVehicleId
+      ? await db.query(`SELECT plate FROM roadside_vehicles WHERE "webfleetVehicleId" = $1 LIMIT 1`, [otf.webfleetVehicleId])
+      : otf.assignedVehicleName
+        ? await db.query(`SELECT plate FROM roadside_vehicles WHERE name = $1 LIMIT 1`, [otf.assignedVehicleName])
+        : null;
+    vanPlate = vp?.rows[0]?.plate ?? null;
+  } catch { /* sin furgoneta */ }
+
+  return {
+    otf: { ...otf, primerTrabajoMs },
+    vehiclePosition,
+    eta,
+    workshop,
+    vanPlate,
+    actualizadoMs: Date.now(),
+    expired: !sigue,
+  };
+}
+
 app.get("/api/otf/:id/seguimiento", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isFinite(id)) return res.status(400).json({ error: "OTF no válida" });
     const r = await db.query(`SELECT * FROM otf WHERE id = $1`, [id]);
     if (!r.rows[0]) return res.status(404).json({ error: "OTF no encontrada" });
-    const otf = normalizeOtf(r.rows[0]);
-    const t = await db.query(
-      `SELECT MIN("updatedAtMs") AS "primerTrabajoMs" FROM otf_trabajos WHERE "otfId" = $1 AND status <> 'pendiente'`,
-      [id]
-    );
-    const primerTrabajoMs = t.rows[0]?.primerTrabajoMs != null ? Number(t.rows[0].primerTrabajoMs) : null;
-
-    let workshop: { lat: number; lng: number } | null = null;
-    try {
-      const wcfg = await getWorkshopConfig(otf.workshopId);
-      const wlat = parseFloat(wcfg.taller_lat);
-      const wlng = parseFloat(wcfg.taller_lng);
-      if (Number.isFinite(wlat) && Number.isFinite(wlng)) workshop = { lat: wlat, lng: wlng };
-    } catch { /* sin config */ }
-
-    let vehiclePosition: { lat: number; lng: number; speedKmh: number | null; moving: boolean | null } | null = null;
-    let eta: { minutos: number; km: string } | null = null;
-    const sigue = otfSigueEnCurso(otf);
-    if (sigue && otf.webfleetVehicleId) {
-      try {
-        const pos = await getWebfleetVehiclePosition(otf.webfleetVehicleId);
-        vehiclePosition = { lat: pos.lat, lng: pos.lng, speedKmh: pos.speedKmh, moving: pos.moving };
-        // Ida: hacia la base hasta que llega; vuelta: hacia el taller.
-        const destino =
-          otf.status === "finalizada"
-            ? otf.enCaminoBaseAtMs != null ? workshop : null
-            : otf.arrivedAtBaseMs == null && otf.lat != null && otf.lng != null
-              ? { lat: otf.lat, lng: otf.lng }
-              : null;
-        if (destino) {
-          try {
-            const e = await calcularETA({ lat: pos.lat, lng: pos.lng }, destino);
-            eta = { minutos: e.minutos, km: e.kilometros };
-          } catch { /* sin ETA */ }
-        }
-      } catch { /* sin posición */ }
-    }
-
-    let vanPlate: string | null = null;
-    try {
-      const vp = otf.webfleetVehicleId
-        ? await db.query(`SELECT plate FROM roadside_vehicles WHERE "webfleetVehicleId" = $1 LIMIT 1`, [otf.webfleetVehicleId])
-        : otf.assignedVehicleName
-          ? await db.query(`SELECT plate FROM roadside_vehicles WHERE name = $1 LIMIT 1`, [otf.assignedVehicleName])
-          : null;
-      vanPlate = vp?.rows[0]?.plate ?? null;
-    } catch { /* sin furgoneta */ }
-
-    res.json({
-      otf: { ...otf, primerTrabajoMs },
-      vehiclePosition,
-      eta,
-      workshop,
-      vanPlate,
-      actualizadoMs: Date.now(),
-      expired: !sigue,
-    });
+    res.json(await seguimientoDeOtf(r.rows[0]));
   } catch (e) {
     console.error("GET /api/otf/:id/seguimiento error:", e);
     res.status(500).json({ error: "Error obteniendo seguimiento" });
   }
 });
+
+/* ── Seguimiento de la OTF: enlace del cliente, movimientos, PDF y correos ── */
+
+/** El token del enlace público de la OTF; se crea la primera vez. */
+async function tokenSeguimientoOtf(id: number): Promise<string | null> {
+  const nuevo = crypto.randomBytes(16).toString("hex");
+  const r = await db.query(
+    `UPDATE otf SET "trackingToken" = COALESCE("trackingToken", $2) WHERE id = $1 RETURNING "trackingToken"`,
+    [id, nuevo]
+  );
+  return r.rows[0]?.trackingToken ?? null;
+}
+
+function urlSeguimientoOtf(token: string): string {
+  return `${getPublicAppBaseUrl({} as express.Request)}/seguimiento-otf/${token}`;
+}
+
+/** Los trabajos con su hora, para los hitos y las fases. */
+async function trabajosParaSeguimiento(otfId: number) {
+  const r = await db.query(
+    `SELECT plate, status, "iniciadoAtMs", "finalizadoAtMs" FROM otf_trabajos WHERE "otfId" = $1 ORDER BY id`,
+    [otfId]
+  );
+  return r.rows.map((t: any) => ({
+    plate: t.plate ?? null,
+    status: String(t.status ?? ""),
+    iniciadoAtMs: t.iniciadoAtMs != null ? Number(t.iniciadoAtMs) : null,
+    finalizadoAtMs: t.finalizadoAtMs != null ? Number(t.finalizadoAtMs) : null,
+  }));
+}
+
+// El enlace para el cliente (se crea si no lo había).
+app.post("/api/otf/:id/enlace-seguimiento", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "OTF no válida" });
+    const token = await tokenSeguimientoOtf(id);
+    if (!token) return res.status(404).json({ error: "OTF no encontrada" });
+    res.json({ url: urlSeguimientoOtf(token) });
+  } catch (e) {
+    console.error("POST enlace-seguimiento OTF error:", e);
+    res.status(500).json({ error: "No se pudo crear el enlace" });
+  }
+});
+
+/*
+ * El seguimiento público de la OTF, para el responsable de la base: sin
+ * sesión, con el token. Solo lo que le sirve (dónde está la furgoneta, cuándo
+ * llega, cómo van los trabajos y a quién llamar); nada de notas internas.
+ */
+app.get("/api/otf-tracking/:token", async (req, res) => {
+  try {
+    const token = String(req.params.token || "").trim();
+    if (!/^[a-f0-9]{16,64}$/.test(token)) return res.status(404).json({ error: "Seguimiento no encontrado" });
+    const r = await db.query(`SELECT * FROM otf WHERE "trackingToken" = $1 LIMIT 1`, [token]);
+    if (!r.rows[0]) return res.status(404).json({ error: "Seguimiento no encontrado" });
+    const s = await seguimientoDeOtf(r.rows[0]);
+    const o = s.otf as any;
+    const prog = await db.query(
+      `SELECT COUNT(*)::int AS total,
+              COUNT(*) FILTER (WHERE status IN ('finalizado','no_realizado'))::int AS hechos
+         FROM otf_trabajos WHERE "otfId" = $1`,
+      [o.id]
+    );
+    let techPhone: string | null = null;
+    if (o.assignedTechName) techPhone = await telefonoDeTecnicoParaCliente(o.assignedTechName).catch(() => null);
+    res.json({
+      otf: {
+        id: o.id, status: o.status, clientName: o.clientName ?? null, baseName: o.baseName ?? null,
+        direccion: o.direccion ?? null, lat: o.lat ?? null, lng: o.lng ?? null,
+        assignedTechName: o.assignedTechName ?? null,
+        fechaProgramadaMs: o.fechaProgramadaMs ?? null, createdAtMs: o.createdAtMs ?? null,
+        departedAtMs: o.departedAtMs ?? null, arrivedAtBaseMs: o.arrivedAtBaseMs ?? null,
+        primerTrabajoMs: o.primerTrabajoMs ?? null, finishedAtMs: o.finishedAtMs ?? null,
+        enCaminoBaseAtMs: o.enCaminoBaseAtMs ?? null, arrivedAtWorkshopMs: o.arrivedAtWorkshopMs ?? null,
+      },
+      progreso: { hechos: prog.rows[0]?.hechos ?? 0, total: prog.rows[0]?.total ?? 0 },
+      vehiclePosition: s.vehiclePosition ? { lat: s.vehiclePosition.lat, lng: s.vehiclePosition.lng } : null,
+      eta: s.eta,
+      workshop: s.workshop,
+      vanPlate: s.vanPlate,
+      techPhone,
+      actualizadoMs: s.actualizadoMs,
+      enCurso: !s.expired,
+      caducado: enlaceCaducado(o),
+    });
+  } catch (e) {
+    console.error("GET /api/otf-tracking error:", e);
+    res.status(500).json({ error: "Error obteniendo el seguimiento" });
+  }
+});
+
+// Movimientos y paradas de la furgoneta durante la OTF (mapa + línea de tiempo).
+app.get("/api/otf/:id/movimientos", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const r = await db.query(`SELECT * FROM otf WHERE id = $1`, [id]);
+    if (!r.rows[0]) return res.status(404).json({ error: "OTF no encontrada" });
+    const o = normalizeOtf(r.rows[0]);
+    const trabajos = await trabajosParaSeguimiento(id);
+    const hitos = hitosDeOtf(o, trabajos);
+    if (!o.webfleetVehicleId) return res.json({ disponible: false, motivo: "La OTF no tiene furgoneta Webfleet asignada", hitos });
+    const v = ventanaDeOtf(o);
+    if (!v) return res.json({ disponible: false, motivo: "La furgoneta aún no ha salido del taller", hitos });
+    const [trips, track] = await Promise.all([
+      getWebfleetTrips(o.webfleetVehicleId, v.desdeMs, v.hastaMs),
+      getWebfleetTracks(o.webfleetVehicleId, v.desdeMs, v.hastaMs).catch(() => [] as { lat: number; lng: number }[]),
+    ]);
+    const tramos = lineaDeTiempo(trips, hitos);
+    const paso = Math.max(1, Math.ceil(track.length / 1500));
+    res.json({
+      disponible: true,
+      vehiculo: o.assignedVehicleName || o.webfleetVehicleId,
+      desdeMs: v.desdeMs,
+      hastaMs: v.hastaMs,
+      resumen: resumenMovimientos(tramos),
+      tramos,
+      hitos,
+      track: track.filter((_, i) => i % paso === 0 || i === track.length - 1).map((p) => [p.lat, p.lng]),
+    });
+  } catch (error: any) {
+    console.error("GET movimientos OTF error:", error);
+    res.status(502).json({ error: error?.message || "No se pudieron leer los movimientos de Webfleet" });
+  }
+});
+
+/** El PDF del recorrido de la OTF (null si no hay furgoneta o aún no ha salido). */
+async function buildOtfTrackingPdfBuffer(id: number): Promise<Buffer | null> {
+  const r = await db.query(`SELECT * FROM otf WHERE id = $1`, [id]);
+  if (!r.rows[0]) return null;
+  const o = normalizeOtf(r.rows[0]);
+  const v = ventanaDeOtf(o);
+  if (!o.webfleetVehicleId || !v) return null;
+  const trabajos = await trabajosParaSeguimiento(id);
+  return buildVehicleTrackingPdfBuffer(o.webfleetVehicleId, v.desdeMs, v.hastaMs, {
+    plate: o.assignedVehicleName || o.webfleetVehicleId,
+    titleExtra: `OTF #${o.id}${o.clientName ? ` · ${o.clientName}` : ""}`,
+    fases: fasesParaInforme(o, trabajos),
+  });
+}
+
+app.get("/api/otf/:id/tracking-report.pdf", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const pdf = await buildOtfTrackingPdfBuffer(id);
+    if (!pdf) return res.status(400).json({ error: "Sin recorrido: la OTF no tiene furgoneta Webfleet o aún no ha salido" });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="seguimiento_otf_${id}.pdf"`);
+    res.send(pdf);
+  } catch (error: any) {
+    console.error("GET tracking-report.pdf (OTF) error:", error);
+    if (!res.headersSent) res.status(500).json({ error: error?.message || "Error generando informe" });
+  }
+});
+
+/*
+ * Los dos correos del seguimiento, al correo de informes de la OTF:
+ *  · «salida»: la furgoneta sale del taller → el enlace para seguirla;
+ *  · «final»: vuelve al taller → el PDF del recorrido.
+ * Cada uno una sola vez, y queda escrito el resultado para la oficina.
+ */
+async function enviarSeguimientoOtf(id: number, momento: "salida" | "final"): Promise<void> {
+  const col = momento === "salida" ? "seguimientoAviso" : "seguimientoInforme";
+  const guardar = (resultado: string) =>
+    db.query(`UPDATE otf SET "${col}Resultado" = $2 WHERE id = $1`, [id, resultado]).catch(() => {});
+  try {
+    const marcado = await db.query(
+      `UPDATE otf SET "${col}AtMs" = $2 WHERE id = $1 AND "${col}AtMs" IS NULL
+        RETURNING "clientName", "baseName", direccion, "assignedTechName", "emailInforme", "webfleetVehicleId", status`,
+      [id, Date.now()]
+    );
+    const o = marcado.rows[0];
+    if (!o) return; // ya enviado
+    if (o.status === "cancelada") return void (await guardar("OTF anulada"));
+    const email = emailValido(o.emailInforme);
+    if (!email) return void (await guardar("sin correo para el informe"));
+    const transport = getMailTransport();
+    if (!transport) return void (await guardar("SMTP no configurado"));
+    const token = await tokenSeguimientoOtf(id);
+    const enlace = token ? urlSeguimientoOtf(token) : null;
+    if (momento === "salida") {
+      if (!enlace) return void (await guardar("sin enlace"));
+      await transport.sendMail({
+        from: process.env.SMTP_FROM || process.env.SMTP_USER,
+        to: email,
+        subject: `Nuestro técnico va de camino · OTF #${id} · Mobilink`,
+        text: textoCorreoSalida({ cliente: o.clientName, base: o.baseName || o.direccion, tecnico: o.assignedTechName, enlace }),
+      });
+    } else {
+      const pdf = await buildOtfTrackingPdfBuffer(id);
+      if (!pdf) return void (await guardar("sin recorrido de Webfleet"));
+      await transport.sendMail({
+        from: process.env.SMTP_FROM || process.env.SMTP_USER,
+        to: email,
+        subject: `Recorrido de la orden de trabajo de flota #${id} · Mobilink`,
+        text:
+          `Hola, adjuntamos el recorrido de la furgoneta${o.clientName ? ` en la visita a ${o.clientName}` : ""}: ` +
+          `trayectos, paradas y tiempos, de la salida del taller a la vuelta.` +
+          (enlace ? `\n\nTambién puede verlo en el mapa: ${enlace}` : ""),
+        attachments: [{ filename: `seguimiento_otf_${id}.pdf`, content: pdf, contentType: "application/pdf" }],
+      });
+    }
+    await guardar(`enviado a ${email}`);
+  } catch (err: any) {
+    console.error(`Seguimiento OTF #${id} (${momento}) por correo:`, err);
+    await guardar(`error: ${String(err?.message ?? err).slice(0, 200)}`);
+  }
+}
 
 app.get("/api/otf/:id", requireAdminRole, async (req, res) => {
   try {
@@ -20857,11 +21094,14 @@ async function enviarInformeOtf(id: number): Promise<void> {
     if (!transport) return void (await guardar("SMTP no configurado", false));
     const pdf = await buildOtfReportPdfBuffer(id);
     if (!pdf) return;
+    const token = await tokenSeguimientoOtf(id).catch(() => null);
     await transport.sendMail({
       from: process.env.SMTP_FROM || process.env.SMTP_USER,
       to: email,
       subject: `Informe de la orden de trabajo de flota #${id} · Mobilink`,
-      text: `Hola, adjuntamos el informe de los trabajos realizados${o?.clientName ? ` para ${o.clientName}` : ""}.`,
+      text:
+        `Hola, adjuntamos el informe de los trabajos realizados${o?.clientName ? ` para ${o.clientName}` : ""}.` +
+        (token ? `\n\nPuede seguir la vuelta de la furgoneta al taller en: ${urlSeguimientoOtf(token)}` : ""),
       attachments: [{ filename: `otf_${id}.pdf`, content: pdf, contentType: "application/pdf" }],
     });
     await guardar(`enviado a ${email}`, true);

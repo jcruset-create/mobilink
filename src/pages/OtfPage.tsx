@@ -26,7 +26,11 @@ import AssistSidebar from "../components/AssistSidebar";
 import MensajesOperario from "../components/MensajesOperario";
 import { leerPestana, otfDeLaPestana, TITULO_PESTANA } from "../modules/otfPestanas";
 import { apiFetch } from "../modules/apiFetch";
+import { getAdminHeaders } from "../modules/adminHeaders";
 import { abrirPdfConSesion } from "../modules/pdfConSesion";
+import MovimientosFurgonetaModal from "../components/MovimientosFurgonetaModal";
+import SeguimientoOtfCard from "../components/SeguimientoOtfCard";
+import { ETIQUETA_FASE_OTF, faseDeOtf, otfSigueEnCurso } from "../modules/seguimientoOtf";
 
 /** Cómo se llama cada tipo de foto de un trabajo (igual que en el informe). */
 const ETIQUETA_FOTO: Record<string, string> = {
@@ -185,6 +189,10 @@ export default function OtfPage() {
                     Progreso: {o.progreso?.hechos ?? 0} / {o.progreso?.total ?? 0}
                     {o.assignedTechName ? ` · ${o.assignedTechName}` : ""}
                   </div>
+                  {/* Dónde está la furgoneta, mientras la OTF sigue fuera del taller. */}
+                  {o.departedAtMs != null && otfSigueEnCurso(o) && (
+                    <div className="mt-1 text-xs font-black text-sky-300">🚐 {ETIQUETA_FASE_OTF[faseDeOtf(o)]}</div>
+                  )}
                 </button>
               ))
             )}
@@ -603,6 +611,25 @@ function PresupuestarModal({ otf, onClose }: { otf: any; onClose: () => void }) 
 
 function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas: OtfPlantilla[]; onChange: () => void; onEdit: () => void }) {
   const [presupuestando, setPresupuestando] = useState(false);
+  // Seguimiento: modal del recorrido y enlace para el cliente.
+  const [recorrido, setRecorrido] = useState(false);
+  const [enlace, setEnlace] = useState<string | null>(null);
+  const [enlaceCopiado, setEnlaceCopiado] = useState(false);
+  useEffect(() => { setEnlace(null); setEnlaceCopiado(false); setRecorrido(false); }, [otf.id]);
+  async function copiarEnlace() {
+    try {
+      const r = await apiFetch(`/api/otf/${otf.id}/enlace-seguimiento`, { method: "POST", headers: getAdminHeaders() });
+      const d = await r.json().catch(() => null);
+      if (!r.ok || !d?.url) throw new Error(d?.error ?? "No se pudo crear el enlace");
+      setEnlace(d.url);
+      try {
+        await navigator.clipboard.writeText(d.url);
+        setEnlaceCopiado(true);
+      } catch { /* sin portapapeles: queda el enlace a la vista */ }
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "No se pudo crear el enlace");
+    }
+  }
   const [plate, setPlate] = useState("");
   const [tipo, setTipo] = useState("Tractora");
   const [trabajoPlantilla, setTP] = useState("");
@@ -754,6 +781,31 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
           >
             💶 Presupuestar en BC
           </button>
+          <button
+            onClick={() => setRecorrido(true)}
+            title="Trayectos y paradas de la furgoneta en el mapa, de la salida del taller a la vuelta"
+            className="mt-2 ml-2 rounded-lg border border-sky-500/40 bg-sky-500/15 px-3 py-1.5 text-xs font-black text-sky-300 hover:bg-sky-500/25"
+          >
+            🛰️ Recorrido
+          </button>
+          <button
+            onClick={() => {
+              void abrirPdfConSesion(apiFetch, `/api/otf/${otf.id}/tracking-report.pdf`, `seguimiento_otf_${otf.id}.pdf`)
+                .catch((e) => window.alert(e instanceof Error ? e.message : "No se pudo abrir el informe."));
+            }}
+            className="mt-2 ml-2 rounded-lg border border-sky-500/40 bg-sky-500/15 px-3 py-1.5 text-xs font-black text-sky-300 hover:bg-sky-500/25"
+          >
+            📄 Informe de seguimiento
+          </button>
+          {otf.status !== "cancelada" && (
+            <button
+              onClick={() => void copiarEnlace()}
+              title="Enlace para que el cliente siga la furgoneta en el mapa"
+              className="mt-2 ml-2 rounded-lg border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs font-black text-slate-200 hover:bg-slate-700"
+            >
+              🔗 {enlaceCopiado ? "Enlace copiado" : "Enlace para el cliente"}
+            </button>
+          )}
           {otf.status !== "finalizada" && otf.status !== "cancelada" && (
             <button
               onClick={async () => {
@@ -774,8 +826,25 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
       </div>
 
       {presupuestando && <PresupuestarModal otf={otf} onClose={() => setPresupuestando(false)} />}
+      {recorrido && (
+        <MovimientosFurgonetaModal
+          otfId={otf.id}
+          titulo={`OTF #${otf.id}${otf.clientName ? ` · ${otf.clientName}` : ""}`}
+          onClose={() => setRecorrido(false)}
+        />
+      )}
+      {enlace && (
+        <div className="mt-3 break-all rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-300">
+          Enlace para el cliente: <a href={enlace} target="_blank" rel="noreferrer" className="font-bold text-sky-300 underline">{enlace}</a>
+        </div>
+      )}
 
-      {(otf.avisoLlegadaResultado || otf.informeResultado) && (
+      {/* Dónde está la furgoneta, la ETA y las fases, mientras está fuera. */}
+      {otf.departedAtMs != null && otfSigueEnCurso(otf) && (
+        <SeguimientoOtfCard otfId={otf.id} apiBase="" otf={otf} />
+      )}
+
+      {(otf.avisoLlegadaResultado || otf.informeResultado || otf.seguimientoAvisoResultado || otf.seguimientoInformeResultado) && (
         <div className="mt-3 space-y-1 text-xs font-bold">
           {otf.avisoLlegadaResultado && (
             <div className={otf.avisoLlegadaResultado === "enviado" ? "text-emerald-300" : "text-amber-300"}>
@@ -785,6 +854,16 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
           {otf.informeResultado && (
             <div className={otf.informeResultado.startsWith("enviado") ? "text-emerald-300" : "text-amber-300"}>
               Informe por correo: {otf.informeResultado}
+            </div>
+          )}
+          {otf.seguimientoAvisoResultado && (
+            <div className={otf.seguimientoAvisoResultado.startsWith("enviado") ? "text-emerald-300" : "text-amber-300"}>
+              Enlace de seguimiento por correo al salir: {otf.seguimientoAvisoResultado}
+            </div>
+          )}
+          {otf.seguimientoInformeResultado && (
+            <div className={otf.seguimientoInformeResultado.startsWith("enviado") ? "text-emerald-300" : "text-amber-300"}>
+              Recorrido por correo al volver al taller: {otf.seguimientoInformeResultado}
             </div>
           )}
         </div>

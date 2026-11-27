@@ -54,23 +54,28 @@ function Encuadre({ puntos }: { puntos: [number, number][] }) {
 
 export default function MovimientosFurgonetaModal({
   assistanceId,
+  otfId,
   titulo,
   conTablet,
   onClose,
 }: {
-  assistanceId: number;
+  /** Una asistencia… */
+  assistanceId?: number;
+  /** …o una OTF: los mismos movimientos, de la salida del taller a la vuelta. */
+  otfId?: number;
   titulo?: string;
   /** Si hay operario asignado: el recorrido con el GPS de la tablet, como alternativa. */
   conTablet?: boolean;
   onClose: () => void;
 }) {
   const [datos, setDatos] = useState<Respuesta | null>(null);
+  const base = otfId != null ? `/api/otf/${otfId}` : `/api/roadside-assistances/${assistanceId}`;
   const [error, setError] = useState("");
   const [sel, setSel] = useState<number | null>(null);
 
   useEffect(() => {
     let vivo = true;
-    apiFetch(`${API_BASE}/api/roadside-assistances/${assistanceId}/movimientos`, { headers: getAdminHeaders() })
+    apiFetch(`${API_BASE}${base}/movimientos`, { headers: getAdminHeaders() })
       .then(async (r) => {
         const d = await r.json().catch(() => null);
         if (!r.ok) throw new Error(d?.error ?? "Error de servidor");
@@ -80,7 +85,7 @@ export default function MovimientosFurgonetaModal({
     return () => {
       vivo = false;
     };
-  }, [assistanceId]);
+  }, [base]);
 
   const paradas = useMemo(
     () => (datos?.tramos ?? []).filter((t): t is Extract<Tramo, { tipo: "parada" }> => t.tipo === "parada" && t.lat != null && t.lng != null),
@@ -92,7 +97,7 @@ export default function MovimientosFurgonetaModal({
   }, [datos, paradas]);
 
   const abrir = (ruta: string, nombre: string) =>
-    abrirPdfConSesion(apiFetch, `${API_BASE}/api/roadside-assistances/${assistanceId}/${ruta}`, nombre).catch((e) =>
+    abrirPdfConSesion(apiFetch, `${API_BASE}${base}/${ruta}`, nombre).catch((e) =>
       setError(e instanceof Error ? e.message : "No se pudo abrir el informe."),
     );
 
@@ -108,7 +113,7 @@ export default function MovimientosFurgonetaModal({
           <div className="min-w-0 flex-1">
             <div className="text-base font-black">🛰️ Movimientos de la furgoneta</div>
             <div className="truncate text-xs text-slate-400">
-              {titulo ?? `Asistencia #${assistanceId}`}
+              {titulo ?? (otfId != null ? `OTF #${otfId}` : `Asistencia #${assistanceId}`)}
               {datos?.vehiculo ? ` · ${datos.vehiculo}` : ""}
               {datos?.desdeMs ? ` · ${fecha(datos.desdeMs)} ${hora(datos.desdeMs)} – ${hora(datos.hastaMs!)}` : ""}
             </div>
@@ -116,13 +121,13 @@ export default function MovimientosFurgonetaModal({
           {datos?.disponible && (
             <button
               type="button"
-              onClick={() => void abrir("tracking-report.pdf", `seguimiento_${assistanceId}.pdf`)}
+              onClick={() => void abrir("tracking-report.pdf", `seguimiento_${otfId != null ? `otf_${otfId}` : assistanceId}.pdf`)}
               className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm font-bold hover:bg-slate-700"
             >
               <FileText className="h-4 w-4" /> Informe con plano (PDF)
             </button>
           )}
-          {conTablet && (
+          {conTablet && otfId == null && (
             <button
               type="button"
               onClick={() => void abrir("tablet-report.pdf", `recorrido_tablet_${assistanceId}.pdf`)}

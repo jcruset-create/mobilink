@@ -993,6 +993,15 @@ export async function initDb() {
     ALTER TABLE otf ADD COLUMN IF NOT EXISTS "avisoLlegadaResultado" TEXT;
     ALTER TABLE otf ADD COLUMN IF NOT EXISTS "informeEnviadoAtMs" BIGINT;
     ALTER TABLE otf ADD COLUMN IF NOT EXISTS "informeResultado" TEXT;
+    -- Seguimiento de la OTF para el cliente (server/otf/seguimiento.ts): el
+    -- enlace público y los dos correos (al salir, con el enlace; al volver al
+    -- taller, con el informe del recorrido).
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "trackingToken" TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS otf_tracking_token_idx ON otf ("trackingToken") WHERE "trackingToken" IS NOT NULL;
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "seguimientoAvisoAtMs" BIGINT;
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "seguimientoAvisoResultado" TEXT;
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "seguimientoInformeAtMs" BIGINT;
+    ALTER TABLE otf ADD COLUMN IF NOT EXISTS "seguimientoInformeResultado" TEXT;
 
     -- Neumáticos y material montados en cada trabajo (server/otf/mejoras.ts).
     CREATE TABLE IF NOT EXISTS otf_trabajo_material (
