@@ -6,8 +6,13 @@ import CamaraSelfie from "./CamaraSelfie";
  * La foto del empleado en la ficha de Core: verla, hacerla, subirla o quitarla.
  *
  * Lo que se suba pasa por la misma normalización que la del enlace de alta
- * (cuadrada, mismo tamaño, cara centrada). Si la comprobación dice que no se
- * ve una cara, aquí —y solo aquí— el administrador puede usarla igualmente.
+ * (cuadrada, mismo tamaño, cara centrada, con el fondo de la empresa). Si la
+ * comprobación dice que no se ve una cara, aquí —y solo aquí— el administrador
+ * puede usarla igualmente.
+ *
+ * El fondo lo cambia el servidor recortando a la persona. Casi siempre queda
+ * bien; cuando no (pelo del color de la pared, poca luz), aquí —y solo aquí—
+ * se puede guardar la misma foto sin cambiarle el fondo.
  */
 export default function FotoEmpleado({
   employeeId,
@@ -32,16 +37,20 @@ export default function FotoEmpleado({
   const [mensaje, setMensaje] = useState<{ ok: boolean; texto: string } | null>(null);
   /** La foto que la comprobación no ha dado por buena, por si se quiere usar igual. */
   const [rechazada, setRechazada] = useState<Blob | null>(null);
+  /** La última que se ha guardado con el fondo cambiado, por si el recorte no convence. */
+  const [conFondo, setConFondo] = useState<{ foto: Blob; forzada: boolean } | null>(null);
 
-  async function subir(foto: Blob, forzar = false) {
+  async function subir(foto: Blob, forzar = false, sinFondo = false) {
     setCamara(false);
     setTrabajando(true);
     setMensaje(null);
     setRechazada(null);
+    setConFondo(null);
     try {
       const cuerpo = new FormData();
       cuerpo.append("foto", foto, "foto.jpg");
       if (forzar) cuerpo.append("forzar", "1");
+      if (sinFondo) cuerpo.append("sinFondo", "1");
       const r = await apiFetch(`/api/core/empleados/${employeeId}/foto`, { method: "POST", body: cuerpo });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
@@ -50,7 +59,14 @@ export default function FotoEmpleado({
         return;
       }
       onCambio(d.url ?? null);
-      setMensaje({ ok: true, texto: d.aviso ? `Guardada. ${d.aviso}` : "Foto guardada." });
+      if (d.fondo === "puesto") setConFondo({ foto, forzada: forzar });
+      const fondo =
+        d.fondo === "no_fiable"
+          ? " No se le ha cambiado el fondo: no se distingue bien a la persona de lo de detrás."
+          : sinFondo
+            ? " Sin cambiarle el fondo."
+            : "";
+      setMensaje({ ok: true, texto: `${d.aviso ? `Guardada. ${d.aviso}` : "Foto guardada."}${fondo}` });
     } catch {
       setMensaje({ ok: false, texto: "No se ha podido guardar la foto." });
     } finally {
@@ -63,6 +79,7 @@ export default function FotoEmpleado({
     setTrabajando(true);
     setMensaje(null);
     setRechazada(null);
+    setConFondo(null);
     try {
       const r = await apiFetch(`/api/core/empleados/${employeeId}/foto`, { method: "DELETE" });
       if (!r.ok) throw new Error();
@@ -106,8 +123,14 @@ export default function FotoEmpleado({
         {rechazada && (
           <button type="button" onClick={() => void subir(rechazada, true)} className={boton}>Usarla igualmente</button>
         )}
+        {conFondo && !trabajando && (
+          <button type="button" onClick={() => void subir(conFondo.foto, conFondo.forzada, true)} className={boton}
+            title="Si el recorte de la persona no ha quedado bien, guarda esta misma foto con su fondo original.">
+            Dejarla sin cambiar el fondo
+          </button>
+        )}
         {!url && !mensaje && !trabajando && (
-          <p className="text-xs text-slate-500">Sin foto. Se recorta y se centra sola al guardarla.</p>
+          <p className="text-xs text-slate-500">Sin foto. Se recorta, se centra y se le pone el fondo sola al guardarla.</p>
         )}
       </div>
       {camara && <CamaraSelfie onFoto={(f) => void subir(f)} onCancelar={() => setCamara(false)} />}

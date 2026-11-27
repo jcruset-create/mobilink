@@ -23,6 +23,21 @@
  * recorta los DNI. Se le pide un recuadro y si se ve bien; no que diga quién
  * es ni cómo es. Sin IA configurada, o si falla, la foto se recorta al centro
  * y se guarda igual.
+ *
+ * ## El fondo
+ *
+ * A todas se les cambia el fondo por el de la empresa (`fotoFondo.ts`): se
+ * recorta a la persona con un modelo que corre en este servidor —la foto no
+ * sale a ningún sitio— y se pega sobre el mural. No se redibuja a nadie.
+ *
+ * La ruta de la foto dice cómo quedó, para saber a cuáles les falta sin
+ * necesitar una columna nueva:
+ *
+ *  · `foto-<hora>-f.jpg` — con el fondo de la empresa.
+ *  · `foto-<hora>-s.jpg` — sin él, y así se queda: lo pidió un administrador
+ *    o no se distinguió bien a la persona.
+ *  · `foto-<hora>.jpg`   — todavía no se ha intentado (las de antes de esto, o
+ *    si el modelo falló). «Poner el fondo a las que faltan» va a por estas.
  */
 
 import { Router, type Request, type RequestHandler, type Response } from "express";
@@ -32,7 +47,8 @@ import db from "../db.ts";
 import { supabase, SUPABASE_STORAGE_BUCKET } from "../supabase.ts";
 import { authenticate, requireAdmin } from "./auth.ts";
 import { registrarAuditoria } from "./auditoria.ts";
-import { normalizarFoto, type Localizador, type Mirada } from "./fotoNormalizar.ts";
+import { ponerFondo, type FondoDeFoto } from "./fotoFondo.ts";
+import { LADO_FOTO, normalizarFoto, type EstadoFondo, type Localizador, type Mirada } from "./fotoNormalizar.ts";
 import { rutaEnBucket } from "./fotosFirmadas.ts";
 import { hayIA, pedirIA } from "./openaiService.ts";
 
@@ -58,7 +74,30 @@ const CADUCIDAD_URL_S = 12 * 3600;
  * segundos (las TV del taller) no tienen que volver a descargarla. Y cuando
  * cambia, cambia la ruta, así que nadie se queda viendo la vieja de su caché.
  */
-export const rutaDeFoto = (employeeId: string, ahoraMs = Date.now()) => `empleados/${employeeId}/foto-${ahoraMs}.jpg`;
+export const rutaDeFoto = (employeeId: string, ahoraMs = Date.now(), marca: MarcaDeFondo = "") =>
+  `empleados/${employeeId}/foto-${ahoraMs}${marca ? `-${marca}` : ""}.jpg`;
+
+/** `f` = con el fondo de la empresa · `s` = sin él y así se queda · vacío = sin intentar. */
+export type MarcaDeFondo = "" | "f" | "s";
+
+/** Las fotos a las que todavía no se les ha intentado poner el fondo. */
+const SIN_INTENTAR_SQL = `COALESCE(foto_url, '') <> '' AND foto_url !~ '-[fs]\\.jpg$'`;
+
+/**
+ * ¿Se cambia el fondo? Sí, salvo que se apague con `CORE_FOTO_FONDO=0`: es el
+ * interruptor por si en producción diera guerra, sin tener que desplegar.
+ */
+export const fondoActivo = (): boolean => process.env.CORE_FOTO_FONDO !== "0";
+
+/**
+ * El fondo de verdad (el modelo y el mural). Se carga solo cuando hace falta:
+ * el motor del modelo pesa, y un servidor que no sube fotos no tiene por qué
+ * cargarlo al arrancar.
+ */
+async function fondoDeVerdad(): Promise<FondoDeFoto | null> {
+  if (!fondoActivo()) return null;
+  return (await import("./fotoSilueta.ts")).fondoCorporativo;
+}
 
 /** Dónde se guardan las fotos. En las pruebas, uno de mentira. */
 export type Almacen = {
@@ -66,6 +105,8 @@ export type Almacen = {
   borrar(ruta: string): Promise<void>;
   /** Dirección firmada de cada ruta; la que no se pueda firmar no aparece. */
   firmar(rutas: string[]): Promise<Record<string, string>>;
+  /** El fichero de una foto guardada, o `null` si no está. Para ponerle el fondo a las que ya había. */
+  bajar?(ruta: string): Promise<Buffer | null>;
 };
 
 export const almacenSupabase: Almacen = {
@@ -95,6 +136,11 @@ export const almacenSupabase: Almacen = {
       firmadas.set(d.path, { url: d.signedUrl, hastaMs: ahora + REUSAR_URL_MS });
     }
     return urls;
+  },
+  async bajar(ruta) {
+    const { data, error } = await supabase.storage.from(BUCKET_CORE).download(ruta);
+    if (error || !data) return null;
+    return Buffer.from(await data.arrayBuffer());
   },
 };
 
@@ -165,19 +211,36 @@ export class ErrorFoto extends Error {
   }
 }
 
-export type Dependencias = { consultor?: Consultor; almacen?: Almacen; localizar?: Localizador | null };
+export type Dependencias = {
+  consultor?: Consultor;
+  almacen?: Almacen;
+  localizar?: Localizador | null;
+  /** Con qué cambiar el fondo. `null` = no cambiarlo. Sin decir nada, el de la empresa. */
+  fondo?: FondoDeFoto | null;
+};
 
-export type FotoGuardada = { url: string | null; aviso: string | null };
+export type FotoGuardada = { url: string | null; aviso: string | null; fondo: EstadoFondo };
+
+/** De cómo quedó el fondo a la marca de la ruta. */
+function marcaDe(fondo: EstadoFondo, sinFondoAPosta: boolean): MarcaDeFondo {
+  if (fondo === "puesto") return "f";
+  // No se distinguió a la persona, o alguien pidió dejarla como está: no se
+  // vuelve a intentar. Lo demás (el modelo falló, o está apagado) sí.
+  if (fondo === "no_fiable" || sinFondoAPosta) return "s";
+  return "";
+}
 
 /**
  * Normaliza la foto y la deja como LA foto del empleado.
  *
- * @param forzar  guardarla aunque no se vea una sola cara. Solo desde la ficha.
+ * @param forzar    guardarla aunque no se vea una sola cara. Solo desde la ficha.
+ * @param sinFondo  no cambiarle el fondo. Solo desde la ficha: es la salida
+ *                  para cuando el recorte de una persona no queda bien.
  */
 export async function ponerFoto(
   employeeId: string,
   fichero: { buffer: Buffer; mimetype: string } | undefined,
-  opciones: { forzar?: boolean } = {},
+  opciones: { forzar?: boolean; sinFondo?: boolean } = {},
   deps: Dependencias = {}
 ): Promise<FotoGuardada> {
   const cx = deps.consultor ?? db;
@@ -191,10 +254,11 @@ export async function ponerFoto(
   if (!rows[0]) throw new ErrorFoto(404, "Ese empleado no existe.");
   const anterior = rows[0].foto_url ? String(rows[0].foto_url) : "";
 
-  const r = await normalizarFoto(fichero.buffer, localizar, { forzar: opciones.forzar });
+  const fondo = opciones.sinFondo ? null : deps.fondo === undefined ? await fondoDeVerdad().catch(() => null) : deps.fondo;
+  const r = await normalizarFoto(fichero.buffer, localizar, { forzar: opciones.forzar, fondo });
   if (r.ok === false) throw new ErrorFoto(422, r.motivo, "FOTO_NO_VALE");
 
-  const ruta = rutaDeFoto(employeeId);
+  const ruta = rutaDeFoto(employeeId, Date.now(), marcaDe(r.fondo, opciones.sinFondo === true));
   await almacen.subir(ruta, r.jpeg);
   await cx.query(`UPDATE sea_employees SET foto_url = $2, updated_at = now() WHERE id = $1`, [employeeId, ruta]);
   // La anterior ya no la apunta nadie. Si no se puede borrar, queda un
@@ -202,7 +266,80 @@ export async function ponerFoto(
   if (anterior && anterior !== ruta) {
     await almacen.borrar(anterior).catch((e) => console.error("[Core foto]", e instanceof Error ? e.message : e));
   }
-  return { url: (await almacen.firmar([ruta]))[ruta] ?? null, aviso: r.aviso };
+  return { url: (await almacen.firmar([ruta]))[ruta] ?? null, aviso: r.aviso, fondo: r.fondo };
+}
+
+/* ── El fondo de las fotos que ya había ──────────────────────────────────── */
+
+/** Cuántas fotos hay a las que todavía no se les ha intentado poner el fondo. */
+export async function fotosSinFondo(cx: Consultor = db): Promise<number> {
+  if (!fondoActivo()) return 0;
+  const { rows } = await cx.query(`SELECT count(*)::int AS n FROM sea_employees WHERE ${SIN_INTENTAR_SQL}`);
+  return Number(rows[0]?.n ?? 0);
+}
+
+export type FondosPuestos = {
+  /** A quién se le ha puesto. */
+  puestos: string[];
+  /** A quién no, y por qué. */
+  saltados: { nombre: string; motivo: string }[];
+  /** Cuántas quedan por intentar (se hacen por tandas). */
+  quedan: number;
+};
+
+/** No más de estas por llamada: cada una son un par de segundos. */
+const TANDA_DE_FONDOS = 40;
+
+/**
+ * Les pone el fondo de la empresa a las fotos que se guardaron antes de que
+ * existiera esto.
+ *
+ * Ya están normalizadas (cuadradas, con la cabeza en su sitio): solo se
+ * recorta a la persona y se cambia lo de detrás. A la que no se le distingue
+ * bien la persona se la deja como está y no se vuelve a intentar.
+ */
+export async function ponerFondoALasQueFaltan(deps: Dependencias = {}): Promise<FondosPuestos> {
+  const cx = deps.consultor ?? db;
+  const almacen = deps.almacen ?? almacenSupabase;
+  const fondo = deps.fondo === undefined ? await fondoDeVerdad() : deps.fondo;
+  const hecho: FondosPuestos = { puestos: [], saltados: [], quedan: 0 };
+  if (!fondo || !almacen.bajar) return hecho;
+
+  const { rows } = await cx.query(
+    `SELECT id::text AS id, nombre, foto_url FROM sea_employees WHERE ${SIN_INTENTAR_SQL} ORDER BY nombre LIMIT ${TANDA_DE_FONDOS}`
+  );
+  for (const e of rows) {
+    const nombre = String(e.nombre);
+    const anterior = String(e.foto_url);
+    try {
+      const guardada = await almacen.bajar(anterior);
+      if (!guardada) {
+        hecho.saltados.push({ nombre, motivo: "su foto no está en el almacén" });
+        continue;
+      }
+      const conFondo = await ponerFondo(guardada, fondo, { lado: LADO_FOTO });
+      const ruta = rutaDeFoto(e.id, Date.now(), conFondo ? "f" : "s");
+      await almacen.subir(ruta, conFondo ?? guardada);
+      // Solo si sigue siendo la misma foto: si alguien la ha cambiado mientras
+      // tanto, la suya manda.
+      const { rows: cambiada } = await cx.query(
+        `UPDATE sea_employees SET foto_url = $2, updated_at = now() WHERE id = $1 AND foto_url = $3 RETURNING id`,
+        [e.id, ruta, anterior]
+      );
+      if (cambiada.length === 0) {
+        await almacen.borrar(ruta).catch(() => {});
+        continue;
+      }
+      await almacen.borrar(anterior).catch((err) => console.error("[Core foto]", err instanceof Error ? err.message : err));
+      if (conFondo) hecho.puestos.push(nombre);
+      else hecho.saltados.push({ nombre, motivo: "no se distingue bien a la persona del fondo; se queda como estaba" });
+    } catch (err) {
+      console.error("[Core foto] fondo:", err instanceof Error ? err.message : err);
+      hecho.saltados.push({ nombre, motivo: "no se ha podido procesar la foto" });
+    }
+  }
+  hecho.quedan = await fotosSinFondo(cx);
+  return hecho;
 }
 
 export async function quitarFoto(employeeId: string, deps: Dependencias = {}): Promise<void> {
@@ -322,7 +459,7 @@ export function createFotoEmpleadoRouter(
 ): Router {
   const r = Router();
   const guardias = [opciones.autenticar ?? authenticate, requireAdmin];
-  const deps: Dependencias = { consultor: opciones.consultor, almacen: opciones.almacen, localizar: opciones.localizar };
+  const deps: Dependencias = { consultor: opciones.consultor, almacen: opciones.almacen, localizar: opciones.localizar, fondo: opciones.fondo };
 
   const responder = (res: Response, err: unknown, donde: string) => {
     if (err instanceof ErrorFoto) return res.status(err.status).json({ error: err.message, code: err.code });
@@ -336,11 +473,30 @@ export function createFotoEmpleadoRouter(
         fotos: await urlsDeFotos(deps),
         // Para ofrecer «Traer fotos de Taller» solo mientras haga falta.
         pendientesDeTaller: await fotosPendientesDeTaller(deps.consultor),
+        // Y «Poner el fondo» a las que se guardaron antes de que lo hubiera.
+        sinFondo: deps.fondo === null ? 0 : await fotosSinFondo(deps.consultor).catch(() => 0),
       });
     } catch (err) {
       console.error("GET /api/core/empleados/fotos:", err instanceof Error ? err.message : err);
       // Sin fotos la lista sale igual, con las iniciales.
-      res.json({ fotos: {}, pendientesDeTaller: 0 });
+      res.json({ fotos: {}, pendientesDeTaller: 0, sinFondo: 0 });
+    }
+  });
+
+  r.post("/fotos/poner-fondo", ...guardias, async (req: Request, res: Response) => {
+    try {
+      const hecho = await ponerFondoALasQueFaltan(deps);
+      await registrarAuditoria({
+        empresaId: req.authCtx!.empresaId,
+        userId: req.authCtx!.userId,
+        accion: "core.empleado.foto.poner_fondo",
+        entidad: "sea_employees",
+        detalle: { puestos: hecho.puestos.length, saltados: hecho.saltados.length, quedan: hecho.quedan },
+        ip: req.ip,
+      });
+      res.json(hecho);
+    } catch (err) {
+      responder(res, err, "POST /api/core/empleados/fotos/poner-fondo");
     }
   });
 
@@ -364,14 +520,15 @@ export function createFotoEmpleadoRouter(
   r.post("/:employeeId/foto", ...guardias, subidaDeFoto.single("foto"), async (req: Request, res: Response) => {
     const employeeId = String(req.params.employeeId ?? "");
     try {
-      const hecha = await ponerFoto(employeeId, req.file, { forzar: req.body?.forzar === "1" }, deps);
+      const sinFondo = req.body?.sinFondo === "1";
+      const hecha = await ponerFoto(employeeId, req.file, { forzar: req.body?.forzar === "1", sinFondo }, deps);
       await registrarAuditoria({
         empresaId: req.authCtx!.empresaId,
         userId: req.authCtx!.userId,
         accion: "core.empleado.foto.poner",
         entidad: "sea_employees",
         entidadId: employeeId,
-        detalle: { forzada: req.body?.forzar === "1" },
+        detalle: { forzada: req.body?.forzar === "1", fondo: hecha.fondo, sinFondoAPosta: sinFondo },
         ip: req.ip,
       });
       res.json(hecha);

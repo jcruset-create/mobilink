@@ -1,5 +1,42 @@
 # Fase 1 — Estudio: Core como fuente única de operarios y usuarios
 
+> **2026-11-27 · La foto del empleado, con el fondo de la empresa.**
+> Pedido por el usuario: al subir una foto, cambiarle el fondo automáticamente
+> por el mural de Confortauto (eligió «el mural tal cual», con el lema).
+>
+> **Cómo, y qué NO se hace**
+> - Se RECORTA a la persona y se pega sobre el mural: la cara y la ropa son los
+>   píxeles de la foto que se hizo. No se usa IA generativa para «cambiar el
+>   fondo», que redibuja la foto entera y puede retocar la cara.
+> - El modelo que recorta («Selfie Multiclass» de MediaPipe, Apache 2.0) va
+>   dentro del programa (`server/core/recursos/`, 16 MB) y se ejecuta en el
+>   servidor con `onnxruntime-web`: la foto no sale a ningún servicio de fuera
+>   y no cuesta nada por foto. Medio segundo por foto.
+>
+> **Qué se ha hecho**
+> - `server/core/fotoFondo.ts` (puro): recorte, silueta maciza por dentro y
+>   suave en el borde, y composición. Si la silueta no es de fiar (casi nada,
+>   casi todo, o no cubre la cabeza localizada), **no se toca la foto**.
+> - `server/core/fotoSilueta.ts`: el modelo y el mural. El modelo se carga al
+>   usarlo y se suelta a los 10 minutos.
+> - `fotoNormalizar.ts`: el fondo es un paso más de la normalización, así que
+>   vale para todas las entradas (ficha, enlace de alta, Taller, «Traer fotos
+>   de Taller»). Y como ahora hay con qué rellenar, a quien sale pegado al
+>   borde de arriba se le baja la cabeza a su altura de siempre.
+> - La ruta de la foto dice cómo quedó, sin columna nueva: `…-f.jpg` con fondo,
+>   `…-s.jpg` sin él y así se queda, sin marca = sin intentar.
+> - Core → Empleados: aviso «Poner el fondo» para las fotos que ya había
+>   (`POST /api/core/empleados/fotos/poner-fondo`, por tandas).
+> - Ficha: tras guardar, «Dejarla sin cambiar el fondo», por si un recorte no
+>   convence. Solo administradores; el enlace de alta no lo ofrece.
+> - Si el modelo falla, la foto se guarda igual con su fondo. Interruptor:
+>   `CORE_FOTO_FONDO=0` lo apaga sin desplegar.
+> - Sin migraciones.
+>
+> **No probado contra producción:** el almacén real de Supabase, la memoria y
+> el tiempo en Render, y fotos de móvil reales (poca luz, pelo largo): las
+> pruebas usan una figura sin cara y un retrato público.
+
 > **2026-11-26 · ¿Llegó el SMS del enlace? Entregado / no entregado en la lista.**
 > Lo destapó un caso real: un SMS de actualización que Twilio aceptó
 > (`mensaje_sid` relleno, `error` vacío) y que no llegó al móvil. La lista

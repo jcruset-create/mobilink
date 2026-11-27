@@ -9,6 +9,7 @@ import express, { type RequestHandler } from "express";
 import type { PoolClient } from "pg";
 import sharp from "sharp";
 
+import { LADO_SILUETA, type FondoDeFoto } from "./fotoFondo.ts";
 import type { Mirada } from "./fotoNormalizar.ts";
 
 const RUN = process.env.RUN_DB_TESTS === "1" && !!process.env.DATABASE_URL;
@@ -27,6 +28,7 @@ const guardado = new Map<string, Buffer>();
 const almacen = {
   async subir(ruta: string, jpeg: Buffer) { guardado.set(ruta, jpeg); },
   async borrar(ruta: string) { guardado.delete(ruta); },
+  async bajar(ruta: string) { return guardado.get(ruta) ?? null; },
   async firmar(rutas: string[]) {
     return Object.fromEntries(rutas.filter((r) => guardado.has(r)).map((r) => [r, `https://firmada.invalid/${r}?token=x`]));
   },
@@ -36,7 +38,8 @@ const ficherosDe = (id: string) => [...guardado.keys()].filter((r) => r.startsWi
 const UNA_CARA: Mirada = { caras: 1, cara: { x: 0.35, y: 0.2, w: 0.3, h: 0.3 }, seVeBien: true, motivo: "" };
 let mirada: Mirada | null = UNA_CARA;
 const localizar = async () => mirada;
-const deps = () => ({ consultor: conexion, almacen, localizar });
+// Sin fondo salvo donde se prueba el fondo: lo demás es lo de siempre.
+const deps = () => ({ consultor: conexion, almacen, localizar, fondo: null as FondoDeFoto | null });
 
 const fotoUrl = async (id: string): Promise<string | null> =>
   (await conexion.query(`SELECT foto_url FROM sea_employees WHERE id = $1`, [id])).rows[0].foto_url;
@@ -67,7 +70,7 @@ describe.runIf(RUN)("foto del empleado", () => {
     const r = await mod.ponerFoto(ANA, { buffer: FOTO, mimetype: "image/jpeg" }, {}, deps());
     const ruta = (await fotoUrl(ANA))!;
     expect(ruta).toMatch(new RegExp(`^empleados/${ANA}/foto-\\d+\\.jpg$`));
-    expect(r).toEqual({ url: `https://firmada.invalid/${ruta}?token=x`, aviso: null });
+    expect(r).toEqual({ url: `https://firmada.invalid/${ruta}?token=x`, aviso: null, fondo: "no_pedido" });
 
     const meta = await sharp(guardado.get(ruta)!).metadata();
     expect([meta.width, meta.height, meta.format]).toEqual([600, 600, "jpeg"]);
@@ -250,5 +253,240 @@ describe.runIf(RUN)("rutas de la foto en /api/core/empleados", () => {
     } finally {
       cerrar();
     }
+  });
+});
+
+
+/* ── El fondo de la empresa ──────────────────────────────────────────────── */
+
+const EVA = "2a2a2a2a-0000-4000-a000-000000000001";
+const IVO = "2b2b2b2b-0000-4000-a000-000000000002";
+const MAR = "2c2c2c2c-0000-4000-a000-000000000003";
+const TEO = "2d2d2d2d-0000-4000-a000-000000000004";
+const UMA = "2e2e2e2e-0000-4000-a000-000000000005";
+
+/** Un «modelo» de mentira que siempre ve un busto en el centro, y un fondo verde. */
+let miradas = 0;
+const busto = () => {
+  const L = LADO_SILUETA;
+  const a = new Uint8Array(L * L);
+  for (let y = 0; y < L; y++) for (let x = 0; x < L; x++) {
+    if ((x - 128) ** 2 + (y - 110) ** 2 < 45 ** 2 || (y > 160 && x > 40 && x < 216)) a[y * L + x] = 255;
+  }
+  return a;
+};
+const verde = async (lado: number) => sharp({ create: { width: lado, height: lado, channels: 3, background: "#00ff00" } }).png().toBuffer();
+const conFondo: FondoDeFoto = { silueta: async () => { miradas += 1; return busto(); }, imagen: verde };
+const sinPersona: FondoDeFoto = { silueta: async () => new Uint8Array(LADO_SILUETA * LADO_SILUETA), imagen: verde };
+const roto: FondoDeFoto = { silueta: async () => { throw new Error("el modelo no carga"); }, imagen: verde };
+
+const esquina = async (ruta: string) => {
+  const { data } = await sharp(guardado.get(ruta)!).raw().toBuffer({ resolveWithObject: true });
+  return [data[0], data[1], data[2]];
+};
+const esVerde = ([r, g, b]: number[]) => g > 200 && r < 70 && b < 70;
+const esGris = ([r, g, b]: number[]) => Math.abs(r - 128) < 20 && Math.abs(g - 128) < 20 && Math.abs(b - 128) < 20;
+
+describe.runIf(RUN)("el fondo de la empresa", () => {
+  beforeAll(async () => {
+    await conexion.query(`
+      INSERT INTO sea_employees (id, nombre) VALUES
+        ('${EVA}', 'Eva'), ('${IVO}', 'Ivo'), ('${MAR}', 'Mar'), ('${TEO}', 'Teo'), ('${UMA}', 'Uma')`);
+    mirada = UNA_CARA;
+  });
+  const poner = (id: string, fondo: FondoDeFoto | null, opciones: { sinFondo?: boolean } = {}) =>
+    mod.ponerFoto(id, { buffer: FOTO, mimetype: "image/jpeg" }, opciones, { ...deps(), fondo });
+
+  it("la foto se guarda con el fondo, y la ruta lo dice", async () => {
+    const r = await poner(EVA, conFondo);
+    const ruta = (await fotoUrl(EVA))!;
+    expect(r.fondo).toBe("puesto");
+    expect(ruta).toMatch(new RegExp(`^empleados/${EVA}/foto-\\d+-f\\.jpg$`));
+    expect(esVerde(await esquina(ruta))).toBe(true);
+    const meta = await sharp(guardado.get(ruta)!).metadata();
+    expect([meta.width, meta.height, meta.format]).toEqual([600, 600, "jpeg"]);
+  });
+
+  it("si el administrador la quiere sin fondo, ni se mira: se queda como es y no se vuelve a intentar", async () => {
+    miradas = 0;
+    const r = await poner(IVO, conFondo, { sinFondo: true });
+    const ruta = (await fotoUrl(IVO))!;
+    expect(r.fondo).toBe("no_pedido");
+    expect(miradas).toBe(0);
+    expect(ruta).toMatch(/-s\.jpg$/);
+    expect(esGris(await esquina(ruta))).toBe(true);
+  });
+
+  it("si no se distingue a la persona, se guarda con su fondo y tampoco se vuelve a intentar", async () => {
+    const r = await poner(MAR, sinPersona);
+    const ruta = (await fotoUrl(MAR))!;
+    expect(r.fondo).toBe("no_fiable");
+    expect(ruta).toMatch(/-s\.jpg$/);
+    expect(esGris(await esquina(ruta))).toBe(true);
+  });
+
+  it("si el modelo falla, la foto se guarda igual y queda pendiente de intentarlo", async () => {
+    const r = await poner(TEO, roto);
+    const ruta = (await fotoUrl(TEO))!;
+    expect(r.fondo).toBe("fallo");
+    expect(ruta).toMatch(new RegExp(`^empleados/${TEO}/foto-\\d+\\.jpg$`));
+    expect(esGris(await esquina(ruta))).toBe(true);
+  });
+
+  describe("las fotos que ya había", () => {
+    let antes: Record<string, string | null>;
+
+    it("solo cuentan las que no se han intentado", async () => {
+      // De las de este fichero: Ana, Pep y Luz se subieron sin fondo (como las
+      // de antes de que existiera) y Teo falló. Eva lo tiene; Ivo y Mar se
+      // quedan sin él a propósito.
+      const { rows } = await conexion.query(
+        `SELECT nombre FROM sea_employees WHERE foto_url IS NOT NULL AND foto_url !~ '-[fs]\\.jpg$' ORDER BY nombre`
+      );
+      expect(await mod.fotosSinFondo(conexion)).toBe(rows.length);
+      expect(rows.map((r) => r.nombre)).toContain("Teo");
+      expect(rows.map((r) => r.nombre)).not.toContain("Eva");
+      expect(rows.map((r) => r.nombre)).not.toContain("Ivo");
+      expect(rows.map((r) => r.nombre)).not.toContain("Mar");
+    });
+
+    it("se les pone a esas, y solo a esas", async () => {
+      // Uma tiene una foto en la ficha que no está en el almacén.
+      await conexion.query(`UPDATE sea_employees SET foto_url = 'empleados/${UMA}/foto-1.jpg' WHERE id = '${UMA}'`);
+      antes = {};
+      for (const id of [EVA, IVO, MAR, TEO]) antes[id] = await fotoUrl(id);
+
+      const r = await mod.ponerFondoALasQueFaltan({ ...deps(), fondo: conFondo });
+
+      expect(r.puestos).toContain("Teo");
+      expect(r.puestos).not.toContain("Eva");
+      expect(r.saltados).toEqual([{ nombre: "Uma", motivo: expect.stringMatching(/no está en el almacén/) }]);
+      // Solo queda Uma, que no se puede.
+      expect(r.quedan).toBe(1);
+
+      const deTeo = (await fotoUrl(TEO))!;
+      expect(deTeo).toMatch(/-f\.jpg$/);
+      expect(esVerde(await esquina(deTeo))).toBe(true);
+      // La anterior no se queda suelta.
+      expect(guardado.has(antes[TEO]!)).toBe(false);
+      expect(ficherosDe(TEO)).toEqual([deTeo]);
+      // Las que ya estaban resueltas, ni tocarlas.
+      for (const id of [EVA, IVO, MAR]) expect(await fotoUrl(id)).toBe(antes[id]);
+    });
+
+    it("hacerlo otra vez no repite nada", async () => {
+      miradas = 0;
+      const r = await mod.ponerFondoALasQueFaltan({ ...deps(), fondo: conFondo });
+      expect(r.puestos).toEqual([]);
+      expect(miradas).toBe(0);
+    });
+
+    it("a la que no se le distingue la persona se la deja como estaba y no se insiste", async () => {
+      await conexion.query(`UPDATE sea_employees SET foto_url = NULL WHERE id = '${UMA}'`);
+      await poner(UMA, roto);
+      const original = Buffer.from(guardado.get((await fotoUrl(UMA))!)!);
+
+      const r = await mod.ponerFondoALasQueFaltan({ ...deps(), fondo: sinPersona });
+
+      expect(r.saltados).toEqual([{ nombre: "Uma", motivo: expect.stringMatching(/no se distingue/) }]);
+      const ruta = (await fotoUrl(UMA))!;
+      expect(ruta).toMatch(/-s\.jpg$/);
+      expect(guardado.get(ruta)!.equals(original)).toBe(true);
+      expect(r.quedan).toBe(0);
+    });
+
+    it("si alguien cambia la foto mientras tanto, manda la suya", async () => {
+      await poner(UMA, roto);
+      const vieja = (await fotoUrl(UMA))!;
+      const nueva = `empleados/${UMA}/foto-9999999999999-f.jpg`;
+      // Justo cuando se baja la foto para procesarla, otro la cambia.
+      const almacenLento = {
+        ...almacen,
+        async bajar(ruta: string) {
+          const f = guardado.get(ruta) ?? null;
+          await conexion.query(`UPDATE sea_employees SET foto_url = $2 WHERE id = $1`, [UMA, nueva]);
+          guardado.set(nueva, f!);
+          return f;
+        },
+      };
+      const r = await mod.ponerFondoALasQueFaltan({ ...deps(), almacen: almacenLento, fondo: conFondo });
+
+      expect(r.puestos).toEqual([]);
+      expect(await fotoUrl(UMA)).toBe(nueva);
+      // Lo que se había preparado para la vieja no se queda en el almacén.
+      expect(ficherosDe(UMA).sort()).toEqual([vieja, nueva].sort());
+    });
+
+    it("sin fondo configurado, o con un almacén del que no se puede bajar, no hace nada", async () => {
+      expect(await mod.ponerFondoALasQueFaltan({ ...deps(), fondo: null })).toEqual({ puestos: [], saltados: [], quedan: 0 });
+      const { bajar: _sinBajar, ...soloSubir } = almacen;
+      expect(await mod.ponerFondoALasQueFaltan({ ...deps(), almacen: soloSubir, fondo: conFondo })).toEqual({ puestos: [], saltados: [], quedan: 0 });
+    });
+  });
+
+  describe("por las rutas", () => {
+    function servidor(esAdmin: boolean) {
+      const autenticar: RequestHandler = (req, _res, next) => {
+        (req as any).authCtx = { userId: "u1", empresaId: "0e0e0e0e-0000-4000-a000-000000000001", esAdmin, esSuperadmin: false };
+        next();
+      };
+      const app = express();
+      app.use("/api/core/empleados", mod.createFotoEmpleadoRouter({ autenticar, ...deps(), fondo: conFondo, origen: async () => null }));
+      return new Promise<{ url: string; cerrar: () => void }>((ok) => {
+        const s = app.listen(0, () =>
+          ok({ url: `http://127.0.0.1:${(s.address() as AddressInfo).port}/api/core/empleados`, cerrar: () => s.close() })
+        );
+      });
+    }
+    const subir = (url: string, id: string, campos: Record<string, string> = {}) => {
+      const cuerpo = new FormData();
+      cuerpo.append("foto", new Blob([new Uint8Array(FOTO)], { type: "image/jpeg" }), "foto.jpg");
+      for (const [k, v] of Object.entries(campos)) cuerpo.append(k, v);
+      return fetch(`${url}/${id}/foto`, { method: "POST", body: cuerpo });
+    };
+
+    it("quien no es administrador no puede ponerles el fondo", async () => {
+      const { url, cerrar } = await servidor(false);
+      try {
+        expect((await fetch(`${url}/fotos/poner-fondo`, { method: "POST" })).status).toBe(403);
+      } finally {
+        cerrar();
+      }
+    });
+
+    it("la lista dice cuántas faltan, y el botón se las pone", async () => {
+      await poner(TEO, roto); // otra vez sin intentar
+      const { url, cerrar } = await servidor(true);
+      try {
+        const faltan = await mod.fotosSinFondo(conexion);
+        expect(faltan).toBeGreaterThan(0);
+        expect((await (await fetch(`${url}/fotos`)).json()).sinFondo).toBe(faltan);
+
+        const r = await fetch(`${url}/fotos/poner-fondo`, { method: "POST" });
+        expect(r.status).toBe(200);
+        const d = await r.json();
+        expect(d.puestos).toContain("Teo");
+        expect((await (await fetch(`${url}/fotos`)).json()).sinFondo).toBe(d.quedan);
+      } finally {
+        cerrar();
+      }
+    });
+
+    it("al subir una foto sale con fondo; con «sinFondo», no", async () => {
+      const { url, cerrar } = await servidor(true);
+      try {
+        const con = await subir(url, EVA);
+        expect((await con.json()).fondo).toBe("puesto");
+        expect(await fotoUrl(EVA)).toMatch(/-f\.jpg$/);
+
+        const sin = await subir(url, EVA, { sinFondo: "1" });
+        expect((await sin.json()).fondo).toBe("no_pedido");
+        const ruta = (await fotoUrl(EVA))!;
+        expect(ruta).toMatch(/-s\.jpg$/);
+        expect(esGris(await esquina(ruta))).toBe(true);
+      } finally {
+        cerrar();
+      }
+    });
   });
 });
