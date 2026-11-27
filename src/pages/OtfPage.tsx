@@ -663,7 +663,8 @@ function OtfDetail({ otf, plantillas, onChange, onEdit }: { otf: any; plantillas
   const faltaParaAnadir = !plate.trim()
     ? "Indica la matrícula."
     : conNeumaticos && !neumaticos
-      ? faltaNeumaticos ?? "Marca las ruedas y elige el neumático."
+      // Siempre con la salida: sin plano, el trabajo se puede añadir igual.
+      ? `${faltaNeumaticos ?? "Marca las ruedas y elige el neumático."} O desmarca «Cambio de neumáticos» para añadirlo sin plano.`
       : !trabajoPlantilla.trim() && !detalle.trim() && !neumaticos
         ? "Elige un trabajo de la plantilla o escribe el detalle manual."
         : null;
