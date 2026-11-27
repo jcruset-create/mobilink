@@ -52,8 +52,13 @@ export interface DatosRendimiento {
 export interface Punto { km: number; mm: number }
 
 export interface Rendimiento {
-  /** Puntos usados, ordenados por km de la goma. */
+  /**
+   * Los puntos de la línea, ordenados por km de la goma: el origen y cada
+   * medición que ha bajado al menos 1 mm desde el punto anterior.
+   */
   puntos: Punto[];
+  /** Mediciones que no han bajado 1 mm desde el último punto: se ven, no cuentan. */
+  descartados: Punto[];
   kmGoma: number | null;
   origenMm: number | null;
   actualMm: number | null;
@@ -83,6 +88,9 @@ export function pendiente(puntos: Punto[]): number | null {
   return sxx === 0 ? null : sxy / sxx;
 }
 
+/** Cuánto tiene que bajar una medición, desde el último punto, para entrar en la línea. */
+export const BAJADA_MINIMA_MM = 1;
+
 export function calcularRendimiento(d: Pick<DatosRendimiento,
   "km_actual_vehiculo" | "km_vehiculo_inicio" | "profundidad_inicial_mm" | "profundidad_actual_mm" | "minimo_mm" | "puntos">,
 ): Rendimiento {
@@ -94,7 +102,7 @@ export function calcularRendimiento(d: Pick<DatosRendimiento,
   const kmGoma = inicio !== null && kmVeh !== null ? Math.max(0, kmVeh - inicio) : null;
 
   const base: Rendimiento = {
-    puntos: [], kmGoma, origenMm, actualMm, gastadoMm: null, kmPorMm: null,
+    puntos: [], descartados: [], kmGoma, origenMm, actualMm, gastadoMm: null, kmPorMm: null,
     quedanKm: null, vidaKm: null, minimoMm, metodo: null, sinProyeccion: null,
   };
   if (origenMm === null) return { ...base, sinProyeccion: "Falta la profundidad de origen" };
@@ -112,24 +120,37 @@ export function calcularRendimiento(d: Pick<DatosRendimiento,
     if (km !== null && mm !== null && km >= inicio) meter(km - inicio, mm);
   }
   if (kmGoma !== null && actualMm !== null && !porKm.has(kmGoma)) meter(kmGoma, actualMm);
-  const puntos = [...porKm.entries()]
+  const todos = [...porKm.entries()]
     .map(([km, l]) => ({ km, mm: l.reduce((a, b) => a + b, 0) / l.length }))
     .sort((a, b) => a.km - b.km);
 
-  const ultimo = puntos[puntos.length - 1];
+  // Solo entra en la línea una medición que ha bajado al menos 1 mm desde el
+  // último punto: entre medias, lo que sube y baja es el calibre, no la goma
+  // (0039LXV: diez revisiones entre 13,5 y 14,3 mm en 6.000 km hacían una
+  // nube y movían la recta).
+  const puntos: Punto[] = [];
+  const descartados: Punto[] = [];
+  for (const p of todos) {
+    const ref = puntos[puntos.length - 1];
+    if (!ref || p.km === 0 || p.mm <= ref.mm - BAJADA_MINIMA_MM + 1e-9) puntos.push(p);
+    else descartados.push(p);
+  }
+
+  const ultimo = todos[todos.length - 1];
   const hoyMm = actualMm ?? ultimo?.mm ?? null;
   const hoyKm = kmGoma ?? ultimo?.km ?? null;
   const gastadoMm = hoyMm !== null ? Math.round((origenMm - hoyMm) * 10) / 10 : null;
-  const r: Rendimiento = { ...base, puntos, gastadoMm, actualMm: hoyMm, kmGoma: hoyKm };
+  const r: Rendimiento = { ...base, puntos, descartados, gastadoMm, actualMm: hoyMm, kmGoma: hoyKm };
 
   if (hoyMm === null || hoyKm === null || hoyKm <= 0) return { ...r, sinProyeccion: "Aún no ha recorrido kilómetros" };
-  if (gastadoMm === null || gastadoMm < 1) return { ...r, sinProyeccion: "Poco gasto para proyectar (menos de 1 mm)" };
+  const fin = puntos[puntos.length - 1];
+  if (puntos.length < 2 || fin.km <= 0) return { ...r, sinProyeccion: "Poco gasto para proyectar (aún no ha bajado 1 mm)" };
 
   let kmPorMm: number;
   let metodo: "recta" | "origen";
   const m = puntos.length >= 3 ? pendiente(puntos) : null;
   if (m !== null && m < 0) { kmPorMm = -1 / m; metodo = "recta"; }
-  else { kmPorMm = hoyKm / (origenMm - hoyMm); metodo = "origen"; }
+  else { kmPorMm = fin.km / (origenMm - fin.mm); metodo = "origen"; }
 
   const quedanKm = Math.max(0, (hoyMm - minimoMm) * kmPorMm);
   return {

@@ -122,6 +122,11 @@ export function GraficoRendimiento({ r }: { r: Rendimiento }) {
       <line x1={x0} y1={Y(r.minimoMm)} x2={x1} y2={Y(r.minimoMm)} stroke="#f59e0b" strokeDasharray="5 4" />
       <text x={x0 + 6} y={Y(r.minimoMm) - 5} textAnchor="start" fill="#f59e0b" fontSize="11">retirar {String(r.minimoMm).replace(".", ",")} mm</text>
       <line x1={x0} y1={Y(1.6)} x2={x1} y2={Y(1.6)} stroke="#f43f5e" strokeDasharray="2 4" />
+      {r.descartados.map((p, i) => (
+        <circle key={`d${i}`} cx={X(p.km)} cy={Y(p.mm)} r={3} fill="#475569">
+          <title>{`${miles(p.km)} km · ${mm(p.mm)} mm — no ha bajado 1 mm desde el punto anterior`}</title>
+        </circle>
+      ))}
       {r.puntos.length > 1 && <polyline points={linea} fill="none" stroke="#38bdf8" strokeWidth="2.5" />}
       {hoy && fin && <line x1={X(hoy.km)} y1={Y(hoy.mm)} x2={X(fin.km)} y2={Y(fin.mm)} stroke="#38bdf8" strokeWidth="2" strokeDasharray="6 5" />}
       {r.puntos.map((p, i) => <circle key={i} cx={X(p.km)} cy={Y(p.mm)} r={i === 0 ? 4 : 5} fill={i === 0 ? "#94a3b8" : "#38bdf8"} />)}
@@ -446,12 +451,12 @@ export function TarjetaRendimientoNeumatico({ neumaticoId }: { neumaticoId: stri
         <Kpi t="Origen → hoy" v={`${mm(r.origenMm)} → ${mm(r.actualMm)} mm`} s={`gastados ${mm(r.gastadoMm)} mm`} />
         <Kpi t="Km con esta goma" v={`${miles(r.kmGoma)} km`} s={fila.fuente_inicio === "manual" ? "origen indicado a mano" : "origen del catálogo"} />
         <Kpi t="Rendimiento" v={r.kmPorMm != null ? `${miles(r.kmPorMm)} km/mm` : "—"} cls="text-emerald-300"
-          s={r.metodo === "recta" ? `recta con ${r.puntos.length} mediciones` : r.metodo === "origen" ? "del origen a hoy" : undefined} />
+          s={r.metodo === "recta" ? `recta con ${r.puntos.length} puntos` : r.metodo === "origen" ? "del origen al último mm bajado" : undefined} />
         <Kpi t={`Proyección a ${mm(r.minimoMm)} mm`} v={r.vidaKm != null ? `≈ ${miles(r.vidaKm)} km` : "—"}
           s={r.quedanKm != null ? `le quedan ≈ ${miles(r.quedanKm)} km` : r.sinProyeccion ?? undefined} />
       </div>
       <GraficoRendimiento r={r} />
-      <div className="text-[11px] text-slate-500">Continuo: lo medido. A trazos: la proyección. Cada revisión añade un punto; con 3 o más se ajusta una recta a todos.</div>
+      <div className="text-[11px] text-slate-500">Continuo: lo medido. A trazos: la proyección. Una revisión solo añade punto a la línea si ha bajado al menos 1 mm desde el anterior; las demás salen en gris y no cuentan. Con 3 o más puntos se ajusta una recta.</div>
     </div>
   );
 }
