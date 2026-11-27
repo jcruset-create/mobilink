@@ -335,6 +335,30 @@ export interface SensoresVehiculo {
   crudo: string;
   /** Ya redactado por el servidor, para «Copiar para Movertis». */
   texto: string;
+  /** Los sensores puestos en claro. `null` si el aparato no da nada de esto. */
+  lectura: LecturaAparato | null;
+}
+
+/**
+ * Lo que el aparato sabe del vehículo: horas de motor, gasóleo consumido,
+ * peso por eje y el estado de ahora mismo.
+ *
+ * `deposito` y `otros` van SIN unidad a propósito: Movertis no las documenta
+ * y ponerle un «%» a un número es inventarse el dato. Lo que sí está derivado
+ * —el consumo medio— se comprueba antes en el servidor.
+ */
+export interface LecturaAparato {
+  horasMotor: number | null;
+  consumidoL: number | null;
+  odometroKm: number | null;
+  consumoMedioL100: number | null;
+  rpm: number | null;
+  velocidadKmh: number | null;
+  contacto: boolean | null;
+  ejes: Array<{ eje: number; kg: number }>;
+  pesoTotalKg: number | null;
+  deposito: Array<{ nombre: string; valor: number | string | boolean }>;
+  otros: Array<{ nombre: string; valor: number | string | boolean }>;
 }
 export const verSensores = (b: { empresaId?: string; vehiculoId: string }) =>
   pedir<SensoresVehiculo>("/sensores", { method: "POST", body: JSON.stringify(b) });
